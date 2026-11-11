@@ -7,9 +7,12 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "pake:build": "node scripts/build-pake.mjs",
+    "predev": "npm run pake:build",
     "dev": "vite",
     "check:privacy": "python3 ../scripts/privacy_check.py",
-    "prebuild": "npm run check:privacy",
+    "check:deps": "node scripts/installed-deps.mjs",
+    "prebuild": "npm run check:privacy && npm run pake:build",
     "build": "tsc -b && vite build && vite build --config vite.public.config.ts",
     "build:public": "vite build --config vite.public.config.ts",
     "dev:public": "vite --config vite.public.config.ts",
@@ -60,7 +63,7 @@
     "tailwindcss": "4.1.16",
     "typescript": "5.9.3",
     "vite": "7.1.12",
-    "vitest": "4.0.6"
+    "vitest": "4.0.10"
   },
   "overrides": {
     "katex": "$katex",

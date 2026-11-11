@@ -352,7 +352,10 @@ def render_css(catalog):
                     if path.startswith(prefix):
                         lines.append(f"  --{alias}{css_name(path[len(prefix):])}: var(--{css_name(path)});")
             lines.append("}")
-    lines.extend(["@media (prefers-reduced-motion: reduce) {", "  :root {", "    --motion-state: var(--motion-reduced);", "    --motion-layout: var(--motion-reduced);", "  }", "}"])
+    # Reduced motion: every motion duration becomes motion.reduced (zero).
+    reduced = [path for path in sorted(catalog.tokens) if path.startswith("motion.") and path != "motion.reduced" and catalog.tokens[path]["$type"] == "duration"]
+    if reduced and "motion.reduced" in catalog.tokens:
+        lines.extend(["@media (prefers-reduced-motion: reduce) {", "  :root {", *(f"    --{css_name(path)}: var(--motion-reduced);" for path in reduced), "  }", "}"])
     return "\n".join(lines) + "\n"
 
 
@@ -380,7 +383,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="生成和检查跨端设计 token")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE, help="token JSON 目录")
     parser.add_argument("--kotlin", type=Path, help="Tokens.kt 输出文件")
-    parser.add_argument("--package", "--kotlin-package", default="persona.android.core.designsystem", help="Kotlin 包名")
+    parser.add_argument("--package", "--kotlin-package", default="persona.core.designsystem", help="Kotlin 包名")
     parser.add_argument("--css", type=Path, help="CSS 输出文件")
     parser.add_argument("--md", type=Path, help="色板 Markdown 输出文件")
     parser.add_argument("--check", action="store_true", help="只读校验结构、引用、对比度和指定产物")

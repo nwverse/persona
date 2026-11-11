@@ -85,6 +85,10 @@ final class MeetingAsk {
 
     /// Longest typed question (the contract's limit, in characters).
     static let maxQuestion = 1000
+
+    /// A typed question can go: it has something besides spaces and new lines (what `ask` trims away). The live bar's
+    /// send button waits for this.
+    nonisolated static func hasWords(_ text: String) -> Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// An answer later than this after the tap is only shown, never said.
     static let speakWithin: TimeInterval = 60
 
@@ -103,7 +107,7 @@ final class MeetingAsk {
     func ask(_ entry: RecordingEntry, text: String? = nil) -> UUID? {
         guard entry.attended else { return nil }
         let typed = text.map { String(String.UnicodeScalarView($0.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.prefix(Self.maxQuestion))) }
-        if let typed, typed.isEmpty { return nil }
+        if let typed, !Self.hasWords(typed) { return nil }
         let exchange = Exchange(recordingID: entry.id, at: max(0, deps.now()), question: typed, typed: typed != nil, state: .asking,
                                 asked: deps.clock())
         exchanges.append(exchange)
@@ -138,14 +142,16 @@ final class MeetingAsk {
     private func run(_ id: UUID, locale: String, prepare: Bool) {
         Task {
             guard let start = exchanges.first(where: { $0.id == id }) else { return }
+            // The hub's copy of the attendance first: until it has it, no live line can go, so a question about what was
+            // just said would reach the hub before the lines it is about.
+            let settled = await deps.settled(start.recordingID)
             var liveNext = start.liveNext
-            if prepare {
+            if prepare, settled {
                 liveNext = await deps.heard(start.recordingID)
                 if let index = exchanges.firstIndex(where: { $0.id == id }) { exchanges[index].liveNext = liveNext }
             }
             let state: Exchange.State
             var answer: Answer?
-            let settled = await deps.settled(start.recordingID)
             // The meeting ended meanwhile (its questions went with it): nothing to ask any more.
             guard exchanges.contains(where: { $0.id == id }) else { return }
             if settled {

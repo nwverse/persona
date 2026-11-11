@@ -143,7 +143,7 @@ class AssistantCardsShotsTest {
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
-                    Column(Modifier.fillMaxWidth().padding(Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xl)) {
+                    Column(Modifier.fillMaxWidth().padding(Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.l)) {
                         when (scene) {
                             0 -> CompositionLocalProvider(LocalAssistantCards provides open) {
                                 AssistantBlock("i1/0", example("decision"), complete = true)

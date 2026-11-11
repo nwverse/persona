@@ -199,6 +199,9 @@ final class AppModel {
     var latestAnswerFor: SessionKey?
     /// A hub link's message to land on once its chat shows (HubPageRouting, #2696); taken by that chat.
     var messageJump: MessageJump?
+    /// A refused send's Open Terminal (a dialog holds that session's terminal, #3752): its chat opens the terminal
+    /// and takes it.
+    var terminalAsk: SessionKey?
     /// The phone writes waiting for Allow / Deny, one shown at a time (#4456).
     @ObservationIgnored let phoneConfirmations = PhoneConfirmations()
     /// The one on screen (RootView / MacRootView's alert).
@@ -235,7 +238,11 @@ final class AppModel {
     static var rememberedChat: String? = UserDefaults.standard.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
-        didSet { if heldInList != visibleSession { heldInList = nil } }
+        didSet {
+            if heldInList != visibleSession { heldInList = nil }
+            // the recently opened conversations: the home screen menu's (#2191)
+            if visibleSession != oldValue { RecentChatsStore.shared.shown(visibleSession) }
+        }
     }
     /// The open agent that was Unread and was marked seen by being open: the Agents list keeps it where it was until
     /// its chat is left (`AgentListOrder.held`, #2213; user, 2026-11-05: it moves to Idle only after you leave).
@@ -252,6 +259,12 @@ final class AppModel {
     /// instead of a made-up launcher name (#4200). Held settings (or a restored snapshot) keep the page usable. An
     /// answer that names no launcher sets it too (current hubs always name one; purely defensive against old hubs).
     private(set) var assistantConfigLoadFailed = false
+    /// The directions' names by leader conversation id (`GET /api/v1/assistant/leaders`): the sidebar's Directions group
+    /// shows these instead of the conversations' titles. Read again with the assistant; empty without leaders.
+    private(set) var directionNames: [String: String] = [:]
+    /// How much work each direction holds (`GET /api/v1/assistant/directions/tree`, read on its `directions` push and on
+    /// every (re)connect): the sidebar's "N working · N need you" under its name. Empty from a hub without the tree.
+    private(set) var directionCounts: [String: APIClient.DirectionCounts] = [:]
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
     /// The assistant conversation shown in the Chat tab (persisted across launches).
     ///
@@ -283,6 +296,14 @@ final class AppModel {
     /// Bumped whenever another page hands the user to a Persona conversation (`askPersona`): the Persona tab goes back
     /// to its conversation even when it is the one already shown (a pushed Knowledge page would otherwise stay on top).
     var assistantReveal = 0
+    /// Bumped when the current assistant really changes (a pick in the switcher, its manager leaving the roster): the
+    /// Persona page's pushed pages (the profile, scheduled tasks, memory…) read the one before and write to the next, so
+    /// they close (`AssistantView`). A re-read of the same assistant (back online, the default moving under a pick) isn't one.
+    var assistantSwitches = 0
+    /// The manager of a conversation opened as another assistant's while the app hasn't listed it yet
+    /// (`openAssistantConversation(_:manager:)`): its links are read through it, its offline note shows and the top bar
+    /// names it. It doesn't switch the current assistant.
+    var assistantItemManagers: [SessionKey: String] = [:]
     /// Compact context asked here, and when: the chat says Compacting until the hub's word on it arrives (#1762).
     var compactionRequests: [SessionKey: Date] = [:]
     /// The failed compaction the user closed, per conversation (`MainConversationActions.key`).
@@ -300,7 +321,8 @@ final class AppModel {
     #if DEBUG
     @ObservationIgnored var inboxHandOffDoneForTests: ((PendingMessage.InboxHandOff) -> Void)?
     #endif
-    /// Per group: the task asking a member-connected group's center whether it answers again (HubLinks.watchCenter).
+    /// Per group: the task asking whether a preferred candidate (the center, a hub's earlier address) answers again
+    /// while the socket is on a fallback (HubLinks.watchCenter).
     @ObservationIgnored var centerWatch: [String: Task<Void, Never>] = [:]
     @ObservationIgnored let outboxWriter = Debouncer(.milliseconds(300))
     /// By group and machine.
@@ -326,6 +348,7 @@ final class AppModel {
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
+        assistantPicks = AssistantPickStore.load(folder: stateFolder)
         DemoHub.install()
         #if DEBUG
         // `-openWelcome YES`: start unpaired and out of Demo Mode, on the pairing page (DemoModeTests); with `-demo.on YES`
@@ -364,6 +387,7 @@ final class AppModel {
             assistantCurrent = SessionKey(path: v)
         }
         connection.lives = { [weak self] in self?.links.map(\.live) ?? [] }
+        connection.onPathChange = { [weak self] in self?.recheckRoutes() }
         buildLinks()
         if registry.hubs.isEmpty, !registryUnreadable, UserDefaults.standard.bool(forKey: Self.demoKey) {
             links = [makeLink("", .demo)]
@@ -522,6 +546,9 @@ final class AppModel {
             let parts = s.split(separator: ":", maxSplits: 1).map(String.init)
             r.hubs[0].config.access = parts.count == 2 ? HubAccess(clientID: parts[0], clientSecret: parts[1]) : nil
         }
+        // `-seedHubAddresses <base64 of a [HubAddress] JSON>`: the first hub's added addresses (screenshots, #4670).
+        if let s = UserDefaults.standard.string(forKey: "seedHubAddresses"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
+           let list = try? JSONDecoder().decode([HubAddress].self, from: json) { r.hubs[0].addresses = list.isEmpty ? nil : list }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()
@@ -548,7 +575,7 @@ final class AppModel {
     /// groups keep everything.
     /// `ssh`: the SSH tunnel set up on the pairing page (docs/operations/network.md「Connecting to hub through SSH」): pairing goes through it
     /// when the address does not answer (or always, with Always Use SSH), and the hub keeps it.
-    func pair(_ new: ServerConfig, ssh: SSHRoute? = nil) async throws {
+    func pair(_ new: ServerConfig, ssh: SSHRoute? = nil, deviceID: String? = nil) async throws {
         try refusePairingWhileSigningOut()
         retryRegistry()
         // Unknown pairings would be written over (the keychain is not readable before the first unlock).
@@ -560,7 +587,7 @@ final class AppModel {
         var new = new
         if new.access == nil { new.access = registry.hubs.first { $0.config.url == new.url }?.config.access }
         if let ssh, ssh.isUsable {
-            let direct = ssh.always ? false : await HubRoute.healthProbe(new)
+            let direct = ssh.always ? false : await HubRoute.healthProbe(.init(config: new))
             if !direct { try await tunnels.open(SSHTunnels.pairingID, route: ssh, hub: new.url) }
         }
         let client = APIClient(config: new)
@@ -595,7 +622,7 @@ final class AppModel {
         } else if let i = same {
             // The same hub paired again (a new pairing link): its new credential replaces the old one.
             r.hubs[i].config = new
-            r.hubs[i].deviceID = nil
+            r.hubs[i].deviceID = deviceID
             r.hubs[i].tradedPairing = nil
             r.hubs[i].watch = nil
             r.hubs[i].watchDeviceID = nil
@@ -604,6 +631,7 @@ final class AppModel {
             tunnels.adopt(SSHTunnels.pairingID, as: r.hubs[i].id)
         } else {
             var hub = PairedHub(config: new, hubID: identity?.hubID, hubName: identity?.hubName)
+            hub.deviceID = deviceID
             hub.ssh = ssh
             tunnels.adopt(SSHTunnels.pairingID, as: hub.id)
             // Listed in a group's mesh already: it joins that group (shown once, not as a group of its own).
@@ -722,6 +750,7 @@ final class AppModel {
         if isDemo { leaveDemo() }
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
+        PortForwarder.shared.closeAll() // no hub left for a forwarded port to reach
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
         // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
@@ -949,6 +978,8 @@ final class AppModel {
                 assistantConfig = updated
             }
             guard showsPage(of: api) else { return }
+            await refreshDirectionInfo(api, leaders: st.leaders ?? [])
+            guard showsPage(of: api) else { return }
             // A hub that names no launcher gets the same retry state as a failed read (#4200): current hubs always
             // resolve one (their default), so an empty answer means an old hub — show Couldn't Load Settings instead of an
             // endless Reading or a made-up name.
@@ -957,6 +988,60 @@ final class AppModel {
             // Settings that already name a launcher stay usable; with none held the page shows Couldn't Load Settings (#4200).
             if showsPage(of: api), (assistantConfig?.launcher ?? "").isEmpty { assistantConfigLoadFailed = true }
         }
+    }
+
+    /// The directions' names for `leaders`: none without leaders; a hub that cannot list them keeps what is held (or
+    /// none), and the sidebar shows those conversations' titles. The counts come from the direction tree alone.
+    private func refreshDirectionInfo(_ api: APIClient, leaders: [String]) async {
+        guard !leaders.isEmpty else {
+            if !directionNames.isEmpty { directionNames = [:] }
+            if !directionCounts.isEmpty { directionCounts = [:] }
+            return
+        }
+        guard let list = try? await api.leaders(), showsPage(of: api) else { return }
+        let names = APIClient.directionNames(list)
+        if names != directionNames { directionNames = names }
+    }
+
+    /// The assistant's leader conversations (the sidebar's Directions), never the main one, in the hub's order.
+    var assistantLeaders: [String] {
+        let main = assistantConfig?.main
+        return (assistantConfig?.leaders ?? []).filter { !$0.isEmpty && $0 != main }
+    }
+
+    /// Makes conversation `id` a direction on the hub, or ends it (#4331): the hub's new list is read back, and an
+    /// error is shown as it is.
+    func setDirectionLead(_ id: String, _ lead: Bool) async {
+        guard let api else { return }
+        Haptics.tap()
+        do {
+            if lead { try await api.makeDirection(id) } else { try await api.endDirection(id) }
+            await refreshAssistant()
+            toast = Toast(lead ? String(localized: "Direction Pinned [Assistant Sidebar 2e8a51]")
+                               : String(localized: "Direction Ended [Assistant Sidebar 9c07f3]"), style: .success)
+        } catch { show(error) }
+    }
+
+    /// The hub's direction tree (#4352): its current directions in order, their names and counts. Read on the hub's
+    /// `directions` push and on every (re)connect. The tree answers for the default manager alone, so another manager's
+    /// page keeps what `GET /api/v1/assistant/leaders` gave it; a hub older than the tree (404) changes nothing.
+    private func refreshDirectionTree(_ api: APIClient) async {
+        guard assistantShows(nil), showsPage(of: api) else { return }
+        guard let tree = try? await api.directionsTree(), assistantShows(nil), showsPage(of: api) else { return }
+        let directions = APIClient.directions(tree)
+        let names = APIClient.directionNames(tree)
+        let counts = APIClient.directionCounts(tree)
+        if names != directionNames { directionNames = names }
+        if counts != directionCounts { directionCounts = counts }
+        let ids = directions.map(\.id)
+        if ids != assistantLeaders, var cfg = assistantConfig {
+            cfg.leaders = ids
+            assistantConfig = cfg
+        }
+        // A direction the page's conversations do not list yet: the whole settings are read, so its row appears
+        // without a relaunch.
+        let known = Set((assistantConfig?.conversations ?? []).map(\.sessionID))
+        if ids.contains(where: { !known.contains($0) }) { await refreshAssistant() }
     }
 
     /// The Couldn't Load Settings retry: the page flips back to Reading at once, and repeated taps share the one request (#4200).
@@ -977,16 +1062,14 @@ final class AppModel {
 
     /// Shows a Persona conversation from another page (Scheduled Tasks' Run Now / its own conversation): the Persona tab or the
     /// shell's Assistant, back at the conversation even from a page pushed on it or the shell's Settings sheet.
-    /// `manager`: whose conversation it is while the app has not listed it (an inbox item's); a listed one says itself.
+    /// Another assistant's conversation opens as itself: the current assistant stays (docs/assistant/managers.md
+    /// "Clients"), and its requests go to its own manager, as the hub routes a conversation's. `manager`: whose it is
+    /// while the app hasn't listed it (an inbox item's), kept for its links, offline note and name, not switched to.
     func openAssistantConversation(_ key: SessionKey, manager: String? = nil) {
+        if let manager, !manager.isEmpty { assistantItemManagers[key] = manager }
         shellSettings = false
         selectedTab = .assistant
         selectHub(key.group)
-        if let s = session(key) {
-            if !s.isHealth { selectAssistantManager(s.manager) }
-        } else if let manager {
-            selectAssistantManager(manager)
-        }
         assistantCurrent = key
         assistantReveal += 1
     }
@@ -1070,6 +1153,26 @@ final class AppModel {
             assistantConfig = st
         } catch {
             if showsPage(of: api) { assistantConfig?.mainTasksQuiet = was }
+            show(error)
+        }
+    }
+
+    /// Whether the main conversation folds its background rounds (docs/apple/ios.md "Background rounds"): on until the
+    /// hub says off, an older hub and settings not read yet included.
+    var mainBackgroundFolded: Bool { assistantConfig?.backgroundFolded ?? true }
+
+    /// Settings › Assistant › Fold Background Rounds. Shown at once, put back if the hub says no.
+    func setMainBackgroundFolded(_ on: Bool) async {
+        guard let api, var shown = assistantConfig else { return }
+        let was = shown.mainBackgroundFolded
+        shown.mainBackgroundFolded = on
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(mainBackgroundFolded: on)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.mainBackgroundFolded = was }
             show(error)
         }
     }
@@ -1237,9 +1340,11 @@ final class AppModel {
     var managerRosters: [String: ManagerRoster] = [:]
     /// Each group's latest roster read: an earlier one answering after it is dropped.
     @ObservationIgnored var managerRosterReads: [String: Int] = [:]
-    /// Each group's pick on the Persona page's switcher (`selectAssistantManager`). Not kept across launches: the page
-    /// starts on the default manager.
-    var assistantPicks: [String: String] = [:]
+    /// Each group's current assistant, as picked in the sidebar's switcher (`selectAssistantManager`): the manager's id,
+    /// kept on this device across launches (`AssistantPickStore`). A group without one follows its hub's default manager.
+    var assistantPicks: [String: String] = [:] {
+        didSet { if assistantPicks != oldValue { AssistantPickStore.save(assistantPicks, folder: stateFolder) } }
+    }
     /// The Persona settings each other manager's page read in this run (`managerKey`): shown again when it is picked, and
     /// all there is of it while it is offline. The default's are `assistantByGroup`, kept in the snapshot.
     @ObservationIgnored var assistantByManager: [String: APIClient.AssistantState] = [:]
@@ -1715,6 +1820,8 @@ final class AppModel {
                 Task { await self.refresh(link) }
             }
             if isHub { PersonalAgentSync.shared.received([]) }
+            // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
+            if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
             Task { await refreshInAppTunnel(group) }
             Task { await refreshManagerRoster(group) }
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
@@ -1760,8 +1867,8 @@ final class AppModel {
                     socket(group)?.send(subscribeMessage(key))
                 }
             }
-        case .sessionsList:
-            sessionLists.invalidate(group)
+        case .sessionsList(let revision):
+            sessionLists.invalidate(group, revision: revision)
             for key in subscribers.keys where key.group == group { Task { await refreshSessionDetail(key) } }
         case .sessions(let machineID, let list):
             // A busy hub sends each machine's list on its own, one after another: they are applied together a moment
@@ -1811,6 +1918,10 @@ final class AppModel {
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
             Task { await refreshManagerRoster(group) }
+        case .directions:
+            // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
+            // manager's page keeps what GET leaders gave it (docs/assistant/managers.md "Clients").
+            if isHub, let hubAPI = api, assistantShows(nil) { Task { await refreshDirectionTree(hubAPI) } }
         case .assistantFeed(let item):
             if isHub { TasksStore.shared.received(item, group: group) }
         case .assistantView(let view):
@@ -1940,6 +2051,7 @@ final class AppModel {
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
+        case .directions: "directions"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
         case .assistantViewAction: "assistant_view_action"
@@ -2793,19 +2905,32 @@ final class AppModel {
 
     // MARK: Snapshot
 
-    nonisolated private struct DevSnapshot: Codable, Sendable {
+    nonisolated struct DevSnapshot: Codable, Sendable {
         var machines: [Machine]
         var sessions: [Session]
         var interactions: [Interaction]
         var assistant: APIClient.AssistantState?
+        /// The hub's roster as last read, so a launch shows the current assistant before the hub answers.
+        var managers: [HubManager]?
+        var defaultManager: String?
+        /// The current assistant's Persona settings when it is another than the default (`assistant` is the default's).
+        var picked: APIClient.AssistantState?
+        var pickedManager: String?
 
-        private enum CodingKeys: String, CodingKey { case machines, sessions, interactions, assistant }
+        private enum CodingKeys: String, CodingKey {
+            case machines, sessions, interactions, assistant, managers, picked
+            case defaultManager = "default_manager", pickedManager = "picked_manager"
+        }
         func encode(to encoder: Encoder) throws {
             var values = encoder.container(keyedBy: CodingKeys.self)
             try values.encode(machines, forKey: .machines)
             try values.encode(sessions.map { NativeSessionEnvelope(session: $0) }, forKey: .sessions)
             try values.encode(interactions, forKey: .interactions)
             try values.encodeIfPresent(assistant, forKey: .assistant)
+            try values.encodeIfPresent(managers, forKey: .managers)
+            try values.encodeIfPresent(defaultManager, forKey: .defaultManager)
+            try values.encodeIfPresent(picked, forKey: .picked)
+            try values.encodeIfPresent(pickedManager, forKey: .pickedManager)
         }
     }
 
@@ -2813,6 +2938,9 @@ final class AppModel {
     /// Each group's default manager's Persona settings, kept for when its page shows again (`assistantConfig` is the page's
     /// of the moment).
     @ObservationIgnored var assistantByGroup: [String: APIClient.AssistantState] = [:]
+    /// The groups whose default manager's settings were read in this run while another assistant was current
+    /// (`refreshManagerRoster`): Health and the channels follow the default, whose own page didn't show.
+    @ObservationIgnored var defaultAssistantReads: Set<String> = []
 
     /// Each group's snapshot: "dev" for the default group (what it always was), "dev.<group>" for the others.
     static func snapshotName(_ group: String) -> String { group.isEmpty ? "dev" : "dev." + group }
@@ -2832,23 +2960,32 @@ final class AppModel {
             allSessions += snap.sessions.map { var s = $0; s.group = g; return s }
             allInteractions += snap.interactions.map { var i = $0; i.group = g; return i }
             if let a = snap.assistant { assistantByGroup[g] = a }
+            // The roster and the current assistant's settings as they were: the pages start on the assistant picked
+            // before, not on the default until the hub's roster is read again.
+            if let managers = snap.managers, managerRosters[g] == nil {
+                managerRosters[g] = ManagerRoster(managers: managers, defaultID: snap.defaultManager)
+            }
+            if let a = snap.picked, let m = snap.pickedManager { assistantByManager[Self.managerKey(g, m)] = a }
         }
         machines = allMachines
         sessionsByMachine = Dictionary(grouping: allSessions, by: \.machineRef)
         interactions = Dictionary(allInteractions.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
-        assistantConfig = assistantByGroup[hub?.group ?? ""]
+        assistantConfig = heldAssistant(hub?.group ?? "")
     }
 
-    private func saveSnapshot() {
+    func saveSnapshot() {
         snapshotWriter.run { [weak self] in
             guard let self, self.isPaired else { return }
             let hubGroup = self.hub?.group
             for g in self.groupIDs {
                 let assistant = g == hubGroup && self.assistantManagerID == nil ? self.assistantConfig : self.assistantByGroup[g]
+                let pick = self.assistantPick(in: g)
                 StateCache.save(Self.snapshotName(g), DevSnapshot(
                     machines: self.machines.filter { $0.group == g },
                     sessions: self.sessionsByMachine.filter { $0.key.group == g }.values.flatMap { $0 },
-                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant),
+                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant,
+                    managers: self.managerRosters[g]?.managers, defaultManager: self.managerRosters[g]?.defaultID,
+                    picked: pick.flatMap { self.assistantByManager[Self.managerKey(g, $0)] }, pickedManager: pick),
                     in: self.stateFolder)
             }
         }
@@ -2859,6 +2996,7 @@ final class AppModel {
         guard !gone.isEmpty else { return }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
+        PortForwarder.shared.close(groups: gone)
         machines = machines.filter { !gone.contains($0.group) }
         sessionsByMachine = sessionsByMachine.filter { !gone.contains($0.key.group) }
         interactions = interactions.filter { !gone.contains($0.value.group) }
@@ -2872,6 +3010,10 @@ final class AppModel {
             StateCache.remove(Self.snapshotName(g), in: stateFolder)
             ChatCache.removeGroup(g, in: stateFolder)
             PinsStore.forget(suffix: g)
+            assistantPicks[g] = nil
+            managerRosters[g] = nil
+            defaultAssistantReads.remove(g)
+            assistantItemManagers = assistantItemManagers.filter { $0.key.group != g }
             InboxHandOffMemory.forget(group: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
         }
@@ -2905,11 +3047,19 @@ final class AppModel {
     /// The Persona page shows another manager (`selectAssistantManager`, or the one it showed left the roster): its
     /// settings, main conversation, conversations and readiness give way to that manager's, as `hubChanged` does for a
     /// group; what was read of it in this run shows until the hub answers.
-    func assistantManagerChanged() {
+    /// `switched`: the current assistant itself changed (not a re-read of the same one: back online, the default moving
+    /// under a pick). Then a conversation on screen that another manager has gives way to the current one's main
+    /// conversation (one not listed yet stays; the health space's is the default's and stays), and the pushed pages close
+    /// (`assistantSwitches`). Another assistant's conversation opened from a notification stays through a re-read.
+    func assistantManagerChanged(switched: Bool = true) {
         assistantConfig = heldAssistant(hub?.group ?? "")
         assistantConfigLoadFailed = false
         readiness.forget()
         relistAssistant()
+        if switched {
+            if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
+            assistantSwitches += 1
+        }
         Task {
             await refreshAssistant()
             readinessChanged()
@@ -2917,12 +3067,11 @@ final class AppModel {
         }
     }
 
-    /// The Persona page's lists again, for the manager it shows. A conversation on screen that another manager has gives
-    /// way to the shown one's main conversation (one not listed yet stays; the health space's is the default's and stays).
+    /// The Persona page's lists again, for the current assistant. Another assistant's conversation opened from elsewhere
+    /// (a notification, the inbox) stays on screen: only switching assistants leaves it (`assistantManagerChanged`).
     func relistAssistant() {
         let lists = AssistantLists(allSessions, group: hub?.group ?? "", shown: assistantShown)
         if lists != assistantLists { assistantLists = lists }
-        if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
     }
 
     /// The Persona settings held for group's page as it is now: its default manager's (kept in the snapshot), or what the
@@ -3271,12 +3420,15 @@ struct Toast: Identifiable, Equatable {
     let action: Action?
     /// A second button before `action` (Undo beside View).
     let secondary: Action?
+    /// An explicit display window for flows whose Undo timing is shared across clients.
+    let duration: Duration?
 
-    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil) {
+    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil, duration: Duration? = nil) {
         self.message = message
         self.style = style
         self.action = action
         self.secondary = secondary
+        self.duration = duration
     }
 
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }

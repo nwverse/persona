@@ -1,13 +1,15 @@
 package prompts
 
 // The answers Persona gives during a meeting it attends (meeting/, docs/assistant/meeting-minutes.md "What the hub
-// gives the answering model"): one model call with no tools. The system prompt is fixed; the input holds only the
+// gives the answering model"): one model call with no tools. The system prompt follows the material policy; the input holds only the
 // meeting material the caller built (kb.MeetingMaterial), every text of it other people's words.
 
-// MeetingAnswer is the system prompt of an answer (meeting/answer): it takes only the owner's name, today's date in
-// the user's zone and the answer's language (a BCP 47 tag), never the assistant's notes, memory or snapshot.
+// MeetingAnswer is the system prompt of an answer (meeting/answer): it takes the owner's name, today's date in
+// the user's zone, the answer's language (a BCP 47 tag) and whether earlier meetings may be used, never the
+// assistant's notes, memory or snapshot.
 type MeetingAnswer struct {
 	Owner, Today, Language string
+	EarlierAvailable       bool
 }
 
 func RenderMeetingAnswer(d MeetingAnswer) string { return render("meeting/answer", d) }
@@ -21,6 +23,7 @@ type MeetingAnswerInput struct {
 	Calendar          *MeetingCalendar
 	Lines             []MeetingLine
 	Asks              []MeetingQA
+	EarlierAvailable  bool
 	Earlier           []MeetingEarlier
 	Question, HeardAt string
 	Heard             []MeetingLine
@@ -60,4 +63,51 @@ type MeetingProject struct{ Slug, Name, Status string }
 
 func RenderMeetingAnswerInput(in MeetingAnswerInput) string {
 	return render("meeting/answer_input", in)
+}
+
+// MeetingRoomClaudeMD is a meeting room's CLAUDE.md (meeting/room_claude): the owner's name and the meeting's language,
+// nothing else of the owner's.
+type MeetingRoomClaudeMD struct{ Owner, Language string }
+
+func RenderMeetingRoomClaudeMD(d MeetingRoomClaudeMD) string { return render("meeting/room_claude", d) }
+
+// MeetingRoomHeader is a room's first message (meeting/room_header): the upload's title and calendar hint, when it
+// started (the user's zone), its language and the room's role.
+type MeetingRoomHeader struct {
+	Title, Started, Language, Role string
+	Calendar                       *MeetingCalendar
+}
+
+func RenderMeetingRoomHeader(d MeetingRoomHeader) string { return render("meeting/room_header", d) }
+
+// MeetingRoomHeard is a heard question for the room (meeting/room_heard): the lines before the tap at At.
+type MeetingRoomHeard struct {
+	Owner, At string
+	Lines     []MeetingLine
+}
+
+func RenderMeetingRoomHeard(d MeetingRoomHeard) string { return render("meeting/room_heard", d) }
+
+// MeetingJustMe is a Just me message to the main chat (meeting/just_me): the meeting's title and calendar title (its
+// data), the recording, the time in the meeting, then the owner's text.
+type MeetingJustMe struct {
+	Title, Calendar, RecordingID, At, Text string
+}
+
+func RenderMeetingJustMe(d MeetingJustMe) string { return render("meeting/just_me", d) }
+
+// MeetingFollowupSeed is a follow-up's first message (meeting/followup_seed): the meeting's material, then the owner's
+// text. Transcript is the transcript of record (Cut: its start and end only); a trimmed recording has none.
+type MeetingFollowupSeed struct {
+	Title, Calendar, Started, RecordingID string
+	PrivateSet, Private                   bool
+	Minutes                               string
+	Thread                                []MeetingQA
+	Transcript                            string
+	Cut, Trimmed                          bool
+	Text                                  string
+}
+
+func RenderMeetingFollowupSeed(d MeetingFollowupSeed) string {
+	return render("meeting/followup_seed", d)
 }

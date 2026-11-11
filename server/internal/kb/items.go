@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -121,21 +122,40 @@ type itemTags struct {
 	} `json:"items"`
 }
 
-// TagItems tags documents, meetings and events that are new or changed, 40 per call.
-func (e *Engine) TagItems(ctx context.Context) error {
+// tagItemsBatch is how many items one tagging call reads.
+const tagItemsBatch = 40
+
+// TagItems tags documents, meetings and events that are new or changed, tagItemsBatch per call and at most max calls
+// per run; more reports that untagged ones are left for the next round: the cap was reached, the connection is paused or
+// the run ended (not when no model is set up: the next collection asks again). The items of a batch whose call failed
+// wait (retryWait, per item) and the next batch goes on, so a batch the model keeps failing on costs a call now and then
+// rather than every run, and does not hold back the rest; an item changed since (what the model reads of it) is tried
+// at once. A paused connection or no model returns its error at once without counting.
+func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 	if e.Model == nil {
-		return nil
+		return false, nil
 	}
+	now := time.Now()
 	var todo []*Item
+	due := map[string]bool{}
 	for _, k := range []string{KindEvent, KindMeeting, KindDoc} {
 		for _, it := range e.Store.Items(k) {
 			if it.TaggedAt.IsZero() && it.Title != "" && !it.Locked {
+				key := it.Kind + "/" + it.ID
+				due[key] = true
+				if e.retries().items.waits(key, itemAbout(it), now) {
+					continue
+				}
 				todo = append(todo, it)
 			}
 		}
 	}
-	for len(todo) > 0 && ctx.Err() == nil {
-		batch := todo[:min(40, len(todo))]
+	e.retries().items.keep(due) // tagged, locked or gone in the meantime
+	for calls := 0; len(todo) > 0 && ctx.Err() == nil; calls++ {
+		if calls >= max {
+			return true, nil
+		}
+		batch := todo[:min(tagItemsBatch, len(todo))]
 		todo = todo[len(batch):]
 		byID := map[string]*Item{}
 		in := prompts.KBItemsInput{Projects: e.knownProjects(), Tags: e.TopTags(40)}
@@ -154,10 +174,21 @@ func (e *Engine) TagItems(ctx context.Context) error {
 		}
 		var out itemTags
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBItemsInput(in), 6000, &out)
+		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
-			return err
+			if deferred(ctx, err) {
+				return !ai.IsNotConfigured(err), err
+			}
+			var f projectRetry
+			for _, it := range batch {
+				f = e.retries().items.fail(it.Kind+"/"+it.ID, itemAbout(it))
+			}
+			e.logf("tag items: %v (%d item(s), failed %d time(s) in a row, next try in %s)", err, len(batch), f.failures, retryWait(f.failures))
+			continue
+		}
+		for _, it := range batch {
+			e.retries().items.clear(it.Kind + "/" + it.ID)
 		}
 		e.Store.applyMu.Lock()
 		now := time.Now().UTC()
@@ -191,7 +222,12 @@ func (e *Engine) TagItems(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return len(todo) > 0, nil // the run ended with some not tried
+}
+
+// itemAbout is what the model reads of an item to tag it: an item changed since a failure is tried at once.
+func itemAbout(it *Item) string {
+	return it.Title + "\x00" + it.At.UTC().Format(time.RFC3339) + "\x00" + it.Where + "\x00" + it.Pinned
 }
 
 // --- reading ---
@@ -258,7 +294,7 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 // any other kind.
 func (e *Engine) SearchKind(query, kind string, messages bool, limit int) []Hit {
 	switch kind {
-	case KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent, KindRecording:
+	case KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent, KindRecording, KindTopic:
 	default:
 		return nil
 	}
@@ -428,7 +464,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 		}
 	case KindPerson:
 		for _, p := range e.Store.People() {
-			if has(p.Tags) {
+			if p.Status != "ignored" && has(p.Tags) {
 				out = append(out, Entry{Kind: kind, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 					Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 			}
@@ -446,6 +482,8 @@ func (e *Engine) List(kind, tag string) []Entry {
 				out = append(out, recordingEntry(r))
 			}
 		}
+	case KindTopic:
+		return e.listTopics(has) // the biggest first: topics carry no importance of their own
 	}
 	Rank(out)
 	return out

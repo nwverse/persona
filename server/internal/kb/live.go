@@ -93,6 +93,28 @@ type LiveAsk struct {
 	AnsweredAt     *time.Time  `json:"answered_at,omitempty"`
 	// Fed is the hub's: the answer already went to the attending session in a batch.
 	Fed bool `json:"fed,omitempty"`
+	// Room meetings (docs/assistant/meeting-minutes.md "Asking the room"). Via is the way it is answered (AskViaRoom or
+	// AskViaMaterial), fixed when its first attempt goes out ("" before); Spoken the request's spoken (a Talk span);
+	// Heard the lines a heard question was made of; Attempts the messages it sent the room, the latest last.
+	Via      string        `json:"via,omitempty"`
+	Spoken   bool          `json:"spoken,omitempty"`
+	Heard    []LiveSegment `json:"heard,omitempty"`
+	Attempts []AskAttempt  `json:"attempts,omitempty"`
+}
+
+// The ways an ask is answered (LiveAsk.Via).
+const (
+	AskViaRoom     = "room"
+	AskViaMaterial = "material"
+)
+
+// AskAttempt is one message a room ask sent the room: its attempt number k (1 for the first), its client_msg_id
+// (ask-<id>-<k>), the room's last line before it (where its turn is read from) and when it went out.
+type AskAttempt struct {
+	K      int       `json:"k"`
+	MsgID  string    `json:"msg_id"`
+	Base   int       `json:"base"`
+	SentAt time.Time `json:"sent_at,omitzero"`
 }
 
 // Live is live.json: the live log of an attended meeting and what became of it.
@@ -111,6 +133,8 @@ type Live struct {
 	// Full: sentences were refused for the limits (ErrLiveFull), so the phone stopped sending them (problem live_full).
 	Full bool      `json:"full,omitempty"`
 	Asks []LiveAsk `json:"asks,omitempty"`
+	// AsksRev is the asks' revision (the meeting_live event's asks): it goes up whenever they change (LiveUpdate).
+	AsksRev int64 `json:"asks_rev,omitempty"`
 }
 
 var (
@@ -140,12 +164,17 @@ func (e LiveGapError) As(target any) bool {
 	return false
 }
 
-// AttendanceRole is the role r is attended in: AttendanceOff, AttendanceListener or AttendanceParticipant.
+// AttendanceRole is the role r is attended in: AttendanceOff, AttendanceListener or AttendanceParticipant. A room
+// meeting's is its room's (meeting.json), never meta.json's; a trimmed recording is attended no more.
 func (r Recording) AttendanceRole() string {
-	if r.Attendance == "" {
+	role := r.Attendance
+	if r.RoomMeeting() {
+		role = r.Conv.Room.Attendance
+	}
+	if role == "" || r.TrimmedAt != nil {
 		return AttendanceOff
 	}
-	return r.Attendance
+	return role
 }
 
 // UnmarshalJSON reads an upload like the default does, except that a value of the wrong type for attendance or
@@ -157,10 +186,13 @@ func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
 		*plain
 		Attendance       json.RawMessage `json:"attendance"`
 		AttendingSession json.RawMessage `json:"attending_session"`
+		Room             json.RawMessage `json:"room"`
+		Private          json.RawMessage `json:"private"`
 	}{plain: (*plain)(u)}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
+	u.readRoomAndPrivate(aux.Room, aux.Private)
 	u.Attendance, u.AttendingSession, u.badRole, u.badSession = "", nil, false, false
 	if raw := aux.Attendance; !jsonNull(raw) {
 		u.badRole = json.Unmarshal(raw, &u.Attendance) != nil
@@ -240,8 +272,10 @@ func (s *Store) readLive(id string) (Live, error) {
 	return l, nil
 }
 
-// putLive writes recording id's live.json as putMinutes writes the minutes: not when the recording was deleted
-// meanwhile (false then), so a delete stays a delete. The caller holds liveMu.
+// putLive writes recording id's live.json as putMinutes writes the minutes: not when the recording was deleted or
+// trimmed meanwhile (false then), so a delete stays a delete and a trim keeps no live log. The trim (recording_trim.go)
+// holds recFilesMu from its meta.json to its last removal, so a read-modify-write that read the live log before it
+// cannot write it back after. The caller holds liveMu.
 func (s *Store) putLive(id string, l *Live) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
@@ -255,7 +289,14 @@ func (s *Store) putLive(id string, l *Live) (bool, error) {
 	if err := s.recoverRecordingLocked(id); err != nil {
 		return false, err
 	}
-	if _, err := os.Stat(s.path(KindRecording, id, "meta.json")); err != nil {
+	meta, err := os.ReadFile(s.path(KindRecording, id, "meta.json"))
+	if err != nil {
+		return false, nil
+	}
+	var trim struct {
+		TrimmedAt *time.Time `json:"trimmed_at"`
+	}
+	if json.Unmarshal(meta, &trim) == nil && trim.TrimmedAt != nil {
 		return false, nil
 	}
 	// Synced before it replaces the old one: the phone was told next, and does not send those positions again.
@@ -352,7 +393,7 @@ func (e *Engine) liveAppend(id string, from int, segs []LiveSegment) (Live, Reco
 		return l, r, false, fmt.Errorf("%w: from must be 0 or more", ErrBadLive)
 	case len(segs) > MaxLiveRequest:
 		return l, r, false, fmt.Errorf("%w: at most %d sentences a request", ErrBadLive, MaxLiveRequest)
-	case r.Attendance == "":
+	case !r.Attending():
 		return l, r, false, ErrNotAttending
 	case from > len(l.Segments):
 		return l, r, false, LiveGapError{Next: len(l.Segments)}
@@ -386,10 +427,13 @@ func (e *Engine) liveAppend(id string, from int, segs []LiveSegment) (Live, Reco
 	return next, r, true, nil
 }
 
-// goneError is why recording id is not there any more: deleted, or never uploaded.
+// goneError is why recording id takes no live log any more: deleted, trimmed (attending it is over) or never uploaded.
 func (s *Store) goneError(id string) error {
 	if _, gone := s.tombstones()[id]; gone {
 		return ErrRecordingDeleted
+	}
+	if r, ok := s.Recording(id); ok && r.Trimmed() {
+		return ErrNotAttending
 	}
 	return ErrNotFound
 }
@@ -406,44 +450,58 @@ func (e *Engine) LiveRead(rawID string) (Live, Recording, error) {
 
 // LiveUpdate changes recording id's live log with fn (given it and the stored upload) and writes the result unless fn
 // fails or changed nothing; the live log after it. ErrNotFound when the recording's meta.json is gone (also deleted
-// meanwhile), ErrReadOnly on a read-only knowledge base. fn runs with the live log locked: it must be quick and call
+// meanwhile) or the recording was trimmed meanwhile, ErrReadOnly on a read-only knowledge base. fn runs with the live log locked: it must be quick and call
 // no Engine method of the live log or the recordings.
 func (e *Engine) LiveUpdate(rawID string, fn func(l *Live, r Recording) error) (Live, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return Live{}, ErrNotFound
 	}
+	l, asks, err := e.liveUpdate(id, fn)
+	if asks {
+		e.meetingChanged(id, []string{PartAsks})
+	}
+	return l, err
+}
+
+func (e *Engine) liveUpdate(id string, fn func(l *Live, r Recording) error) (Live, bool, error) {
 	st := e.Store
 	st.liveMu.Lock()
 	defer st.liveMu.Unlock()
 	r, ok := st.Recording(id)
 	if !ok {
-		return Live{}, ErrNotFound
+		return Live{}, false, ErrNotFound
 	}
 	if st.ReadOnly() {
-		return Live{}, ErrReadOnly
+		return Live{}, false, ErrReadOnly
 	}
 	l, err := st.readLive(id)
 	if err != nil {
-		return Live{}, err
+		return Live{}, false, err
 	}
 	before, err := json.Marshal(l)
 	if err != nil {
-		return Live{}, err
+		return Live{}, false, err
 	}
+	asksBefore, _ := json.Marshal(l.Asks)
 	if err := fn(&l, *r); err != nil {
-		return Live{}, err
+		return Live{}, false, err
 	}
 	after, err := json.Marshal(l)
 	if err != nil || bytes.Equal(before, after) {
-		return l, err
+		return l, false, err
+	}
+	asksAfter, _ := json.Marshal(l.Asks)
+	asks := !bytes.Equal(asksBefore, asksAfter)
+	if asks {
+		l.AsksRev++
 	}
 	if ok, err := st.putLive(id, &l); err != nil {
-		return Live{}, err
+		return Live{}, false, err
 	} else if !ok {
-		return Live{}, ErrNotFound
+		return Live{}, false, ErrNotFound
 	}
-	return l, nil
+	return l, asks, nil
 }
 
 // AttendingRecordings is every recording whose stored attendance is not off and whose end batch has not gone out,
@@ -451,7 +509,7 @@ func (e *Engine) LiveUpdate(rawID string, fn func(l *Live, r Recording) error) (
 func (e *Engine) AttendingRecordings() []Recording {
 	var out []Recording
 	for _, r := range e.Store.Recordings() {
-		if r.Attendance == "" {
+		if !r.Attending() {
 			continue
 		}
 		if l, err := e.Store.readLive(r.ID); err == nil && l.EndFed {

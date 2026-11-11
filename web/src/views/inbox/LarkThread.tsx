@@ -6,7 +6,7 @@
 // play here, a card's buttons press, my messages show who read them, reactions can be put on, an avatar opens the
 // person's card, a group's box can @ people, and what is typed stays as the chat's draft.
 import { ItemManager, ownerHeaders, useItemManager, withManager } from "../../lib/manager-choice";
-import { createContext, memo, use, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, ApiError, enc, errorText, getToken } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { clock } from "../../lib/format";
@@ -21,15 +21,16 @@ import {
   cardButtons, chatImages, draftKey, isVoice, loadDraft, mergeAround, reactionsOf, readMark, ReadReceipts, readStates, react,
   statusOf, toggledReactions, type ReadState,
 } from "../../lib/lark-chat";
-import { quoteSummary, showsBody, showsHistory, useLarkDisplay, useLarkDisplayState } from "../../lib/lark-display";
+import { quoteSummary, showsBody, showsHistory, useLarkDisplay, useLarkDisplayState, type LarkMessageDisplay } from "../../lib/lark-display";
 import { keepSameMessages, keepSameStates } from "../../lib/lark-reuse";
 import type { LarkPerson } from "../../lib/lark-people";
 import { canAddPin, changeChatPin, needsRecheck, pinProblemText, type ChatPinTarget } from "../../lib/lark-pins";
-import { historyProblem, type HistoryProblem, latestOf, nearTop, OlderPaging, screensFromEnd, showsJumpToLatest } from "../../lib/lark-history";
+import { firstAtOrAfter, historyProblem, type HistoryProblem, latestOf, nearTop, newMessagesLineAt, OlderPaging, screensFromEnd, showsJumpToLatest, showsJumpUp } from "../../lib/lark-history";
 import { initialCursor, LarkReadTracker } from "../../lib/lark-read";
 import { clickLink, linkHref, prefetchLink } from "../../lib/links";
 import { isResumed } from "../../lib/reconnect";
 import { adoptConversation } from "../../lib/outbox";
+import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
 import { getState, onHubEvent, useStore } from "../../lib/store";
 import { isForeignCached, translatesChat, useTranslatePrefs, useTranslation } from "../../lib/translate";
@@ -81,16 +82,26 @@ export interface LarkChatRef {
   feed: string;
   title: string;
   topic?: boolean;
-  /** Open at this position (the first new message) instead of the newest. */
+  /** Open at this message (a link, an @me, an inbox entry), lit up for a moment, instead of the newest. */
   focus?: string;
+  /** The first unread message: the New messages line goes above it, the chat opens there when no `focus` says
+   * otherwise, and "First unread" goes back to it. */
+  unreadFrom?: string;
+  /** An unread @me: "You were mentioned" goes to it until it has been on screen. */
+  mention?: string;
   /** The Feishu account the chat is in (`ol_account`, docs/extensions/feishu.md "Multiple accounts"); undefined: the hub's own. */
   account?: number;
   /** A group: its box can @ people, my messages show how many read them. */
   group?: boolean;
 }
 
+/** An open inbox item lands on its @me (else its first new message) with the New messages line at its first new
+ * message; a done one opens at the newest. */
 export function chatOfItem(item: InboxItem): LarkChatRef {
-  return { feed: item.lark!.feed_id, title: item.title, topic: item.lark?.is_topic, focus: !isDone(item) ? item.lark?.start_position : undefined,
+  const open = !isDone(item);
+  const start = open ? item.lark?.start_position : undefined;
+  const mention = open ? item.lark?.mention_position : undefined;
+  return { feed: item.lark!.feed_id, title: item.title, topic: item.lark?.is_topic, focus: mention ?? start, unreadFrom: start, mention,
     account: olAccount(item.lark?.ol_account), group: item.lark?.is_group, manager: item.manager };
 }
 
@@ -118,6 +129,35 @@ const Today = createContext("");
 
 type LarkThreadProps = { chat: LarkChatRef; pinsOpen?: boolean; onPinsOpen?: (open: boolean) => void };
 
+/** Connector codes that say the chat itself can never be opened again: it was disbanded, or the signed-in account is
+ * no longer a member. Upstream outages keep their own codes and stay retryable. */
+const TERMINAL_CONVERSATION_CODES = new Set(["CONVERSATION_NOT_FOUND", "CONVERSATION_NOT_MEMBER"]);
+
+/** Whether the first page's failure means the conversation is permanently unavailable (a disbanded group, an app
+ * whose access was removed), as opposed to a transient gateway failure the reader can retry. The extension answers
+ * 404/403 with a terminal code; a bare 404/410 without a business code is treated as a gone resource too, while a
+ * hub-level `not_found` (an old route) keeps the ordinary error text. */
+export function conversationUnavailable(e: unknown): boolean {
+  if (!(e instanceof ApiError)) return false;
+  const code = (e.code ?? "").toUpperCase();
+  if (TERMINAL_CONVERSATION_CODES.has(code)) return true;
+  return (e.status === 404 || e.status === 410) && !code;
+}
+
+/** The empty state for a chat that can no longer be opened: an explicit explanation instead of a blank pane or a
+ * raw gateway error that only says "unavailable". */
+function ThreadUnavailable() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+      <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
+        <Icon name="chat" size={18} />
+      </span>
+      <p className="text-[13.5px] font-medium text-ink">{t("inbox-larkthread.unavailable_title")}</p>
+      <p className="max-w-[320px] text-[12.5px] text-ink-3">{t("inbox-larkthread.unavailable_detail")}</p>
+    </div>
+  );
+}
+
 export function LarkThread(props: LarkThreadProps) {
   // whose Lark the chat is (an inbox item's manager; a chat opened from it is the same one's): every request below names it
   const outer = useItemManager();
@@ -136,8 +176,14 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   const ol = chat.account;
   const manager = useItemManager();
   const focus = chat.focus;
+  const unreadFrom = chat.unreadFrom;
+  const mention = chat.mention;
+  // where the first page is read around and the list is placed
+  const land = focus ?? unreadFrom;
   const [page, setPage] = useState<LarkPage | null>(null);
   const [error, setError] = useState("");
+  // The connector says the chat itself is gone (disbanded, access removed): ThreadUnavailable replaces the thread.
+  const [unavailable, setUnavailable] = useState(false);
   const [newerBusy, setNewerBusy] = useState(false);
   // The draft's quote comes back with the chat (lib/lark-chat.ts drafts); set while drawing, so the box never keeps
   // another chat's quote for a frame.
@@ -174,6 +220,11 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   const windowGen = useRef(0);
   const [jumpShown, setJumpShown] = useState(false);
   const [jumping, setJumping] = useState(false);
+  // "First unread" (while it lies above the screen) and "You were mentioned" (wherever it is), until that message has been
+  // on screen since the window last moved (iOS LarkChatView mention pill); `reached` remembers which ones were.
+  const reached = useRef({ unread: false, mention: false });
+  const [upShown, setUpShown] = useState({ unread: false, mention: false });
+  const [goingUp, setGoingUp] = useState<"unread" | "mention" | null>(null);
   const prefs = useTranslatePrefs();
   const translateTo = translatesChat(prefs, feed) ? prefs.target : undefined;
   // A topic group: a card per topic, its newest replies on it, its thread in a dialog (LarkTopicCard.tsx).
@@ -187,6 +238,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     tracker.current = null;
     setPage(null);
     setError("");
+    setUnavailable(false);
     setFlash(null);
     setPinThread(null);
     setOpenTopic(null);
@@ -196,18 +248,25 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     windowGen.current++;
     setJumpShown(false);
     setJumping(false);
-    api<LarkPage>(larkPath(`${base}?limit=${PAGE}${focus ? `&around=${enc(focus)}` : ""}`, ol, manager))
+    reached.current = { unread: false, mention: false };
+    setUpShown({ unread: false, mention: false });
+    setGoingUp(null);
+    api<LarkPage>(larkPath(`${base}?limit=${PAGE}${land ? `&around=${enc(land)}` : ""}`, ol, manager))
       .then((r) => {
         if (!live) return;
         const messages = mergeMessages([], r.messages ?? []);
-        tracker.current = new LarkReadTracker(initialCursor(focus, messages, topic || Boolean(r.topic)));
+        tracker.current = new LarkReadTracker(initialCursor(unreadFrom ?? focus, messages, topic || Boolean(r.topic)));
         setPage({ ...r, messages });
       })
-      .catch((e) => live && setError(errorText(e)));
+      .catch((e) => {
+        if (!live) return;
+        if (conversationUnavailable(e)) setUnavailable(true);
+        else setError(errorText(e));
+      });
     return () => {
       live = false;
     };
-  }, [base, focus, topic, ol, manager]);
+  }, [base, land, unreadFrom, focus, topic, ol, manager]);
 
   // New messages in this chat (the hub's `lark` push names the chats): read the newest page again when we show it.
   const pageRef = useRef(page);
@@ -295,10 +354,12 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     }
     if (placed.current) return;
     placed.current = true;
-    const target = focus ? el.querySelector<HTMLElement>(`[data-pos="${CSS.escape(focus)}"]`) : null;
+    const at = firstAtOrAfter(page.messages, land);
+    const target = at ? el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(at.id)}"]`) : null;
     if (target) el.scrollTop = Math.max(0, target.offsetTop - 64);
     else el.scrollTop = el.scrollHeight;
-  }, [page, focus]);
+    if (at && focus && comparePosition(at.position, focus) === 0) setFlash((f) => ({ id: at.id, n: (f?.n ?? 0) + 1 }));
+  }, [page, land, focus]);
 
   const loadNewer = useCallback(async () => {
     const p = pageRef.current;
@@ -346,7 +407,20 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     if (!el || !p) return;
     if (autoOlder && placed.current && p.has_older && nearTop(el)) void loadOlder();
     setJumpShown(showsJumpToLatest(p.has_newer, el));
-  }, [autoOlder, loadOlder]);
+    if (!placed.current) return;
+    const box = el.getBoundingClientRect();
+    const up = (target: string | undefined, key: "unread" | "mention") => {
+      const m = firstAtOrAfter(p.messages, target);
+      const row = m ? el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(m.id)}"]`)?.getBoundingClientRect() : undefined;
+      const onScreen = Boolean(row && row.bottom > box.top && row.top < box.bottom);
+      if (onScreen) reached.current[key] = true;
+      if (reached.current[key]) return false;
+      // the @me shows until it has been on screen, wherever it is (iOS); the first unread only while it lies above
+      return key === "mention" ? Boolean(target) && !onScreen : showsJumpUp(target, p, row ? row.bottom - box.top : undefined);
+    };
+    const next = { unread: up(unreadFrom, "unread"), mention: up(mention, "mention") };
+    setUpShown((cur) => (cur.unread === next.unread && cur.mention === next.mention ? cur : next));
+  }, [autoOlder, loadOlder, unreadFrom, mention]);
   useEffect(() => {
     checkScroll();
   }, [page, checkScroll]);
@@ -372,6 +446,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     anchor.current = null;
     jumpTo.current = null;
     placed.current = true;
+    reached.current = { unread: false, mention: false };
     const kept = latest.current;
     if (kept) {
       toEnd.current = true;
@@ -398,6 +473,42 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
       if (gen === windowGen.current) setJumping(false);
     }
   }, [base, ol, manager]);
+
+  // "First unread" / "You were mentioned": to that message when the window holds it, else the window around it
+  // replaces this one (as a Pin does); the mention is lit up when it lands.
+  const jumpUp = useCallback(async (key: "unread" | "mention") => {
+    const position = key === "unread" ? unreadFrom : mention;
+    const p = pageRef.current;
+    const el = scroller.current;
+    if (!position || !p || !el) return;
+    const light = (id: string) => key === "mention" && setFlash((f) => ({ id, n: (f?.n ?? 0) + 1 }));
+    const first = p.messages[0];
+    const have = first && !(comparePosition(position, first.position) < 0 && p.has_older) ? firstAtOrAfter(p.messages, position) : undefined;
+    const row = have ? el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(have.id)}"]`) : null;
+    if (have && row) {
+      el.scrollTo({ top: Math.max(0, row.offsetTop - 64), behavior: scrollBehavior() });
+      light(have.id);
+      return;
+    }
+    const gen = ++windowGen.current;
+    paging.current.reset();
+    anchor.current = null;
+    placed.current = true;
+    setGoingUp(key);
+    try {
+      const r = await api<LarkPage>(larkPath(`${base}?limit=${PAGE}&around=${enc(position)}`, ol, manager));
+      if (gen !== windowGen.current) return;
+      const messages = mergeMessages([], r.messages ?? []);
+      const target = firstAtOrAfter(messages, position);
+      jumpTo.current = target?.id ?? null;
+      setPage((cur) => ({ ...(cur ?? {}), ...r, messages: keepSameMessages(cur?.messages ?? [], messages) }));
+      if (target) light(target.id);
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      if (gen === windowGen.current) setGoingUp(null);
+    }
+  }, [base, ol, manager, unreadFrom, mention]);
 
   const handleReply = useCallback((m: LarkMessage) => {
     setReplyTo({
@@ -464,7 +575,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
       const r = await startConversation({ prompt }, ownerHeaders(manager));
       // its requests (feed, stop…) go to that manager whatever the page shows later; the current assistant stays
       adoptConversation(manager, r.session.session_id, r.session.machine_id);
-      navigate({ name: "persona", sid: r.session.session_id });
+      navigate(conversationPage(r.session.session_id, r.session.machine_id, manager));
     } catch (e) {
       toast(t("inbox-larkthread.summary_failed", { error: errorText(e) }), "error");
     } finally {
@@ -533,9 +644,10 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   }), [feed, chat.group, refreshAround]);
 
   if (!page) {
+    if (unavailable) return <ThreadUnavailable />;
     return <div className="p-5">{error ? <p className="text-[12.5px] text-red">{error}</p> : <Loading label={t("inbox-larkthread.loading")} />}</div>;
   }
-  const firstNew = focus ? page.messages.find((m) => comparePosition(m.position, focus) >= 0)?.id : undefined;
+  const firstNew = newMessagesLineAt(page, unreadFrom ?? focus);
   const shown = viewing ? images.findIndex((i) => i.src === viewing) : -1;
   const topicGroup = topic || Boolean(page.topic);
   return (
@@ -609,18 +721,25 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
           {error && <p className="px-2 pt-2 text-[12px] text-red">{error}</p>}
         </div>
       </div>
+      {(upShown.unread || upShown.mention) && (
+        <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center gap-2">
+          {upShown.unread && (
+            <JumpPill icon="arrowUp" busy={goingUp === "unread"} disabled={goingUp !== null} onClick={() => void jumpUp("unread")} testId="lark-jump-unread">
+              {t("inbox-larkthread.jump_first_unread")}
+            </JumpPill>
+          )}
+          {upShown.mention && (
+            <JumpPill icon="at" busy={goingUp === "mention"} disabled={goingUp !== null} onClick={() => void jumpUp("mention")} testId="lark-jump-mention">
+              {t("inbox-larkthread.jump_mention")}
+            </JumpPill>
+          )}
+        </div>
+      )}
       {jumpShown && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
-          <button
-            type="button"
-            onClick={() => void jumpToLatest()}
-            disabled={jumping}
-            className="pointer-events-auto inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full bg-surface px-3 text-[12px] font-medium text-ink shadow-raised transition-transform duration-150 active:scale-[0.96]"
-            style={{ animation: "fade-up 180ms ease-out both" }}
-          >
-            {jumping ? <Spinner size={12} /> : <Icon name="arrowDown" size={13} />}
+          <JumpPill icon="arrowDown" busy={jumping} disabled={jumping} onClick={() => void jumpToLatest()} testId="lark-jump-latest">
             {t("inbox-larkthread.jump_latest")}
-          </button>
+          </JumpPill>
         </div>
       )}
       </div>
@@ -693,6 +812,24 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     </Today.Provider>
     </Receipts.Provider>
     </Tools.Provider>
+  );
+}
+
+/** A pill floating over the list that jumps somewhere in it ("Back to latest" draws the same). */
+function JumpPill({ icon, busy, disabled, onClick, testId, children }: { icon: "arrowUp" | "arrowDown" | "at"; busy: boolean; disabled: boolean;
+  onClick: () => void; testId: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      data-testid={testId}
+      className="pointer-events-auto inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full bg-surface px-3 text-[12px] font-medium text-ink shadow-raised transition-transform duration-150 active:scale-[0.96]"
+      style={{ animation: "fade-up 180ms ease-out both" }}
+    >
+      {busy ? <Spinner size={12} /> : <Icon name={icon} size={13} />}
+      {children}
+    </button>
   );
 }
 
@@ -987,17 +1124,30 @@ function TranslationLine({ m, target }: { m: LarkMessage; target: string }) {
   );
 }
 
+/** A reply's quoted strip: the one-line summary, plus a thumbnail when the quoted message is a picture (its parts
+ * carry the URL), so the quote shows the picture instead of only an "[Image]" placeholder. */
+function QuoteLine({ m, display, className = "" }: { m: LarkMessage; display: LarkMessageDisplay; className?: string }) {
+  const q = m.reply_to;
+  const manager = useItemManager();
+  if (!q) return null;
+  const src = safeURL(q.parts?.find((p) => p.kind === "image")?.url, manager);
+  return (
+    <p className={`flex items-center gap-1.5 border-l-2 border-line-strong pl-2 text-[12px] text-ink-3 ${className}`}>
+      <span className="min-w-0 flex-1 truncate">
+        {q.sender_name ? t("inbox-larkthread.quoted_sender", { name: q.sender_name }) : ""}{quoteSummary(display, q)}
+      </span>
+      {src && <img src={src} alt="" decoding="async" className="size-5 shrink-0 rounded-[6px] object-cover" />}
+    </p>
+  );
+}
+
 /** A topic's own content on its card: what a chat row holds under its header. */
 function MessageBody({ m, translateTo }: { m: LarkMessage; translateTo?: string }) {
   const display = useLarkDisplay(useContext(ChatAccount));
   const shown = showsBody(display, m);
   return (
     <>
-      {m.reply_to && (
-        <p className="mb-1 truncate border-l-2 border-line-strong pl-2 text-[12px] text-ink-3">
-          {m.reply_to.sender_name ? t("inbox-larkthread.quoted_sender", { name: m.reply_to.sender_name }) : ""}{quoteSummary(display, m.reply_to)}
-        </p>
-      )}
+      {m.reply_to && <QuoteLine m={m} display={display} className="mb-1" />}
       {shown ? <Parts parts={m.parts?.length ? m.parts : [{ kind: "text", text: m.text ?? "" }]} /> : <p className="text-[13px] text-ink-3 italic">{t("inbox-larkthread.recalled")}</p>}
       {shown && m.recalled && <p className="mt-0.5 text-[11px] text-ink-3">{t("inbox-larkthread.recalled_mark")}</p>}
       {translateTo && <TranslationLine m={m} target={translateTo} />}
@@ -1151,11 +1301,7 @@ const Message = memo(function Message({
             )}
           </p>
         )}
-        {m.reply_to && (
-          <p className="mt-0.5 truncate border-l-2 border-line-strong pl-2 text-[12px] text-ink-3">
-            {m.reply_to.sender_name ? t("inbox-larkthread.quoted_sender", { name: m.reply_to.sender_name }) : ""}{quoteSummary(display, m.reply_to)}
-          </p>
-        )}
+        {m.reply_to && <QuoteLine m={m} display={display} className="mt-0.5" />}
         {shown ? <Parts mid={m.id} parts={m.parts?.length ? m.parts : [{ kind: "text", text: m.text ?? "" }]} /> : <p className="text-[13px] text-ink-3 italic">{t("inbox-larkthread.recalled")}</p>}
         {((shown && m.recalled) || (compact && m.edited)) && (
           <p className="mt-0.5 flex items-center gap-2 text-[11px] text-ink-3">
@@ -1296,7 +1442,7 @@ function safeURL(u?: string, manager?: string) {
   return /^(https?:|mailto:)/i.test(u) ? u : undefined;
 }
 
-function LinkText({ url, children }: { url?: string; children: React.ReactNode }) {
+function LinkText({ url, children }: { url?: string; children: ReactNode }) {
   const manager = useItemManager();
   const safe = safeURL(url, manager);
   if (!safe) return <>{children}</>;
@@ -1350,6 +1496,21 @@ function Inline({ p }: { p: LarkPart }) {
   }
 }
 
+// The largest a chat picture is drawn (the img's max-width / max-height classes below): the reported size is scaled
+// into this box so the place reserved before load matches the loaded picture.
+const PICTURE_MAX_W = 280;
+const PICTURE_MAX_H = 256;
+
+/** The box a picture reserves from its reported size, so it has layout before it loads. A boxless img never starts
+ * loading in some browsers (a zero-size lazy request is skipped), which left group pictures permanently blank. */
+function pictureBox(meta: Record<string, unknown>): CSSProperties | undefined {
+  const w = Number(meta.width);
+  const h = Number(meta.height);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined;
+  const scale = Math.min(PICTURE_MAX_W / w, PICTURE_MAX_H / h, 1);
+  return { width: Math.round(w * scale), height: Math.round(h * scale) };
+}
+
 function Block({ p, mid }: { p: LarkPart; mid?: string }) {
   const meta = p.metadata ?? {};
   const tools = useContext(Tools);
@@ -1361,13 +1522,13 @@ function Block({ p, mid }: { p: LarkPart; mid?: string }) {
       const src = p.url?.startsWith("blob:") ? p.url : safeURL(p.url, manager);
       return src ? (
         <button type="button" onClick={() => (tools ? tools.openImage(src) : openMedia(src))} aria-label={t("inbox-larkthread.open_image")} className="w-fit">
-          <img src={src} alt={t("inbox-larkthread.image")} loading="lazy" className="max-h-64 max-w-[min(280px,100%)] rounded-[8px] object-contain shadow-hairline" />
+          <img src={src} alt={t("inbox-larkthread.image")} decoding="async" style={pictureBox(meta)} className="max-h-64 max-w-[min(280px,100%)] rounded-[8px] object-contain shadow-hairline" />
         </button>
       ) : <span className="text-ink-3">{t("inbox-larkthread.image_placeholder")}</span>;
     }
     case "emotion": {
       const src = safeURL(p.url, manager);
-      return src ? <img src={src} alt={p.text || t("inbox-larkthread.sticker")} loading="lazy" className="size-20 object-contain" /> : <span>{emojiLabel(p.refId ?? "", p.text)}</span>;
+      return src ? <img src={src} alt={p.text || t("inbox-larkthread.sticker")} decoding="async" className="size-20 object-contain" /> : <span>{emojiLabel(p.refId ?? "", p.text)}</span>;
     }
     case "file":
       return <FilePart p={p} />;

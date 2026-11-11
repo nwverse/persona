@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -35,6 +36,7 @@ import (
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", h.health)
+	h.passwordLoginRoutes(mux)
 	api := http.NewServeMux()
 	h.apiMux = api
 	if h.upd != nil {
@@ -210,7 +212,14 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		if ext {
 			p, ok, p.extOpens, p.extScope, sure = h.authorizeExtension(r.Context(), tok, r)
 		} else {
-			p, ok = h.authenticate(r.Context(), tok)
+			var err error
+			if p, ok, err = h.lookupToken(r.Context(), tok); err != nil {
+				// The token store did not answer: no verdict on the token. A 401 would tell the app its credential is
+				// revoked (Android then forgets the hub), so say "try again" and don't count it against the source.
+				retryAfter(w, 5*time.Second)
+				h.securityError(w, r, http.StatusServiceUnavailable, codeTokenStoreUnavailable, 0)
+				return
+			}
 		}
 		if !ok && ext && !sure && (!public || h.proofVouches(r, proof, tok)) {
 			// A manager did not answer (timed out, not ready yet): no verdict on the token, so neither counted nor
@@ -399,6 +408,30 @@ func requestID(client string) string {
 
 func writeJSON(w http.ResponseWriter, v any) { apierr.WriteJSON(w, v) }
 
+// marshalItems is v, a page or push of transcript items, as JSON with < > & as they are. Escaped, each costs six
+// bytes, and a tool input or text of HTML or code went to the apps at up to three times its size (#2907). Escapes the
+// node already wrote stay as they are, and U+2028 and U+2029 are still escaped, as encoding/json does without HTML
+// escaping.
+func marshalItems(v any) ([]byte, error) {
+	var b bytes.Buffer
+	if err := itemsEncoder(&b).Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+// writeItemsJSON is writeJSON for a body of transcript items (marshalItems).
+func writeItemsJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = itemsEncoder(w).Encode(v)
+}
+
+func itemsEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc
+}
+
 func atoi(s string) int {
 	n := 0
 	for _, c := range s {
@@ -511,7 +544,7 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
-	writeJSON(w, res)
+	writeItemsJSON(w, res)
 }
 
 // sessionItemFull serves one item whole: pages cut long text (the item says full_size), the app fetches the rest when
@@ -527,7 +560,7 @@ func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine
 	// The whole item for the channels that follow the conversation, or show its view (the manager's, fleet_follow.go).
 	h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
 		Items: []proto.Item{it}})
-	writeJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
+	writeItemsJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
 }
 
 // sessionImage serves one item's image as raw bytes. An item's image never changes, so the app may cache it forever.
@@ -706,6 +739,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		Cwd             string `json:"cwd"`
 		Launcher        string `json:"launcher"`
 		AgentType       string `json:"agent_type,omitempty"`
+		WorkSession     bool   `json:"work_session,omitempty"`
 		Model           string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
 		Prompt          string `json:"prompt"`
 		ResumeSessionID string `json:"resume_session_id"`
@@ -732,6 +766,11 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeBodyErr(w, err, err)
+		return
+	}
+	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||
+		p.ResumeSessionID != "" || p.TodoID != "" || p.WorkspaceID != "" || p.Host != "") {
+		writeErrCode(w, http.StatusBadRequest, "work_target_required", errors.New("Choose a computer, project folder, harness and launcher for the new session."))
 		return
 	}
 	r = h.captureHumanSubmission(r, p.Prompt)
@@ -801,7 +840,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudget(async))
+	ctx, cancel := context.WithTimeout(parent, startBudget(async && !p.WorkSession))
 	defer cancel()
 	var res struct {
 		Session proto.Session `json:"session"`
@@ -824,7 +863,25 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
 	}
-	if err := m.call(ctx, "session.start", params, &res); err != nil {
+	method := "session.start"
+	if p.WorkSession {
+		method = devicewire.MethodStartWorkSession // An old node must refuse, never silently ignore strict start options.
+		if params["launcher"] != p.Launcher || (strings.TrimSpace(p.Model) != "" && params["model"] != strings.TrimSpace(p.Model)) {
+			writeErrCode(w, http.StatusConflict, "work_target_changed", errors.New("The selected launcher or model changed."))
+			return
+		}
+		if strings.TrimSpace(p.Model) == "" {
+			// In this picker "Launcher default" is the launcher's own model,
+			// even if Models › Agents happens to configure the same launcher.
+			delete(params, "model")
+			delete(params, "model_fingerprint")
+		}
+		if p.Effort == "" {
+			delete(params, "effort")
+		}
+		setWorkLauncherConfig(m, p.Launcher, params)
+	}
+	if err := m.call(ctx, method, params, &res); err != nil {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
 		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
@@ -894,6 +951,11 @@ func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
 		r.Error = err.Error()
 		var re *rpc.Error
 		if errors.As(err, &re) {
+			// Work picker refusals happen before the launcher runs. Counting
+			// them as failures could hide a working launcher from the picker.
+			if strings.HasPrefix(re.Code, "work_") {
+				return
+			}
 			r.Code, r.Data = re.Code, re.Data
 		}
 	}
@@ -1090,7 +1152,7 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if moreAfter {
 			out["more_after"] = true
 		}
-		b, _ := json.Marshal(out)
+		b, _ := marshalItems(out)
 		return b
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
@@ -1498,7 +1560,9 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			out["more_after"] = true
 			more = false
 		}
-		c.sendJSON(out)
+		if b, err := marshalItems(out); err == nil {
+			c.queue(b)
+		}
 		if !more {
 			h.sendLiveText(c, m.cfg.ID, sid)
 			return
