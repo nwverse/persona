@@ -525,6 +525,11 @@ Severity ladder to adopt:
 
 The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
 
+A blocked terminal card on the web offers **Close Agent**, including when no choices can be parsed from the screen.
+Its footer reuses `Button`, explains that the pending confirmation is cancelled and the conversation kept, and
+requires **Close and archive** or **Cancel**. Close controls use the existing 44 px grid minimum and single-line labels.
+The archive toast offers Undo; Undo restores visibility without reopening the Agent or granting its request.
+
 Task-progress reply drafts (#3743) use the reversible rung: **Send** is primary, **Later** and **Don't handle** are
 secondary. Don't handle removes only the exact draft from Needs you, sends nothing and leaves its task, Agent and
 Inbox source open. It persists a task decision and offers receipt-scoped Undo in the web's existing six-second toast
