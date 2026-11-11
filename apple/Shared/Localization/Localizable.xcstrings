@@ -48471,6 +48471,30 @@
       },
       "extractionState": "manual"
     },
+    "Downloads: %lld": {
+      "comment": "Cumulative package downloads reported by the extension catalog, not active installations.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloads: %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载量：%lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ダウンロード数：%lld"
+          }
+        }
+      }
+    },
     "Download package": {
       "localizations": {
         "en": {
@@ -72370,6 +72394,28 @@
       },
       "extractionState": "manual"
     },
+    "Message deleted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message deleted"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メッセージを削除しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "消息已删除"
+          }
+        }
+      }
+    },
     "Message for the Agent": {
       "localizations": {
         "en": {
@@ -72392,6 +72438,22 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Message %lld [Chat Navigation]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Message %1$lld" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "%1$lld件目のメッセージ" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "第 %1$lld 条" } }
+      }
+    },
+    "Couldn't load this message. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Couldn't load this message. Try again." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "このメッセージを読み込めませんでした。もう一度お試しください。" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "无法加载这条消息，请重试。" } }
+      }
     },
     "Message not sent: couldn't save it on this device. Check your storage.": {
       "localizations": {
@@ -160775,6 +160837,133 @@
           }
         }
       }
+    },
+    "%lld on [Source Subscriptions]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld on"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld on"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件オン"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 个开着"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%lld on · %lld failing [Source Subscriptions]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld on · %2$lld failing"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 件オン · %2$lld 件エラー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 个开着 · %2$lld 个出错"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Available [Source Subscriptions]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Available"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "購読できます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可以订阅"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Subscriptions [Source Subscriptions Entry]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscriptions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "購読"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "订阅"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Subscriptions [Source Subscriptions]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscriptions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "購読"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "订阅来源"
+          }
+        }
+      },
+      "extractionState": "manual"
     }
   },
   "version": "1.0"

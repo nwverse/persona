@@ -21,6 +21,9 @@ import { agentKey, isSpacePinned, pinnedSessions } from "../lib/pins";
 import { firstAndCurrent } from "../lib/persona-nav";
 import { recentConversations } from "../lib/conversation-origins";
 import { countsLabel, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
+import { groupsByDirection, useDirectionTree } from "../lib/direction-tree";
+import { buildDirectionAgentTree } from "../lib/direction-agent-tree";
+import { SidebarDirectionRow } from "./SidebarDirections";
 import { ConversationRowMenu } from "./ConversationMenu";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
@@ -343,7 +346,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
             }
           >
             {directions.length > 0 && <SubHeading label={t("sidebar.directions")} />}
-            {directions.map(directionRow)}
+            {/* each 常驻 row folds open to its tasks (#4352) */}
+            {directions.map((c) => <SidebarDirectionRow key={c.session_id} id={c.session_id} name={directionLabel(directionNames, c.session_id, conversationTitle(c))} row={directionRow(c)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
             {recent.length > 0 && <SubHeading label={t("sidebar.recent_chats")} />}
             {recent.map(recentRow)}
             {assistant && <NavRow k="history" reg={reg} hover={hover} active={activeKey === "history"} to={{ name: "history" }} go={go} icon="list" label={t("sidebar.all_chats")} hint={assistant.conversations.length > 0 ? String(assistant.conversations.length) : undefined} />}
@@ -601,12 +605,16 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     localStorage.setItem("persona.agentChatList", "0");
     chooseGrouping(g);
   }, [chooseGrouping]);
-  const availableGroupings = useMemo(() => {
-    if (todosSupported === false) return AGENT_GROUPINGS.filter((g) => g.key !== "todo");
-    return AGENT_GROUPINGS;
-  }, [todosSupported]);
-  // a hub without todos shows by machine, a by-todo choice kept for when it has them
-  const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : grouping;
+  // "By pinned" (#4352) only where the hub sends the direction tree and there is a leader to group by
+  const directionTree = useDirectionTree();
+  const byDirection = groupsByDirection(directionTree);
+  // a hub without todos shows by machine, a by-todo choice kept for when it has them; by pinned with no leaders (or an
+  // older hub, or a first read that failed) shows by to-do, the choice kept for when there are
+  const fallback = todosSupported === false ? "machine" : "todo";
+  const shownGrouping = grouping === "direction" ? (byDirection || directionTree === undefined ? "direction" : fallback) : todosSupported === false && grouping === "todo" ? "machine" : grouping;
+  // while the first read is out "By pinned" stays an option, so the control's value is always one of its options
+  const offersDirection = byDirection || shownGrouping === "direction";
+  const availableGroupings = useMemo(() => AGENT_GROUPINGS.filter((g) => (g.key !== "todo" || todosSupported !== false) && (g.key !== "direction" || offersDirection)), [todosSupported, offersDirection]);
   // "State first" / "Recently updated" (iOS AgentSort, G099): not under "By status", whose sections are the states already
   const [sortChoice, setSortChoice] = useState<AgentSort>(() => agentSort(localStorage.getItem(AGENT_SORT_KEY)));
   const byUpdate = sortChoice === "updated" && shownGrouping !== "state";
@@ -658,7 +666,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [unpinned, machines, byUpdate]);
   const groups = useMemo(() => {
     if (shownGrouping === "space" || shownGrouping === "repo" || shownGrouping === "machine") return [];
-    if (shownGrouping === "todo") return [];
+    if (shownGrouping === "todo" || shownGrouping === "direction") return [];
     return buildAgentGroups(unpinned, machines, "state", mutes);
   }, [unpinned, machines, shownGrouping, mutes, todos]);
   // by todo waits for the first GET /todos: the socket pushes the sessions before it answers, and a tree drawn without
@@ -673,6 +681,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, byUpdate]);
   lastTodoTree.current = todoTree;
   const catalog = useWorkspaceCatalog(shownGrouping === "repo");
+  // by pinned: the hub's tree, the agents it does not hold last (lib/direction-tree.ts)
+  const lastDirectionTree = useRef<TodoTree | undefined>(undefined);
+  const directionAgents = useMemo(() => {
+    if (shownGrouping !== "direction" || !byDirection) return undefined;
+    return shareTree(lastDirectionTree.current, buildDirectionAgentTree(directionTree, unpinned, machines, mutes));
+  }, [shownGrouping, byDirection, directionTree, unpinned, machines, mutes]);
+  lastDirectionTree.current = directionAgents;
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo") return [];
     const built = buildRepoMachineTree(unpinned, machines, { ...catalog, hiddenSources: botmuxHidden ? ["botmux"] : undefined, navigationSessions: [...shown, ...pinnedAgents.filter((p) => !shown.includes(p))], hideEmpty: filtered, compareSessions: byUpdate ? byUpdated : undefined });
@@ -684,7 +699,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     return byUpdate ? machineTreeByUpdate(built) : built;
   }, [shownGrouping, machines, unpinned, pins, filtered, byUpdate]);
   // by todo a group mixes hosts (herdr, botmux…): when the list has more than one, rows outside herdr name theirs (#1836)
-  const mixedHosts = useMemo(() => shownGrouping === "todo" && hostsOf(live).size > 1, [shownGrouping, live]);
+  const mixedHosts = useMemo(() => (shownGrouping === "todo" || shownGrouping === "direction") && hostsOf(live).size > 1, [shownGrouping, live]);
   const unreadShown = filter === "unread" ? unreadOf(shown) : [];
   // Stable event handlers read the last committed list, including pushes received since the bar last rendered.
   const filterInputs = useRef({ live, mutes });
@@ -861,6 +876,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         repoMachines.map((m) => (
           <RepoMachineSection key={m.key} m={m} flat={repoMachines.length <= 1} machines={machines} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} {...workspaceActions} />
         ))
+      ) : shownGrouping === "direction" ? (
+        directionAgents ? <TodoTreeView tree={directionAgents} machines={machines} showHost={mixedHosts} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} onNavigate={onNavigate} /> : <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
       ) : todosPending ? (
         <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
       ) : todoTree ? (

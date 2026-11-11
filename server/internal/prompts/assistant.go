@@ -376,6 +376,9 @@ func RenderTaskRun(t TaskRun) string { return render("assistant/task_run", t) }
 // BriefFacts are the facts of a morning or evening routine's run, as the model is given them (assistant/routine_facts):
 // the lines are ready to read; the totals count more than the lines when the lists were cut.
 type BriefFacts struct {
+	// NorthStar: the lines the report opens with (the interruptions and the availability today, their change against
+	// yesterday until the same time, and where they come from), ready to read.
+	NorthStar                                                        []string
 	ConfirmationSummary                                              string
 	Confirmations                                                    []string
 	Hours                                                            int // how far back "done" and "not through" look
@@ -438,6 +441,10 @@ type BriefProgress struct{ Title, Stage string }
 
 func RenderBriefFacts(b BriefFacts) string { return render("assistant/routine_facts", b) }
 
+// RenderNorthStarFacts is what a leader or main conversation's daily task opens with when it has no facts of its own
+// (assistant/north_star_facts): the north star's lines, ready to read.
+func RenderNorthStarFacts(lines []string) string { return render("assistant/north_star_facts", lines) }
+
 // RenderMorningRoutine and RenderEveningRoutine are the default daily tasks' prompts.
 func RenderMorningRoutine() string { return render("assistant/routine_morning", nil) }
 func RenderEveningRoutine() string { return render("assistant/routine_evening", nil) }
@@ -484,6 +491,27 @@ type TaskNotice struct {
 }
 
 func RenderTaskNotice(n TaskNotice) string { return render("assistant/task_notice", n) }
+
+// SpawnNotice tells the conversation that opened another with conversation_new that the other failed, or ended a turn
+// without reporting back with conversation_send (#4669): once per opened conversation.
+type SpawnNotice struct {
+	ID, Title, Link string
+	Failed          bool
+	Error           string // Failed: the turn's error
+	Last            string // what it said last, when it did not fail
+}
+
+func RenderSpawnNotice(n SpawnNotice) string { return render("assistant/spawn_notice", n) }
+
+// TaskEnded tells a conversation that is not the main one that a task it handed out with task_plan, supervised by the
+// main conversation, ended (#4669): accepted or cancelled, with the task's link (or its id without one).
+type TaskEnded struct {
+	ID, Title, Link string
+	Verdict         string // accepted | cancelled
+	Note            string
+}
+
+func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended", n) }
 
 // AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
 // (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
