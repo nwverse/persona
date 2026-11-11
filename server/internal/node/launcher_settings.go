@@ -139,8 +139,8 @@ func (n *Node) mergeManagedSettings(launcher string, l proto.ManagedLauncher, ou
 	// A proxy the user's settings give every claude that no longer answers would hold this launcher's requests until
 	// they time out; one the launcher does not set itself is taken away (deadproxy.go, #5953).
 	if len(configDir) > 0 {
-		// An assistant's recorded profile wins over a provider's later edit.
-		// Config selection precedes settings load; do not pin it in settings.env.
+		// Config selection precedes settings load. The caller supplies the real
+		// profile; do not turn that selection into a settings.env override.
 		delete(env, "CLAUDE_CONFIG_DIR")
 	}
 	for _, k := range n.deadSettingsProxies(env, l.BaseURL, configDir...) {
