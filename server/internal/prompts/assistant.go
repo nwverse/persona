@@ -376,6 +376,8 @@ func RenderTaskRun(t TaskRun) string { return render("assistant/task_run", t) }
 // BriefFacts are the facts of a morning or evening routine's run, as the model is given them (assistant/routine_facts):
 // the lines are ready to read; the totals count more than the lines when the lists were cut.
 type BriefFacts struct {
+	ConfirmationSummary                                              string
+	Confirmations                                                    []string
 	Hours                                                            int // how far back "done" and "not through" look
 	WaitingTotal, DoneTotal, FailedTotal, AcceptTotal, ProgressTotal int
 	WaitingUnknown                                                   bool // the cards waiting were not read yet: say nothing of whether any waits
@@ -530,10 +532,12 @@ type Supervise struct {
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
 	Decisions bool
+	// Inbox: an entry is new Inbox messages from other people about the task (#4293).
+	Inbox bool
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
-// started, escalated, ask).
+// started, escalated, ask, inbox…).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
@@ -576,6 +580,16 @@ type SuperviseEntry struct {
 	// (assistant, leader, routine, hub) and StartedWhy the reason given.
 	Asked, AskedAt, Started, StartedWhy string
 	Dropped                             []string
+	// inbox: the Inbox item the new messages came in, the newest when several did.
+	Inbox *SuperviseInbox
+}
+
+// SuperviseInbox is the Inbox item an inbox entry names (#4293): its id, title (the chat's name or the mail's subject),
+// who wrote the newest message, a one-line preview, and how many messages from other people came in about the task
+// since its supervisor last heard (the newest item's, and any other item's linked to the same task meanwhile).
+type SuperviseInbox struct {
+	Item, Title, Sender, Preview string
+	Count                        int
 }
 
 // SuperviseParked is what a task was parked for (task_review parked), as its parked_due entry repeats it: the reason,
