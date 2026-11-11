@@ -114,7 +114,8 @@ class ChatDraftEditor(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { error.value = R.string.chat_draft_read_failed }
             ready.value = true
-            changes.trySend(state.draft)
+            // What was typed before the draft arrived was not saved then: it is now (it replaces the draft).
+            if (touched) changes.trySend(state.draft)
             val versions = sessionVersions?.let { flow -> launch {
                 flow.collect { version ->
                     composer.value?.let { state ->
