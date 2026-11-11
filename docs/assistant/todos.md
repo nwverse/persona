@@ -471,8 +471,9 @@ presented as a fresh user click. The grant itself is managed through the main co
 and the list/delete API in [Unified entry](unified-entry.md#standing-authorizations); established task decisions keep
 their provenance even after that grant is revoked.
 
-The owner's own decisions (`source` `card` and `manual`) are also what a suggested rule is counted from: after the same
-go-ahead three times in 14 days, the next decision offers to make it a standing authorization
+The owner's own decisions (`source` `card`, and the `manual` ones made by choosing a decision's option) are also what
+a suggested rule is counted from: after the same go-ahead three times in 14 days, the next decision offers to make it a
+standing authorization
 ([Unified entry](unified-entry.md#a-rule-after-the-same-answer-three-times-4929)).
 
 
