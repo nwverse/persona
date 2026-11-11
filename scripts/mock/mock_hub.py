@@ -13009,12 +13009,14 @@ def case_route(h, method, p, q, body):
         return True
     if p == "/mock/case/load" and method == "POST":  # another case in the same mock (its sockets closed first)
         try:
-            case = sync_case.load(json.loads(body or b"{}").get("case", ""))
+            asked = json.loads(body or b"{}")
+            case = sync_case.load(asked.get("case", ""))
         except (ValueError, KeyError, OSError) as e:
             case_json(h, {"error": str(e)}, 400)
             return True
         CASE.close()
-        CASE = sync_case.CaseHub(case)
+        # "now": its times moved to the present, for an app on the real clock (the iOS simulator's)
+        CASE = sync_case.CaseHub(case, shift=sync_case.shift_to(time.time()) if asked.get("now") else 0)
         case_json(h, CASE.state())
         return True
     if method == "GET" and MOCK_WEB and not p.startswith(("/api/", "/mock/")):
