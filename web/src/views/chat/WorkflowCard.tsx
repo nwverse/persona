@@ -92,7 +92,8 @@ export const WorkflowCallCard = memo(function WorkflowCallCard({ step, mid, sid,
     return session?.workflows?.find((w) => w.tool_use_id === call);
   });
   const task = run?.task_id;
-  const inDialog = useSyncExternalStore(subscribeBackgroundDialogs, () => Boolean(task) && canOpenBackgroundDialog(mid, sid, task));
+  const listed = () => Boolean(task) && canOpenBackgroundDialog(mid, sid, task);
+  const inDialog = useSyncExternalStore(subscribeBackgroundDialogs, listed, listed);
   const [open, setOpen] = useExpanded(`${scope}workflow:${call}`);
   // the agents' clocks go each second only while their rows show
   const now = useNow(1000, Boolean(run?.running) && open && !inDialog);
