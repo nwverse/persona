@@ -119,6 +119,7 @@ func TestAssistantSendsSayWhetherAPersonSentThem(t *testing.T) {
 		{"a full device", &principal{ID: "d1", Name: "iPhone", Role: roleFull}, true},
 		{"an extension's token", &principal{ID: "x1", Role: roleExtension, Extension: "helper"}, false},
 		{"an answer-only device", &principal{ID: "w1", Role: roleAnswer}, false},
+		{"a computer's link", &principal{ID: "l1", Role: roleLink, Machine: "box"}, false},
 		{"the hub's own token", &principal{Role: roleFull}, false},
 		{"no credential", nil, false},
 	} {
@@ -135,6 +136,50 @@ func TestAssistantSendsSayWhetherAPersonSentThem(t *testing.T) {
 		if got.Human != c.human {
 			t.Fatalf("%s: human %v, want %v", c.name, got.Human, c.human)
 		}
+	}
+}
+
+// A new conversation's start (its first message) is marked as a person's own (HTTPRequest.Human) by the same test as a
+// message: a full device's credential only, never an extension's, a computer link's, an answer-only device's or the hub's
+// own token, nor a client's word for it (a header or the body); and no other relayed request carries the mark.
+func TestAConversationsFirstMessageIsAPersonsOnlyFromAFullDevice(t *testing.T) {
+	h, m := handoffBusHub(t)
+	start := h.startConversationOnce()
+	for _, c := range []struct {
+		name  string
+		who   *principal
+		human bool
+	}{
+		{"a full device", &principal{ID: "d1", Name: "iPhone", Role: roleFull}, true},
+		{"the hub's own token", &principal{Role: roleFull}, false},
+		{"an extension's token", &principal{ID: "x1", Role: roleExtension, Extension: "helper", Manager: assistantwire.AssistantID}, false},
+		{"a computer's link", &principal{ID: "l1", Role: roleLink, Machine: "box"}, false},
+		{"an answer-only device", &principal{ID: "w1", Role: roleAnswer}, false},
+		{"no credential", nil, false},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/assistant/conversations", strings.NewReader(`{"prompt":"fix CI","human":true}`))
+		req.Header.Set("X-Persona-Human", "1")
+		if c.who != nil {
+			req = req.WithContext(context.WithValue(req.Context(), principalKey{}, *c.who))
+		}
+		w := httptest.NewRecorder()
+		start(w, req)
+		relayed, _, _ := m.took()
+		if c.human && (w.Code != http.StatusOK || len(relayed) != 1) {
+			t.Fatalf("%s: %d, relayed %d", c.name, w.Code, len(relayed))
+		}
+		for _, r := range relayed {
+			if r.Human != c.human {
+				t.Fatalf("%s: human %v, want %v", c.name, r.Human, c.human)
+			}
+		}
+	}
+	// Any other relayed request of a full device: not marked.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/assistant/conversations/s1/compact", strings.NewReader(`{}`))
+	req = req.WithContext(context.WithValue(req.Context(), principalKey{}, principal{ID: "d1", Role: roleFull}))
+	h.forwardSend(httptest.NewRecorder(), req, assistantwire.AssistantID)
+	if relayed, _, _ := m.took(); len(relayed) != 1 || relayed[0].Human {
+		t.Fatalf("another request was marked: %+v", relayed)
 	}
 }
 

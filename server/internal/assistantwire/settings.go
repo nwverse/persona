@@ -103,8 +103,11 @@ type StartParams struct {
 	// that cannot picks its own. Never over the bus.
 	NewSessionID string `json:"-"`
 	// ClientMsgID: the first message's client_msg_id (with NewSessionID: the node sends it once and its transcript
-	// item carries it, as a send's). Never over the bus.
+	// item carries it, as a send's; without, the node ties it to the new conversation's first line). Never over the bus.
 	ClientMsgID string `json:"-"`
+	// Human: a person's own app opens it, as the hub vouched (HTTPRequest.Human): its first message gets a
+	// client_msg_id and counts as theirs, as a send the hub vouched for does (SendParams.Human). Never over the bus.
+	Human bool `json:"-"`
 }
 
 // SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is

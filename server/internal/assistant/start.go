@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -383,14 +384,31 @@ func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, erro
 	if p.Origin == "" || p.Origin == OriginUser {
 		p.Text = prompts.ProtectUserMessage(p.Text)
 	}
+	human := humanStart(&p)
 	sess, err := s.start(ctx, p)
 	if err != nil {
 		return proto.Session{}, err
+	}
+	if human != "" { // the hub's word: a person's own app sent its first message (secret_handoff.go handoffUserTurn)
+		s.humanSent.note(sess.SessionID, human, p.Text)
 	}
 	if !p.Untitled {
 		s.titleNew(sess.MachineID, sess.SessionID, time.Now())
 	}
 	return sess, nil
+}
+
+// humanStart gives the first message of a conversation a person's own app opens (p.Human, the hub's word) a
+// client_msg_id of its own, which the node ties to the conversation's first line, so that message counts as theirs as
+// a send the hub vouched for does; the id ("" for any other start, and for one that names its session or its first
+// message's id already: a meeting's, Just me's).
+func humanStart(p *StartParams) string {
+	if !p.Human || p.Origin != "" && p.Origin != OriginUser || p.OpenedBy != "" || p.GuestTools != nil ||
+		p.NewSessionID != "" || p.ClientMsgID != "" {
+		return ""
+	}
+	p.ClientMsgID = "start-" + randomHex(16)
+	return p.ClientMsgID
 }
 
 // ---- the main conversation ----
@@ -672,7 +690,7 @@ func (s *Service) startRoutes() {
 		// The main conversation is the assistant's, on its machine.
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
-			OpenedBy: requestOpener(r), GuestTools: guestTools})
+			OpenedBy: requestOpener(r), GuestTools: guestTools, Human: assistantwire.HumanStartOf(r.Context())})
 		if err != nil {
 			apierr.Call(w, err)
 			return
@@ -766,9 +784,12 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 		p.Params["text"] = prompts.ProtectUserMessage(text)
 	}
 	sent, _ := p.Params["text"].(string)
+	id, _ := p.Params["client_msg_id"].(string)
 	out, err := s.sendParams(ctx, p)
-	if err == nil && p.Human { // the hub's word: a person's own app sent it (secret_handoff.go handoffUserTurn)
-		id, _ := p.Params["client_msg_id"].(string)
+	switch {
+	case !p.Human: // anyone else's id never counts, nor does a person's id once another sent it (secret_handoff.go)
+		s.humanSent.voidSend(p.SessionID, id)
+	case err == nil: // the hub's word: a person's own app sent it (handoffUserTurn)
 		s.humanSent.note(p.SessionID, id, sent)
 	}
 	return out, err

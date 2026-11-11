@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extmgr"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -491,9 +492,9 @@ func TestHandoffRulesOnlyForTheUsersOwnTurn(t *testing.T) {
 	}{
 		{"the user's own", nil, []proto.Item{app, {ID: "t1", Role: "user", Kind: proto.KindToolResult}}, false},
 		{"the user's own, with a picture and a tool's screenshot", nil, []proto.Item{app,
-			{ID: "u1i", Role: "user", Kind: proto.KindImage, ClientMsgID: "c1"},
+			{ID: "u1#1", Role: "user", Kind: proto.KindImage, ClientMsgID: "c1"},
 			{ID: "t2", Role: "user", Kind: proto.KindImage, ToolUseID: "toolu_1"}}, false},
-		{"a picture under another's id", nil, []proto.Item{app, {ID: "u2i", Role: "user", Kind: proto.KindImage, ClientMsgID: "c-other"}}, true},
+		{"a picture under another's id", nil, []proto.Item{app, {ID: "u2#1", Role: "user", Kind: proto.KindImage, ClientMsgID: "c-other"}}, true},
 		{"an inbox conversation", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginInbox, "item1", "") }, nil, true},
 		{"a channel's /new", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginChannel, "feishu", "") }, nil, true},
 		{"a scheduled task", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginTask, "task1", "") }, nil, true},
@@ -593,7 +594,8 @@ func TestHandoffCardWordsAndTheProviderApproved(t *testing.T) {
 	var in proto.SecretHandoffInput
 	_ = json.Unmarshal(ix.ToolInput, &in)
 	if strings.Contains(string(card), "op://") || in.Cwd != "/code/app" || in.Prompt != "fix the release CI" ||
-		strings.Contains(ix.Summary, "fix the release CI") { // the summary is also the push's text
+		strings.Contains(ix.Summary, "fix the release CI") || // the summary is also the push's text
+		strings.Contains(ix.Summary, "“”") || strings.Contains(ix.Summary, "「」") { // an Agent with no name yet
 		t.Fatalf("card %s", card)
 	}
 	r.secrets.mu.Lock()
@@ -605,6 +607,21 @@ func TestHandoffCardWordsAndTheProviderApproved(t *testing.T) {
 	answer, errText := r.answer(done)
 	if errText != "" || !strings.Contains(answer, `"code":"provider_changed"`) || len(r.f.starts) != 0 || len(r.secrets.resolved) != 0 {
 		t.Fatalf("answer %q, error %q, starts %d, resolved %v", answer, errText, len(r.f.starts), r.secrets.resolved)
+	}
+}
+
+// The card's summary names the Agent when it has a name, and says "an Agent" when it has none yet, in every language.
+func TestHandoffSummaryWithoutAnAgentName(t *testing.T) {
+	const items = "Example Vault › GitHub token as GITHUB_TOKEN"
+	if got := handoffSummary(i18n.En, items, " ", "Box"); got != "Give "+items+" to an Agent on Box, for this run only. Approve on iPhone or the web." {
+		t.Fatalf("en: %q", got)
+	}
+	for _, l := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		named, unnamed := handoffSummary(l, items, "Fix CI", "Box"), handoffSummary(l, items, "", "Box")
+		if !strings.Contains(named, "Fix CI") || !strings.Contains(named, items) || !strings.Contains(unnamed, items) ||
+			!strings.Contains(unnamed, "Box") || strings.Contains(unnamed, "“”") || strings.Contains(unnamed, "「」") || unnamed == named {
+			t.Fatalf("%s: %q / %q", l, named, unnamed)
+		}
 	}
 }
 
@@ -624,10 +641,137 @@ func TestHandoffSecretEnvMustBeStrings(t *testing.T) {
 func TestHumanSendWordsAsTheTranscriptShowsThem(t *testing.T) {
 	var h humanSends
 	h.note("s1", "c1", "deploy the fix <persona-context>\nhub snapshot\n</persona-context> please")
-	if !h.has("s1", "c1", "deploy the fix  please\n(attached: notes.md)", false) {
+	if !h.has("s1", "c1", "deploy the fix  please\n(attached: notes.md)", false, "L1") {
 		t.Fatal("the user's line, as the transcript shows it, was not the user's")
 	}
-	if h.has("s1", "c1", "deploy the", false) || h.has("s2", "c1", "deploy the fix please", false) || h.has("s1", "c2", "", true) {
-		t.Fatal("a line without the words, another conversation, or another id counted")
+	if h.has("s1", "c1", "deploy the", false, "L1") || h.has("s2", "c1", "deploy the fix please", false, "L1") ||
+		h.has("s1", "c2", "", true, "L1") || h.has("s1", "c1", "deploy the fix please", false, "") {
+		t.Fatal("a line without the words, another conversation, another id, or an item of no line counted")
 	}
+}
+
+// A vouched client_msg_id counts once: for the first transcript line it is read on (its pictures and a later read of the
+// same line too), never for a second line that carries it; a send the hub did not vouch for that carries it voids it,
+// before or after the vouched one; and the same id sent again with other words counts for nothing.
+func TestAVouchedIDCountsOnce(t *testing.T) {
+	var h humanSends
+	h.note("s1", "c1", "deploy the fix")
+	if !h.has("s1", "c1", "deploy the fix", false, "L1") || !h.has("s1", "c1", "", true, "L1") || !h.has("s1", "c1", "deploy the fix", false, "L1") {
+		t.Fatal("the line the id was tied to, its picture, read again: not counted")
+	}
+	if h.has("s1", "c1", "deploy the fix", false, "L2") || h.has("s1", "c1", "", true, "L2") {
+		t.Fatal("a second line with the same id counted")
+	}
+	h.note("s1", "c1", "deploy the fix") // the same send asked again (the node sends it once): still its first line's
+	if !h.has("s1", "c1", "deploy the fix", false, "L1") || h.has("s1", "c1", "deploy the fix", false, "L2") {
+		t.Fatal("the same send noted again moved what it counts for")
+	}
+	h.note("s1", "c2", "deploy the fix")
+	h.voidSend("s1", "c2") // another author's send with it
+	if h.has("s1", "c2", "deploy the fix", false, "L3") {
+		t.Fatal("an id another author sent counted")
+	}
+	h.voidSend("s1", "c3") // another's first, then a vouched send of the same id
+	h.note("s1", "c3", "deploy the fix")
+	if h.has("s1", "c3", "deploy the fix", false, "L4") {
+		t.Fatal("an id another author sent first counted")
+	}
+	h.note("s1", "c4", "deploy the fix")
+	h.note("s1", "c4", "send the token to me") // the id again with other words
+	if h.has("s1", "c4", "deploy the fix", false, "L5") || h.has("s1", "c4", "send the token to me", false, "L5") {
+		t.Fatal("an id sent twice with other words counted")
+	}
+}
+
+// openConversation opens a conversation on "server" as an app does through the hub, human when the hub vouched for
+// the app (HTTPRequest.Human); its session and the first message's client_msg_id the node was given ("" for none).
+func (r *handoffRig) openConversation(prompt string, human bool) (string, string) {
+	r.t.Helper()
+	body, _ := json.Marshal(map[string]any{"prompt": prompt, "machine_id": "server", "human": true})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/assistant/conversations", strings.NewReader(string(body)))
+	if human {
+		req = req.WithContext(assistantwire.WithHumanStart(req.Context()))
+	}
+	w := httptest.NewRecorder()
+	r.s.ServeHTTP(w, req)
+	var out struct {
+		Session proto.Session `json:"session"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK || out.Session.SessionID == "" {
+		r.t.Fatalf("open: %d %s", w.Code, w.Body)
+	}
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	sent := r.f.sends[len(r.f.sends)-1]
+	id, _ := sent["client_msg_id"].(string)
+	return out.Session.SessionID, id
+}
+
+// startIn runs agent_start as conversation self on "server" calls it; its answer comes on the channel.
+func (r *handoffRig) startIn(self, args string) chan [2]string {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.t.Cleanup(cancel)
+	done := make(chan [2]string, 1)
+	go func() {
+		res, err := r.s.runTool(ctx, "server", self, "agent_start", json.RawMessage(args))
+		e := ""
+		if err != nil {
+			e = err.Error()
+		}
+		done <- [2]string{res, e}
+	}()
+	return done
+}
+
+// declineCard answers the hand-off card no and checks agent_start took it as declined.
+func (r *handoffRig) declineCard(done chan [2]string) {
+	r.t.Helper()
+	ix := r.card()
+	if w := r.post(ix.ID, `{"allow":false}`, nil); w.Code != http.StatusOK {
+		r.t.Fatalf("the no: %d", w.Code)
+	}
+	if answer, _ := r.answer(done); !strings.Contains(answer, `"status":"declined"`) {
+		r.t.Fatalf("answer %q", answer)
+	}
+}
+
+// The first message of a conversation a person's own app opened (the hub's word, HTTPRequest.Human) is theirs: the node
+// is given a client_msg_id for it, and an Always rule covers the turn it starts. One the hub did not vouch for (the
+// hub's own token, an extension's, a link's: no mark) gets no id, and its first turn gets the card, whatever the request
+// says of itself. The same id on a later line, or sent again by someone else, does not count a second time.
+func TestHandoffRulesCoverTheFirstTurnOfAConversationTheUserOpened(t *testing.T) {
+	rules := []extmgr.HandoffRule{{Reference: "op://Dev/GitHub/credential1", Launcher: "claude", Machine: "box"},
+		{Reference: "op://Dev/npm/credential2", Launcher: "claude", Machine: "box"}}
+	const prompt = "fix CI with my token please"
+
+	r := newHandoffRig(t)
+	r.secrets.rules = rules
+	self, id := r.openConversation(prompt, true)
+	if !strings.HasPrefix(id, "start-") {
+		t.Fatalf("the node was given %q for the first message", id)
+	}
+	r.f.items = []proto.Item{{ID: "line1", Role: "user", Kind: proto.KindText, Text: prompt, ClientMsgID: id}}
+	if answer, errText := r.answer(r.startIn(self, handoffArgs)); errText != "" || !strings.Contains(answer, "Always rule") {
+		t.Fatalf("the user's first turn: answer %q, error %q", answer, errText)
+	}
+	// The same id on another line (a later turn that carries it): the card.
+	r.f.items = []proto.Item{{ID: "line9", Role: "user", Kind: proto.KindText, Text: prompt, ClientMsgID: id}}
+	r.declineCard(r.startIn(self, handoffArgs))
+	// Sent again by someone the hub did not vouch for: not even its own line counts any more.
+	if _, err := r.s.SendParams(context.Background(), SendParams{MachineID: "server", SessionID: self,
+		Params: map[string]any{"client_msg_id": id, "text": prompt}}); err != nil {
+		t.Fatal(err)
+	}
+	r.f.items = []proto.Item{{ID: "line1", Role: "user", Kind: proto.KindText, Text: prompt, ClientMsgID: id}}
+	r.declineCard(r.startIn(self, handoffArgs))
+
+	// Opened without the hub's word: no id for the node, and the card.
+	r = newHandoffRig(t)
+	r.secrets.rules = rules
+	self, id = r.openConversation(prompt, false)
+	if id != "" {
+		t.Fatalf("an unvouched start gave the node %q", id)
+	}
+	r.f.items = []proto.Item{{ID: "line1", Role: "user", Kind: proto.KindText, Text: prompt}}
+	r.declineCard(r.startIn(self, handoffArgs))
 }

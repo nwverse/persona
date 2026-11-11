@@ -127,9 +127,8 @@ func (a assistantRemote) SendParams(ctx context.Context, machine, session string
 	var res struct {
 		Params map[string]any `json:"params"`
 	}
-	who := principalOf(ctx) // a person's own app: a full device's credential (secret_handoff.go)
 	err := a.call(ctx, assistantwire.MethodSendParams, assistantwire.SendParams{MachineID: machine, SessionID: session, Params: params,
-		Lang: string(a.h.contextLang(ctx)), Human: who.Role == roleFull && who.ID != ""}, &res)
+		Lang: string(a.h.contextLang(ctx)), Human: personSent(ctx)}, &res)
 	if err != nil {
 		return nil, err
 	}
