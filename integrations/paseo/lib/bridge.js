@@ -376,7 +376,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       const a = agents.get(agentId)
       const spaceId = a && s.idOf(a.project)
       const row = a && agentRow(a.agent,
-        { project: a.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId) })
+        { project: a.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId), canon })
       if (row && row.session_id === sid) rows.push(row)
     }
     return rt.recent(rows, { days: 3650, max: LIST_MAX, pinned: (r) => r.status === 'working' || r.status === 'blocked' })
@@ -561,17 +561,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const a = agents.get(agent.id)
     const s = spaces()
     const spaceId = s.idOf(a?.project)
-    return agentRow(agent, { project: a?.project, roots, labels, lastText: lastTexts.get(agent.id), spaceId, spaceName: s.names.get(spaceId) })
+    return agentRow(agent, { project: a?.project, roots, labels, lastText: lastTexts.get(agent.id), spaceId, spaceName: s.names.get(spaceId), canon })
   }
 
-  /** A path as compared: symbolic links resolved (a home under another mount), else as written. */
+  /**
+   * A path as compared: symbolic links resolved (a home under another mount), else as written. One that cannot be
+   * resolved now (a volume away for a moment) is asked again the next time, not kept as written.
+   */
   function canon(p) {
     let c = canonical.get(p)
     if (c === undefined) {
       try {
         c = realpathSync(p)
       } catch {
-        c = resolve(p)
+        return resolve(p)
       }
       if (canonical.size > 1000) canonical.clear()
       canonical.set(p, c)

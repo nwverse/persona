@@ -59,7 +59,8 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
     If Persona does not yet know the main repository's project (it has no Agents), the record forms its own group, named after the main repository directory.
   - **A slot is a Paseo workspace**: a worktree, or a task in the same directory. Its name is the workspace title; if absent, the branch name; if that is absent too, the directory name.
   - Agents without project information from Paseo keep the existing behavior: their workspace is their space, with no slot.
-- **Repository** (#2840): Agents in Git repositories carry `repo_root` (the main repository directory for a worktree, or the checkout itself for a main checkout). "By repository" on all three clients uses it to group
+- **Repository** (#2840): Agents in Git repositories carry `repo_root` (the main repository directory for a worktree, or the checkout itself for a main checkout), as its physical
+  directory (symbolic links resolved, #4492), the way node names a session's working tree. "By repository" on all three clients uses it to group
   Paseo worktrees under the main repository. Paseo worktrees live at `~/.paseo/worktrees/<project hash>/<name>`; the path alone does not identify the repository.
 - **Streaming**: while the phone is viewing a session, the bridge subscribes to that Agent's timeline and shows text as it is written. Unviewed sessions have no bridge subscription. If a session changes Agents (the original closes and another resumes it), the bridge subscribes to the new one. Non-Claude sessions use the new history to make the phone refetch the whole page.
 

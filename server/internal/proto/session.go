@@ -102,7 +102,9 @@ type Session struct {
 	// Worktree is the top of the git working tree Cwd is in (RepoRoot itself for the main checkout, a linked worktree's
 	// own folder otherwise) and Branch the branch checked out there ("" when detached or unknown). The node reads both,
 	// and RepoRoot when no host names it, off the filesystem (node/gitplace.go): the apps list machine → project
-	// (RepoRoot) → worktree (Worktree, labelled Branch) → sessions, as Orca does (#1805).
+	// (RepoRoot) → worktree (Worktree, labelled Branch) → sessions, as Orca does (#1805). RepoRoot and Worktree are
+	// physical directories (symbolic links resolved, #4492), however Cwd is written and however a host wrote the
+	// RepoRoot it named: the apps compare them as strings.
 	Worktree    string `json:"worktree,omitempty"`
 	Branch      string `json:"branch,omitempty"`
 	Status      string `json:"status"`

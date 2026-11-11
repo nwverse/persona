@@ -139,6 +139,9 @@ test("spaces: a project's checkout and its worktrees are one space, Paseo's work
   ])
   assert.deepEqual(rows.map((r) => r.repo_root), ['/w/app', '/w/app', '/w/app'], "按仓库: the repository's main checkout (#2840)")
   assert.equal(row('wks_notes', folder).repo_root, undefined, 'not a git repository: the path says enough')
+  const physical = agentRow(agentSnapshot({ provider: 'grok', cwd: main.checkout.cwd, workspaceId: 'wks_main' }),
+    { roots, project: main, canon: (path) => `/data${path}` })
+  assert.equal(physical.repo_root, '/data/w/app', 'by its physical directory, as the bridge resolves it (#4492)')
   const bare = agentRow(agentSnapshot({ provider: 'grok', cwd: '/w/x', workspaceId: 'wks_x' }), { roots })
   assert.deepEqual([bare.space_id, bare.space_name, bare.slot_id], ['wks_x', 'x', undefined], 'no placement: its workspace, as before')
 })

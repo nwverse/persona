@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
@@ -511,6 +511,23 @@ test("a project's worktrees are one space; a new session at a worktree goes into
   assert.deepEqual([inWt.space_id, inWt.space_name, inWt.slot_id, inWt.slot_name], [key, 'app', 'wks_wt', '修登录'])
   const inApp = await slow({ cwd: app, workspace_id: key })
   assert.deepEqual([inApp.space_id, inApp.space_name, inApp.slot_id], [key, 'app', undefined], 'a new workspace of the project: no slot yet')
+})
+
+test('a repository opened through a symbolic link is named by its physical directory', async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-ln-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'data', 'app'), { recursive: true })
+  symlinkSync(join(dir, 'data'), join(dir, 'home'))
+  const opened = join(dir, 'home', 'app') // as the project was opened in Paseo
+  const physical = realpathSync(join(dir, 'data', 'app')) // the temporary directory may be behind a link itself
+  const placed = { agent: agentSnapshot({ provider: 'my-codex', cwd: opened, workspaceId: 'wks_ln', title: 'LN' }),
+    project: { projectKey: 'prj_ln', projectName: 'app', workspaceName: null,
+      checkout: { cwd: opened, isGit: true, currentBranch: 'main', remoteUrl: null, worktreeRoot: opened, isPaseoOwnedWorktree: false, mainRepoRoot: null } } }
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { rows } = await setup(t, { agents: [...base, placed] })
+  await until('the agent', () => rows().some((r) => r.title === 'LN'))
+  const row = rows().find((r) => r.title === 'LN')
+  assert.deepEqual([row.cwd, row.repo_root], [opened, physical], "its cwd as Paseo has it; the repository as the node names its working tree (#4492)")
 })
 
 test("cards: Paseo's requests go to the phone and its answers back; one answered in Paseo leaves the phone", async (t) => {
