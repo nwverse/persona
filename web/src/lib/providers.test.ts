@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
 import {
   autoCheckable,
+  fallbackTitle,
   fillFromCatalog,
   formFromView,
   formModel,
@@ -56,13 +57,25 @@ describe("formProblems", () => {
     expect(formProblems(ready(), true)).toEqual({ connect: "", reach: "", models: "", advanced: "" });
   });
   it("checks the connection step", () => {
-    expect(formProblems(ready({ name: "" }), true).connect).toBe("要填名称");
-    expect(formProblems(ready({ name: "1bad" }), true).connect).toMatch(/名字只能/);
+    expect(formProblems(ready({ name: "" }), true).connect).toBe("要填启动 ID");
+    expect(formProblems(ready({ name: "1bad" }), true).connect).toMatch(/启动 ID 只能/);
     expect(formProblems(ready({ base_url: "ftp://x" }), true).connect).toMatch(/http/);
     expect(formProblems(ready({ base_url: "https://u:p@x.example.com" }), true).connect).toMatch(/凭据/);
     expect(formProblems(ready({ api_key: "" }), true).connect).toBe("要填 API Key");
     // editing one that has a key: left empty keeps it
     expect(formProblems(ready({ api_key: "" }), false, true).connect).toBe("");
+  });
+  it("needs no startup ID where the hub makes one up, but checks a typed one and the display name (#5029)", () => {
+    const auto = (over: Partial<ProviderForm>) => formProblems(ready(over), true, false, true);
+    expect(auto({ name: "", display_name: "我的中转 站" })).toEqual({ connect: "", reach: "", models: "", advanced: "" });
+    expect(auto({ name: "1bad" }).connect).toMatch(/启动 ID 只能/);
+    expect(auto({ name: "test" }).connect).toBe("不能叫 test");
+    expect(auto({ name: "", display_name: "字".repeat(65) }).connect).toBe("显示名最多 64 个字，不能换行");
+    // an older hub still needs the ID; a saved provider always has its own
+    expect(formProblems(ready({ name: "", display_name: "我的中转 站" }), true).connect).toBe("要填启动 ID");
+    expect(formProblems(ready({ display_name: "Team\nrelay" }), false, true).connect).toBe("显示名最多 64 个字，不能换行");
+    // the names never keep the gateway from being reached
+    expect(auto({ name: "1bad", display_name: "字".repeat(65) }).reach).toBe("");
   });
   it("lets the address and the key alone decide whether the gateway can be reached (#4881)", () => {
     expect(formProblems(ready(), true)).toMatchObject({ connect: "", reach: "" });
@@ -129,6 +142,18 @@ describe("providerBody", () => {
     expect(b.models).toEqual([{ id: "m1", context_window: 200000 }]);
     for (const k of ["headers", "env", "proxy", "opus_model", "compact_window", "effort"]) expect(b).not.toHaveProperty(k);
   });
+  it("a new provider with no startup ID sends it empty, for the hub to make up, with the display name (#5029)", () => {
+    expect(providerBody(ready({ name: " ", display_name: " 我的中转 站 " }), null)).toMatchObject({ name: "", display_name: "我的中转 站", base_url: "https://gw.example.com" });
+    expect(providerBody(ready(), null)).toMatchObject({ name: "gw", display_name: "" });
+  });
+  it("a PUT renames: the display name always goes, \"\" back to showing the ID (#5029)", () => {
+    const named: ProviderView = { ...stored, display_name: "Team relay" };
+    const f = formFromView(named);
+    expect(f.display_name).toBe("Team relay");
+    expect(providerBody(f, named)).toMatchObject({ name: "gw", display_name: "Team relay" });
+    expect(providerBody({ ...f, display_name: " 团队中转 " }, named).display_name).toBe("团队中转");
+    expect(providerBody({ ...f, display_name: "" }, named).display_name).toBe("");
+  });
   it("an unchanged PUT leaves out the #2455 fields, the key and the headers", () => {
     const b = providerBody(formFromView(stored), stored);
     expect(b).toMatchObject({ name: "gw", base_url: "https://gw.example.com", model: "m1", auth: "bearer" });
@@ -167,6 +192,17 @@ describe("formFromView", () => {
   });
   it("keeps a default model that is not in the list", () => {
     expect(formFromView({ name: "x", model: "solo" }).models.map((m) => m.id)).toEqual(["solo"]);
+  });
+});
+
+describe("fallbackTitle", () => {
+  it("is what an empty display name ends up as: the startup ID, else the host the hub names it after (#5029)", () => {
+    expect(fallbackTitle(ready({ name: "", base_url: "https://relay.example.com/v1" }), true)).toBe("relay.example.com");
+    expect(fallbackTitle(ready({ name: " my_gw " }), true)).toBe("my_gw");
+    expect(fallbackTitle(formFromView(stored), true)).toBe("gw");
+    // an older hub names nothing; an address that does not parse names nothing yet
+    expect(fallbackTitle(ready({ name: "" }), false)).toBe("");
+    expect(fallbackTitle(ready({ name: "", base_url: "relay.example" }), true)).toBe("");
   });
 });
 
