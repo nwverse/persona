@@ -527,8 +527,15 @@ in #5033.
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px 148 px (name ≤ 108 px and truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
   tile and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
-  pending (a 12 px clock first, the target engine's name in `ink-3`, a two-line tooltip), disabled (50% opacity, no
-  pointer), and a label (not a button) where nothing can be switched. The click keeps the caret in the message box.
+  pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
+  the target launcher's tile and its name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
+  effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
+  disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
+  in the message box.
+- Panel while a switch waits: one warning line at the top of the list (the panel's `note`: `warning` icon, 11 px,
+  `--orange`), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"; a recorded
+  pick is confirmed by a toast ("Switch scheduled: …"). Cindy's "Switch Agent?" confirmation is for an engine change,
+  which Persona does not offer yet (#5054); a launcher switch keeps the conversation and its engine, so it asks nothing.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
   300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
@@ -538,7 +545,8 @@ in #5033.
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
 - Deviations from Cindy: letter tiles instead of vendor logos; no price or quota data; ↑↓ also move between rows; providers
-  and engines that can't be switched to yet are listed with their rows off and the reason.
+  and engines that can't be switched to yet are listed with their rows off and the reason; a pending switch names the
+  launcher rather than the engine.
 
 ### 3.9 Empty states
 

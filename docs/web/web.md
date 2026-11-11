@@ -1516,40 +1516,68 @@ and components (`docs/design/DESIGN_SYSTEM.md` 3.1). A Persona chat keeps its la
   once the name has no room left (Cindy lets both shrink alike; her own rule says the name goes first); under 520 its text is 12 px and its marks a step smaller; under 420 it is 64 px: the tile and the chevron (and a
   clock or a warning when there is one).
 - **States**: reading the list for the first time with no model known: a spinner and "Loading model…"; that read failed: a
-  warning in the error colour ("Model loading failed" in the tooltip); a switch waiting for the next message (the `pending`
-  prop; its data comes with #5035): a clock first, the target engine's name, and the tooltip "Current: …" / "Next
-  message: …"; a switch on its way: dimmed, no clicks. An Agent that can switch neither its model nor its effort (offline,
-  a read-only source) gets the same words as a label, not a button; with no model known either, nothing.
+  warning in the error colour ("Model loading failed" in the tooltip); a switch to another launcher waiting for the next
+  message (`pending_switch` on the session, #5035): a clock first, then the setup the next message runs on: that launcher's
+  tile, its name before the model (gone when the pill is narrow; the engine's name instead when the engine changes, as in
+  Cindy), the model as that launcher's list names it (none picked: its default) and the effort, with the tooltip
+  "Current: …" / "Next message: …" and the accessible name "Select model. Next message: work · GLM 5.3, thinking effort:
+  High"; a switch on its way: dimmed, no clicks. An Agent that can switch neither its model nor its effort (offline, a
+  read-only source) gets the same words as a label, not a button; with no model known either, nothing.
 - **Providers** (`lib/session-models.ts` reads them, `lib/session-panel.ts` builds the panel's data and what a pick
   sends, loaded with the panel): the computer's launchers (`GET /machines/{mid}/launchers?purpose=agent.new`),
   each with the models its agent lists in its own /model menu (`GET …/launchers/{name}/models`, the list **New agent**
   uses). The pill reads the session's own list once (for the model's name); the panel, on each opening, shows the lists
   read before at once and reads every list again behind them, the session's own first, at most three at a time.
-- **Switching rules**: only the session's own launcher switches today. Its group "Recommended" is the model that runs, then
-  its other models. Another launcher of the same engine is listed with its rows off: "Switching providers in a running
-  Agent isn't available yet" (#5035). Another engine: "Switching from Claude Code to Codex needs a new conversation". A
-  Codex thread keeps its model ("Codex can't change the model of a running session"), but the model it runs still opens
-  its flyout, where the thinking effort and Fast apply at once. While the Agent works or waits on you, picks are off and
-  the panel says why. A launcher that fixes its own `--model` says so and takes no pick. Claude Code and Codex take a model
-  ID typed into the search ("Use “…”", #1644, `lib/model-id.ts`), offered only when none of the launcher's models answers
-  the search (a word that names a listed model is a search); IDs typed before are listed and can be forgotten.
-- **Applying**: a pick sends `POST …/modes {"model"}`, then `{"effort"}`, then (Codex) `{"service_tier"}`, each only when it
-  differs from the session's. The model and effort are drawn at once and put back with a toast if the node refuses; the
-  speed waits for the session's push (DESIGN_SYSTEM.md "Codex speed controls"). The panel closes once a pick applied and
-  keeps the old setup when it did not. An Antigravity variant brings its own thinking level. `/model` Enter in the composer
-  opens the panel (where the agent switches models). Claude Code's ultracode switch is in the flyout of the model that runs.
+- **Switching rules**: the session's own launcher switches its model at once. Its group "Recommended" is the model that
+  runs, then its other models. On a hub with `launcher_switch` (#5035, docs/protocol/protocol.md "Switching a running
+  Agent to another provider"), a Claude Code Agent in a terminal may also pick a model of another Claude Code launcher on
+  its computer: the pick is recorded and the next message carries it out (the node quits the agent and resumes the same
+  conversation through that launcher in the same terminal), so a pick never interrupts the agent. Those launchers keep
+  their own groups (they don't switch at once, so they are not "Recommended"); one that fixes its own `--model` offers
+  only its default entry. While a switch waits, the panel's list starts with a warning line: "Switches on your next
+  message: the Agent restarts on work and keeps this conversation", and its target is the panel's `pending` setup.
+  Picking the session's own launcher drops the waiting switch first. On an older hub another launcher of the same engine
+  is listed with its rows off: "Switching providers in a running Agent isn't available yet". Another engine: "Switching
+  from Claude Code to Codex needs a new conversation" (a cross-engine handoff is #5054). A Codex thread keeps its model
+  ("Codex can't change the model of a running session"), but the model it runs still opens its flyout, where the thinking
+  effort and Fast apply at once. While the Agent works or waits on you, picks are off and the panel says why. A launcher
+  of the session's own that fixes its `--model` says so and takes no pick. Claude Code and Codex take a model ID typed into
+  the search ("Use “…”", #1644, `lib/model-id.ts`) in each launcher that can take a pick here, offered only when none of
+  that launcher's models answers the search (a word that names a listed model is a search); IDs typed before are listed
+  and can be forgotten.
+- **Applying**: a pick on the session's own launcher sends `POST …/modes {"launcher": <own>}` first when a switch waits
+  (it drops it), then `{"model"}`, then `{"effort"}`, then (Codex) `{"service_tier"}`, each only when it differs from the
+  session's. A pick on another launcher is one `POST …/modes {"launcher", "model"?, "effort"?}`: the model unless it is
+  that launcher's default entry, the effort the setup has. The model, the effort and the waiting switch are drawn at once
+  and put back with a toast in the hub's words if it says no (`switch_config_dir`, `switch_model_locked`…); a switch that
+  was recorded is said by a toast: "Switch scheduled: your next message moves the Agent to work · GLM 5.3". The speed waits
+  for the session's push (DESIGN_SYSTEM.md "Codex speed controls"). The panel closes once a pick applied and keeps the
+  old setup when it did not. An Antigravity variant brings its own thinking level. `/model` Enter in the composer opens
+  the panel (where the agent switches models). Claude Code's ultracode switch is in the flyout of the model that runs.
+- **The message that carries a switch out**: when the node refuses it (`409` with a `switch_*` code and `delivered: "none"`:
+  the agent was working, had background work, did not quit, did not come up on the new launcher…), nothing was typed and
+  the switch still waits, so the words go back into the box with the hub's reason in a toast, as an edit's refused send
+  does (`ChatView` `deliver`, `switchRefused` in `lib/session-models.ts`), not into a failed bubble. Sending again tries
+  the switch again; picking the session's own launcher drops it.
 - **Kept in this browser**: favorites, the last five setups that applied (Recent) and per-model customizations (effort,
   Fast) live in `localStorage` (`persona.modelPanel.<base>.agent.*`, apart from a Persona chat's). The hub has no store for
   such preferences, so they do not follow you to another browser: a choice for this step.
 - **Deviations from Cindy**: provider marks are letter tiles (Persona has no vendor logos); no price tiers, price block or
-  weekly quota bar (the client has no such data; a follow-up); ↑↓ also move between rows; other providers and engines are
-  listed but off until the in-session switch (#5035) and a cross-engine handoff (a follow-up); a failed list shows
+  weekly quota bar (the client has no such data; a follow-up); ↑↓ also move between rows; another engine is listed but off
+  until a cross-engine handoff (#5054), so there is no "Switch Agent?" dialog; a pending switch's pill names the launcher it
+  moves to rather than the engine (it stays Claude Code), and its warning line speaks of a restart on that launcher rather
+  than a handoff summary (the conversation is resumed as it is); a failed list shows
   Persona's warning triangle rather than a circled alert; the context ring stays in the header for now. The note that
   newer Claude Code also saves the chosen model as the default for new sessions (under the composer bullets above) is no
   longer repeated in the panel.
 - **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, what a pick sends, the
-  lists kept and read again), `views/chat/ModelPill.test.tsx` and `ModelPill.en.test.tsx` (states, widths, the panel's
-  wiring), `ChatView.test.tsx` (the footer), `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot).
+  lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the feature,
+  another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which send
+  refusals are the switch's), `views/chat/ModelPill.test.tsx` and `ModelPill.en.test.tsx` (states, widths, the panel's
+  wiring, a switch picked, shown and dropped), `ChatView.test.tsx` (the footer), `ChatView.awaiting.test.tsx` (a refused
+  switch keeps the words in the box), `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot). Screenshots: the
+  mock hub with `MOCK_LAUNCHER_SWITCH=1` (a second Claude Code launcher, `work`, on every computer; `=pending` has the PR
+  review waiting to switch to it; `=refuse` refuses the message that carries a switch out).
 
 ## Claude Code ultracode (#3428)
 
