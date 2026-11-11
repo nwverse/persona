@@ -161,7 +161,11 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			return i18n.Err("assistant-models.err_provider_unsupported")
 		}
 	}
-	if b.Effort != "" && !slices.Contains([]string{"off", "none", "low", "medium", "high", "xhigh", "max"}, b.Effort) {
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
+	if p.Kind == "api" {
+		efforts = append(efforts, "off", "none")
+	}
+	if b.Effort != "" && !slices.Contains(efforts, b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
 	}
 	if p.Kind == "api" {

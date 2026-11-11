@@ -79,7 +79,7 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 		if err != nil {
 			return sw, false, err
 		}
-		effective := mergeModel(base, b)
+		effective := effectiveModel(purpose, base, b)
 		if body, err := s.triageInUse(ctx, cat, effective); err != nil {
 			return sw, false, err
 		} else if body != nil {

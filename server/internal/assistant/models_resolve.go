@@ -35,19 +35,15 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 			provider = "legacy.kb"
 		}
 		c := s.legacyModelConfig(ctx, provider)
-		defaultEffort := c.ReasoningEffort
-		if p.ID == "inbox.triage" && defaultEffort == "" {
-			defaultEffort = "off"
-		}
 		if c.BaseURL == "" {
 			// No hub.json connection for this use: fall back to a provider the assistant can call itself, instead of
 			// failing while a keyed Claude connection sits unused (#388). Not stored, so a later explicit choice still
 			// wins.
 			if name := s.fallbackAPIProvider(ctx); name != "" {
-				return ModelBinding{Provider: "launcher." + name, Effort: defaultEffort}, mc(l, modelAutoSource), nil
+				return ModelBinding{Provider: "launcher." + name, Effort: c.ReasoningEffort}, mc(l, modelAutoSource), nil
 			}
 		}
-		return ModelBinding{Provider: provider, Model: c.Model, Effort: defaultEffort}, mc(l, "source_hub_config"), nil
+		return ModelBinding{Provider: provider, Model: c.Model, Effort: c.ReasoningEffort}, mc(l, "source_hub_config"), nil
 	}
 	if p.ID == "assistant" { // the assistant's own launcher (its settings, else hub.json's)
 		return ModelBinding{Provider: "launcher." + s.settings(ctx).Launcher}, mc(l, "source_assistant_default"), nil
@@ -159,6 +155,15 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	return base
 }
 
+// effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
+func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
+	b := mergeModel(base, over)
+	if p.ID == "inbox.triage" && b.Effort == "" {
+		b.Effort = "off"
+	}
+	return b
+}
+
 // resolveModel reads category defaults, except the opt-in Lark /agent override and independent plugin models.
 func (s *Service) resolveModel(ctx context.Context, id string) (ModelBinding, error) {
 	return s.resolveModelRecord(ctx, id, nil)
@@ -184,7 +189,7 @@ func (s *Service) resolveModelRecord(ctx context.Context, id string, r *modelRec
 		}
 		r = &read
 	}
-	return mergeModel(base, r.Binding), nil
+	return effectiveModel(p, base, r.Binding), nil
 }
 
 func launcherProvider(name string) string {

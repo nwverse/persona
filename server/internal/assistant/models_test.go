@@ -1160,18 +1160,29 @@ func TestTriageDefaultEffortIsOffAndHonoursMessagesAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	putLaunchers(t, s, storedLauncher{
-		ManagedLauncher: proto.ManagedLauncher{Name: "anthropic", Kind: "api", API: "messages", BaseURL: "https://api.anthropic.com", Model: "claude-haiku-5-5"},
-		KeySealed:       key,
-	})
+	putLaunchers(t, s,
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "anthropic", Kind: "api", API: "messages", BaseURL: "https://api.anthropic.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		},
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "other", Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		})
 
 	p := purposeOf(t, s, "inbox.triage")
 	if !slices.Contains(p.Fields, "effort") {
 		t.Fatalf("expected Fields to include effort, got %v", p.Fields)
 	}
 
-	b.Provider = "launcher.anthropic"
-	b.Effort = "off"
+	r := modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"provider":"launcher.other"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("select Messages provider: %d %s", r.Code, r.Body.String())
+	}
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Provider != "launcher.other" || b.Effort != "off" {
+		t.Fatalf("provider-only selection must keep triage's default off: %+v, %v", b, err)
+	}
 	cfg, err := s.apiConfig(ctx, b)
 	if err != nil {
 		t.Fatal(err)
@@ -1180,12 +1191,13 @@ func TestTriageDefaultEffortIsOffAndHonoursMessagesAPI(t *testing.T) {
 		t.Fatalf("expected apiConfig ReasoningEffort to be off, got %q", cfg.ReasoningEffort)
 	}
 
-	b.Effort = "low"
-	cfg, err = s.apiConfig(ctx, b)
-	if err != nil {
-		t.Fatal(err)
+	p = purposeOf(t, s, "inbox.triage")
+	r = modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"effort":"low"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("save Messages effort: %d %s", r.Code, r.Body.String())
 	}
-	if cfg.ReasoningEffort != "low" {
-		t.Fatalf("expected apiConfig ReasoningEffort to be low, got %q", cfg.ReasoningEffort)
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Effort != "low" {
+		t.Fatalf("explicit Messages effort was not preserved: %+v, %v", b, err)
 	}
 }
