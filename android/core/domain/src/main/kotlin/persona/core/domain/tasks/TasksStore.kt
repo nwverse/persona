@@ -85,6 +85,12 @@ class TasksStore(
 
     /** Called by the visible conversation; exact lookups never change the Agents list window. */
     fun watchAgents(keys: Set<persona.core.contracts.SessionKey>) = agentLookup.watch(keys)
+
+    /**
+     * The whole row of one session, as the hub holds it: list rows are summaries, which carry only where a closeout
+     * stands (#3612), not what the agent said it did and verified. Null from a hub without the exact lookup.
+     */
+    suspend fun sessionDetail(key: persona.core.contracts.SessionKey): persona.core.contracts.Session? = api.taskAgent(key)
     private var written: List<Todo>? = null
     private val _todosSupported = MutableStateFlow(true)
     val todosSupported: StateFlow<Boolean> = _todosSupported.asStateFlow()
@@ -226,6 +232,13 @@ class TasksStore(
             _todos.update { list -> list.map { if (it.id == id && it == moved) before else it } }
             throw t
         }
+    }
+
+    /** The detail page's due date, reminder and priority (#4636); the list follows the hub's answer. */
+    suspend fun setTodoPlan(id: String, plan: persona.core.contracts.TodoPlan): Todo {
+        val updated = api.setTodoPlan(id, plan)
+        _todos.update { list -> list.map { if (it.id == updated.id) updated else it } }
+        return updated
     }
 
     suspend fun updateTodo(id: String, title: String? = null, notes: String? = null): Todo {
@@ -502,6 +515,33 @@ class TasksStore(
             if (_todos.value.firstOrNull { it.id == todo.id }?.ask != ask) { onChanged(); return@act }
             api.acceptTask(todo.id, ask.askedAt)
             synchronized(todosLock) {
+                acceptedAsks += todo.id to ask.askedAt
+                _todos.update { rows -> rows.map { if (it.id == todo.id && it.ask == ask) it.copy(ask = null) else it } }
+            }
+            reloadTodos()
+        }
+    }
+
+    /**
+     * Answers a decision's round as the owner read it (#3804): one of its options, or a fixed response. [onDone] hears
+     * whether the hub took it; a round answered elsewhere meanwhile (409) is not an error: it took nothing, and the
+     * to-dos are read again. An option ends the decision, so its ask goes at once; a fixed response leaves it to the hub.
+     */
+    fun answerTask(todo: Todo, answer: persona.core.contracts.api.AskAnswer, onError: (Throwable) -> Unit,
+        onChanged: () -> Unit, onDone: (taken: Boolean) -> Unit) {
+        val ask = todo.ask ?: return
+        if (ask.askedAt.isBlank()) return
+        act("accept:${todo.id}", onError) {
+            if (_todos.value.firstOrNull { it.id == todo.id }?.ask != ask) { onChanged(); return@act }
+            val taken = try {
+                withManager(todo.manager) { api.answerTask(todo.id, ask.askedAt, answer) }
+                true
+            } catch (error: Throwable) {
+                if (error is CancellationException || hubCodedFailure(error)?.status != 409) throw error
+                false
+            }
+            onDone(taken)
+            if (taken && answer is persona.core.contracts.api.AskAnswer.Option) synchronized(todosLock) {
                 acceptedAsks += todo.id to ask.askedAt
                 _todos.update { rows -> rows.map { if (it.id == todo.id && it.ask == ask) it.copy(ask = null) else it } }
             }

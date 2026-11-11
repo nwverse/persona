@@ -43,8 +43,15 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 				return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": id, "field": field})
 			}
 		}
-		if b.Effort != "" && !slices.Contains(proto.EffortLevels, b.Effort) {
-			return profileEffortErr(id, b.Effort)
+		kind := ""
+		for _, purpose := range modelPurposes {
+			if purpose.ID == id {
+				kind = purpose.Kind
+				break
+			}
+		}
+		if b.Effort != "" && !slices.Contains(effortLevelsForKind(kind), b.Effort) {
+			return profileEffortErr(id, b.Effort, effortLevelsForKind(kind))
 		}
 	}
 	for name, m := range p.Launchers {
@@ -66,7 +73,7 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 				return i18n.Err("assistant-model_profiles.err_launcher_model", i18n.Args{"launcher": name})
 			}
 			if f.name == "effort" && *v != "" && !slices.Contains(proto.EffortLevels, *v) {
-				return profileEffortErr(name, *v)
+				return profileEffortErr(name, *v, proto.EffortLevels)
 			}
 			if stored[i].Kind == "api" && f.name != "model" && *v != "" {
 				return i18n.Err("assistant-model_profiles.err_launcher_api", i18n.Args{"launcher": name, "field": f.name})
@@ -111,7 +118,7 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 			}
 		}
 		if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
-			return profileEffortErr(name, t.Effort)
+			return profileEffortErr(name, t.Effort, proto.EffortLevels)
 		}
 		if t.Description = strings.TrimSpace(t.Description); utf8.RuneCountInString(t.Description) > modelTierAbout ||
 			strings.ContainsAny(t.Description, "\r\n\x00") {
@@ -132,8 +139,8 @@ func checkTierModel(name string, t ModelTier) error {
 	return nil
 }
 
-func profileEffortErr(where, effort string) error {
-	return i18n.Err("assistant-model_profiles.err_effort", i18n.Args{"where": where, "effort": effort, "levels": strings.Join(proto.EffortLevels, " / ")})
+func profileEffortErr(where, effort string, levels []string) error {
+	return i18n.Err("assistant-model_profiles.err_effort", i18n.Args{"where": where, "effort": effort, "levels": strings.Join(levels, " / ")})
 }
 
 // ---- editing ----

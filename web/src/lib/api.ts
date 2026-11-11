@@ -8,17 +8,25 @@ import { requestCrumb } from "./error-reports";
 import { currentLanguage, t } from "../i18n";
 import type { Item } from "./types";
 import { clearFeedCache } from "./feed-cache";
+import { credentialEpoch, renewCredentialEpoch } from "./credential-epoch";
 
 let ownerToken: string | undefined;
+let ownerEpoch: string | undefined;
 let ownerGeneration = 0;
 const credentialListeners = new Set<(owner: string) => void>();
+function publishCredentialOwner(): string {
+  const owner = `credential-${++ownerGeneration}`;
+  credentialListeners.forEach((listener) => listener(owner));
+  return owner;
+}
 /** Opaque in-memory auth partition; never expose credentials in tree keys or persisted drafts. */
 export function credentialOwner(): string {
   const token = getToken();
-  if (token !== ownerToken) {
+  const epoch = credentialEpoch();
+  if (token !== ownerToken || epoch !== ownerEpoch) {
     ownerToken = token;
-    ownerGeneration++;
-    credentialListeners.forEach((listener) => listener(`credential-${ownerGeneration}`));
+    ownerEpoch = epoch;
+    return publishCredentialOwner();
   }
   return `credential-${ownerGeneration}`;
 }
@@ -45,6 +53,20 @@ export function setToken(token: string, tokenId?: string) {
   if (token !== getToken() || !token) clearFeedCache();
   storeCredentials(token, tokenId);
   credentialOwner();
+}
+
+/** A successful sign-in is a new owner even if the hub returned the same token. */
+export function setPairedToken(token: string, tokenId?: string) {
+  credentialOwner();
+  storeCredentials(token, tokenId);
+  const shared = renewCredentialEpoch();
+  clearFeedCache();
+  if (shared) credentialOwner();
+  else {
+    ownerToken = getToken();
+    ownerEpoch = credentialEpoch();
+    publishCredentialOwner();
+  }
 }
 
 export class ApiError extends Error {
@@ -120,9 +142,10 @@ export class HubTimeoutError extends Error {
   }
 }
 
-type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; onResponse?: (headers: Headers, status: number) => void };
+type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; isAuthContextCurrent?: () => boolean; onResponse?: (headers: Headers, status: number) => void };
 
 /** `tokenOwner`: explicit credentials opt into 401 recovery only while both the token and credential generation are current.
+ *  `isAuthContextCurrent`: an optional additional lifetime fence for a request scoped to a view or manager.
  *  `timeout`: ms before a read gives up with HubTimeoutError (default READ_TIMEOUT_MS for GET, none otherwise; 0: none). */
 export async function api<T>(path: string, init: ApiOptions & { timeout?: number } = {}): Promise<T> {
   const { timeout, ...rest } = init;
@@ -169,7 +192,7 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 async function request<T>(path: string, init: ApiOptions): Promise<T> {
-  const { onResponse, ...fetchOptions } = init;
+  const { onResponse, isAuthContextCurrent, ...fetchOptions } = init;
   const owner = init.token === undefined ? credentialOwner() : init.tokenOwner;
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${init.token ?? getToken()}`);
@@ -202,7 +225,11 @@ async function request<T>(path: string, init: ApiOptions): Promise<T> {
   const notModified = res.status === 304 && headers.has("If-None-Match");
   if (!notModified && intercepted(res)) {
     requestCrumb(method, path, res.status);
-    reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    // Retired requests cannot reload a replacement view or credential; an unowned pairing probe can still sign in.
+    if ((isAuthContextCurrent?.() ?? true)
+      && (owner === undefined || (owner === credentialOwner() && (init.token === undefined || init.token === getToken())))) {
+      reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    }
     throw new ApiError(res.status || 401, t("lib-api.hub_no_response"), {}, false);
   }
   const text = await res.text();
@@ -218,7 +245,8 @@ async function request<T>(path: string, init: ApiOptions): Promise<T> {
   }
   if (!res.ok && !notModified) {
     requestCrumb(method, path, res.status);
-    if (res.status === 401 && owner !== undefined && owner === credentialOwner() && (init.token === undefined || init.token === getToken())) onUnauthorized();
+    if (res.status === 401 && owner !== undefined && owner === credentialOwner() && (init.token === undefined || init.token === getToken())
+      && (isAuthContextCurrent?.() ?? true)) onUnauthorized();
     const msg = typeof data.error === "string" && data.error ? data.error : `HTTP ${res.status}`;
     throw new ApiError(res.status, msg, data, isJson, res.headers?.get("X-Request-Id") ?? undefined, path);
   }

@@ -22,6 +22,8 @@ interface TasksApi {
     suspend fun patchTodo(id: String, title: String? = null, notes: String? = null, done: Boolean? = null): Todo = error("patchTodo not implemented")
     /** Moves a to-do's due date (`PATCH /api/v1/todos/{id}` with `due_at` or `due_date`, the other cleared; #2045). */
     suspend fun setTodoDue(id: String, due: persona.core.contracts.TodoDue): Todo = error("setTodoDue not implemented")
+    /** The detail page's due date, reminder and priority, all three in one PATCH (#4636). */
+    suspend fun setTodoPlan(id: String, plan: persona.core.contracts.TodoPlan): Todo = error("setTodoPlan not implemented")
     suspend fun deleteTodo(id: String) = Unit
     suspend fun linkTodoAgent(todoId: String, machineId: String, sessionId: String) = Unit
     suspend fun unlinkTodoAgent(todoId: String, machineId: String, sessionId: String) = Unit
@@ -52,6 +54,11 @@ interface TasksApi {
     suspend fun removeTask(todoId: String)
     /** Accept only the owner's displayed round, never a newer ask under the same todo id. */
     suspend fun acceptTask(todoId: String, askedAt: String): Unit = error("Task acceptance unavailable")
+    /**
+     * Answer a decision's round through the same accept route (#3804, docs/assistant/todos.md "Decisions the owner can
+     * answer"): one of its options, or a fixed answer that says the owner cannot answer it as asked.
+     */
+    suspend fun answerTask(todoId: String, askedAt: String, answer: AskAnswer): Unit = error("Task answers unavailable")
     /** Mark a question left for a briefing as handled (`POST /api/v1/later/{id}/handled`). */
     suspend fun markLaterHandled(questionId: String): Unit = error("Later-question handling unavailable")
     /** Sends text straight to a task's agent; the answer is the conversation's new `routed` item. */
@@ -86,4 +93,12 @@ interface TasksApi {
     /** What an assistant's HTML page asked for through its bridge, after the user confirmed it. */
     suspend fun viewHtmlAction(conversation: String, key: String, input: persona.core.contracts.generated.ExtensionAssistantHTMLActionInput): AssistantViewAnswer =
         error("viewHtmlAction not implemented")
+}
+
+/** An owner's answer to a decision (`POST /api/v1/todos/{id}/accept`): an option by its label, or a fixed response. */
+sealed interface AskAnswer {
+    data class Option(val label: String) : AskAnswer
+
+    /** [code]: `decide_yourself`, `not_what_i_asked` or `explain_first`. */
+    data class Response(val code: String) : AskAnswer
 }

@@ -1,5 +1,9 @@
 # Lessons: Android
 
+## A design-system signature change compiles every caller (#4145)
+
+#4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
+
 ## Receipt navigation inside task details (#3841)
 
 A receipt reused inside task details must not invoke the same task-sheet destination again: assigning the same Compose state produces no visible change. Resolve the task's existing lead binding and open its Agent page after dismissing the sheet. Keep missing-target feedback inside that sheet; generic operation feedback discards arbitrary exception messages and a snackbar behind a modal does not prove the explanation is visible. Exercise the receipt button independently of the footer and verify the real navigation stack in addition to callback tests.
@@ -129,6 +133,10 @@ stream fixtures. Fixture screenshots do not establish live transport routing; ve
 
 A bounded, filtered session list cannot establish that a task has no agent. Keep navigation from the durable todo binding even when its session is outside the window; request exact metadata only for watched task agents and never add those rows to the paged list. Refresh that metadata on list invalidations and reconnect. Serialize todo reads so an older unbound or completed snapshot cannot overwrite a later linked or reopened snapshot in memory or on disk. A metadata failure falls back to the binding and never starts another agent.
 
+## Every list of sessions takes the subtask rule, not only the Agents list (#4769)
+
+#4686 made an agent another Paseo agent created a subtask, folded under its creator and left out of the Agents list's counts, but the floating capsule and the main chat's dock each filtered the session list by state on their own: an orchestrator with five working reviewers was six dock rows, and every finished Codex subagent an unread capsule entry with its own notice. A new place that lists or counts sessions by state takes the same rule from `CodexTaskForest.kt`: `isNestedSubtask` for a count, `foldedSubtasks` for a flat list that draws rows of its own (left out only while the list shows the session above it). Do not write a second parent lookup; the forest's (parent session, then the Codex thread, then the root, on the same computer) is the one the Agents list uses. Test with a runtime subtask, a Codex subagent and a subtask that needs the user, beside a list without subtasks that must stay as it was.
+
 ## Completion edges must retain evidence of the current run (#2124)
 
 Comparing only adjacent Working → Unread snapshots misses Working → NeedsYou → Unread; a turn can finish directly after waiting for a question or permission midway through work. Retain a current-run marker through NeedsYou and consume it at completion; clear it on Idle, removal, or disconnect. A rev-only change is not a new completion, and old unread versions must not replay when unmuted.
@@ -192,6 +200,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Pages' own `PersonaTheme` wrappers default to `isSystemInDarkTheme()`; passing `darkTheme` only at the root does not override them. DEBUG-fixed light / dark mode must change `LocalConfiguration` uiMode (`MainActivity.AppearanceOverride`), or dark screenshots mix in light pages.
 - Kotlin trailing lambdas match only the final function parameter. After adding an optional function parameter to `AppNavigator`, existing `AppNavigator(...) { group tabs by session }` calls silently bound to the new parameter. Put new function parameters last, and name parameters at call sites.
 - Do not use `Modifier.alpha` for changing opacity in Compose. At 1 it adds no layer, so switching adds / removes a graphicsLayer in the modifier chain. After `clip` + `background`, removing the layer in Compose UI 1.12.1 stops drawing that background (Android `JButton` lost everything but text when enabled). The design system uses `Modifier.stableAlpha` (`docs/android/android.md`, "Lessons").
+- `Modifier.clip` on a frame also clips touches (2026-11-10, DS-06). Compose gives any control smaller than 48 dp a 48 dp touch target, even past its own clip, but a clipping parent at least 48 dp across rejects every touch outside itself first: the 36 dp segments inside `JSegmented`'s clipped Glass capsule and Board frame lost the taps just above them, while unclipped buttons, chips and switches kept the full 48 dp. A frame that only needs to keep its children's drawing inside its shape uses `clipDrawing`. Test touch targets with real text metrics (`@GraphicsMode(NATIVE)`): Robolectric's legacy text measurement drew the segments 53-61 dp tall and hid the miss (`TouchTargetTest`, which also checks that a tap just past 48 dp misses).
 - material3-adaptive `ListDetailSceneStrategy.detailPane()` returns new metadata without `equals` every time, so equality comparisons always fail (Android two-column left selection never highlighted). Identify detail pages by route type (`ShellPanes.kt`).
 - A container with `height(IntrinsicSize.Min)` (to stretch a left color block) crashes as soon as it contains a lazy list or `BoxWithConstraints`
   ("Asking for intrinsic measurements of SubcomposeLayout layouts is not supported," seen in board-style Lark chats). Draw edge color blocks with `drawBehind` (`Modifier.holder`).
@@ -566,3 +575,7 @@ On the JVM, closing a server socket with a blocked accept can defer the actual d
 Keep a message's last rendered parse while its next parse runs; switching to raw text for every delta changes list and code-block geometry twice. Reset that retained state when the message identity or cache changes, and include stream completion in the parse effect keys. The Markdown renderer also defaults to a text-size spring: chat text should use its measured size immediately, without animating every line wrap.
 
 Measure pending and parsed frames with the real chat row and reverse list. A fixed scroll index and offset can still accompany visible height oscillation. Replay both Assistant and Agent styles, completion, rapid deltas, history reading and return-to-latest. Check selection and exact copied text in the APK as well. Write a PASS evidence file only after every assertion has completed; cleanup must not turn an earlier failure into a successful verdict.
+
+## Pairing fixtures must follow the default sign-in page (#4623)
+
+Skipping onboarding does not skip password sign-in. Tests of manual or scan pairing must select the localized pairing alternative from that default page before using the existing controls. Keep initial-link fixtures on their direct confirmation path, and retain back-stack, field-retention, invalid-input and screenshot assertions rather than changing the product default to fit older fixtures.
