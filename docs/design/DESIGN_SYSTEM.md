@@ -282,6 +282,9 @@ Reduce Motion:
 the phone-control sections and the `iphone_*` tools. Why a separate symbol: `Theme.Icon.phone` (`iphone`) already means a
 device, and the phone's own data tools (`phone_*`) keep their icon.
 
+`Theme.Icon.monitor` (`waveform.path.ecg`) is a command watched in the background, each line it prints an event (Claude
+Code's `Monitor`). A command run once keeps `Theme.Icon.terminal`.
+
 ### 2.9 Styles and theme colors
 
 | Style | Surface | Buttons | Canvas | Icons |
@@ -538,6 +541,11 @@ parent-chat message bubbles (#3378). Reuse the existing work summary and manuall
 keep each delivery separately inspectable, including its full text. Nonterminal `running` / `waiting` reports retain
 the existing progress presentation. Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
+
+A tool row names its tool in words on iOS and the web (#2986): Claude Code's tools have verbs of their own, another
+server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
+no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
+shared with computer tools). Details in `docs/lessons/ios.md`.
 
 ### 4.8 Pending requests
 
