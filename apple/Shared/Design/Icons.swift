@@ -333,6 +333,8 @@ extension Theme {
         static let context = "gauge.with.dots.needle.33percent"
         /// A piece of context a message carries (a page excerpt, a part of a Feishu /agent request's context).
         static let quote = "text.quote"
+        /// The mark at the top of a quote in a reply (#2984).
+        static let quoteMark = "quote.closing"
         /// The context a message carries, folded into one row.
         static let contexts = "rectangle.stack"
         static let space = "square.stack.3d.up"

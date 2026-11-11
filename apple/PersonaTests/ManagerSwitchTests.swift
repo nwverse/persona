@@ -248,7 +248,7 @@ struct ManagerSwitchTests {
         model.managerRosters[""] = try Self.roster(Self.oneManager)
         model.selectAssistantManager("m-1")
         #expect(model.assistantManagerID == nil && model.assistantManager == nil, "one manager: nothing is named")
-        #expect(model.currentAssistant?.name == "助手" && !model.showsAssistantIdentity, "one manager: it is current, and no switcher shows (#3975)")
+        #expect(model.currentAssistant?.name == "助手" && model.managerRoster?.isMulti == false, "one manager: it is current, without a roster switcher")
         model.managerRosters[""] = nil
         #expect(model.currentAssistant == nil, "a hub without a roster: no switcher")
     }

@@ -9,7 +9,9 @@ sealed interface ChatAction {
     data class Rename(val title: String) : ChatAction
     data class Mute(val muted: Boolean) : ChatAction
     /** [ultracode]: Claude Code's ultracode switch, sent on its own (docs/protocol/protocol.md "Claude Code ultracode"). */
-    data class Modes(val permissionMode: String? = null, val effort: String? = null, val ultracode: Boolean? = null) : ChatAction
+    data class Modes(val permissionMode: String? = null, val effort: String? = null, val ultracode: Boolean? = null,
+        /** Take the after-resume ultracode notice away (`ultracode_dismiss_lost`, #582). */
+        val dismissUltracodeLost: Boolean? = null) : ChatAction
     data object Close : ChatAction
     /** Join a Codex app-server thread live (POST …/attach); only for a session whose capabilities offer it. */
     data object Attach : ChatAction
