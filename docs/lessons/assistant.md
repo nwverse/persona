@@ -232,3 +232,23 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   and then heard nothing when they finished. The sink now builds the ending line for every quiet end and, with no card,
   posts it as a card of its own (the same rule #3930's timeout relies on). The result stays quiet: the line is
   "Done · took X", not an empty answer.
+
+- **A card nests a list by four spaces per level, not by the Markdown rule** (#4180). Lark's Markdown component documents
+  one nesting level as four leading spaces (a list's sub-items are indented four spaces per level), while CommonMark — and
+  so a model writing an answer — indents a sub-item by its parent marker's width: two spaces under "- ", three under
+  "1. ". The answer's Markdown was passed through unchanged, so every nested list arrived as a flat list of siblings and
+  the hierarchy the answer was written with was gone. `CardMarkdown` now maps each item's observed indentation to a level
+  and writes four spaces per level (`listIndent` in `feishubot/card.go`) in one pass over the whole answer, so the levels
+  carry across a fenced code block and a list goes on around it; a list item's continuation lines, a list inside a
+  blockquote, and four-or-more-space indented code at the left margin stay as written, and a paragraph at the left margin
+  ends the list. Test the conversion through `CardMarkdown` and through the answer builder (`answerCards`).
+
+- **A list shown to a client holds the thing it names, not the records that produce it** (#4184). `feishu.view`'s
+  `agents` is "the Agents you have talked to in Lark", but it was built by walking the chat's thread bindings — and the
+  chat binds *every* card it posts about a conversation (the list card "Chat here" was pressed on, each progress card,
+  each answer card, each finished card), so one Agent talked to for a while filled the settings section with dozens of
+  copies of itself, in map order, keyed alike on both clients (web and iOS key those rows by session id). Fold the
+  bindings by machine + session, let the newest name the row, and sort it (rows of the same time by session): the same
+  source, read as what the field means. A test that binds three cards of one Agent along with two other Agents, and
+  loads the view ten times, shows it. The settings pages are the only readers — web and iOS key the rows by session id,
+  Android draws them in order — so none of them changes.
