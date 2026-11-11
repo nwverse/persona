@@ -202,6 +202,8 @@ object AssistantLines {
     private fun inputTime(line: ChatLine): Instant? = when (line) {
         is ChatLine.Row -> if (line.row.type == "user") line.row.start else null
         is ChatLine.UserImages -> line.images.firstOrNull()?.time
+        // A folded background round (#4314) stands where its first input is: what came before it stays before it.
+        is ChatLine.Extra -> (line.payload as? BackgroundRound)?.lines?.firstNotNullOfOrNull(::inputTime)
         else -> null
     }
 
@@ -210,6 +212,7 @@ object AssistantLines {
         is ChatLine.Work -> line.start
         is ChatLine.ApiError -> line.item.time
         is ChatLine.Extra -> (line.payload as? AssistantExtra.Feed)?.item?.at?.let(::time)
+            ?: (line.payload as? BackgroundRound)?.lines?.firstNotNullOfOrNull(::lineTime)
         else -> null
     }
 

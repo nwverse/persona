@@ -1,3 +1,4 @@
+import MapKit
 import SwiftUI
 
 /// Saved Places' state and what the page does with the hub (#1598): the places the user names (home, the office) that
@@ -58,11 +59,52 @@ import SwiftUI
     }
 }
 
-/// What the place editor decides without the hub or MapKit: when it may save, the radius choices and how a place is
-/// described under its name.
+/// What the place editor decides without the hub or a MapKit request: when it may save, the radius choices, how a place
+/// is described under its name, where the map opens and what a search's outcome says.
 enum SavedPlaceText {
     /// The radius choices in the editor, in meters: the reminders' default first among the small ones.
     static let radii = [100, 150, 300, 500, 1000, 2000]
+
+    /// Where the editor's map opens (#4248): on the place; on the user, when Persona may already see where they are (the
+    /// editor never asks for that by itself); else wherever MapKit opens.
+    enum Opening: Equatable { case place, user, anywhere }
+
+    static func opening(located: Bool, location: PhoneAuthStatus) -> Opening {
+        if located { return .place }
+        return location == .granted ? .user : .anywhere
+    }
+
+    /// The meters across the map shows around a place: its circle and a street or two around it.
+    static func mapSpan(radius: Int) -> Double { Double(radius) * 4 }
+
+    /// A tap on the map moves the place there; the map zooms in on it only when it shows far more than the place's own
+    /// span (the world, a whole city), so a small correction keeps the user's zoom. `shownLatitudeDelta` is the map's
+    /// height in degrees, nil before it has reported one.
+    static func zoomsIn(shownLatitudeDelta: Double?, radius: Int) -> Bool {
+        guard let shownLatitudeDelta else { return true }
+        return shownLatitudeDelta * metersPerDegree > mapSpan(radius: radius) * 10
+    }
+
+    /// About how many meters a degree of latitude is.
+    private static let metersPerDegree = 111_000.0
+
+    /// How a search ended: MapKit's "nothing there" is not a failure, everything else (offline, too many requests) is.
+    enum SearchOutcome: Equatable {
+        case found, nothing, failed
+
+        init(_ error: any Error) {
+            self = (error as? MKError)?.code == .placemarkNotFound ? .nothing : .failed
+        }
+    }
+
+    /// What the location section's footer says after a search for `query`; nil when it found something.
+    static func searchNote(_ outcome: SearchOutcome, query: String) -> String? {
+        switch outcome {
+        case .found: nil
+        case .nothing: String(localized: "No places found for “\(query)”.")
+        case .failed: String(localized: "Couldn't search for places. Check the connection and try again.")
+        }
+    }
 
     /// A name and a location: what the hub needs.
     static func canSave(_ p: APIClient.SavedPlace, located: Bool) -> Bool {

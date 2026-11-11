@@ -45,6 +45,13 @@ const windowLabel = (w: ActiveWindow) => t(`paged-agents.window_${w || "any"}`);
 // the Earlier header's place among the rows: a key no row identity has
 const EARLIER_KEY = "\u0000earlier";
 
+/** A counts query in a stable key order, so the same scope reached through different filters compares equal. */
+function countsQuery(filters: ListFilters): string {
+  const params = new URLSearchParams({ counts: "1" });
+  for (const [key, value] of Object.entries(filters).sort(([a], [b]) => a.localeCompare(b))) if (value) params.set(key, value);
+  return params.toString();
+}
+
 function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement; p; p = p.parentElement) {
     if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
@@ -79,9 +86,9 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const [scopeCounts, setScopeCounts] = useState<ListCounts | null>(null);
   const [scopeError, setScopeError] = useState("");
   const scopeQuery = useMemo(() => {
-    const params = new URLSearchParams({ counts: "1", ...filters });
-    params.delete("state");
-    return params.toString();
+    const scope = { ...filters };
+    delete scope.state;
+    return countsQuery(scope);
   }, [filters]);
   const rootPage = useSyncExternalStore(root.subscribe, root.getSnapshot, root.getSnapshot);
   // Counts without state keep other state tabs reachable; machine scopes disambiguate computer-local groups.
@@ -89,35 +96,50 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // Unscoped counts are the root's own: follow them. Scoped counts are read on their own, now and once per hint; they
   // do not follow the root's counts, which land for that same hint (a second read of the same counts every time).
   const facetScoped = Object.keys(facetFilters).length > 0;
+  const facetQuery = useMemo(() => countsQuery(facetFilters), [facetFilters]);
+  // With no state tab and no browsed value the filtered list's own per-hint counts read is the facet query: follow it.
+  const facetsFromList = filtered && countsQuery(filters) === facetQuery;
   useEffect(() => {
     if (facetScoped) return;
     setFacets(rootPage.counts);
     setFacetError("");
   }, [facetScoped, rootPage.counts]);
   useEffect(() => {
-    if (!facetScoped) return;
+    // Keep the last counts while the list loads; a failed read shows as the list's own error.
+    if (!facetsFromList) return;
+    if (page.counts) setFacets(page.counts);
+    setFacetError("");
+  }, [facetsFromList, page.counts]);
+  useEffect(() => {
+    if (!facetScoped || facetsFromList) return;
     let live = true;
     let sequence = 0;
     const controller = new AbortController();
     const read = () => {
       const request = ++sequence;
-      const params = new URLSearchParams({ counts: "1", ...facetFilters });
-      void api<ListCounts>(`${path}?${params}`, { signal: controller.signal }).then((counts) => {
+      void api<ListCounts>(`${path}?${facetQuery}`, { signal: controller.signal }).then((counts) => {
         if (live && request === sequence && counts.state && counts.group && counts.project && counts.machine) { setFacets(counts); setFacetError(""); }
       }, (e) => { if (live && request === sequence) setFacetError(errorText(e)); });
     };
     read();
     const off = onHubEvent(event, read);
     return () => { live = false; controller.abort(); off(); };
-  }, [path, event, facetScoped, facetFilters]);
+  }, [path, event, facetScoped, facetsFromList, facetQuery]);
   useEffect(() => {
     // Keep the last counts while a refresh or a new scope is loading, including a root rebaseline.
     if (scopeQuery !== "counts=1") return;
     if (rootPage.counts) setScopeCounts(rootPage.counts);
     setScopeError("");
   }, [scopeQuery, rootPage.counts]);
+  // Without a browsed value the scope is the facets' query: one read serves both.
+  const scopeFromFacets = scopeQuery !== "counts=1" && scopeQuery === facetQuery;
   useEffect(() => {
-    if (scopeQuery === "counts=1") return;
+    if (!scopeFromFacets) return;
+    if (facets) setScopeCounts(facets);
+    setScopeError("");
+  }, [scopeFromFacets, facets]);
+  useEffect(() => {
+    if (scopeQuery === "counts=1" || scopeFromFacets) return;
     let sequence = 0;
     const abort = new AbortController();
     const read = () => {
@@ -129,7 +151,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     read();
     const off = onHubEvent(event, read);
     return () => { sequence++; abort.abort(); off(); };
-  }, [scopeQuery, path, event]);
+  }, [scopeQuery, scopeFromFacets, path, event]);
   useEffect(() => {
     if (filtered) void list.setFilters(filters).catch(() => {});
     else if (!list.getSnapshot().loaded) void list.load().catch(() => {});

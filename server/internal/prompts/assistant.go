@@ -237,7 +237,7 @@ type Snapshot struct {
 	Machines      []SnapshotMachine
 	Needs, Unread []SnapshotAgent
 	// Waiting: stopped on something the hub waits out for them (a retry, a deploy, another agent); Done: finished
-	// within a day, with the conclusion (docs/assistant/agent-work.md "What Persona knows").
+	// within a day. Their details stay out of the snapshot; Done renders only a count and agents_list state=done.
 	Waiting, Done []SnapshotAgent
 	// Awaiting: stopped on a question to the user, who looked at it and has not answered (docs/protocol/agent-states.md
 	// "Awaiting your reply", #5096).
@@ -279,7 +279,7 @@ type Snapshot struct {
 // and its count, with the tool that lists it, never as empty: the node sends only the sections that changed, so a
 // section that went missing would read as unchanged, and one rendered without its items as "none".
 type SnapshotOmit struct {
-	Muted, Done, Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+	Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
 }
 
 // SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).
@@ -404,6 +404,8 @@ type BriefTask struct {
 	Status          string
 	Decide, Overdue bool
 	Cancelled       bool
+	// Parked: it is parked waiting for the owner's priority call, and this is the reason in one sentence ("" otherwise).
+	Parked          string
 	Scope, AlsoDone []string
 	Result          []BriefCriterion
 }
@@ -519,6 +521,8 @@ type Supervise struct {
 	LeaderStuck bool
 	// Overdue: an entry is a task past its brief's clock (#3822).
 	Overdue bool
+	// ParkedDue: an entry is a parked task whose time came (#3804).
+	ParkedDue bool
 	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
 	// they wait here before going up a rung.
 	Asked      bool
@@ -565,11 +569,21 @@ type SuperviseEntry struct {
 	// (decide_yourself, not_what_i_asked, explain_first).
 	Decision *SuperviseDecision
 	Response string
+	// parked_due: what the task was parked for.
+	Parked *SuperviseParked
 	// From the task's brief (#3822): Asked is the owner's message that led to the work (clipped) and AskedAt its day;
 	// Started says who started it when it was not the owner; Dropped are the criteria scope changes took out.
 	// (assistant, leader, routine, hub) and StartedWhy the reason given.
 	Asked, AskedAt, Started, StartedWhy string
 	Dropped                             []string
+}
+
+// SuperviseParked is what a task was parked for (task_review parked), as its parked_due entry repeats it: the reason,
+// what kind of thing it waits on, until when (local), how many times in a row it was parked with no agent turn in
+// between, and how many more times it can be.
+type SuperviseParked struct {
+	Reason, WaitingOn, Until string
+	Count, Left              int
 }
 
 // SuperviseDecision is a decision a task's supervisor put to the owner (task_review needs_user), as a supervision
