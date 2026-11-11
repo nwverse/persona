@@ -377,6 +377,8 @@ When enabled, tasks dispatched from the main chat (`task_plan`; also `agent_star
 
 The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos created by `agent_start` in quiet-task mode). The assistant owns their completion and quality, rather than merely relaying "done."
 
+- **Supervised by default** (#4669): a task any other chat (neither the main chat nor a leader) hands out with `task_plan` is the main chat's to supervise too: it gets a ledger, its signals go into the main chat's supervision messages, and when it ends (`accepted` or `cancelled`, `reviewDoneTodo`) the chat that planned it gets one line with the task's link (`prompts/assistant/task_ended.md`, relay kind `task_end`: no hop, no push of its own). A failed start still pushes as before (#5081). Without a main chat, a reporting chat's task (#4101) and a task leader's workers keep their old supervision. `start_paths_test.go` lists every function that starts an Agent or opens a conversation and requires each to make a ledger or be on its opt-out list with a reason, so a new entry point cannot skip supervision silently.
+
 - **Ledger**: each `task_plan` task may include `done_when` (up to 6 acceptance criteria) and `expect_minutes` (estimated minutes). Criteria are appended to the assignment prompt, asking the Agent to provide evidence for each when finished.
   A task may also give `todo_id` (#5279): the to-do it runs on instead of a new one. Only one this chat opened, that is not done and has no Agent on it is taken (a Lark topic's to-do, `docs/assistant/todos.md` "Opening a to-do from a topic"); the check is made when the plan is made and again when it starts, and a task that fails it gets the reason as its `error` and starts nothing. The to-do keeps its title, notes and task card; the plan adds no second card, only the task's `done_when` / `expect_minutes` on its supervision.
   The to-do records its supervisor (the creating chat), criteria, estimated duration, and review state in `todo_supervision` (one row per supervised to-do, deleted with it). To-do JSON adds `supervision` (`docs/protocol/protocol.md`).
@@ -800,7 +802,9 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 - **Action bar on iPhone, iPad and Mac (#3393, replacing #2879's Pending / To Start / Progress / Agents and the Mac's
   dock)**: Needs You and In Progress as "Needs you and In progress: each thing once" above defines them. The split is
   `AssistantEntries.split`, a port of the web's `assistantEntries`; `ActionTrayContent` puts the conversation's own cards
-  in front of Needs You (their row closes the tray onto the card below). An Agent linked to a to-do made by hand (no
+  in front of Needs You (their row closes the tray onto the card below). The web (`OwnAskRow` in `AssistantActionBar`,
+  the cards in `ChatView`'s dock) and Android (`panelRequests`, the chat's `InteractionPanel`) do the same since #4883:
+  the conversation's own cards are above its composer, never only inside the closed tray. An Agent linked to a to-do made by hand (no
   `origin`) is that to-do's row in the main chat, not a second row of its own (#3387's `dockAgents` leaves out only the
   agents of conversations' tasks, so web and Android list it twice; the fixture has no such case yet). Message cards also leave Needs You once the inbox
   has the item handled or the user put the card off with Later. Rows: a task opens its details (right-click or long press
