@@ -356,6 +356,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   Extension install progress (#3307): `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=fail PORT=<dedicated port> python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_EXTENSIONS_OPS_HUB=http://127.0.0.1:<port>` runs `ExtensionInstallProgressTests` (background preview steps, auto-opening on approval, stuck at Start, leave/return, cache retry completes directly, uninstall failure/retry).
   Extension CLI/login (#4507): fresh `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=1 MOCK_EXTENSION_AUTH=1 PORT=<port>` mock and old hub `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=1 MOCK_EXTENSION_AUTH=installed MOCK_EXTENSION_AUTH_OLD=1 PORT=<port 2>` each time; `TEST_RUNNER_PERSONA_EXT_AUTH_HUB` / `TEST_RUNNER_PERSONA_EXT_AUTH_OLD_HUB` runs `ExtensionSignInTests` (Install command-line programs in confirmation, Install CLI step/programs, automatic QR sign-in after install, polling success, sign-out, CLI section; old hub only warning + extension's login page, no login section).
   `MOCK_EXTENSION_OPS=1` all succeeds; `MOCK_EXTENSION_OPS_STEP=<seconds>` slows for screenshots. Without OPS, `MOCK_EXTENSION_INSTALL_DELAY=<seconds>` shows old-hub Installing.
+  Extension settings Review (#3692): `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=stall MOCK_EXTENSION_OPS_STEP=3 PORT=<port>` (the first preview of each extension stalls half-way through its download; `/mock/reset` arms it again) and an old hub `MOCK_EXTENSIONS=1 MOCK_EXTENSION_PREVIEW_DELAY=8 PORT=<port 2>` (a synchronous preview answers that late); `TEST_RUNNER_PERSONA_EXTENSIONS_REVIEW_HUB` / `TEST_RUNNER_PERSONA_EXTENSIONS_REVIEW_OLD_HUB` run `ExtensionSettingsReviewTests` in light and dark (`TEST_RUNNER_PERSONA_LOOKS`): the operation card under Updates, the stall with Retry, the Update sheet, the upgrade going in, and the card at the largest text; the old hub's spinner until the sheet.
   First launch on a new simulator asks notification permission; test dismisses it.
 - Git pull: `MOCK_FILES=1 MOCK_GIT_PULL=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py`; `TEST_RUNNER_PERSONA_GIT_HUB=http://127.0.0.1:<port>` runs `GitPullUITests`, from 28 commits behind through refresh success, recheck, failure/retry.
   `TEST_RUNNER_PERSONA_SHOTS=<directory>`; actually switch `simctl ui <udid> appearance light|dark`, both styles; `TEST_RUNNER_PERSONA_GIT_APPEARANCE` only names files.
@@ -583,6 +584,12 @@ Own-hub links open in App (`HubPageLinkUITests`, #2696): mock `/s/…?at=…` op
 external links remain web cards. `MOCK_HUB_LINKS=1 PORT=18796 python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_HUB_LINKS_HUB=http://127.0.0.1:18796 xcodebuild test … -only-testing:PersonaUITests/HubPageLinkUITests`;
 `TEST_RUNNER_PERSONA_SHOTS=<directory>`, `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save shots. URL unit tests `PersonaTests/HubPageLinkTests`.
+
+A link tapped again opens its own page (`LinkSheetReopenTests`, #4074): Persona's main chat links 示例页面 (example.com); in the sheet the page's link leads on to iana.org
+and the sheet is closed there; tapping 示例页面 again shows example.com. Needs the internet. A synthesized edge swipe does not start WebKit's back gesture in the simulator,
+so that the reopened page has no history is checked by the unit tests.
+`MOCK_LINKS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_LINKS_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/LinkSheetReopenTests`;
+`TEST_RUNNER_PERSONA_SHOTS=<directory>`, `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save each step. Pool unit tests `PersonaTests/WebViewPoolTests`.
 
 Telegram reply box (`ConnectorThreadReplyTests`, #1190): sent replies appear immediately; no confirmation-card notice or Allow:
 `MOCK_TELEGRAM=signed_in MOCK_TELEGRAM_INBOX=1 PORT=18857 python3 scripts/mock/mock_hub.py &`,

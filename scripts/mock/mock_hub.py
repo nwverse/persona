@@ -2195,6 +2195,78 @@ def _triage_fixture():
 
 if os.environ.get("MOCK_TODO_TRIAGE") == "1":
     TODOS_INIT.extend(_triage_fixture())
+
+
+# MOCK_TODO_LIST=1|calm|failed (#3712, #3740): only these to-dos, for the To-dos list's header, filter and sort
+# screenshots. Every section has rows; due dates fall today, later this week, later this month, before today (an open PR,
+# overdue) and nowhere; two are high priority, two low; a fix and its regression test share issue #412 (one row,
+# "1 related"). The selected-cache decision waits on the owner (an ask). calm: nothing needs the owner. failed: also three
+# closed to-dos whose agent never started (#3713), one in the same plan as a to-do that really finished.
+def _todo_list_fixture(variant):
+    out = []
+    local = NOW.astimezone()
+    today = local.date()
+    week_end = today + timedelta(days=6 - today.weekday())  # Monday-first, as the calendar view in zh-Hans
+    nxt = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_end = nxt - timedelta(days=1)
+
+    def day(n, cap=None):
+        d = today + timedelta(days=n)
+        return (min(d, cap) if cap else d).isoformat()
+
+    def agent(n, title, cwd, state, minutes, last, **kw):
+        sid = f"c3d5e7f9-0000-4000-8000-{3712000 + n:012d}"
+        status = {"working": "working", "needs_you": "blocked", "unread": "done", "idle": "idle"}[state]
+        space = cwd.rstrip("/").rsplit("/", 1)[-1]
+        SESSIONS.append(sess("macbook", sid, title, cwd, status, state, space, 7, "1", 1, minutes, last, **kw))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=minutes + 30), "released_at": None,
+                "title": title, "cwd": cwd, "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def todo(tid, title, minutes, agents=(), **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 600),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": list(agents), "priority": ""}
+        t.update(kw)
+        out.append(t)
+
+    evening = local.replace(hour=18, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    p = "/Users/me/code/persona"
+    if variant != "calm":
+        todo("tl_migrate", "数据库升级到 18", 12, [agent(1, "数据库升级", "/home/me/code/shop-api", "needs_you", 12,
+             "要不要先在备份库上演练一遍？", pending=1)], due_at=evening.isoformat().replace("+00:00", "Z"))
+        todo("tl_cache", "选缓存方案", 120, [agent(2, "缓存方案", p, "idle", 120, "测试已通过，是否继续更换缓存方案？")],
+             priority="high")
+    todo("tl_inbox", "收件箱分拣加批量操作", 4, [agent(3, "收件箱批量操作", p, "working", 4, "批量标记已处理的接口写好了，正在补单测。")],
+         due_date=day(2, week_end), priority="high")
+    todo("tl_widget", "修小组件横屏崩溃", 1, [agent(4, "小组件横屏", "/Users/me/code/weather", "working", 1,
+         "在模拟器里复现了横屏崩溃，正在改布局。")], due_date=day(9, month_end))
+    todo("tl_push_fix", "修复 #412 推送丢失", 50, [agent(5, "推送丢失", p, "unread", 50, "修好了：重连后补拉漏掉的推送，单测已加。")])
+    todo("tl_push_test", "#412 推送丢失：补回归测试", 60 * 20, [agent(6, "推送回归测试", p, "idle", 60 * 20, "回归测试写完了。")],
+         priority="low")
+    todo("tl_speed", "网页加载提速", 60, done_at=ago(hours=1), done_by="review", done_reason="验收通过", due_date=day(0),
+         delivery={"state": "live", "at": ago(hours=1)})
+    todo("tl_search_pr", "设置页加搜索", 60 * 24 * 6, [agent(7, "设置页搜索", p, "idle", 60 * 24 * 6, "PR 已经开好了，等合并。")],
+         stage="review", pr_url="https://github.com/example/app/pull/31", due_date=day(-4),
+         delivery={"state": "pr", "gate": "等你批准合并", "unblock": "user", "at": ago(days=6)})
+    todo("tl_minutes", "整理本周会议纪要", 125, [agent(8, "会议纪要", "/Users/me/work", "idle", 125, "纪要初稿放在知识库里了。")],
+         due_date=day(3, week_end), priority="low")
+    todo("tl_nas", "给 NAS 配自动备份", 180, origin="", due_date=day(17, month_end))
+    for i, title in enumerate(["排查 node 内存上涨", "试一下新的启动器", "清理旧的构建缓存", "看一下日志轮转", "调研新引擎", "修 Android 深色模式的边框"]):
+        todo(f"tl_stale_{i}", title, 60 * 24 * (3 + i), [agent(20 + i, title, p, "idle", 60 * 24 * (3 + i), "先到这里。")])
+    for i, (title, days) in enumerate([("换一套设置页图标", 2), ("整理发布说明", 3), ("博客迁移到 Astro", 4), ("接入支付回调", 5)]):
+        todo(f"tl_done_{i}", title, 60 * 24 * days, done_at=ago(days=days), **({"due_date": day(-8)} if i == 0 else {}))
+    if variant == "failed":
+        failed = dict(done_at=ago(hours=12), start_error="rpc: connection closed", agents=[])
+        todo("tl_failed_rce", "修复控制台远程执行漏洞", 60 * 12, plan_id="plan_tl_rce", **failed)
+        todo("tl_rce_done", "控制台远程执行漏洞：上线验证", 60 * 10, plan_id="plan_tl_rce", done_at=ago(hours=10), done_by="review",
+             done_reason="验收通过")
+        todo("tl_failed_panel_a", "部署自托管面板", 60 * 24, **dict(failed, done_at=ago(hours=24)))
+        todo("tl_failed_panel_b", "部署自托管面板", 60 * 28, **dict(failed, done_at=ago(hours=28)))
+    return out
+
+
+_TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
+if _TODO_LIST:
+    TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 TODOS = copy.deepcopy(TODOS_INIT)
 
 
@@ -2262,7 +2334,7 @@ def apply_todo_plan(t, body):
 
 # MOCK_TODO_ASKS=1 (#2056, docs/assistant/todos.md "Waiting for the owner"): to-dos carry the ask they wait on, as GET
 # /api/v1/todos lists it: a decision with a recommendation (the PR check, its agent idle), a conclusion that cannot be done
-# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" (the brief's accept row). POST …/accept takes one
+# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" and the cache decision (the brief's accept rows). POST …/accept takes one
 # (accept_brief): its ask is gone from the list, and a second press is 409.
 TODO_ASKS = {
     "todo_review": {"outcome": "decide", "verdict": "🤔 要你拍板：PR #42 改了公开接口，旧接口留不留", "recommend": "先合入，下个版本再删旧接口"},
@@ -2270,6 +2342,9 @@ TODO_ASKS = {
     "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
+if _TODO_LIST and _TODO_LIST != "calm":  # MOCK_TODO_LIST: the cache decision waits on the owner
+    TODO_ASKS["tl_cache"] = {"outcome": "decide", "verdict": "🤔 要你拍板：测试已通过，是否继续更换缓存方案？",
+                             "recommend": "保留当前缓存，下次再评估新方案"}
 
 # MOCK_ORPHANED=1 (#3618, docs/assistant/todos.md "Nobody is working on this"): open to-dos whose agents are gone, as GET
 # /api/v1/todos carries it, on to-dos whose agents have stopped, one per reason: closed after a model error (the PR
@@ -3586,6 +3661,8 @@ if MOCK_TASKS:
                    "/Users/me/code/weather", 44, "plan_mock_1"),
         _task_todo("todo_task_tests", "补齐网络层的单元测试", "网络层的单元测试补到 80% 覆盖。", "macbook", TESTS,
                    "/Users/me/code/weather", 44, "plan_mock_1"),
+        _task_todo("todo_task_cache", "选缓存方案", "本地缓存还是 Redis，选定后交给网络层 Agent。", "macbook", TESTS,
+                   "/Users/me/code/weather", 130, ""),
         _task_todo("todo_task_release", "整理发布说明", "把这周合并的 PR 整理成发布说明，只读。", "macbook", RELEASE,
                    "/Users/me/code/weather", 30, "plan_mock_2"),
         _task_todo("todo_task_blog", "博客迁移到 Astro", "把博客从 Hexo 迁到 Astro。", "studio", BLOG,
@@ -3636,6 +3713,11 @@ if MOCK_TASKS:
             if _t["id"] == "todo_task_blog":
                 _t["check"] = {"verdict": "waiting", "reason": "等 Vercel 部署跑完", "at": ago(minutes=11),  # i18n-ignore
                                "work_since": ago(minutes=40)}
+    if os.environ.get("MOCK_TODO_ASKS") == "1":
+        TODO_ASKS["todo_task_cache"] = {
+            "outcome": "decide", "verdict": "需要你拍板：本地缓存还是 Redis",  # i18n-ignore
+            "recommend": "本地缓存，先不引入 Redis",
+        }
     TODOS = copy.deepcopy(TODOS_INIT)
     # MOCK_TASK_DECISION=1: a stopped task whose owner can finish without another Agent turn.
     if os.environ.get("MOCK_TASK_DECISION") == "1":
@@ -3748,8 +3830,8 @@ if MOCK_TASKS:
                      {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
             # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
-                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT,
                         "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
@@ -4230,9 +4312,16 @@ def tasks_area(h, method, p, raw):
         h.send_json({"plan": plan})
         return True
     if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith("/accept"):
-        # The Accept button of a brief item: the first press verifies the task, a second one is a round that is over (409).
+        # Accept only the current round; a Brief's older row is already handled, while an ordinary card uses its current ask.
         tid = p.split("/")[4]
-        if tid in BRIEF_ACCEPTED:
+        sent = json.loads(h.last_body or b"{}")
+        brief = next((row for feeds in TASK_FEED.values() for item in feeds if item.get("kind") == "brief"
+                      for row in item.get("body", {}).get("accept", []) if row.get("id") == tid), None)
+        current = next((t for t in sorted_todos() if t["id"] == tid), None)
+        current_ask = (current or {}).get("ask")
+        # With asks shown the hub accepts only the current round; MOCK_TASKS_NO_ASKS hides that state for visual tests.
+        expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
+        if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
         else:
             BRIEF_ACCEPTED.add(tid)
@@ -14367,6 +14456,8 @@ def system_route(handler, p, req):
 # the same operation (install → start; nodes skipped). A removal, async or not, is recorded as an operation too.
 # =fail: the first install or upgrade of each extension stops at start (retryable: …/retry starts a new operation, its
 # download from the cache and the consent already given, so it goes on by itself); the first removal stops at remove.
+# =stall (#3692): the first preview of each extension stops half-way through its download, three steps later, with
+# download_stalled (retryable: …/retry downloads it again and waits for consent).
 # MOCK_EXTENSION_OPS_STEP=<seconds> per step (default 0.6).
 EXT_OPS = os.environ.get("MOCK_EXTENSION_OPS", "") if os.environ.get("MOCK_EXTENSIONS") else ""
 EXT_OPS_STEP = float(os.environ.get("MOCK_EXTENSION_OPS_STEP", "0.6"))
@@ -14379,6 +14470,8 @@ _UNINSTALL_STEPS = ["stop", "remove", "nodes"]
 _PACKAGE_BYTES = 4 * 1024 * 1024
 # MOCK_EXTENSION_INSTALL_DELAY=<seconds>: a hub without operations takes that long to answer an install or a removal.
 EXT_INSTALL_DELAY = float(os.environ.get("MOCK_EXTENSION_INSTALL_DELAY", "0"))
+# MOCK_EXTENSION_PREVIEW_DELAY=<seconds>: a synchronous preview takes that long to answer (a slow download, #3692).
+EXT_PREVIEW_DELAY = float(os.environ.get("MOCK_EXTENSION_PREVIEW_DELAY", "0"))
 
 
 def _ext_now():
@@ -14446,7 +14539,24 @@ def _ext_preview_run(op, c, cached=False):
         _ext_step(op, "download", "running", bytes=0, total=_PACKAGE_BYTES)
         for part in range(1, 5):
             time.sleep(EXT_OPS_STEP)
+            if op["state"] == "canceled": return
             _ext_step(op, "download", "running", bytes=_PACKAGE_BYTES * part // 4, total=_PACKAGE_BYTES)
+            if part == 2 and EXT_OPS == "stall" and ("preview", c["id"]) not in _EXT_FAILED:
+                _EXT_FAILED.add(("preview", c["id"]))
+                time.sleep(EXT_OPS_STEP * 3)
+                with _EXT_OPS_LOCK:
+                    for st in op["steps"]:
+                        if st["id"] == "download": st["state"] = "failed"
+                    op.update(state="failed", step="download", error="包下载停滞，请重试。", error_code="download_stalled",  # i18n-ignore: the hub's words
+                              retryable=True, updated_at=_ext_now(), ended_at=_ext_now())
+
+                    def retry(c=c, was=op):
+                        nxt = _ext_op_new(was["kind"], c["id"], c["name"], version=c["version"], frm=was.get("from"), market=c["market"])
+                        threading.Thread(target=_ext_preview_run, args=(nxt, c), daemon=True).start()
+                        return nxt
+                    EXT_OP_JOBS[op["id"]]["retry"] = retry
+                _ext_op_push(op)
+                return
         _ext_step(op, "download", "done")
     for sid in ("verify", "unpack", "check"):
         _ext_step(op, sid, "running"); time.sleep(EXT_OPS_STEP); _ext_step(op, sid, "done")
@@ -14605,6 +14715,7 @@ def markets_route(handler, p, body):
             _PREVIEWS.pop(pid, None); _PREVIEW_BODIES.pop(pid, None)  # the operation makes its own
             threading.Thread(target=_ext_preview_run, args=(op, c), daemon=True).start()
             handler.send_json({"operation": _ext_op_view(op)}, 202); return True
+        time.sleep(EXT_PREVIEW_DELAY)
         handler.send_json(pv); return True
     if p in ("/api/v1/plugins/-/install",) or (p.startswith("/api/v1/plugins/") and p.endswith("/-/upgrade")):
         c = _PREVIEWS.pop(req.get("preview_id", ""), None)
@@ -15689,6 +15800,8 @@ class H(BaseHTTPRequestHandler):
             # ExtensionMarketTests' update installed (#2988): example-gateway at 1.0.0 again, its newer version waiting.
             PLUGINS.pop("example-gateway-next", None); _UPGRADE_WHILE_ON.pop("example-gateway", None)
             PLUGINS["example-gateway"] = copy.deepcopy(_GATEWAY_START)
+            # MOCK_EXTENSION_OPS=stall: the next preview of each extension stalls again (ExtensionSettingsReviewTests).
+            _EXT_FAILED.difference_update({k for k in _EXT_FAILED if k[0] == "preview"})
             for m in MACHINES:
                 m["engine"] = "herdr"
                 if m["id"] == "lab":
