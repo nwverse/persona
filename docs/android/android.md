@@ -449,7 +449,7 @@ iOS app.
 ./scripts/app/android.sh lint     # Android lint
 ```
 
-- **Use `release` on the phone you actually use.** The debug package is debuggable, so ART never compiles it ahead of time, and it skips R8: it starts and scrolls noticeably worse ("Debug against release" below has the numbers). `release` runs `:app:assembleRelease`, checks the APK with `scripts/release/check_android_shrink.py`, then aligns and signs it with the newest build-tools. The key is `android.release_keystore` in `~/.config/persona/config.json` (with `android.release_key_alias` and `android.release_keystore_password_command`; [config.md](../operations/config.md)). With none configured it signs with the SDK's local debug keystore (`~/.android/debug.keystore`), which is what debug builds on the same computer are signed with, so the release installs over one of the same application id and keeps its pairing; the script says so when it does. That key is only for your own phone: anyone can sign with a debug key, and a package signed on another computer does not update this one. Android refuses an update whose signature differs, so changing keys means uninstalling first, which removes the pairing. The published APKs are built and signed by the release worker ([release.md](../operations/release.md)), not by this command.
+- **Use `release` on the phone you actually use.** The debug package is debuggable, so ART never compiles it ahead of time, and it skips R8: it starts and scrolls noticeably worse ("Debug against release" below has the numbers). `release` runs `:app:assembleRelease`, checks the APK with `scripts/release/check_android_shrink.py`, then aligns and signs it with the newest build-tools. The key is `android.release_keystore` in `~/.config/persona/config.json` (with `android.release_key_alias` and `android.release_keystore_password_command`; [config.md](../operations/config.md)). With none configured it signs with the SDK's local debug keystore (`~/.android/debug.keystore`), which is what debug builds on the same computer are signed with, so the release installs over one of the same application id and keeps its pairing; the script says so when it does. That key is only for your own phone: its password is the same on every computer, so anyone can sign with a debug key; do not pass such a package on to someone else. A package signed on another computer does not update this one. Android refuses an update whose signature differs, so changing keys means uninstalling first, which removes the pairing. The published APKs are built and signed by the release worker ([release.md](../operations/release.md)), not by this command.
 - Needs the Android SDK (`$ANDROID_HOME`, default `~/Library/Android/sdk`) with the API 37 platform and matching build-tools installed; needs JDK 21 (Android Studio's bundled JBR 21 works).
 - The toolchain is Gradle 9.8.2, AGP 9.5.0, Kotlin 2.4.21, Compose BOM 2026.09.00. Versions are centralized in `android/gradle/libs.versions.toml`; the wrapper and daemon configuration are committed too.
 - AGP 9 uses built-in Kotlin and no longer applies `org.jetbrains.kotlin.android`. `build-logic/convention` provides `persona.android.application`, `persona.android.library`, `persona.jvm.library` and `persona.compose`, unifying SDK and JVM configuration; JVM bytecode is still 17.
@@ -745,40 +745,45 @@ commit installed side by side under two application ids, both paired with the sa
 (`MOCK_AGENTS=1 MOCK_LONG_HISTORY=1`, about 140 sessions), Glass style, the frame-drop fallback left on. Each round
 opens the page with a `persona://open` link, waits 3.5 seconds, resets `dumpsys gfxinfo`, flings up and down twice and
 reads the summary; 10 rounds per scenario, the two packages alternating inside each round. Frame times come from
-gfxinfo's histogram, which counts every frame since the reset (its buckets widen above 32 ms). Janky is gfxinfo's own
-"Janky frames ÷ Total frames" summed over the 10 rounds, with the per-round min / p50 / max in parentheses. The chat is
+gfxinfo's histogram, which counts every frame since the reset (1 ms buckets up to 31 ms, wider ones above). Janky is gfxinfo's own
+"Janky frames ÷ Total frames" summed over the 10 rounds, with the per-round min / median / max in parentheses. The chat is
 the long Agent conversation `MOCK_LONG_HISTORY=1` adds.
 
-| Phone | Scenario | Build | Frames | p50 | p90 | p99 (ms) | Over 32 ms | Janky |
+| Phone | Scenario | Build | Frames | p50 | p90 | p99 (ms) | 34 ms or longer | Janky |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Huawei BLK-AL80, HarmonyOS 4.2 (Android 12 base), 120 Hz | Agents list | debug | 2,584 | 15 | 34 | 105 | 10.10% | 11.57% (6.8 / 10.6 / 19.2) |
+| Huawei BLK-AL80, HarmonyOS 4.2 (Android 12 base), 120 Hz panel | Agents list | debug | 2,584 | 15 | 34 | 105 | 10.10% | 11.57% (6.8 / 11.0 / 19.2) |
 | | | release | 2,840 | 20 | 21 | 27 | 0.04% | 0.11% (0 / 0 / 0.7) |
-| | Chat | debug | 2,517 | 16 | 38 | 121 | 11.08% | 12.16% (8.9 / 10.8 / 17.3) |
+| | Chat | debug | 2,517 | 16 | 38 | 121 | 11.08% | 12.16% (8.9 / 10.9 / 17.3) |
 | | | release | 2,840 | 20 | 21 | 26 | 0% | 0% (0 / 0 / 0) |
-| Xiaomi 12 (2201123C), Android 13, 120 Hz | Agents list | debug | 5,834 | 9 | 13 | 30 | 0.48% | 4.83% (4.3 / 4.8 / 5.5) |
-| | | release | 5,943 | 17 | 17 | 20 | 0% | 1.51% (0 / 1.0 / 3.7) |
+| Xiaomi 12 (2201123C), Android 13, 120 Hz panel | Agents list | debug | 5,834 | 9 | 13 | 30 | 0.48% | 4.83% (4.3 / 4.8 / 5.5) |
+| | | release | 5,943 | 17 | 17 | 20 | 0% | 1.51% (0 / 1.3 / 3.7) |
 | | Chat | debug | 5,849 | 9 | 13 | 30 | 0.56% | 4.63% (3.7 / 4.5 / 5.8) |
-| | | release | 5,965 | 16 | 17 | 21 | 0% | 1.83% (0.3 / 2.0 / 2.5) |
+| | | release | 5,965 | 16 | 17 | 21 | 0% | 1.83% (0.3 / 2.1 / 2.5) |
 
 | Phone | Cold start, debug | Cold start, release |
 | --- | --- | --- |
-| Huawei BLK-AL80 | 2,422 ms (2,405 to 2,489) | 557 ms (552 to 617) |
-| Xiaomi 12 | 850 ms (828 to 874) | 391 ms (376 to 406) |
+| Huawei BLK-AL80 | 2,431 ms (2,405 to 2,489) | 580 ms (552 to 617) |
+| Xiaomi 12 | 851 ms (828 to 874) | 391 ms (376 to 406) |
 
 Cold start is the median `TotalTime` of six `am start -W` runs after a force-stop, with the range in parentheses; the
 packages were paired and had been opened before. APK size: 97.3 MB debug, 20.8 MB release.
 
-- The long frames are the difference. On the Huawei phone one debug frame in ten takes longer than 32 ms and the 99th
+Both panels are 120 Hz, but the Huawei phone drew about half as many frames per round as the Xiaomi phone in the same
+steps, so it was most likely running at 60 Hz; the refresh rate in use was not recorded. Each build is compared with
+the other on the same phone, not across phones.
+
+- The long frames are the difference. On the Huawei phone one debug frame in ten takes 34 ms or longer and the 99th
   percentile is over 100 ms; the release build has almost none and its 99th percentile is under 30 ms. On the faster
-  Xiaomi phone the debug build's long frames are fewer, and the release build still has none over 32 ms and well under
+  Xiaomi phone the debug build's long frames are fewer, and the release build still has none that long and well under
   half the janky share.
 - The release build's median is not lower: its histogram puts most frames in the 16 to 21 ms buckets on both phones,
   where the debug build has a faster median and a long tail. Why the release frames sit there was not looked into, and
   it moves between runs: an earlier run on the Xiaomi phone put the release median at 8 ms for the Agents list. Read the
   tail and the janky share, not the median.
 - These are two phones, one run each. An earlier run of the same steps agreed: on the Huawei phone 11.33% against
-  1.62% janky for the Agents list and 10.58% against 0% for the chat. The release build has no Baseline Profile yet
-  (#4055), so its first launches after an install are the slowest it gets.
+  1.62% janky for the Agents list and 10.58% against 0% for the chat. The release build has no Baseline Profile of the
+  app's own yet, only the one merged from its libraries (#4055), so its first launches after an install are the slowest
+  it gets.
 
 `android_scroll_perf.py` (below) opens pages through the debug entry and only runs on a debug package. To compare
 builds, install them under different application ids (`-PpersonaApplicationId`, "Build and install"), pair each one,
@@ -787,6 +792,7 @@ and run:
 ```sh
 CHAT=<machine>/<session> COLD=6 python3 scripts/diag/android_build_perf.py <serial> out.json debug=<package> release=<package>
 ```
+
 ## Interface style performance
 
 Measured 2026-10-31 on a test phone (Android, ColorOS, connected to a real hub) with `scripts/diag/android_scroll_perf.py`: debug package, pages opened through debug entries

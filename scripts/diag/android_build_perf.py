@@ -7,8 +7,10 @@ Pages open through persona://open links, which a release build answers too (andr
 entry). Each round opens the Agents list, and a conversation when CHAT=<machine>/<session> is set, in every package,
 in alternating order so drift on the phone (heat, background work) lands on all of them: wait, reset gfxinfo, fling up
 and down twice, read the summary and the histogram. The histogram counts every frame since the reset; the framestats
-rows keep only the last 120 per window, so the percentiles here come from the histogram.
-COLD=<n> also times n cold starts of each package with `am start -W`. Every package must be paired already.
+rows keep only the last 120 per window, so the percentiles here come from the histogram. Its buckets are 1 ms wide up
+to 31 ms and wider above, so shares are counted from a bucket's edge: 17 ms or longer, 34 ms or longer.
+COLD=<n> also times n cold starts of each package with `am start -W`; a start the phone does not report as cold is
+dropped. Every package must be paired already.
 RUNS (10), SWIPE_MS (180) and SETTLE_S (0.9) override the round count, swipe duration and idle delay; ONLY=agents,chat
 limits the scenarios."""
 import json, os, re, statistics, subprocess, sys, time
@@ -20,14 +22,14 @@ COLD = int(os.environ.get("COLD", "0"))
 
 
 def histogram(text):
-    """gfxinfo's HISTOGRAM line as a map from each bucket's lower bound in ms to its frames."""
-    line = re.search(r"HISTOGRAM: (.*)", text)
+    """gfxinfo's frame-time HISTOGRAM line (not the GPU one) as a map from each bucket's name in ms to its frames."""
+    line = re.search(r"^HISTOGRAM: (.*)", text, re.MULTILINE)
     return dict((int(ms), int(n)) for ms, n in re.findall(r"(\d+)ms=(\d+)", line.group(1))) if line else dict()
 
 
 def histogram_stats(buckets):
-    """Percentiles and shares over a histogram: the bucket a percentile falls in, and the share of frames in buckets above
-    a limit."""
+    """Percentiles and shares over a histogram: the bucket a percentile falls in, and the share of frames from a bucket
+    up. The 32 ms bucket is 2 ms wide, so the long-frame share starts at 34."""
     rows = sorted(buckets.items())
     total = sum(n for _, n in rows)
     if not total:
@@ -41,11 +43,11 @@ def histogram_stats(buckets):
                 return ms
         return rows[-1][0]
 
-    def over(limit):
-        return round(100.0 * sum(n for ms, n in rows if ms > limit) / total, 2)
+    def from_bucket(first):
+        return round(100.0 * sum(n for ms, n in rows if ms >= first) / total, 2)
 
     return dict(frames=total, p50=at(0.5), p90=at(0.9), p95=at(0.95), p99=at(0.99),
-            over_16ms_percent=over(16), over_32ms_percent=over(32))
+            from_17ms_percent=from_bucket(17), from_34ms_percent=from_bucket(34))
 
 
 def merged(runs):
@@ -60,9 +62,23 @@ def stats(values):
     values = sorted(v for v in values if v is not None)
     if not values:
         return None
-    q = lambda p: values[min(len(values) - 1, int(round(p * (len(values) - 1))))]
-    return dict(n=len(values), min=round(values[0], 1), p50=round(q(0.5), 1), max=round(values[-1], 1),
-            mean=round(statistics.fmean(values), 2))
+    return dict(n=len(values), min=round(values[0], 1), median=round(statistics.median(values), 1),
+            max=round(values[-1], 1), mean=round(statistics.fmean(values), 2), values=[round(v, 2) for v in values])
+
+
+def ordered(packages, i):
+    """Reversed every other round, so no package always runs first."""
+    return packages if i % 2 == 0 else packages[::-1]
+
+
+def cold_start_ms(text):
+    """TotalTime of an `am start -W`, or None when the phone says the start was not cold (the process was still alive, or
+    something else, such as a permission prompt, came to the front instead)."""
+    state = re.search(r"LaunchState: (\w+)", text)
+    total = re.search(r"TotalTime: (\d+)", text)
+    if not total or (state and state.group(1) != "COLD"):
+        return None
+    return int(total.group(1))
 
 
 def scenarios(chat, only):
@@ -121,22 +137,20 @@ def main():
         with open(out, "w") as f:
             json.dump(result, f, ensure_ascii=False, indent=1)
 
-    # reversed every other round, so neither package always runs first
-    order = lambda i: packages if i % 2 == 0 else packages[::-1]
     for i in range(COLD):
-        for label, package in order(i):
+        for label, package in ordered(packages, i):
             adb("shell", "am", "force-stop", package)
             time.sleep(1.5)
             text = adb("shell", "am", "start", "-W", "-n", package + "/persona.android.MainActivity", capture=True)
-            found = re.search(r"TotalTime: (\d+)", text)
-            if found:
-                cold[label].append(int(found.group(1)))
-            print("cold", label, i, found and found.group(1), flush=True)
+            took = cold_start_ms(text)
+            if took is not None:
+                cold[label].append(took)
+            print("cold", label, i, took, flush=True)
             time.sleep(4)
         save()
     for i in range(RUNS):
         for name, link in links.items():
-            for label, package in order(i):
+            for label, package in ordered(packages, i):
                 adb("shell", "am", "force-stop", package)
                 # quoted for the phone's shell, where & would end the command
                 adb("shell", "am", "start", "-W", "-a", "android.intent.action.VIEW", "-d", "'%s'" % link, "-p", package)
