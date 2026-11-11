@@ -505,7 +505,7 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		}
 		_ = json.Unmarshal(raw, &fields)
 		if fields.ConfigDir != "" {
-			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: "Update this computer's node before selecting an assistant config_dir"}
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_assistant_config_dir")}
 		}
 	}
 	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
