@@ -1256,6 +1256,15 @@ if os.environ.get("MOCK_OVERVIEW_DENSE"):
                          source_kind="runtime", agent_label="claude", state_since=ago(minutes=2),
                          capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True, "attach": False}))
 
+# MOCK_SESSIONS_MANY=<n> (#4410): n more idle sessions, enough to page an Agents list several pages deep with
+# MOCK_SESSIONS_LIST=1. GET /mock/sessions/touch moves the newest of them to now: the list's revision changes and every
+# cursor of the old one answers 409 cursor_expired, as the hub's do once a frozen view has expired.
+if os.environ.get("MOCK_SESSIONS_MANY"):
+    for _i in range(int(os.environ["MOCK_SESSIONS_MANY"])):
+        SESSIONS.append(sess("server", "e4410a00-0000-4000-8000-%012d" % (_i + 1), "Session %03d" % (_i + 1),
+                             "/home/me/code/fixture", "idle", "idle", "fixture", 24, "fixture-%03d" % (_i + 1), _i + 1,
+                             60 * (_i + 1), "Done."))
+
 # MOCK_OPENCODE=1 (#3070, docs/integrations/opencode.md): opencode in herdr panes on the server. Four are herdr sessions the Persona
 # plugin completes (working, needs you with a permission card, finished unread, idle with a long conversation), one has
 # no plugin (terminal only, with why), and gemini is an agent nothing reads (terminal only).
@@ -15458,6 +15467,7 @@ MOCK_HELP = [
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
+    "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
@@ -15966,6 +15976,9 @@ class H(BaseHTTPRequestHandler):
                 threading.Thread(target=narrate, args=args, daemon=True).start()
                 return self.send_json({"ok": True})
             return self.send_json(narrate(*args))
+        if p == "/mock/sessions/touch" and os.environ.get("MOCK_SESSIONS_MANY"):  # #4410: expire the paged list's cursors
+            SESSIONS[[s["session_id"] for s in SESSIONS].index("e4410a00-0000-4000-8000-000000000001")]["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            return self.send_json({"ok": True})
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
