@@ -209,9 +209,9 @@ def edit(r, name):
 
 def edit_full(r):
     edit(r, "gw_full")
-    d = r.dialog("编辑 gw_full")
-    # no display name yet: it shows the startup ID
-    expect(d.get_by_label("显示名", exact=True)).to_have_value("")
+    # the mock's gw_full has a display name: the title and the field show it, the startup ID is the placeholder
+    d = r.dialog("编辑 Team gateway")
+    expect(d.get_by_label("显示名", exact=True)).to_have_value("Team gateway")
     expect(d.get_by_label("显示名", exact=True)).to_have_attribute("placeholder", "gw_full")
     d.get_by_role("button", name="更多选项").click()
     expect(d.get_by_label("启动 ID", exact=True)).to_be_disabled()
@@ -229,13 +229,13 @@ def edit_full(r):
     d.get_by_role("button", name="保存", exact=True).click()
     expect(d).to_be_hidden()
     put = r.log()["put"]
-    assert put["timeout_ms"] == 900000 and put["display_name"] == "", put
+    assert put["timeout_ms"] == 900000 and put["display_name"] == "Team gateway", put
     for k in ("headers", "api_key", "models", "proxy", "opus_model", "effort", "subagent_force"):
         assert k not in put, (k, put)
-    ok("editing gw_full restores its tiers and every advanced field; the PUT carries only the changed timeout")
+    ok("editing gw_full restores its display name, tiers and every advanced field; the PUT carries the changed timeout and the display name")
 
     edit(r, "gw_full")
-    d = r.dialog("编辑 gw_full")
+    d = r.dialog("编辑 Team gateway")
     d.get_by_role("button", name="选择模型").click()
     d.get_by_role("button", name="高级").click()
     expect(d.get_by_label("超时（毫秒）")).to_have_value("900000")
