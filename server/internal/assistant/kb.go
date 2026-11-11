@@ -78,16 +78,18 @@ type kbState struct {
 	notOpen time.Time
 
 	// sourceWrites lets deletion finish after already running connector reads and writes.
-	sourceWrites sync.Mutex
-	postWrites   sync.Mutex // separate: a connector read may synchronously submit posts
-	mu           sync.Mutex
-	archivedAt   map[string]time.Time        // connector id → when its archive was last asked (kb_sources.go)
-	changed      map[string]bool             // connectors that said their chats changed: read at the next round (kbChangedFloor)
-	itemsNew     bool                        // a connector said its items changed: collected at the next round
-	agentAt      map[string]time.Time        // agent → when its turn last went into a project timeline (kb_bus.go)
-	waiting      []assistantwire.KBAgentTurn // turns that came before it opened
-	postsDirty   atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
-	retries      kb.Retries                  // the steps' backoffs, kept across the engines built one after another
+	sourceWrites     sync.Mutex
+	postWrites       sync.Mutex // separate: a connector read may synchronously submit posts
+	archiveCleanupMu sync.Mutex
+	archiveCleanup   map[string]archiveReservation
+	mu               sync.Mutex
+	archivedAt       map[string]time.Time        // connector id → when its archive was last asked (kb_sources.go)
+	changed          map[string]bool             // connectors that said their chats changed: read at the next round (kbChangedFloor)
+	itemsNew         bool                        // a connector said its items changed: collected at the next round
+	agentAt          map[string]time.Time        // agent → when its turn last went into a project timeline (kb_bus.go)
+	waiting          []assistantwire.KBAgentTurn // turns that came before it opened
+	postsDirty       atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
+	retries          kb.Retries                  // the steps' backoffs, kept across the engines built one after another
 
 	history   kbHistoryShared  // the history import (kb_history.go)
 	selection kbSelectionState // what is brought in and kept (kb_selection.go)
