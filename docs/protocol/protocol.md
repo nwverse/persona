@@ -144,7 +144,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - Avatars: `look_uploads` (`POST /api/v1/looks/uploads` and `DELETE /api/v1/looks/uploads/{id}` in the REST table, #2404; the apps offer making an avatar from an image only when the hub lists it).
   - Extensions ([extensions.md](../extensions/extensions.md)): `extensions` (`GET /api/v1/extensions` and the relay under `/api/v1/extensions/{id}/`), `extension_manager` (an extension's detail, form, settings, secrets and switch under `/api/v1/extensions/{id}/-/`), `extension_ui_slots` ("UI slots", `extension_ui` events), `extension_auto_upgrade` ("Auto-upgrade", `extension_upgrade` events), `extension_market_spec` (`PUT /api/v1/extensions/-/markets/{id}` with `spec`: a market moves and keeps its id), `extension_operations` (install, upgrade, uninstall in steps with progress, see "Extension install, upgrade and uninstall progress" below), `extension_auth` (extension sign-in `/api/v1/extensions/{id}/-/auth…`, `extension_auth` events, the install step `tools`, "Sign-in (auth)"), `extension_ui_v3` ("UI version 3"), `extension_widgets`, `extension_shortcuts` and `extension_notify_actions` (widgets, Shortcuts and notification buttons, "System-level placements"), `extension_secret_references` (a secret may hold a provider's reference: `PUT …/{id}/-/secrets/{name}` with `{reference}`, `secrets[].reference` and `secret_users` in the details, [secret-providers.md](../extensions/secret-providers.md)). `plugins`, `plugin_manager`, `plugin_ui_slots` and `plugin_auto_upgrade` are the same under the old names (`/api/v1/plugins/…`, `plugin_ui` and `plugin_upgrade` events), kept for the apps out there until at least 2027-05-05 ("Naming and compatibility").
 - Added by the hub:
-  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `machine_rename` (see "Renaming a computer").
+  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_pane_source` (see "Pane/host origins"), `sessions_dimensions` (see "Runtime session dimensions"), `sessions_manager` (see "One manager's sessions"), `machine_rename` (see "Renaming a computer").
   - `meeting_attendance` only while the default manager (the one recording routes go to) is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): attending a recorded meeting (the `attendance` / `attending_session` upload fields, `…/live`, `…/ask` and the `meeting_attendance_default` setting, see "Recording sync"). The phone offers a role only when the hub lists it, since an older hub or manager accepts the fields and ignores them.
   - `meeting_conversation` only while the default manager names both `meeting_attendance` and `meeting_conversation` in its `manager.hello` capabilities, the same way: the meeting conversation's phase 1 (the upload's `room` and `private`, the room conversation, `…/ask` answered by it, `…/just-me`, `…/private`, `…/followup`, the origins `meeting` and `meeting_followup`, the `meeting_live` event and the fields phase 1 adds to `GET …/live` and `detail.meta`; see "Meeting conversation (#3862)").
   - `agent_session_archives` only while every manager (the default one, each connected one and each computer's owner) is connected and names it in its `manager.hello` capabilities, and `agent_session_archive_close` only while every manager names that one too (see "Agent session archives" above).
@@ -1697,7 +1697,7 @@ Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `c
 | `counts` | `1`/`true` returns aggregates instead of rows. `0`/`false` selects a normal page. The same filters apply. |
 | `since` | Opaque `revision` from the completed baseline/previous delta. Returns only changed rows and removals, including state/title-only changes when `updated_at` did not advance. Keep the same filters; changing a filter requires a new first-page baseline. |
 
-Repeated recognized parameters, malformed booleans/page sizes/states and malformed tokens return HTTP **400** with `code: "invalid_query"`. Unknown parameters are ignored for compatibility. Responses retain the usual localized `error` field.
+Except for the repeatable runtime dimension filters below, repeated recognized parameters, malformed booleans/page sizes/states and malformed tokens return HTTP **400** with `code: "invalid_query"`. Unknown parameters are ignored for compatibility. Responses retain the usual localized `error` field.
 
 #### Page and ordering
 
@@ -1723,6 +1723,44 @@ GET /api/v1/agents/sessions?summary=1&limit=50&source=demo
 - A cursor traverses a **frozen filtered snapshot**: updates, deletions and inserts while scrolling cannot duplicate, omit or reorder rows in that snapshot. Every page returns its snapshot's same `revision` and `total`.
 - Snapshot retention is five minutes, with at most 32 active views per collection. A restart, expiry or eviction returns HTTP **409**, `code: "cursor_expired"`; restart at page one. Cursors bind filters and summary mode; a mismatched/tampered cursor returns 400.
 - The runtime collection includes Codex history. It uses the manager's already-decorated state, ownership, hidden/deleted-session rules and task metadata; it does not recompute business state in the hub.
+
+#### Runtime session dimensions (`sessions_dimensions`)
+
+The hub advertises `sessions_dimensions` in `hello.features` and the health response. Check it before sending these
+runtime-only parameters to `GET /api/v1/sessions`. A single `machine_id` by itself still returns the legacy list.
+The personal-agent collection is unchanged.
+
+| Parameter | Contract |
+| --- | --- |
+| `machine_id`, `project_id`, `harness` | Repeat a key for OR within that dimension; different dimensions and other filters, including `state` and `q`, intersect. Repeated `machine_id` opts into paging by itself. Device IDs identify the reporting computers; they do not claim where an external runtime executes. |
+| `scope=work` | Excludes the current main conversation explicitly bound by the owning manager and Assistant rows that the manager marks as `space=health`. Independent API/Web, runtime and legacy Assistant rows remain discoverable. A missing main binding does not exclude anything by guesswork. |
+| `agents_only=1` | Excludes every row flagged `assistant`. Do not combine with `scope=work`; that combination returns `invalid_query`. |
+| `facets=1` | Adds `facets: {device, project, harness}` to page and counts responses. Each array contains `{id, name, count}`, sorted by case-insensitive name then ID. The count covers all authorized rows matching the entire query, including the dimension's own filter, independent of page size. |
+| `group_by` | Omit for a flat list, or pass up to three distinct comma-separated keys from `device,project,harness` in the desired nesting order. Adds `groups: [{path, count}]` for every group prefix; a path contains IDs in that order. Each count covers the whole matching group. Use the corresponding facet for the group label. |
+| `sort`, `direction` | `recent` (`updated_at`, default), `created` (`created_at`) or `title` (case-insensitive); `asc` or `desc`. Title defaults to ascending; dates default to descending and absent dates are always last. The final tie is the composite session identity. |
+
+Each group orders its children by their latest matching activity, newest first, then case-insensitive label and ID.
+Unknown identities and groups with no activity sort after their known siblings. The selected row sort applies
+inside the innermost group. Rows and group counts therefore remain contiguous across pages. The cursor freezes rows,
+facets and groups together and binds the filter, grouping, sort, summary mode and authorization scope. A delta returns
+changed rows and removals plus the current matching totals, facets and groups; use a fresh first page to rebuild a
+visible ordering after an update.
+
+Bounded runtime rows, including summaries, have `project_id`, `project_name`, `harness_id` and `harness_name`.
+`created_at` is present when the source recorded an opening session event. Missing values are not inferred from
+`updated_at` or file modification time.
+
+- `git:` project IDs use a digest of the normalized remote host and full repository path. SSH and HTTP(S) spellings,
+  URL credentials, default ports, `.git` and trailing slashes do not split the same repository. Different hosts or
+  owners remain separate. Custom SSH accounts and absolute SCP paths stay distinct from hosted paths; an implicit
+  SSH account is not guessed. The node prefers `origin`, or a sole configured remote, and never sends the remote URL.
+- `local:` identifies a Git repository without a usable network remote by machine and physical Git common directory.
+  `name:` is reserved for confirmed non-Git projects and combines equal names across machines. `unknown:` uses a
+  machine-scoped fallback when no proof is available, including rows from older nodes. Treat the rest of the ID as opaque.
+- Display names use the repository, workspace or working directory basename in that order, then the space name.
+  Where the same ID has different labels, the facet uses the first label in case-insensitive lexical order.
+- The harness ID comes from the agent, with known aliases normalized and custom runtime labels preserved. Legacy
+  empty agents default to Claude Code unless the source identifies Codex or another runtime.
 
 #### Pane/host origins (`sessions_pane_source`, #994)
 
