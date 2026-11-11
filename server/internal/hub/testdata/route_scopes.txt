@@ -241,6 +241,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/iphone
 -                    GET /api/v1/machines/{mid}/launchers
 -                    GET /api/v1/machines/{mid}/launchers/{name}/models
+-                    GET /api/v1/machines/{mid}/launchers/{name}/start-options
 -                    GET /api/v1/machines/{mid}/omp-settings
 -                    GET /api/v1/machines/{mid}/panes
 -                    GET /api/v1/machines/{mid}/ports/{port}

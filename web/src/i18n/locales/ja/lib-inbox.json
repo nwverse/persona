@@ -104,6 +104,7 @@
   "group_mail": "メール · {account}",
   "group_agents": "あなたを待っている Agent",
   "folder_failed": "移動できませんでした：{error}",
+  "filter_doc": "ドキュメントのコメント",
   "ignored": "無視しました",
   "by_you": "あなたが変更",
   "moved": "{tier}に移動しました",

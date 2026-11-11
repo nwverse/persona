@@ -21,7 +21,10 @@ import (
 // `claude -p -c`, or the other way round, is listed. So is everything Persona has a hand in: whatever was started under
 // its state directory (the assistant's, any manager's, a health space's, a guest's; its path and its resolved one), a
 // session the node keeps state for (none is left out while that state still loads), a fork, a kept session. The Agent
-// SDKs' runs ("sdk-ts", "sdk-py") are listed: interactive hosts such as Paseo run the user's sessions through them.
+// SDKs' runs ("sdk-ts", "sdk-py") are listed: interactive hosts run the user's sessions through them. A host that runs
+// the command line itself writes "sdk-cli" like a script (Paseo does): its sessions are listed by the host while it
+// lists them, and the ones it no longer lists (archived there) are the transcripts it names as its own
+// (runtimeunlisted.go, #4521), which the offline list keeps.
 // Codex's one-shot runs are left out the same way (codex_hierarchy.go programRun).
 
 // Entrypoints are read a tail's worth at a time, up to oneShotReach from either end. The first is looked for from the

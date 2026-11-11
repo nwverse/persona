@@ -112,6 +112,7 @@
   "group_mail": "Mail · {account}",
   "group_agents": "Agents waiting on you",
   "folder_failed": "Couldn't move it: {error}",
+  "filter_doc": "Doc comments",
   "ignored": "Ignored",
   "by_you": "Moved by you",
   "moved": "Moved to {tier}",
