@@ -231,7 +231,9 @@ type promptWatch struct {
 	rest []byte // the start of a line not written whole yet
 	want []rune // the prompt's words (echoWords)
 	seen bool
-	lost bool // the file shrank: written anew, its lines are no longer what came after the typing
+	// after filters rows when startup must attach after the transcript file appears; older matching prompts are not delivery.
+	after time.Time
+	lost  bool // the file shrank: written anew, its lines are no longer what came after the typing
 }
 
 // usable: the watch can still tell (not nil, its file not written anew).
@@ -300,11 +302,18 @@ const promptWords = 24
 func (w *promptWatch) isPrompt(line []byte) bool {
 	var e struct {
 		Type      string          `json:"type"`
+		Timestamp json.RawMessage `json:"timestamp"`
 		Operation string          `json:"operation"`
 		Content   json.RawMessage `json:"content"`
 	}
 	if json.Unmarshal(line, &e) != nil {
 		return false
+	}
+	if !w.after.IsZero() {
+		var at time.Time
+		if json.Unmarshal(e.Timestamp, &at) != nil || at.Before(w.after.Add(-time.Second)) {
+			return false
+		}
 	}
 	var words []rune
 	image := false

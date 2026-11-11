@@ -1,6 +1,7 @@
 package node
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -135,10 +136,12 @@ func TestStartEntersAFirstMessageLeftInTheBox(t *testing.T) {
 func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 	long := "First prompt submit regression.\n" + strings.Repeat("Test-only multiline context.\n", 26)
 	for _, c := range []struct {
-		name, prompt, draft, why           string
-		showAfter, takeEnter, replaceAfter int
-		clearOnEnter                       bool
+		name, prompt, draft, why                       string
+		showAfter, takeEnter, replaceAfter, imageBytes int
+		clearOnEnter, submitted                        bool
 	}{
+		{name: "large image already submitted", prompt: long, imageBytes: 2 << 20, submitted: true},
+		{name: "large image after recovery Enter", prompt: long, imageBytes: 2 << 20, draft: "[Image #1][Pasted text #2 +26 lines]", takeEnter: 1},
 		{name: "delayed image and long text", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines]", showAfter: 5, takeEnter: 1},
 		{name: "swallowed recovery Enter", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines]", takeEnter: 2},
 		{name: "short text with image path lines", prompt: "Check this test image", draft: "[Image #1][Pasted text #2 +3 lines]", takeEnter: 1},
@@ -159,6 +162,24 @@ func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 			draft := strings.Replace(screenFixture(t, "claude-2.1.312-typed-162.txt"), "fix the flaky test", c.draft, 1)
 			draftANSI := strings.Replace(screenFixture(t, "claude-2.1.312-typed-162.ansi"), "fix the flaky test", c.draft, 1)
 			prompt := c.prompt + "\n\n<attached_images>\n/tmp/test-image.png\n</attached_images>"
+			imageData := "aW1hZ2U="
+			if c.imageBytes > 0 {
+				imageData = base64.StdEncoding.EncodeToString(make([]byte, c.imageBytes))
+			}
+			land := func() {
+				line, err := json.Marshal(map[string]any{
+					"type": "user", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "cwd": cwd,
+					"message": map[string]any{"role": "user", "content": []any{
+						map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": imageData}},
+						map[string]any{"type": "text", "text": keepImagePaths(prompt)},
+					}},
+				})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				appendTranscript(t, home, cwd, startedID(f), string(line))
+			}
 			var mu sync.Mutex
 			pasted, enters, reads := false, 0, 0
 			f.after(func(call herdrCall) {
@@ -167,7 +188,9 @@ func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 				switch {
 				case call.Method == "agent.prompt":
 					pasted = true
-					if c.showAfter == 0 {
+					if c.submitted {
+						land()
+					} else if c.showAfter == 0 {
 						f.setScreens("w1:p2", draft, draftANSI)
 					}
 				case call.Method == "pane.read" && pasted:
@@ -183,18 +206,7 @@ func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 						f.setScreens("w1:p2", empty, emptyANSI)
 					}
 					if c.takeEnter == enters {
-						line, err := json.Marshal(map[string]any{
-							"type": "user", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "cwd": cwd,
-							"message": map[string]any{"role": "user", "content": []any{
-								map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
-								map[string]any{"type": "text", "text": keepImagePaths(prompt)},
-							}},
-						})
-						if err != nil {
-							t.Error(err)
-							return
-						}
-						appendTranscript(t, home, cwd, startedID(f), string(line))
+						land()
 					}
 				}
 			})
@@ -217,7 +229,7 @@ func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
-			case c.takeEnter > 0:
+			case c.takeEnter > 0 || c.submitted:
 				if enters != c.takeEnter {
 					t.Fatalf("Enter count %d, want %d", enters, c.takeEnter)
 				}
@@ -237,6 +249,30 @@ func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 				t.Fatal("did not retry Enter while the owned draft remained")
 			}
 		})
+	}
+}
+
+func TestFirstWatchAttachesLateWithoutCountingOldImagePrompt(t *testing.T) {
+	n, _, home := herdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	text := "fix the flaky test"
+	watch := &promptWatch{want: echoWords(text), after: time.Now()}
+	if n.firstWatchTaken(startID, watch) {
+		t.Fatal("a nonexistent transcript confirmed delivery")
+	}
+	var old map[string]any
+	if err := json.Unmarshal([]byte(promptLine(cwd, text, 2<<20)), &old); err != nil {
+		t.Fatal(err)
+	}
+	old["timestamp"] = watch.after.Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	line, _ := json.Marshal(old)
+	appendTranscript(t, home, cwd, startID, string(line))
+	if n.firstWatchTaken(startID, watch) {
+		t.Fatal("an older matching image prompt confirmed this send")
+	}
+	appendTranscript(t, home, cwd, startID, promptLine(cwd, text, 2<<20))
+	if !n.firstWatchTaken(startID, watch) {
+		t.Fatal("a full image-bearing prompt was missed on late attach")
 	}
 }
 

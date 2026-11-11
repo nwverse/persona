@@ -164,6 +164,12 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   an empty box without a transcript receipt is ambiguous,
   not permission to paste again. A later follow-up's timestamp can show it was queued after work began; do not
   attribute the original submission to that follow-up without a terminal-key receipt.
+- Never confirm a first image prompt from quick metadata alone (#4794): its head stops at 256 KB and tail at
+  384 KB, so a multi-megabyte user row can be absent from both. A real disposable Agent's normal start recorded
+  the same image prompt three times while confirmation believed it had been dropped. Capture a full incremental
+  `promptWatch` before typing; attach lazily with a timestamp filter when the file appears late, and recheck it
+  after readiness waits before re-pasting. The normal and swallowed-Enter real tests must both record exactly
+  one image prompt.
 - An image message once remained unsent in Claude's input box (2026-10-31, Claude Code 2.1.206: `[Image #1]` and text in the box, Agent `done`, Enter on the computer sent it).
   Forty-two later attempts in a separate herdr session (small PNG, 1.8 MB JPEG, saturated CPU) didn't reproduce it; cause unknown. On 11-01 a phone photo did it again. node fallback (`ensureSubmitted`): 2 seconds after sending,
   read the input box once; if it's still the just-sent text (strip `[Image #n]` / `[Pasted text #n]`, compare the first few words), press Enter once more. If empty or different, press nothing.
