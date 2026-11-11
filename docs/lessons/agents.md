@@ -236,6 +236,13 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
   (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
+## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
+
+Deleting a meeting room stopped its `claude -p` and removed the transcript at once; a moment later the file was back
+with three lines Claude Code appends on exit (`last-prompt` with the last prompt's text, `atis-latch`, `cost-state`).
+Wait for the process to exit (`stopAndWait`) before removing a conversation's files, and remove its
+`<config dir>/session-env/<session id>` folder with them.
+
 ## A new private profile and `--setting-sources project` both drop the login (2026-11-11, #3862)
 
 A meeting room (an assistant guest started with `--setting-sources project` so none of the owner's setup reaches it)

@@ -53,6 +53,11 @@ func (n *Node) setKept(ids []string) {
 	n.mu.Lock()
 	n.kept = m
 	n.mu.Unlock()
+	forgetOfflineScan()
+}
+
+// forgetOfflineScan drops the cached scan of offline transcripts: the next list scans again.
+func forgetOfflineScan() {
 	offlineCache.Lock()
 	offlineCache.at = time.Time{}
 	offlineCache.Unlock()
@@ -89,6 +94,7 @@ func (n *Node) scanOffline() []proto.Session {
 	n.mu.Unlock()
 	own := n.assistantProject()
 	persona := n.personaProjectDirs()
+	unlisted := n.runtimes.unlistedTranscripts() // sessions of a runtime's own that it no longer lists (runtimeunlisted.go)
 	// The desktop app's sessions as its sidebar lists them (claudedesktop.go).
 	desktop := readClaudeDesktopIndex(n.home)
 	for _, p := range files {
@@ -118,7 +124,7 @@ func (n *Node) scanOffline() []proto.Session {
 		if !forked[id] && n.agentFiltered("claude", p) {
 			continue
 		}
-		if !forked[id] && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
+		if !forked[id] && !unlisted[id] && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
 			continue
 		}
 		if inDesktop { // counted on their own: they neither take the others' 80 nor are pushed out by them
@@ -179,7 +185,6 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
-		s.Inventory = m.inventory
 		s.ModelFallback = m.modelFallback
 		n.setModelRestore(&s, c.path, m)
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
@@ -239,7 +244,6 @@ func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
-		s.Inventory = m.inventory
 		s.ModelFallback = m.modelFallback
 		s.PermissionMode, s.Effort = n.currentModes(c.id, m)
 		untitled(&s, m)
