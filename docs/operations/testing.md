@@ -265,6 +265,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   The first three also end chats of their own (`…c2916` Edit, `…c2917` MultiEdit, `…c2918` Write), so `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows each diff without scrolling; `scripts/app/personactl.py tap --label-prefix "Show All"` opens the long one.
 - A reply's Markdown as written (#3863, `CJKEmphasis` in PersonaKit and `MarkdownTable.swift`): `MOCK_REPLY_MARKDOWN=1` adds MacBook's "导出耗时整理" (`macbook/a1f3c2d4-0000-4000-8000-0000000c3863`) and puts the same turn at the end of Persona's conversation: a table whose delimiter row aligns its columns (the seconds right-aligned so the decimals line up, the result centered), headings at levels 4 to 6, and bold labels next to full-width punctuation (`**注意：**后文`, `**「必须」**`), which render bold with no asterisks left over.
 - Tool outcomes (#4303, `ToolOutcomeText` in `apple/Persona/Views/Chat/ToolOutcomeViews.swift`): `MOCK_TOOL_OUTCOMES=1` adds MacBook's "Why the last export batch goes missing" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4303`), one turn whose tool results carry the node's `outcome`: a test run that failed with exit code 1 and an output the page cut (its last lines in `tail`), an edit the user denied, a write refused before it ran, a command the user interrupted and one that timed out and went on in the background. Only the failed run is red; the others say in gray what stopped them. The failed run and the denied edit also end chats of their own (`…c4304`, `…c4305`): `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows "Exit code 1" with "End of output" under the cut output, or "Denied".
+- A file tool's change on its permission card (#4621, `PermissionDiff` in `apple/Persona/Views/Interactions/PermissionDiff.swift`): `MOCK_PERMISSION_DIFF=1` adds two MacBook chats that wait on a Claude Code permission card, as a hub sends it: "Keep the last export batch" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4621`), an Edit whose diff is longer than the card shows (Show All 15 Lines), and "Test the last export batch" (`…c4622`), a Write of a short test file. `-openSession macbook/<id>` shows the card under the chat.
 - Cron scheduled tasks (#4399, `docs/assistant/assistant.md` "Scheduled tasks"): `MOCK_CRON=1` adds the `task_cron` feature and a cron task (every 30 minutes in work hours on weekdays, `rt_cron`), and answers `GET /api/v1/assistant/tasks/cron` for the web editor's examples (anything else gets the hub's kind of refusal). iOS: `-tab assistant -openAssistantPage routines` shows it in the list, `-openAssistantPage cronTask` opens it. Web: `node web/e2e/task-cron.mjs` (`docs/web/web.md`).
 - Notification settings that can't load (#1860): `MOCK_PREFS_FAIL=1` makes `GET /api/v1/devices/<id>/prefs` answer 503; `-openNotificationSettings YES` shows "Couldn't load: …" with Retry while the system-settings buttons stay enabled. `GET /mock/prefs_fail?on=0` lets the next read through (Retry, or switching back to the app).
 - herdr stopped (#1916): `MOCK_HERDR_STOPPED=macbook` stops classic herdr for mock MacBook; Agents shows "MacBook's herdr isn't running" and "Start" at the top.
@@ -941,6 +942,24 @@ stopped by name afterwards. `herdrlive` tests compare socket/CLI, events; launch
 verify trust dialog detected (`dialog_open` refusal), option answers (rev check, keys from current screen), empty input allowed, draft refused
 (`input_draft`), unrelated text not cleared, clearing seen draft allows send. Without local Go, cross-build test binary on hub/copy back.
 Requires herdr/claude locally (claude starts but receives no message).
+
+First-prompt image delivery has a separate opt-in real-Agent test (`server/internal/node/firstprompt_live_test.go`,
+#4794). Start your own named `herdr --session persona-firstprompt-<unique> server`; set `HERDR_SESSION` to that
+name and `HERDR_SOCKET_PATH` to its socket, never the active server's. Then, from `server/`, run:
+
+```sh
+PERSONA_LIVE_FIRST_PROMPT=1 PERSONA_LIVE_LAUNCHER=<launcher> \
+  go test -tags herdrlive -run '^TestLiveFirstPrompt$' ./internal/node -v -timeout 6m
+```
+
+It starts disposable Claude Agents in temporary directories/profiles, with no Persona hooks or hub/node service
+changes, and sends a synthetic 768×768 PNG plus multiline text through `firstPrompt`. A launcher's first Bypass
+Permissions confirmation is accepted only in its disposable test profile. The normal case uses real
+`agent.prompt`; the fault-injected case pastes into the real terminal but omits initial Enter and swallows one
+recovery Enter. Both require exactly one user prompt and image in the transcript, a model reply, and an empty
+input box. `PERSONA_LIVE_ARTIFACTS=<existing directory outside the repo>` keeps redacted ANSI captures and JSON
+receipts. Stop the test server by its exact session name afterwards. A fault-injected pass proves recovery, not
+that the normal case reproduced the original timing race.
 
 ## Codex integration
 

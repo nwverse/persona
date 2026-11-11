@@ -1,4 +1,10 @@
 # Persona design principles
+# Design principles
+
+Persona is an Agent product for everyone. Assistant is for everyday people and must stay approachable; Agents is for people who collaborate directly with tools such as Claude Code.
+
+**Audience test:** before shipping, answer in one sentence who this design serves. If the answer is "developers", it belongs in Agents or advanced settings, not in an everyday-facing experience.
+
 
 **Persona is a personal Agent product for everyone, not only software developers.** Defaults are simple and reliable, complex capabilities open up gradually through settings, and with the user's permission an Agent can help manage that complexity.
 
