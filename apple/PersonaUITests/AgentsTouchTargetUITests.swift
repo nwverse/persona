@@ -2,8 +2,8 @@ import XCTest
 
 /// Every row, heading and fold control a finger taps in the Agents list is at least 44 pt tall (#3753), in every grouping
 /// and display, and a tap just inside a row's or a heading's edge lands on it (a plain button takes taps on its label
-/// alone: the label has to be the whole row). Against the long mock list with worktrees:
-///   PORT=<port> MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 python3 scripts/mock/mock_hub.py
+/// alone: the label has to be the whole row). Against the long mock list with worktrees and a Codex chat's subagents:
+///   PORT=<port> MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 python3 scripts/mock/mock_hub.py
 ///   TEST_RUNNER_PERSONA_TOUCH_HUB=http://127.0.0.1:<port>
 /// TEST_RUNNER_PERSONA_TOUCH_GROUPINGS=repo,state and TEST_RUNNER_PERSONA_TOUCH_DISPLAYS=avatar,list narrow the matrix;
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps each one's first screen. Runs in English (the labels it reads).
@@ -15,7 +15,8 @@ final class AgentsTouchTargetUITests: XCTestCase {
     /// above the list, nor the answers inside a pending card.
     static let tapped: Set<String> = ["agents.row", "agents.compactRow", "agents.project", "agents.worktree", "agents.foldWorkspace",
                                       "agents.childSpaces", "agents.host", "agents.showAll", "agents.tab", "agents.quietSpace",
-                                      "agents.waiting", "agents.section", "agents.space", "agents.idleFold", "agents.collapse"]
+                                      "agents.waiting", "agents.section", "agents.space", "agents.idleFold", "agents.collapse",
+                                      "agents.subtasks"]
     static let groupings = ["repo", "space", "state", "machine", "app", "todo", "recent"]
     /// Avatar, Two Lines, State Cards, Compact List.
     static let displays = ["avatar", "compact", "cards", "list"]
@@ -25,7 +26,7 @@ final class AgentsTouchTargetUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = true
         guard let h = ProcessInfo.processInfo.environment["PERSONA_TOUCH_HUB"] else {
-            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 (PERSONA_TOUCH_HUB)")
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 (PERSONA_TOUCH_HUB)")
         }
         hub = h
     }
@@ -79,7 +80,8 @@ final class AgentsTouchTargetUITests: XCTestCase {
     }
 
     /// A tap 3 pt inside the top and the bottom of a heading or a row that folds lands on it: the machine's heading and a
-    /// repository's header (By Repository), a state's heading (By Status), "N more idle" (Compact List, By Project).
+    /// repository's header (By Repository), a state's heading and a Codex chat's Subtasks (By Status), "N more idle"
+    /// (Compact List, By Project).
     @MainActor func testATapByTheEdgeLands() throws {
         launch(grouping: "repo", display: "avatar")
         let column = app.buttons["agents.filter.all"]
@@ -97,6 +99,17 @@ final class AgentsTouchTargetUITests: XCTestCase {
         bringUp(state, column: column)
         XCTAssertTrue(state.exists && state.isHittable, "no Unread heading")
         foldsByItsEdges(state, "a state's heading")
+        // The Codex chat's Subtasks (MOCK_DESKTOP_APPS): by its top edge it opens on its subagents, by its bottom it folds.
+        let subtasks = app.buttons.matching(identifier: "agents.subtasks").firstMatch
+        bringUp(subtasks, column: column)
+        XCTAssertTrue(subtasks.exists && subtasks.isHittable, "no Subtasks row")
+        XCTAssertGreaterThanOrEqual(subtasks.frame.height, Self.floor, "the Subtasks row is \(subtasks.frame.height) pt tall")
+        let subagent = app.descendants(matching: .any).matching(identifier: "agents.compactRow")
+            .matching(NSPredicate(format: "label CONTAINS %@", "检查 BOM")).firstMatch
+        tap(subtasks, nearTop: true)
+        XCTAssertTrue(subagent.waitForExistence(timeout: 5), "a tap by the Subtasks row's top edge did not open it")
+        tap(subtasks, nearTop: false)
+        XCTAssertTrue(waitUntil { !subagent.exists }, "a tap by the Subtasks row's bottom edge did not fold it")
         app.terminate()
 
         launch(grouping: "space", display: "list")

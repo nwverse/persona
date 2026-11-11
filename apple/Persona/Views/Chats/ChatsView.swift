@@ -2664,6 +2664,8 @@ private struct AgentsList: View {
         let open = found.isEmpty ? expandedTasks.contains(parent.key) : !foldedFound.contains(parent.key)
         let rows = found.isEmpty ? all : found
         let foldLast = cardLast.map { $0 && !open }
+        let edges = floating ? foldLast.map { EdgeInsets(top: 0, leading: Theme.Space.page, bottom: $0 ? Theme.Space.xs : 0, trailing: Theme.Space.page) }
+            ?? rowInsets(level: depth) : rowInsets(level: depth)
         Button {
             Haptics.tap()
             withAnimation(Theme.Motion.standard) {
@@ -2677,10 +2679,11 @@ private struct AgentsList: View {
             CodexSubtasksRow(count: all.count, open: open,
                              style: foldLast.map { .card(last: $0) } ?? (repoTree ? .tree(level: depth) : compact ? .compact : .regular))
                 .padding(.leading, nested(depth))
+                // The row's room is the label's, a finger's height (#3753); By Repository's line is one already.
+                .modifier(ButtonRowLabel(edges: edges, on: !repoTree))
         }
         .buttonStyle(.plain)
-        .listRowInsets(floating ? foldLast.map { EdgeInsets(top: 0, leading: Theme.Space.page, bottom: $0 ? Theme.Space.xs : 0, trailing: Theme.Space.page) }
-                       ?? rowInsets(level: depth) : rowInsets(level: depth))
+        .modifier(ButtonRowInsets(edges: edges))
         .listRowBackground(repoTree ? treeBackground(false) : floating ? AnyView(Color.clear) : nil)
         .listRowSeparator(floating || repoTree ? .hidden : .automatic)
         .accessibilityIdentifier("agents.subtasks")
