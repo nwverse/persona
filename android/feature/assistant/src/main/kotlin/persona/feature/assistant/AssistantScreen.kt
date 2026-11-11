@@ -159,7 +159,8 @@ fun AssistantScreen(
         (draftEditor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
     }
     val composer = savedComposer ?: transientComposer
-    val draftReady = draftEditor == null || savedComposer != null
+    val draftRead by key(draftEditor) { (draftEditor?.ready ?: remember { MutableStateFlow(true) }).collectAsStateWithLifecycle() }
+    val draftReady = draftEditor == null || draftRead
     LaunchedEffect(draftEditor, savedComposer) {
         savedComposer?.let { state -> snapshotFlow { state.draft }.collect { draftEditor?.changed(it) } }
     }
@@ -725,8 +726,12 @@ fun AssistantScreen(
                     if (demo) AssistantDemoNotice()
                     Box(Modifier.weight(1f)) {
                         CompositionLocalProvider(LocalChromeInsets provides if (demo) host else host.copy(top = padding.calculateTopPadding())) {
-                            if (assistantChatContent != null) assistantChatContent(active, AssistantChatOptions(readOnlyNote = managers.offline))
-                            else chatContent?.invoke(active)
+                            // The refusal fallback card's "New main chat" (#2528): the main conversation's own dialog.
+                            CompositionLocalProvider(persona.feature.chat.LocalNewMainChat provides
+                                (if (onMain && mainActions.newMain) ({ newMainOpen = true }) else null)) {
+                                if (assistantChatContent != null) assistantChatContent(active, AssistantChatOptions(readOnlyNote = managers.offline))
+                                else chatContent?.invoke(active)
+                            }
                         }
                         // A compaction of the main conversation: under the bar, over the conversation.
                         if (onMain) compaction.line?.let { line ->

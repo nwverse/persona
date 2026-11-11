@@ -21,10 +21,25 @@ var (
 )
 
 // classifyLark reads a Bash command against the command gates (curl / wget aimed at one's API is refused); cwd
-// resolves @file bodies, risk tells lark-cli's reads from its writes (nil without lark-cli: its commands are all
-// confirmed).
+// resolves @file bodies; risk supplies CLI metadata when configured. Known read commands also have a static fallback.
 func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk) larkVerdict {
+	return classifyLarkDepth(cmd, gates, cwd, risk, 0)
+}
+
+func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
 	var v larkVerdict
+	if depth > 16 {
+		v.other, v.unparsed, v.unknown = true, true, true
+		return v
+	}
+	merge := func(child larkVerdict) {
+		v.calls = append(v.calls, child.calls...)
+		if child.deny != "" {
+			v.deny = child.deny
+		}
+		v.unknown = v.unknown || child.unknown || child.unparsed
+		v.cliWrite = v.cliWrite || child.cliWrite
+	}
 	for _, g := range gates {
 		for _, name := range g.Secret {
 			if name != "" && strings.Contains(cmd, name) {
@@ -51,7 +66,22 @@ func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRi
 		if s.subst {
 			v.unsure = true
 		}
+		for _, nested := range s.nested {
+			child := classifyLarkDepth(nested, gates, cwd, risk, depth+1)
+			if len(child.calls) > 0 || child.unknown || child.unparsed {
+				v.other = true
+			}
+			merge(child)
+		}
+		if v.deny != "" {
+			return v
+		}
 		words := s.words
+		// Loop bodies may prefix the invocation with both a shell keyword and environment assignments.
+		for len(words) > 0 && (words[0] == "do" || words[0] == "then" || words[0] == "else") {
+			words = words[1:]
+			v.other = true
+		}
 		// Leading assignments: alone they set a variable for later words; before ol only the account / timeout.
 		var env []string
 		for len(words) > 0 && isAssignment(words[0]) {
@@ -63,14 +93,6 @@ func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRi
 				k, val, _ := strings.Cut(a, "=")
 				vars[k] = val
 			}
-			continue
-		}
-		// `do lark-cli …` inside a loop body, or `then` / `else`.
-		for len(words) > 0 && (words[0] == "do" || words[0] == "then" || words[0] == "else") {
-			words = words[1:]
-			v.other = true
-		}
-		if len(words) == 0 {
 			continue
 		}
 		// `timeout 20 ol …` (the prompt asks for timeouts), `command -v ol`.
@@ -91,17 +113,17 @@ func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRi
 			gate = gateOf(gates, name)
 		}
 		switch {
+		case (name == "sh" || name == "bash") && len(words) == 3 && (words[1] == "-c" || words[1] == "-lc"):
+			v.other = true
+			merge(classifyLarkDepth(words[2], gates, cwd, risk, depth+1))
 		case isLarkCLI(name):
-			if len(env) > 0 {
-				v.other = true
-			}
 			c, deny, ok := parseLarkCLI(words[1:], risk)
 			if deny != "" {
 				v.deny = deny
 				return v
 			}
 			if !ok {
-				v.other, v.cliWrite = true, true
+				v.other, v.cliWrite, v.unknown = true, true, true
 				continue
 			}
 			if s.redirect != "" && !safeRedirect(s.redirect) {
@@ -124,7 +146,7 @@ func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRi
 				return v
 			}
 			if !ok {
-				v.other = true
+				v.other, v.unknown = true, true
 				continue
 			}
 			c.Gate = gate
@@ -142,7 +164,7 @@ func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRi
 		default:
 			v.other = true
 			if larkCLIRe.MatchString(s.text) {
-				v.cliWrite = true // lark-cli inside a loop, a subshell, xargs…: its risk is unknown
+				v.cliWrite, v.unknown = true, true // a CLI invocation in an unknown interpreter or wrapper
 			}
 		}
 	}

@@ -309,7 +309,8 @@ internal fun ChatLineContent(
             "thinking" -> if (!style.hideThoughts) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
             "image" -> line.row.item?.item?.let { ChatPicture(session, it, loader) }
             "recap" -> line.row.item?.item?.let { RecapLine(listOf(it)) }
-            else -> line.row.item?.compaction?.let { TimelineMark(it.label.text()) }
+            else -> line.row.item?.item?.refusal?.let { RefusalNotice(it) }
+                ?: line.row.item?.compaction?.let { TimelineMark(it.label.text()) }
                 ?: line.row.item?.takeIf { it.task != null }?.let { TaskNoteLine(it, last = true, onFullText = onFullText) }
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }

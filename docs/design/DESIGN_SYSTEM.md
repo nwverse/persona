@@ -261,7 +261,7 @@ The Glass style relies on Liquid Glass and has no shadow. The vendored Beautiful
 | `drawer(velocity:)` | interpolating spring 0.32 s, no bounce (`:650`) | drawer and pager |
 | `springBack` | spring 0.3 s, bounce 0.25 (`:654`) | |
 | `keyboard` | interpolating spring (`:662`) | |
-| Needs-you breath | 1 s, scale 1.2 | the only attention loop |
+| Needs-you breath | 1 s, scale 1.2 | the only attention loop; Android Glass draws the same ring (`JStatusDot`, `JStatusMark`) |
 | `Theme.Motion.recordingLevelFrame` | a 1/30 s clock | the live recording's level meter only (`RecordingLevelMeter`); fixed-height bars scaled vertically, one still frame with Reduce Motion or Low Power Mode. Reason: the level changes many times a second, and a 30 fps clock read inside the meter redraws only the meter (#4240) |
 
 The composer and attach panel own about 40 more one-off tokens (Telegram-derived). Web: 150 ms state, 220 ms glide, 300 ms collapse, one easing curve, no springs. Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. `spec/tokens/motion.json` carries this shared set (state, layout, expand, reveal, conceal, drawer, springBack, keyboard and the needs-you breath), checked against `Theme.Motion` by `scripts/assets/test_gen_tokens.py`. Android Glass moves with the `state` and `layout` springs (`IosSpring` in `PersonaTheme.kt`: damping ratio `1 - bounce`, stiffness `(2π / duration)²`); Brief and Board keep their tweens (DS-11).
@@ -287,6 +287,9 @@ device, and the phone's own data tools (`phone_*`) keep their icon.
 
 `Theme.Icon.monitor` (`waveform.path.ecg`) is a command watched in the background, each line it prints an event (Claude
 Code's `Monitor`). A command run once keeps `Theme.Icon.terminal`.
+
+`Theme.Icon.denied` (`hand.raised.slash`) is a tool call the user, a permission rule or a hook turned down (#4303). It is
+drawn in gray at the end of the call's row: the call did not run, so it is not an error and never takes the triangle.
 
 ### 2.9 Styles and theme colors
 
@@ -458,6 +461,12 @@ This is a requested status correction, not a new style or setting; the existing 
 Workflow phase text may ellipsize, but the done/started count stays visible; simultaneous command/subagent counts
 use another subtitle line rather than pushing the workflow count out of the row.
 
+The web main conversation has one compact header line on the welcome page and in the open main chat (#4572).
+It uses the same neutral text in both places and reveals the full line on hover, focus or tap when space is tight.
+The summary describes the observed harness and execution environment. The new conversation's launcher remains a
+separate composer setting. A missing execution report, a proxy node and the last known location each have distinct
+copy; none is presented as the current location.
+
 ### 3.9 Empty states
 
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
@@ -578,6 +587,13 @@ A tool row names its tool in words on iOS and the web (#2986): Claude Code's too
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
 no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
 shared with computer tools). Details in `docs/lessons/ios.md`.
+
+A tool row says what its call came to when the node sends `outcome` (#4303, `docs/protocol/protocol.md` "Tool
+outcomes"). Only a call that ran and failed turns the row and its chip red, and its result says "Exit code N". A call
+that was denied, refused before it ran or interrupted gets a gray mark with its word (Denied, Did not run, Interrupted)
+for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that timed out says Timed out. Under an output the
+page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
+full text. Without an outcome (an older node) a row draws as before.
 
 ### 4.8 Pending requests
 
@@ -718,7 +734,7 @@ Titles of plans, permissions, questions and terminal prompts, the same on every 
 4. State never rides on color alone: pair with text or a symbol.
 5. A gesture-only action has an accessibility action or visible control.
 6. Animations: transitions and press effects respect Reduce Motion; every loop is listed in `ContinuousMotionTests`.
-7. Text contrast at least 4.5:1 (3:1 for text of 18 pt or larger, bold text, and non-text marks), verified for each style and theme color. Composite cases (text on a tinted fill) need a test.
+7. Text contrast at least 4.5:1 (3:1 for text of 18 pt or larger, bold text, and non-text marks), verified for each style and theme color. Composite cases (text on a tinted fill) need a test. The exception is iOS's own palette, and Android's Glass with it (11-11): white words on the accent 3.5:1, the accent as a link 3:1, words on the user's bubble 4.5:1, with the system's secondary gray as it is (`apple/Shared/Design/PersonaPalette.swift`, `android/core/designsystem/src/test/kotlin/persona/core/designsystem/StyleContrastTest.kt`).
 8. Layouts survive the largest accessibility size without clipping.
 9. Transient messages are announced to VoiceOver.
 10. Headers carry the header trait; modal sheets trap focus.
@@ -741,7 +757,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
 | Toast | capsule, top | dark capsule, bottom | Snackbar, 3 mechanisms | different |
 | Haptics | 4 kinds, 393 sites | none | 4 kinds, 35 sites | thin on Android |
-| Icons | SF Symbols | custom strokes | Phosphor | no shared map |
+| Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
@@ -754,12 +770,12 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | DS-03 | Docs list five radii; code has seven plus `appIcon` | `apple/Shared/Design/Theme.swift:181-198` | `thumbnail` and `page` undocumented | Document all, or fold `thumbnail` into `badge` |
 | DS-04 | Duplicate hex values under different names (`#1D7A4C`/`#4CC38A` in Diff.add, Hue.green, unread text; `#2E6FD0`/`#5B9BFF` in loop and Hue.blue; `#B35400`/`#FF9F0A` in cautionText and Hue.orange; system blue literal written twice) | `apple/Shared/Design/Theme.swift:151,171,173,813-815`; `apple/Shared/StatusPalette.swift:24`; `apple/Shared/Design/Styles/Glass.swift:23`; `apple/Shared/Design/Palette.swift:8` | A change in one silently misses the others | Alias to one source; make the blue accent read `Palette.systemBlue` |
 | DS-05 | Resolved 11-11 (#4209): Android's spacing has the iOS names and values, `spec/tokens` follows `Theme.Space` (checked by `scripts/assets/test_gen_tokens.py`), and the old 20 is gone: icons take `Tokens.Size.iconXS`, gaps the value iOS uses in the same place | `apple/Shared/Design/Theme.swift`; `spec/tokens/dimension.json` | None left | Keep the drift test green |
-| DS-06 | Minimum target: web visuals 28 px. Android draws Small/Medium buttons 32/40 dp, chips 36, switches 26-30 and segments 35-36, and Compose extends their touch targets to 48 dp; the Glass and Board `JSegmented` frames clipped that extension away until they switched to `clipDrawing` | `web/src/ui/atoms.tsx:106`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt` (`clipDrawing`, `JSegmented`); `android/core/designsystem/src/test/kotlin/persona/core/designsystem/TouchTargetTest.kt` | Fails the baseline on web; Android meets it while no clipping parent cuts a target | Web: inflate hit area to the floor in the component. Android: frames around small controls clip drawing only (`clipDrawing`), and new small controls join `TouchTargetTest` |
+| DS-06 | Minimum target: web visuals 28 px. Android draws Small/Medium buttons 32/40 dp, chips 36, switches 26-30 and segments 35-36, and Compose extends their touch targets to 48 dp; the Glass and Board `JSegmented` frames clipped that extension away until they switched to `clipDrawing`; Android's switch, search clear button and heading actions reach 48dp through Compose's touch area without growing (`TouchTargetTest`, 11-11) | `web/src/ui/atoms.tsx:106`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt` (`clipDrawing`, `JSegmented`); `android/core/designsystem/src/test/kotlin/persona/core/designsystem/TouchTargetTest.kt` | Fails the baseline on web; Android meets it while no clipping parent cuts a target | Web: inflate hit area to the floor in the component. Android: frames around small controls clip drawing only (`clipDrawing`), and new small controls join `TouchTargetTest` |
 | DS-07 | Two rounded-container primitives with different color sources | `apple/Persona/DesignSystem/Styling.swift:8` (style card color) vs `apple/Persona/DesignSystem/Components.swift:429-438` (system grouped color) | Clay, Island, Lark cards do not match neighboring surfaces | Make `.card()` read the style's card color; add an "inset well" component for `Fill.well` blocks |
 | DS-08 | No shadow or elevation tokens; shadows are inline literals in six places; BeautifulUI elevation unused | section 2.6 | Inconsistent depth; bypasses the ratchet | Add `Theme.Shadow` from these literals |
 | DS-09 | Off-grid magic numbers: card padding 14, chip padding 2.5, watch 10/12, toast and disabled opacity | `apple/Persona/DesignSystem/Components.swift:222,429`; `apple/Shared/Design/Theme.swift:431-451` | Cannot retune globally | Move to tokens; add an opacity scale |
 | DS-10 | Overlapping size steps 1 pt apart; value-named boxes; 44 under six names | `apple/Shared/Design/Theme.swift:457-570` | Token choice is arbitrary | Merge neighbors; rename `boxNN` by meaning; alias the 44s to `tapTarget` |
-| DS-11 | Motion: `spec/tokens/motion.json` holds the iOS shared set, checked against `Theme.Motion`, and Android Glass's state and layout use its springs (11-11, #4209). Open: the needs-you breath and the other shared motions in Android components; web has one curve | `apple/Shared/Design/Theme.swift`; `spec/tokens/motion.json`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/PersonaTheme.kt` | Android's needs-you mark still pulses its own way | Draw the iOS breathing ring on Android (phase 1 T3) |
+| DS-11 | Motion: `spec/tokens/motion.json` holds the iOS shared set, checked against `Theme.Motion`; Android Glass's state and layout use its springs and its Needs You dot and mark breathe as on iOS (11-11, #4209). Open: the other shared motions (expand, reveal, conceal, drawer, springBack, keyboard) in Android components; web has one curve | `apple/Shared/Design/Theme.swift`; `spec/tokens/motion.json`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/PersonaTheme.kt`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/StatusComponents.kt` | Some Android transitions still use their own timing | Adopt each motion where its iOS counterpart moves |
 | DS-12 | Resolved 11-11 (#4209): `spec/tokens/type.json` holds the nine `Theme.Font` levels with `Theme.Level`'s sizes and line heights, checked against the Swift, and Android Glass reads them | `spec/tokens/type.json`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt` | None left | Keep the drift test green |
 | DS-13 | Radius philosophy: fixed on Apple, per-style on Android, literals on web (about 480) | `apple/Shared/Design/Theme.swift:178-180`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/PersonaTheme.kt:54-62`; `web/src/ui/atoms.tsx:973` | Same screen looks different | State the rule; replace web literals with tokens |
 | DS-14 | Dynamic Type caps are literal sizes at 36 sites; only two are named | section 6.2 | Inconsistent behavior at large sizes | Name roles (glyph in button, badge, top bar) |
