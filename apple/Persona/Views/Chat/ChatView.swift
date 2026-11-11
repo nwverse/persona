@@ -2612,8 +2612,14 @@ struct ChatView: View {
             case .loading:
                 ChatSkeleton().flippedBack().accessibilityIdentifier("chat-loading-placeholder")
             case .empty:
-                EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages yet"), message: String(localized: "Send a message to get started."))
-                    .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
+                if model.session(key)?.isStopped == true { // read-only (#4754): nothing to start from here
+                    EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages"),
+                                   message: String(localized: "This Agent stopped before it left any messages."))
+                        .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
+                } else {
+                    EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages yet"), message: String(localized: "Send a message to get started."))
+                        .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
+                }
             case .none: EmptyView()
             }
             if store.hasMore {

@@ -773,6 +773,8 @@ final class AppModel {
         links = []
         registry = HubRegistry()
         saveRegistry(registry)
+        // The watch drops the credential it holds only when told (#1870): an empty push, as `removeGroup` sends for one group.
+        pushWatchConfigs()
         applyPersonaPalette()
         forgetDeviceCredentials()
         machines = []
