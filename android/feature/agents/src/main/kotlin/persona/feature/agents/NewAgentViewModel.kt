@@ -139,7 +139,8 @@ private fun NewAgentState.settled(): NewAgentState {
 }
 
 internal class NewAgentViewModel(
-    private val service: AgentCreationService,
+    /** Also the Agents list's way to a worktree's status and removal on Close Agent / Delete Chat (#4532). */
+    internal val service: AgentCreationService,
     private val store: AgentCreationStore,
     private val machines: StateFlow<List<Machine>>,
     /** Sends the first message as an ordinary one once the hub answered an async start; null keeps it in `prompt`. */

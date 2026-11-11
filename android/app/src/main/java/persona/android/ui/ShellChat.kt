@@ -90,6 +90,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                 onGit = if (filesAvailable && git?.isRepo == true) ({ open(FilesPane.Git) }) else null,
                 gitLabel = "Git${git?.files?.size?.takeIf { it > 0 }?.let { " · $it" }.orEmpty()}",
                 actions = actions, connection = wiring?.connection ?: session.connection, requestId = requestId, covered = pane != null,
+                worktrees = wiring?.worktrees,
                 onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
                 waiting = waiting,
                 onOpenRequest = { chat, request ->
