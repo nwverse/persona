@@ -127,9 +127,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * the providers' names and the hook that reads them again after a rename). And 448 B for clearing the main chat's context
  * (#5095 added 405 B to ja, 593,185 B to 593,590 B: /clear in the main chat's command list, its ⋯ row, the cleared page's
  * state in lib/main-clear.ts and their words); main was already 595 B over its budget at 286d88fb2 (ja 593,185 B against
- * 592,590 B), and that overage is kept here, not new room. Raise it on purpose, in the change that needs it.
+ * 592,590 B), and that overage is kept here, not new room. And 2,304 B for child sessions folded into their parent
+ * (#5120 added 2,323 B to ja, 593,323 B to 595,646 B: every list's folding and the parent row's folded state and running
+ * line, a child's request counted and opened under its parent, the paged list's roots, the parent chat's placement of its
+ * children's cards, the hook that reads them and the old child links' redirect; the child card and what it reads when
+ * opened load with the card). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_633;
+export const FIRST_SCREEN_BUDGET = 595_937;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
