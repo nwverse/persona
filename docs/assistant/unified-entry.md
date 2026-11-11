@@ -388,7 +388,7 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
   Completion is about the assigned task and its `done_when`, not whichever side question the Agent answered last. A known peer, cross-conversation or inspection turn cannot enter pending review on its answer alone. Only a fresh, successful `report_to_supervisor` done call with evidence tied to this task can establish the completion candidate from such a turn; the supervisor must still verify it. Unknown-source fallbacks never imply that a new question replaced a finished task. Ordinary delivery turns continue through the existing judge without requiring that tool.
   Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior. A text of only `/exit` / `/quit` (no attachments) from such a conversation, as `agent_send` or as `agent_interrupt`'s `then`, is refused before anything is stopped, sent or confirmed on the phone, and again after the phone answers should the agent have become such a task meanwhile (#3537): the node closes an agent only for the bare command, and the agent a task runs on is not another conversation's to close (the user can close it in the app, or with `agent_archive` and `close` once it is idle).
 - **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
-  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below), `inbox` new Inbox messages from other people about it (below, off by default).
+  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), or in any other state (waiting on background work, a wake, stopped) with nothing new in its transcript for more than max(2 hours, estimate × 1.5), so a wait nothing ends is still heard of (#5124), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below), `inbox` new Inbox messages from other people about it (below, off by default).
   The same signal for the same task is reported only once within the same state segment. A second guard suppresses an unchanged summary for the same task, Agent and signal kind for 30 minutes, regardless of new turn timestamps or elapsed-minute counters. Its hashed fingerprints and timestamps live in Postgres settings (`assistant.supervision_dedup`), survive manager restarts, and are reserved before dispatch; failed dispatch and queue admission release the reservation. An unreadable or unwritable reservation is retried rather than treated as empty history. Changed evidence, questions, summary, task, Agent or status can wake again. Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, links, and handling instructions).
   The first waits 15 seconds to coalesce; subsequent messages are at most one per 10 minutes, with a 2-minute minimum for decision-waiting signals such as `needs_you` / `idle` / `interrupted` / `failed`. If the main chat is running, queue between turns ("Supervision message" above the input); replace any queued, undelivered supervision message with the merged one. A supervision message also waits while the owner is talking in the conversation, a decision-waiting one at most 5 minutes, and the queue goes out by rank (`docs/assistant/assistant.md` "Messages from the system wait for the owner").
   Supervised tasks no longer emit "🔔 任务…" (task notices) from `quiet.go`; all appear in supervision messages. Tasks started by other chats are unchanged.
@@ -583,6 +583,58 @@ App API (the conversation's manager, with full-access role):
 DELETE is idempotent; deleting a missing entry keeps the revision. A concurrent update returns 409 and the caller
 refreshes before retrying; storage unavailable returns 503, and insufficient role returns 403. There is no HTTP grant
 creation endpoint: additions use the main conversation's approval flow. The empty default list authorizes nothing.
+The one other way a grant is made is the owner's **Always** on a suggested rule, below.
+
+#### A rule after the same answer three times (#4929)
+
+When the owner gave the same answer to the same kind of card for the same scope 3 times in a row within 14 days, the
+next card of that kind and scope carries one more line, a `suggestion`, with two actions: **Always** makes the rule,
+**Not now** hides the line for that kind and scope for 30 days. The line is computed by the manager with no model
+call; nothing is turned on for the owner without the tap.
+
+| Repeated answer | Counted from | Shown on | Always creates |
+| --- | --- | --- | --- |
+| **Start** on plan cards for tasks that change files in one directory of one computer (the kind "Start These Directly" remembers) | Started plans made within the 14 days whose tasks carry `owner_started`; a dismissed plan starts the count again, and a plan the hub started without asking counts neither way | The next open plan with a task of that kind (`TaskPlan.suggestion`) | The `tasks.trust` entry, as "Start These Directly" does |
+| The go-ahead to `merge`, `push` or `deploy-test` in one directory of one computer: Yes to a plain confirmation ("Merge the PR now?"), or a decision's option that is the action itself ("Merge") | The to-do's decisions of source `card` (a question card the owner answered) and those of source `manual` that have an `owner_decided` work event (the option of a `needs_user` decision the owner chose; the event keeps the decision's `why_owner`); a No to the same confirmation starts the count again | The next `needs_user` decision that offers that go-ahead (`ask.suggestion` on `GET /api/v1/todos`), or the next such question a supervisor passes up (`interaction.suggestion`) | A standing authorization for that computer, directory and action, with the owner's answer as its `quote` (shown as `scope.quote`): the option they chose, after the question only when that is a plain confirmation ("Merge the PR now? → Yes"), never the free text an Agent or a supervisor wrote around a decision; a merge carries `ci_green` and `no_conflicts` |
+| A question a supervisor passed up (`ask_escalate` with a recommendation), answered with what it recommended | The card's decision and the `ask_escalated` work event, which keeps the card, its kind and the recommendation | The next question a supervisor passes up, while `agents.delegate` is off | Nothing: the suggestion names the setting `agents.delegate` for the app to open |
+
+- **Whose answers count**: only the owner's. A supervisor's answer, a standing authorization's, the delegate's and a
+  default taken at a deadline are decisions of source `agent` and count nothing. `owner_started` is set by the plan's
+  Start route alone; `task_plan` arguments cannot set it.
+- **Never suggested**: `deploy-production`, `send`, `delete` and `spend`; a decision whose `why_owner` is
+  `irreversible` or `visible_to_others` (the line is not shown on one, and the answer to one is not counted); a
+  question whose text mentions force, production, release, deleting, sending or paying; tool permission cards and plan
+  approvals (their answers are not counted either); the health space. A decision typed into a to-do by hand
+  (`POST /api/v1/todos/{id}/decisions`) is not an answer to a card and counts nothing. An Agent's question card has no
+  `why_owner`: for it the list of actions and the words above are the whole check.
+- **The scope** of a go-ahead is the directory the task's plan named (the repository, whichever worktree its agent
+  got), else its agent's directory; a directory an existing standing authorization covers, or a kind already in
+  `tasks.trust`, is not suggested.
+- **Always is the owner's own approval**, as Start is: it is an app route for a device with the full-access role, and
+  no MCP tool reaches it, so a model or an Agent cannot make a rule this way. The manager counts again when the tap
+  arrives and makes the rule only if the answers still earn it, so a made-up suggestion id makes nothing. The grant
+  goes through the same checks and revision-checked store as every standing authorization.
+- **Where the rules are listed and removed**: where their kind already is, `GET` / `DELETE /api/v1/task-trust` and
+  `GET` / `DELETE /api/v1/assistant/standing-authorizations/{id}`. After Always the line also stays hidden for 30 days,
+  so removing the rule does not bring it straight back.
+- **Stored**: when each suggestion was last answered, in the setting `assistant.rule_suggestions`; no table of its own.
+  The count is read at most every 30 seconds.
+- **A card already rung** keeps the suggestion it went out with (a plan and a to-do's decision are worded each time
+  they are read). When a suggestion is answered, the manager takes it off every pending card that carries it and
+  sends those cards again, so the line is gone on every device.
+- **Two taps on Always at once** make one rule: the grant is stored only if no standing authorization covers the
+  directory and action yet, checked under the lock every change of the list takes; the second tap gets 404.
+
+App API (full-access role; 403 otherwise):
+
+| Method | Path | JSON response |
+| --- | --- | --- |
+| POST | `/api/v1/assistant/rule-suggestions/{id}/always` | `{"ok": true, "kind": "standing_authorization", "creates": "standing_authorization", "authorization": {…}, "revision": 2}`; for `plan_start` `{"ok": true, "kind": "plan_start", "creates": "tasks.trust", "key": "…"}`; for `delegate` `{"ok": true, "kind": "delegate", "creates": "", "setting": "agents.delegate"}` |
+| POST | `/api/v1/assistant/rule-suggestions/{id}/not-now` | `{"ok": true}` |
+
+404: the answers do not earn this suggestion (any more), or it was already answered. 409: the standing
+authorizations changed meanwhile; read again and retry. 503: storage unavailable. The `suggestion` object is in
+`docs/protocol/protocol.md`, "Tasks and the chat feed".
 
 #### Asks go to the supervisor first (#3589)
 
