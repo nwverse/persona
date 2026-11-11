@@ -62,6 +62,11 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if handled, err := n.sendOutside(ctx, id, text, images); handled {
 			return err
 		}
+		// A session of the desktop app that nothing runs: the app opens it, and the message goes to its inbox, not to a
+		// claude --resume of ours (claudedesktop_open.go).
+		if handled, err := n.sendThroughDesktopApp(ctx, id, text, images); handled {
+			return err
+		}
 	}
 	n.dropSuggestion(id)
 	if exitCommand(text) && len(images) == 0 && !n.isAssistantSession(id) && !n.runtimeAssistant(id) {
