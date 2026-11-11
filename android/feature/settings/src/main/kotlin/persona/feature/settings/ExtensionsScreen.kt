@@ -20,6 +20,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import persona.core.contracts.api.ConnectorsManagement
 import persona.core.contracts.api.HubConnector
 import persona.core.contracts.Machine
@@ -201,7 +202,13 @@ fun ExtensionPage(
     var signOutError by remember { mutableStateOf<String?>(null) }
     var confirmingSignOut by remember { mutableStateOf(false) }
     val polled = signInState.bind.prompt?.takeIf { signInState.bind.polled }
-    LaunchedEffect(signIn, polled?.step, polled?.kind, polled?.userCode, polled?.url) { if (polled != null) signIn.poll() }
+    // While shown and for a while after (the user signs in in another app); back in front, ask at once (`pollWhileShown`).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // When the page left, once per sign-in: a new code (the effect below starting again) keeps it.
+    val away = remember(signIn, polled != null) { SignInAway() }
+    LaunchedEffect(signIn, lifecycle, away, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
+        if (polled != null) pollWhileShown(lifecycle.startedFlow(), away, catchUp = { signIn.catchUp() }, poll = { signIn.poll() })
+    }
     LaunchedEffect(signInState.signedInAs) {
         val who = signInState.signedInAs ?: return@LaunchedEffect
         feedback?.notice(if (who.isBlank()) res.getString(R.string.settings_ext_auth_signed_in) else res.getString(R.string.settings_ext_auth_signed_in_as, who))

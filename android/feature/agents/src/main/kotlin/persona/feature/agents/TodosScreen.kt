@@ -20,6 +20,7 @@ import persona.core.domain.tasks.TriageRule
 import persona.core.domain.tasks.TriageSection
 import persona.core.domain.tasks.acceptedAtRest
 import persona.core.domain.tasks.checksAsOpen
+import persona.core.domain.tasks.supersededFailedStarts
 import persona.core.domain.tasks.triageTodos
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -170,10 +171,15 @@ fun TodosScreen(
     val restores = remember(context) { TodoRestores(context) }
     var restored by remember(restores) { mutableStateOf(restores.read()) }
     val nowMs = now.toEpochMilli()
-    val triaged = remember(filtered, sessionMap, restored, nowMs) { triageTodos(filtered, sessionLookup, nowMs, restored) }
+    // Whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
+    // leaves the finished one out must not put it back in Needs you.
+    val superseded = remember(todos) { supersededFailedStarts(todos) }
+    val triaged = remember(filtered, sessionMap, restored, nowMs, superseded) {
+        triageTodos(filtered, sessionLookup, nowMs, restored, known = superseded)
+    }
     // With a filter, Needs you is filtered too: the line over the list says how many it leaves out.
-    val hidden = remember(searched, filtered, sessionMap, restored, nowMs, listFilter) {
-        if (listFilter == TodoListFilter.All) 0 else hiddenWaiting(searched, filtered, sessionLookup, nowMs, restored)
+    val hidden = remember(searched, filtered, sessionMap, restored, nowMs, listFilter, superseded) {
+        if (listFilter == TodoListFilter.All) 0 else hiddenWaiting(searched, filtered, sessionLookup, nowMs, restored, superseded = superseded)
     }
     // Which sections the user folded or unfolded: Other open, Shelved and Done start folded.
     var toggled by rememberSaveable { mutableStateOf(emptyList<String>()) }
