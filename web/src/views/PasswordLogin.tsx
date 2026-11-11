@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useState } from "react";
 import { errorText } from "../lib/api";
 import { pair } from "../lib/auth";
@@ -20,7 +21,7 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null }: 
       setPasswordEnabled(state.enabled);
       if (!state.enabled) {
         setMode("token");
-        if (native) setError("管理员尚未开启密码登录，请回到 App 使用扫码配对。");
+        if (native) setError(t("password.disabled"));
       }
     }, (error) => { if (live) { setMode("token"); if (native) setError(errorText(error)); } })
       .finally(() => { if (live) setLoading(false); });
@@ -33,31 +34,31 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null }: 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (busy || loading || appCallback) return;
-    const t = mode === "password" ? token : token.trim();
-    if (!t) return;
+    const credential = mode === "password" ? token : token.trim();
+    if (!credential) return;
     setBusy(true);
     setError("");
     try {
       if (mode === "password") {
-        const pending = loginWithPassword(t, native);
+        const pending = loginWithPassword(credential, native);
         setTok("");
         const result = await pending;
         if (native) {
-          if (!("code" in result)) throw new Error("登录返回无效，请回到 App 重试");
+          if (!("code" in result)) throw new Error(t("password.invalid_native_result"));
           const callback = `persona://password-login?${new URLSearchParams({ code: result.code, state: native.state })}`;
           setAppCallback(callback);
           window.location.assign(callback);
         } else {
-          if (!("token" in result)) throw new Error("登录返回无效，请重试");
+          if (!("token" in result)) throw new Error(t("password.invalid_result"));
           setToken(result.token, result.id);
           onDone();
         }
       } else {
-        await pair(t);
+        await pair(credential);
         onDone();
       }
     } catch (err) {
-      setError(errorText(err) === "invalid token" ? "token 不对" : errorText(err));
+      setError(errorText(err) === "invalid token" ? t("password.invalid_token") : errorText(err));
     } finally {
       setBusy(false);
     }
@@ -71,13 +72,13 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null }: 
             <Icon name="spark" size={20} />
           </span>
           <div>
-            <h1 className="text-[18px] font-semibold tracking-tight text-ink">连接到 Persona</h1>
-            <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{native ? `登录后将连接「${native.name}」。密码只在本机参与验证。` : mode === "password" ? "输入管理员设置的连接密码。" : "输入配对链接中的 token，也可以运行 personad hub pair 生成。"}</p>
+            <h1 className="text-[18px] font-semibold tracking-tight text-ink">{t("password.title")}</h1>
+            <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{native ? t("password.native_prompt", { name: native.name }) : mode === "password" ? t("password.prompt") : t("password.token_prompt")}</p>
           </div>
         </div>
         {appCallback ? <div className="rounded-card bg-surface p-4 text-center shadow-card">
-          <p className="mb-3 text-[13px] text-ink" role="status">登录成功，请返回 App 完成连接。</p>
-          <a href={appCallback} className="inline-flex h-9 items-center justify-center rounded-control bg-ink px-5 text-[13px] text-surface">返回 App</a>
+          <p className="mb-3 text-[13px] text-ink" role="status">{t("password.success")}</p>
+          <a href={appCallback} className="inline-flex h-9 items-center justify-center rounded-control bg-ink px-5 text-[13px] text-surface">{t("password.return_app")}</a>
         </div> : <div className="rounded-card bg-surface p-1.5 shadow-card">
           <label className="flex h-10 items-center gap-2 rounded-control bg-inset px-3 shadow-hairline focus-within:shadow-[0_0_0_1px_var(--line-strong)]">
             <Icon name="key" size={14} className="text-ink-3" />
@@ -86,24 +87,24 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null }: 
               type="password"
               value={token}
               onChange={(e) => setTok(e.target.value)}
-              placeholder={mode === "password" ? "连接密码" : "hub token"}
-              aria-label={mode === "password" ? "连接密码" : "hub token"}
+              placeholder={mode === "password" ? t("password.connection_password") : "hub token"}
+              aria-label={mode === "password" ? t("password.connection_password") : "hub token"}
               autoComplete={mode === "password" ? "current-password" : "off"}
               disabled={loading || busy || Boolean(native && !passwordEnabled)}
               className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-ink outline-none placeholder:font-sans placeholder:text-ink-3"
             />
           </label>
           <Button type="submit" tone="primary" disabled={loading || busy || !token || Boolean(native && !passwordEnabled)} className="mt-1.5 h-9 w-full">
-            {busy || loading ? <Spinner /> : "连接"}
+            {busy || loading ? <Spinner /> : t("password.connect")}
           </Button>
         </div>}
         <p className="mt-3 h-5 text-center text-[12.5px] text-red" role="alert">
           {error}
         </p>
         {!native && passwordEnabled && <button type="button" className="mb-4 w-full text-center text-[12.5px] text-ink-2" disabled={busy} onClick={() => { setMode(mode === "password" ? "token" : "password"); setTok(""); setError(""); }}>
-          {mode === "password" ? "使用配对 token" : "使用密码登录"}
+          {mode === "password" ? t("password.use_token") : t("password.use_password")}
         </button>}
-        <p className="text-center text-[11.5px] leading-relaxed text-ink-3">{native ? "设备将获得自己的凭据，可以在管理端单独撤销。" : "这个浏览器会拿到自己的凭据，可以在「设置 › 设备」里随时撤销。"}</p>
+        <p className="text-center text-[11.5px] leading-relaxed text-ink-3">{native ? t("password.native_credential") : t("password.browser_credential")}</p>
       </form>
     </div>
   );
@@ -113,8 +114,8 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null }: 
 export function NativePasswordLogin() {
   const [request] = useState(() => {
     try { return { native: readNativeLogin(window.location.href), error: "" }; }
-    catch { return { native: null, error: "App 的登录请求无效，请回到 App 重试。" }; }
+    catch { return { native: null, error: t("password.invalid_request_full") }; }
   });
-  if (!request.native) return <p role="alert" className="p-8 text-ink">{request.error || "请从 App 发起密码登录。"}</p>;
+  if (!request.native) return <p role="alert" className="p-8 text-ink">{request.error || t("password.start_from_app")}</p>;
   return <PasswordLogin native={request.native} onDone={() => {}} />;
 }

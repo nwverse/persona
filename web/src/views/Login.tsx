@@ -54,7 +54,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
   const field = "flex h-10 items-center gap-2 rounded-control bg-inset px-3 shadow-hairline focus-within:shadow-[0_0_0_1px_var(--line-strong)]";
   const input = "min-w-0 flex-1 bg-transparent font-mono text-[13px] text-ink outline-none placeholder:font-sans placeholder:text-ink-3";
 
-  if (passwordMode) return <div><Suspense fallback={<Spinner />}><PasswordLogin onDone={onDone} error={linkError} /></Suspense><button type="button" onClick={() => setPasswordMode(false)} className="mx-auto mb-6 block text-ink-2">扫码或配对链接</button></div>;
+  if (passwordMode) return <div><Suspense fallback={<Spinner />}><PasswordLogin onDone={onDone} error={linkError} /></Suspense><button type="button" onClick={() => setPasswordMode(false)} className="mx-auto mb-6 block text-ink-2">{t("login.password_pairing")}</button></div>;
 
   return (
     <div className="flex min-h-full items-center justify-center bg-page px-5 py-16">
