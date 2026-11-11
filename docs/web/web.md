@@ -1583,8 +1583,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   in the flyout of the model that runs is kept the same way; Codex's Fast is the speed request. On an older hub the pick
   lives on this page and goes with each message (`launcher`, `model`) and the effort with `POST …/modes`, as the old
   chips did, and a pick of a launcher the list no longer offers goes back to the default with a word. The new-chat page
-  keeps its pick for the start (`POST /assistant/conversations` `{launcher, model?, effort?}`; an older hub ignores the
-  model).
+  keeps its pick for the start (`POST /assistant/conversations` `{launcher, model?, effort?}`), which the new chat keeps
+  as its own pick on a hub with `assistant_model_pick` (an older hub ignores the model and keeps nothing).
 - **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, what a pick sends, the
   lists kept and read again), `lib/assistant-panel.test.ts` (a Persona chat's setup and where it comes from, its pill, its
   providers with the ones that can't run there, what a pick keeps), `views/chat/ModelPill.test.tsx` and
