@@ -554,6 +554,18 @@ Where a conversation scrolls under the chrome that floats over it, the content f
 - A fog is a fixed-size layer at the list's edge. It never depends on the scroll offset, a streaming reply or keystrokes, so it is never drawn again while scrolling or typing (#3435); the keyboard only moves it.
 - No solid band of page color over content, and no material under the footer: on the solid page the page color alone shows what a mask would, without a tinted strip where nothing is behind it. A page that is not one solid color needs a mask instead.
 
+### 3.13 Tabletop hinge safety (Android)
+
+A horizontal separating hinge divides a page into safe regions; the window and hinge alone select this behavior, never a device model. All three Android styles use the same measured policy in `PageFrame`.
+
+- With a bottom dock, content stays above the hinge and the dock starts below it. The dock retains the page's reading width and does not add a second navigation-bar inset.
+- Without a bottom dock, every interactive and focusable element belongs to the upper safe region. The lower region and the hinge contain only the page background.
+- The upper region must fit the measured top bar plus Android's minimum touch-target height (`Tokens.MinTouch.android`) of usable content. The lower region must fit the dock's measured height when one exists. Otherwise the page uses its ordinary flat layout and system insets rather than clipping two half-pages. A dockless page may use a short lower region as background.
+- Content ends `Tokens.Space.m` before the hinge. Bars are measured before the policy runs in the same layout pass, so there is no first frame across the hinge followed by an `onSizeChanged` correction.
+- Split and flat layouts reuse the same content slot. Rotation, folding and window resizing do not reset navigation, list position, drafts, selection, focus or ViewModels.
+
+Real folding-feature evidence and fake-posture layout evidence are reported separately. `debug.posture=tabletop` does not prove an OEM device's posture behavior. Glass requires light and dark captures; Brief and Board require light and dark samples. These rules change geometry and insets only, not the styles' visual languages.
+
 ## 4. Interaction patterns
 
 ### 4.1 Navigation hierarchy (super rule 3)
