@@ -71,9 +71,14 @@ final class ForwardMessageTests: XCTestCase {
     @MainActor private func type(_ note: String, in app: XCUIApplication) {
         let fields = app.descendants(matching: .any).matching(identifier: "shell-composer-field")
         XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 10), "no composer:\n\(app.debugDescription)")
-        // The chat the card opened stays in the tree under Persona with its own composer: type into the one in use.
-        let all = fields.allElementsBoundByIndex
-        let field = all.first { ($0.value(forKey: "hasKeyboardFocus") as? Bool) == true } ?? all.first { $0.isHittable } ?? fields.firstMatch
+        // The chat the card opened stays in the tree under Persona with its own composer, and reports itself hittable:
+        // type into the one the forward focused, waiting for the focus to land.
+        let focused = fields.matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        if focused.waitForExistence(timeout: 5) {
+            focused.typeText(note)
+            return
+        }
+        let field = fields.allElementsBoundByIndex.last { $0.isHittable } ?? fields.firstMatch
         field.tap()
         field.typeText(note)
     }
