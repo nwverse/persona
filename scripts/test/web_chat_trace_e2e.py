@@ -186,8 +186,9 @@ def agents_page(page, tag, shot):
 
     # an old link to a subagent's own conversation opens its parent at its card, opened
     page.goto(S["base"] + AGENTS + "@scdone")
-    page.wait_for_timeout(1500)
-    if "@" in page.url:
+    try:
+        page.wait_for_url(lambda url: "@" not in url, timeout=15000)
+    except Exception:
         fail(f"{tag}: the subagent link stayed on the subagent ({page.url})")
     linked = main.locator("[data-subagent-card]").filter(has_text="回归：结算流程")
     expect(linked.locator("button").first).to_have_attribute("aria-expanded", "true")
