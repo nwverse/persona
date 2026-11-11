@@ -4,8 +4,8 @@ import XCTest
 /// day in two days and yesterday, and one has no due date: the day, the week and the month show them; a block opens
 /// its to-do; a day of the week opens that day; "+" makes a to-do due on the day shown; the bar under the calendar
 /// goes back to the list; a to-do dragged to another time, the All Day row, another day of the week or the month is
-/// saved with Undo on its toast (#2045). TEST_RUNNER_PERSONA_SHOTS=<dir> also saves the screens
-/// (TEST_RUNNER_PERSONA_SHOTS_APPEARANCE names them light / dark).
+/// saved with Undo on its toast (#2045); at the largest text size the screens come up. TEST_RUNNER_PERSONA_SHOTS=<dir>
+/// also saves the screens (TEST_RUNNER_PERSONA_SHOTS_APPEARANCE names them light / dark).
 final class TodoCalendarTests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -249,6 +249,39 @@ final class TodoCalendarTests: XCTestCase {
         XCTAssertTrue(undo.waitForExistence(timeout: 10))
         undo.tap()
         XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: ten, day: nil) })
+    }
+
+    /// The largest accessibility text size (DESIGN_SYSTEM.md, "UI change self-check"): the "Change Due Date" sheet and
+    /// the day, the week and the month, saved as screens to look at; it only checks that each comes up.
+    @MainActor func testLargestTextSize() throws {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
+        }
+        guard ProcessInfo.processInfo.environment["PERSONA_BEFORE"] == nil else { throw XCTSkip("not in the app before #2045") }
+        continueAfterFailure = true
+        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        try resetReview(hub, to: ten)
+        start(hub, ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
+                    "-openRescheduleTitled", "检查 PR #42"])
+        let calendarSwitch = app.buttons["日历"]
+        XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
+        let allDay = app.switches["todo.calendar.rescheduleAllDay"]
+        if !allDay.waitForExistence(timeout: 4) {
+            if calendarSwitch.isSelected { app.buttons["列表"].tap() }
+            calendarSwitch.tap()
+        }
+        XCTAssertTrue(allDay.waitForExistence(timeout: 30))
+        shot("large-sheet")
+        app.terminate()
+        start(hub, ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        let calendar = app.buttons["日历"]
+        XCTAssertTrue(calendar.waitForExistence(timeout: 60))
+        if !calendar.isSelected { calendar.tap() }
+        for (mode, id) in [("日", "todo.calendar.strip"), ("周", "todo.calendar.dayHeader"), ("月", "todo.calendar.monthDay")] {
+            app.buttons[mode].tap()
+            XCTAssertTrue(app.descendants(matching: .any)[id].firstMatch.waitForExistence(timeout: 15), mode)
+            shot("large-" + ["日": "day", "周": "week", "月": "month"][mode]!)
+        }
     }
 
     /// An hour on the axis (`Theme.CalendarGrid.hour`), and where a month day's first line is from its top (its date,
