@@ -6,7 +6,6 @@ import persona.core.contracts.api.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 
 /**
  * Owned by the paired hub scope, never by a settings screen or an Activity.
@@ -63,11 +62,16 @@ class PhoneToolsRuntime(
                             .distinctUntilChanged().collect { specs -> transport.register(deviceId, deviceName, simulator, specs) }
                     }
                     transport.calls.collect { call ->
-                        // Bounded concurrency: back-pressure on the transport queue when many calls arrive.
-                        // Each call has its own supervised coroutine, so one waiting for the user never blocks
-                        // the receive loop or another call.
+                        // Acquire the permit *inside* the collector, before launching: the transport channel
+                        // and the semaphore together bound how many calls are in flight, so a flood backs up
+                        // into the channel (which then refuses new calls) instead of spawning unbounded
+                        // waiting coroutines. collectLatest cancels this acquire when the connection drops,
+                        // so a call that never started is discarded rather than surviving into the next
+                        // socket. Calls that already acquired a permit and launched live on the pairing
+                        // scope and keep running across a transient reconnect.
+                        inFlight.acquire()
                         scope.launch {
-                            inFlight.withPermit {
+                            try {
                                 coroutineScope {
                                     val execution = async { registry.call(call) }
                                     val watcher = launch {
@@ -96,6 +100,8 @@ class PhoneToolsRuntime(
                                         outbox.send(call.callId, result) { transport.result(call.callId, result) }
                                     } finally { watcher.cancel() }
                                 }
+                            } finally {
+                                inFlight.release()
                             }
                         }
                     }
