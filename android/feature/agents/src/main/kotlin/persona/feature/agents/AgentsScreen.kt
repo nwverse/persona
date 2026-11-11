@@ -8,8 +8,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -103,7 +101,8 @@ internal fun AgentsScreen(
     /** A project being put on a to-do ("Link to to-do…"): its machine and its name as the hub keys it. */
     var pickingTodoForSpace by remember { mutableStateOf<Pair<String, String>?>(null) }
     val todos by (model.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
-    val snackbar = remember { SnackbarHostState() }
+    // A fallback for when no app feedback is provided (previews, tests): the page's own toast, as the root's.
+    val toast = persona.core.designsystem.rememberToastState()
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     var menu by remember { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
@@ -149,19 +148,19 @@ internal fun AgentsScreen(
     val failureResources = agentResources()
     LaunchedEffect(failure) {
         failure?.let {
-            if (feedback?.failure(it) != true) snackbar.showSnackbar(persona.core.designsystem.operationFeedback(it).text.resolve(failureResources))
+            if (feedback?.failure(it) != true) toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(it).text.resolve(failureResources), style = persona.core.designsystem.FeedbackStyle.Error))
             model.clearFailure()
         }
     }
     LaunchedEffect(archiveState.error, showArchives) {
         if (!showArchives) archiveState.error?.let {
-            if (feedback?.failure(it) != true) snackbar.showSnackbar(persona.core.designsystem.operationFeedback(it).text.resolve(failureResources))
+            if (feedback?.failure(it) != true) toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(it).text.resolve(failureResources), style = persona.core.designsystem.FeedbackStyle.Error))
             archives?.clearError()
         }
     }
     val noticeResources = agentResources()
     LaunchedEffect(notice) {
-        notice?.let { val text = it.resolve(noticeResources); if (feedback?.notice(text) != true) snackbar.showSnackbar(text); model.clearNotice() }
+        notice?.let { val text = it.resolve(noticeResources); if (feedback?.notice(text) != true) toast.show(persona.core.designsystem.FeedbackNotice(text)); model.clearNotice() }
     }
     val nameWithGroup = stringResource(R.string.agents_machine_with_group)
     val names = remember(page.machines, groups, nameWithGroup) { groups.machineNames(page.machines, nameWithGroup) }
@@ -515,7 +514,7 @@ internal fun AgentsScreen(
                 }
             }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
+        persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
     }
     }
     if (menu) JActionSheet(buildList {
