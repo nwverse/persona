@@ -544,10 +544,14 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
+		ctx, note := withLauncherNote(ctx)
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
 			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
+		}
+		if *note != "" {
+			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
 		return map[string]any{"params": params}, nil
 	case assistantwire.MethodRename:

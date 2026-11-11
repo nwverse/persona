@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -275,7 +276,18 @@ func (s *Service) hiddenLaunchers(ctx context.Context) []string {
 	if st := s.store(); st != nil {
 		_, _ = memoSetting(ctx, st, launchersHiddenKey, &list)
 	}
+	if n, _ := ctx.Value(unhiddenKey{}).(string); n != "" && slices.Contains(list, n) {
+		list = slices.DeleteFunc(slices.Clone(list), func(h string) bool { return h == n })
+	}
 	return list
+}
+
+type unhiddenKey struct{}
+
+// withUnhidden has hiddenLaunchers leave name out: a launcher that a configuration or a conversation still names keeps
+// running when it is hidden, as the hide route says; hiding takes it out of the pickers only (#4659).
+func withUnhidden(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, unhiddenKey{}, name)
 }
 
 func (s *Service) putSetting(ctx context.Context, key string, v any) error {
