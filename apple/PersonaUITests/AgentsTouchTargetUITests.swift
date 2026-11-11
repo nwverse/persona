@@ -16,7 +16,7 @@ final class AgentsTouchTargetUITests: XCTestCase {
     static let tapped: Set<String> = ["agents.row", "agents.compactRow", "agents.project", "agents.worktree", "agents.foldWorkspace",
                                       "agents.childSpaces", "agents.host", "agents.showAll", "agents.tab", "agents.quietSpace",
                                       "agents.waiting", "agents.section", "agents.space", "agents.idleFold", "agents.collapse"]
-    static let groupings = ["repo", "space", "state", "machine", "todo", "recent"]
+    static let groupings = ["repo", "space", "state", "machine", "app", "todo", "recent"]
     /// Avatar, Two Lines, State Cards, Compact List.
     static let displays = ["avatar", "compact", "cards", "list"]
     /// A finger's height, less a rounding point.

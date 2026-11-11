@@ -2333,6 +2333,7 @@ private struct AgentsList: View {
                 FoldButton(title: app.title, folded: isFolded(app.id), detail: Self.appDetail(group)) { toggleFold(app.id) } label: {
                     AppSectionHeader(app: app, counts: group)
                 }
+                .accessibilityIdentifier("agents.section")
             }
             .listSectionSpacing(isFolded(app.id) ? .custom(0) : .default)
         }

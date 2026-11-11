@@ -14,6 +14,7 @@ final class AgentsGroupingTests: XCTestCase {
         "state": ["By Status", "按状态", "状態別"],
         "space": ["By Project", "按项目", "プロジェクト別"],
         "machine": ["By Machine", "按机器", "マシン別"],
+        "app": ["By App", "按 App", "アプリ別"],
         "recent": ["Recently Used", "最近使用", "最近使用した項目"],
     ]
 
@@ -149,7 +150,7 @@ final class AgentsGroupingTests: XCTestCase {
         launch(fresh: true)
         XCTAssertTrue(says("repo"), "a fresh list is By Repository: \(menu.label)")
         var heights: [String: CGFloat] = [:]
-        for g in ["repo", "space", "state", "machine", "recent"] {
+        for g in ["repo", "space", "state", "machine", "app", "recent"] {
             if g != "repo" { choose(g) }
             closeSearchIfNeeded()
             let row = app.buttons.matching(NSPredicate(format: "identifier == 'agents.row' AND label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
