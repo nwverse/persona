@@ -317,8 +317,7 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	q := b.st.Queue[to]
 	for i := range q {
 		if q[i].Tool == superviseTool && (i > 0 || !b.draining[to]) {
-			msg.At = firstQueued(q[i], msg) // it waited since then (relay_presence.go)
-			q[i] = msg
+			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
 			s.saveRelayLocked()
 			return true
 		}

@@ -76,15 +76,31 @@ func anyDecision(list []superviseSignal) bool {
 	return slices.ContainsFunc(list, func(g superviseSignal) bool { return g.waitsOnDecision() })
 }
 
-// firstQueued is when the message that takes queued message old's place counts as queued: when old was, so a
-// message replaced again and again still comes to the end of its hold. One that only now waits on a decision counts
-// from now: its relayDecisionMax starts with the decision, not with the ordinary message it merged into.
-func firstQueued(old, msg relayMsg) time.Time {
-	if msg.decisionWaiting() && !old.decisionWaiting() {
-		return msg.At
+// replacing is msg taking queued message old's place at now. It has waited since old was queued (queuedAs), so a
+// message replaced again and again still comes to the end of its hold and its queue wait is the whole wait. One that
+// only now waits on a decision counts its relayDecisionMax from now: it starts with the decision, not with the
+// ordinary message it merged into.
+func (msg relayMsg) replacing(old relayMsg, now time.Time) relayMsg {
+	msg = msg.queuedAs(old)
+	msg.DecisionAt = time.Time{}
+	if msg.decisionWaiting() {
+		if old.decisionWaiting() {
+			msg.DecisionAt = old.DecisionAt
+		} else {
+			msg.DecisionAt = now.UTC()
+		}
 	}
-	if !old.At.IsZero() && old.At.Before(msg.At) {
-		return old.At
+	return msg
+}
+
+// decisionSince is when msg began to wait on a decision: when it queued, unless it took the place of a message
+// that waited on none (DecisionAt). One queued by a manager from before queued_at counts from its own time.
+func (msg relayMsg) decisionSince() time.Time {
+	switch {
+	case !msg.DecisionAt.IsZero():
+		return msg.DecisionAt
+	case !msg.QueuedAt.IsZero():
+		return msg.QueuedAt
 	}
 	return msg.At
 }
@@ -98,7 +114,7 @@ func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Dura
 	}
 	until := spoke.Add(ownerPresentFor)
 	if msg.decisionWaiting() {
-		if latest := msg.At.Add(relayDecisionMax); latest.Before(until) {
+		if latest := msg.decisionSince().Add(relayDecisionMax); latest.Before(until) {
 			until = latest
 		}
 	}

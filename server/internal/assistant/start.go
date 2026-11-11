@@ -285,7 +285,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if params["launch"] != "headless" {
 		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
 	}
-	if err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
+	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
@@ -626,7 +626,7 @@ func (s *Service) startRoutes() {
 			// Guest: a guest conversation (guest.go): only these connector tools, nothing of the assistant's.
 			Guest *GuestSpec `json:"guest"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&in); err != nil {
+		if err := decodeLargeBody(w, r, &in, 32<<20); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -670,6 +670,7 @@ func (s *Service) startRoutes() {
 			in.Prompt = s.withWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
 		// The main conversation is the assistant's, on its machine.
+		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
 			OpenedBy: requestOpener(r), GuestTools: guestTools})
@@ -683,6 +684,10 @@ func (s *Service) startRoutes() {
 		// The owner's New chat: is it a direction? In the background; nothing waits for it (route.go).
 		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks {
 			go s.routeNewChat(sess.MachineID, sess.SessionID, sentence)
+		}
+		if *note != "" {
+			apierr.WriteJSON(w, map[string]any{"session": sess, "launcher_note": *note})
+			return
 		}
 		apierr.WriteJSON(w, map[string]any{"session": sess})
 	})
@@ -757,21 +762,45 @@ func (s *Service) appLang(ctx context.Context, lang string) i18n.Lang {
 // filled in (sendModel) and, the first one to a new main conversation started empty, what the old one left before
 // its text. A conversation the machine does not list (yet) that is not the main one keeps what it runs on.
 func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any, error) {
+	return s.messageParams(ctx, p, true)
+}
+
+// messageParams is SendParams for a message that is the owner's own (owner), or one the manager writes in their
+// place (a channel's "answer again"), which preempts nothing.
+func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (map[string]any, error) {
 	if p.Params == nil {
 		p.Params = map[string]any{}
 	}
 	delete(p.Params, "source") // app input cannot claim an automated author
 	delete(p.Params, "message_source")
-	if text, ok := p.Params["text"].(string); ok {
+	if id, _ := p.Params["client_msg_id"].(string); id != "" {
+		s.availOwnerSent(p.MachineID, p.SessionID, id, time.Now()) // a replay opens no reply wait (availability.go)
+	}
+	text, said := p.Params["text"].(string)
+	if said {
 		p.Params["text"] = prompts.ProtectUserMessage(text)
+	} else {
+		_, said = p.Params["images"] // the node asking what its own message runs on carries neither (NodeAnswer)
 	}
 	sent, _ := p.Params["text"].(string)
-	out, err := s.sendParams(ctx, p)
+	params, err := s.sendParams(ctx, p)
 	if err == nil && p.Human { // the hub's word: a person's own app sent it (secret_handoff.go handoffUserTurn)
 		id, _ := p.Params["client_msg_id"].(string)
 		s.humanSent.note(p.SessionID, id, sent)
 	}
-	return out, err
+	if err == nil && said && owner {
+		s.ownerInterjects(p.SessionID, params)
+	}
+	return params, err
+}
+
+// ownerInterjects: params are the owner's own message to conversation id, ready to send. On a round they did not
+// start it is read at once, whatever interject_background says (owner_preempt.go).
+func (s *Service) ownerInterjects(id string, params map[string]any) {
+	if s.ownerPreempts(id) {
+		params["interject_background"] = true
+	}
+	s.ownerSent(id)
 }
 
 // sendParams also serves manager-generated notices, which must not be marked as
@@ -801,6 +830,10 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		}
 	}
 	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params); err != nil {
+		var other *launcherOtherKind
+		if errors.As(err, &other) {
+			return nil, other.rpcError(s.appLang(ctx, p.Lang)) // 409 launcher_other_kind, with the kinds for the app
+		}
 		return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
 	if text, ok := params["text"].(string); ok {
@@ -841,6 +874,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	}
 	l, _ := p["launcher"].(string)
 	asked := l != "" // picked in the chat's menu for this message
+	if asked {
+		if err := s.otherKindPick(ctx, machine, sid, l); err != nil {
+			return err // another agent kind can't resume this conversation: refused, not swapped on the node
+		}
+	}
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
 			l = c.Launcher // no launcher picked: the one this conversation runs
@@ -880,7 +918,8 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
 		return err
 	}
-	return s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
+	_, err := s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
+	return err
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.

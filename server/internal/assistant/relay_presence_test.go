@@ -126,8 +126,8 @@ func TestSupervisionMessageWaitsOnADecisionByItsSignals(t *testing.T) {
 		return len(q) == 1 && q[0].Urgent
 	})
 	merged := queuedRelays(s, "conv1")[0]
-	if merged.rank() != relayRankDecision || !merged.At.After(first.At) || f.sentTo("conv1") != 0 {
-		t.Fatalf("merged: rank %d, queued %s (the first %s), %d sent", merged.rank(), merged.At, first.At, f.sentTo("conv1"))
+	if merged.rank() != relayRankDecision || !merged.decisionSince().After(first.QueuedAt) || !merged.QueuedAt.Equal(first.QueuedAt) || f.sentTo("conv1") != 0 {
+		t.Fatalf("merged: rank %d, waits on its decision since %s, queued %s (the first %s), %d sent", merged.rank(), merged.decisionSince(), merged.QueuedAt, first.QueuedAt, f.sentTo("conv1"))
 	}
 }
 
@@ -387,6 +387,12 @@ func TestDecisionWaitingMessagesAreHeldAtMost(t *testing.T) {
 		{"a decision that waited 4 minutes has one more", relayMsg{Tool: superviseTool, Urgent: true, At: now.Add(-4 * time.Minute)}, time.Minute},
 		{"a decision that waited 5 minutes goes", relayMsg{Tool: askAnswerTool, At: now.Add(-5 * time.Minute)}, 0},
 		{"a decision that does not say when it queued goes", relayMsg{Tool: askAnswerTool}, 0},
+		// Since #5006 a queued message says when it queued (queued_at): the 5 minutes count from then, not from when
+		// the message was written.
+		{"a decision written long ago that queued a minute ago", relayMsg{Tool: askAnswerTool, At: now.Add(-time.Hour), QueuedAt: now.Add(-time.Minute)}, 90 * time.Second},
+		{"a decision that queued 4 minutes ago has one more", relayMsg{Tool: superviseTool, Urgent: true, At: now, QueuedAt: now.Add(-4 * time.Minute)}, time.Minute},
+		{"a decision that queued 5 minutes ago goes", relayMsg{Tool: askAnswerTool, At: now, QueuedAt: now.Add(-5 * time.Minute)}, 0},
+		{"a message that began to wait on a decision a minute ago", relayMsg{Tool: noticeTool, State: "needs", QueuedAt: now.Add(-10 * time.Minute), DecisionAt: now.Add(-time.Minute)}, 90 * time.Second},
 	} {
 		if got := b.holdLocked("conv1", tc.msg, now); got != tc.want {
 			t.Errorf("%s: held %s, want %s", tc.name, got, tc.want)
@@ -431,30 +437,124 @@ func TestDecisionGoesInWhileTheOwnerKeepsTalking(t *testing.T) {
 	}
 }
 
-// A supervision message or task notice that takes a queued one's place has waited since the first queued; one that
-// only now waits on a decision counts from now.
+// A supervision message or task notice that takes a queued one's place has waited since the first queued, for its
+// hold and for its queue wait alike; one that only now waits on a decision counts its hold from now, and its queue
+// wait still from when the first queued.
 func TestReplacedQueuedMessageKeepsItsWait(t *testing.T) {
+	presenceTimes(t, 2*time.Minute, 5*time.Minute)
 	s, _ := newQuietService(t)
 	first := time.Now().Add(-4 * time.Minute).UTC()
-	now := time.Now().UTC()
-	s.queueRelay("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Urgent: true, Text: "one", At: first})
-	s.queueRelay("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "needs", Text: "needs", At: first})
-	s.queueRelay("conv1", relayMsg{From: "t2", Tool: noticeTool, State: "done", Text: "done", At: first})
-	if !s.replaceQueuedSupervise("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Urgent: true, Text: "both", At: now}) {
+	s.queueRelay("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Urgent: true, Text: "one"})
+	s.queueRelay("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "needs", Text: "needs"})
+	s.queueRelay("conv1", relayMsg{From: "t2", Tool: noticeTool, State: "done", Text: "done"})
+	s.relays.mu.Lock()
+	for i := range s.relays.st.Queue["conv1"] {
+		s.relays.st.Queue["conv1"][i].QueuedAt = first // they queued 4 minutes ago
+	}
+	s.relays.mu.Unlock()
+	before := time.Now()
+	if !s.replaceQueuedSupervise("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Urgent: true, Text: "both", At: before.UTC()}) {
 		t.Fatal("not replaced")
 	}
-	if !s.replaceQueuedNotice("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "failed", Text: "failed", At: now}) {
+	if !s.replaceQueuedNotice("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "failed", Text: "failed", At: before.UTC()}) {
 		t.Fatal("notice not replaced")
 	}
-	if !s.replaceQueuedNotice("conv1", relayMsg{From: "t2", Tool: noticeTool, State: "needs", Text: "now needs", At: now}) {
+	if !s.replaceQueuedNotice("conv1", relayMsg{From: "t2", Tool: noticeTool, State: "needs", Text: "now needs", At: before.UTC()}) {
 		t.Fatal("second notice not replaced")
 	}
-	q := s.relays.st.Queue["conv1"]
-	if len(q) != 3 || q[0].Text != "both" || !q[0].Urgent || !q[0].At.Equal(first) || q[1].Text != "failed" || !q[1].At.Equal(first) {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	q := b.st.Queue["conv1"]
+	if len(q) != 3 || q[0].Text != "both" || !q[0].Urgent || q[1].Text != "failed" || q[2].Text != "now needs" {
 		t.Fatalf("queue: %+v", q)
 	}
-	if q[2].Text != "now needs" || !q[2].At.Equal(now) {
-		t.Fatalf("a message that only now waits on a decision counts from %s, want %s", q[2].At, now)
+	for i, m := range q {
+		if !m.QueuedAt.Equal(first) || m.Depth != i+1 {
+			t.Fatalf("message %d lost when the first queued (its queue wait): %+v", i, m)
+		}
+	}
+	if !q[0].decisionSince().Equal(first) || !q[1].decisionSince().Equal(first) {
+		t.Fatalf("a decision that replaced a decision counts from %s and %s, want %s", q[0].decisionSince(), q[1].decisionSince(), first)
+	}
+	if since := q[2].decisionSince(); since.Before(before.Add(-time.Second)) || since.After(time.Now()) {
+		t.Fatalf("a message that only now waits on a decision counts from %s, want now", since)
+	}
+	// The owner keeps talking: the two that waited 4 minutes have one more, the new decision its full hold.
+	now := time.Now()
+	b.ownerSpokeLocked("conv1", now)
+	if h := b.holdLocked("conv1", q[1], now); h <= 0 || h > time.Minute {
+		t.Fatalf("the replaced decision is held %s, want at most a minute", h)
+	}
+	if h := b.holdLocked("conv1", q[2], now); h != 2*time.Minute {
+		t.Fatalf("the new decision is held %s, want the owner's 2 minutes", h)
+	}
+	// A notice that waits on nothing any more takes its place: no decision time is left behind.
+	if got := (relayMsg{Tool: noticeTool, State: "done"}).replacing(q[2], now); !got.DecisionAt.IsZero() || !got.QueuedAt.Equal(first) {
+		t.Fatalf("an outcome that replaced a decision: %+v", got)
+	}
+}
+
+// The queue wait (#4924) of a message held for the owner in an idle conversation is the whole hold: from when it
+// queued to when it went in.
+func TestQueueWaitOfAHeldMessage(t *testing.T) {
+	presenceTimes(t, 300*time.Millisecond, time.Hour)
+	s, f := newQuietService(t)
+	stopHolds(t, s)
+	ctx := context.Background()
+	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
+	queued := time.Now()
+	s.relayOrQueue(ctx, "conv1", relayMsg{From: "c2", FromTitle: "Research", Tool: "conversation_send", Text: "held", At: queued.Add(-time.Hour).UTC()})
+	if q, sent := s.queuedFor("conv1"), f.sentTo("conv1"); q != 1 || sent != 0 {
+		t.Fatalf("while the owner talks: %d queued, %d sent", q, sent)
+	}
+	if len(availEvents(s, queueWaitEvent)) != 0 {
+		t.Fatal("a queue wait recorded before the message went in")
+	}
+	waitFor(t, "the held message's queue wait", func() bool { return len(availEvents(s, queueWaitEvent)) == 1 })
+	longest := time.Since(queued).Seconds()
+	e := availEvents(s, queueWaitEvent)[0]
+	// From the owner's message to the end of the hold it waited ownerPresentFor, less what passed before it queued.
+	if wait, _ := e["wait"].(float64); wait < 0.2 || wait > longest || e["kind"] != proto.SourceConversation || e["depth"] != 1 {
+		t.Fatalf("queue wait %v, want between 0.2 and %.2f seconds", e, longest)
+	}
+	// One that goes straight in once the owner is quiet waited in no queue.
+	s.relayOrQueue(ctx, "conv1", relayMsg{From: "c2", FromTitle: "Research", Tool: "conversation_send", Text: "straight in", At: time.Now().UTC()})
+	if n := len(availEvents(s, queueWaitEvent)); f.sentTo("conv1") != 2 || n != 1 {
+		t.Fatalf("%d sent, %d queue waits", f.sentTo("conv1"), n)
+	}
+}
+
+// A message that goes in ahead of earlier ones by its rank records its own queue wait and the queue's length when
+// it was added; those it passed record theirs when they go in, the longer for it.
+func TestQueueWaitOfReRankedMessages(t *testing.T) {
+	s, f := newQuietService(t)
+	s.queueRelay("conv1", relayMsg{From: "c2", FromTitle: "Research", Tool: "conversation_send", Text: "ordinary"})
+	s.queueRelay("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "done", Text: "report"})
+	s.queueRelay("conv1", relayMsg{From: "t4", Tool: askAnswerTool, Text: "answer"})
+	now := time.Now().UTC()
+	s.relays.mu.Lock()
+	for i, ago := range []time.Duration{30 * time.Minute, 20 * time.Minute, 10 * time.Minute} {
+		s.relays.st.Queue["conv1"][i].QueuedAt = now.Add(-ago)
+	}
+	s.relays.mu.Unlock()
+	idle := []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}}
+	for i := range 3 {
+		s.drainRelays("server", idle)
+		waitFor(t, "the next queue wait", func() bool { return len(availEvents(s, queueWaitEvent)) == i+1 })
+	}
+	if n := f.notices(); len(n) != 3 || !strings.Contains(n[0], "answer") || !strings.Contains(n[1], "report") || !strings.Contains(n[2], "ordinary") {
+		t.Fatalf("went in as %q", n)
+	}
+	for i, want := range []struct {
+		kind  string
+		depth int
+		wait  float64
+	}{{roundNotice, 3, 600}, {roundNotice, 2, 1200}, {proto.SourceConversation, 1, 1800}} {
+		e := availEvents(s, queueWaitEvent)[i]
+		if wait, _ := e["wait"].(float64); e["kind"] != want.kind || e["depth"] != want.depth || wait < want.wait || wait > want.wait+30 {
+			t.Fatalf("queue wait %d is %v, want %+v", i, e, want)
+		}
 	}
 }
 
@@ -508,7 +608,7 @@ func TestRelayStateReadsAcrossVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(out), "urgent") || strings.Contains(string(out), "spoke") {
+	if strings.Contains(string(out), "urgent") || strings.Contains(string(out), "spoke") || strings.Contains(string(out), "decision_at") {
 		t.Fatalf("new fields written for a queue that has none: %s", out)
 	}
 	rs.Queue["conv1"][0].Urgent = true

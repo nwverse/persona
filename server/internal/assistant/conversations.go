@@ -193,6 +193,13 @@ type relayMsg struct {
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
 	// not know it drops it on its next save: the message then ranks and waits as any other supervision message.
 	Urgent bool `json:"urgent,omitempty"`
+	// QueuedAt and Depth are when it was first queued and how long the queue was with it then (the queue wait,
+	// availability.go): kept by a message that takes its place (queuedAs).
+	QueuedAt time.Time `json:"queued_at,omitzero"`
+	Depth    int       `json:"depth,omitempty"`
+	// DecisionAt is when it began to wait on a decision, where that is later than QueuedAt: it took the place of a
+	// queued message that waited on none (replacing, relay_presence.go).
+	DecisionAt time.Time `json:"decision_at,omitzero"`
 }
 
 type relayHop struct {
@@ -356,6 +363,7 @@ func (s *Service) queueRelay(to string, msg relayMsg) int {
 	if !s.relayLocked(context.Background()) {
 		return 0
 	}
+	msg.QueuedAt, msg.Depth = time.Now().UTC(), len(b.st.Queue[to])+1
 	b.st.Queue[to] = append(b.st.Queue[to], msg)
 	s.saveRelayLocked()
 	return len(b.st.Queue[to])
@@ -408,6 +416,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool {
 		text = msg.Text
 	}
+	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
 	if msg.Tool == superviseTool {
 		// Register before dispatch: a fast MCP call can arrive before assistant.send returns.
 		s.holdPushes(ctx, to)
@@ -520,6 +529,9 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				b.stuck[id] = msg // the next drain takes another one first (pickLocked)
 			}
 			b.mu.Unlock()
+			if taken && !stale && err == nil {
+				s.availQueueDelivered(machine, id, msg, time.Now())
+			}
 			if taken {
 				s.publish(context.Background()) // it no longer shows waiting
 			}
