@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -72,18 +71,20 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 			delete(p, field.http)
 		}
 	}
-	// A switch to another launcher (#5035), carried out by the next message (node/launcher_switch.go): an older node
-	// would drop launcher and switch the model on the launcher the Agent runs on.
-	if v, exists := p["launcher"]; exists {
-		launcher, ok := v.(string)
-		if !ok {
-			writeErr(w, http.StatusBadRequest, errors.New("launcher must be a string"))
-			return
+	// A switch to another launcher (#5035), carried out by the user's next message (node/launcher_switch.go); from is
+	// the launcher the client saw the session on. An older node would drop launcher and switch the model on the
+	// launcher the Agent runs on.
+	for _, field := range []string{"launcher", "from"} {
+		if v, exists := p[field]; exists {
+			if _, ok := v.(string); !ok {
+				writeErr(w, http.StatusBadRequest, errors.New(field+" must be a string"))
+				return
+			}
 		}
-		if strings.TrimSpace(launcher) != "" && !m.nodeSwitchesLaunchers() {
-			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-machine.node_no_launcher_switch"), nil)
-			return
-		}
+	}
+	if launcher, _ := p["launcher"].(string); strings.TrimSpace(launcher) != "" && !m.switchesLaunchers() {
+		writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-machine.node_no_launcher_switch"), nil)
+		return
 	}
 	p["session_id"] = r.PathValue("sid")
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
@@ -127,11 +128,12 @@ func modesLauncher(p map[string]any, s proto.Session) string {
 	return cmp.Or(s.Launcher, "claude")
 }
 
-// nodeSwitchesLaunchers: the machine's node takes launcher in session.modes (capability launcher_switch); a node of a
-// test or a dev build that says nothing is taken to.
-func (m *Machine) nodeSwitchesLaunchers() bool {
+// switchesLaunchers: the machine's node takes launcher in session.modes (capability launcher_switch), as its manager
+// reported it. Not before the manager reported the node at all: hasCapability takes a node that says nothing for a
+// test's, and an older node met right after a hub restart would drop the launcher and switch the model in place.
+func (m *Machine) switchesLaunchers() bool {
 	m.mu.Lock()
-	info := m.info
+	reported := m.info.Protocol > 0 || m.info.Version != ""
 	m.mu.Unlock()
-	return slices.Contains(info.Capabilities, nodeproto.LauncherSwitch) || (info.Protocol == 0 && info.Version == "")
+	return reported && m.hasCapability(nodeproto.LauncherSwitch)
 }
