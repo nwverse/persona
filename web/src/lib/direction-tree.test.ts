@@ -2,17 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Machine, Session } from "./types";
 
-const listeners = vi.hoisted(() => new Map<string, Set<(m: Record<string, unknown>) => void>>());
-vi.mock("./store", () => ({
-  onHubEvent: (type: string, l: (m: Record<string, unknown>) => void) => {
-    if (!listeners.has(type)) listeners.set(type, new Set());
-    listeners.get(type)!.add(l);
-    return () => listeners.get(type)?.delete(l);
-  },
-}));
-
+import { buildDirectionAgentTree } from "./direction-agent-tree";
 import {
-  buildDirectionAgentTree,
   directionCountsText,
   directionStateName,
   directionTitle,
@@ -23,8 +14,9 @@ import {
   normalizeTree,
   refreshDirectionTree,
   resetDirectionTree,
+  directionTreeAwaitsHello,
+  readDirectionTreeOnce,
   shownSecretary,
-  watchDirectionTree,
   type DirectionTree,
 } from "./direction-tree";
 
@@ -51,7 +43,6 @@ const TREE: DirectionTree = {
 describe("direction tree", () => {
   afterEach(() => {
     resetDirectionTree();
-    listeners.clear();
     vi.unstubAllGlobals();
   });
 
@@ -127,24 +118,61 @@ describe("direction tree", () => {
     expect(tree.loose.flatMap((g) => g.sessions.map((s) => s.session_id))).toEqual(["loose"]);
   });
 
-  it("is asked on load, again on a directions push and on hello; a 404 is no tree", async () => {
+  it("is read once for everyone asking while a read is out, again after it for a change; a 404 is no tree", async () => {
     let status = 200;
     const fetch = vi.fn(async () => (status === 200 ? new Response(JSON.stringify(TREE), { status: 200, headers: { "Content-Type": "application/json" } }) : new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json" } })));
     vi.stubGlobal("fetch", fetch);
-    const settle = () => new Promise((r) => setTimeout(r, 0));
-    watchDirectionTree();
-    watchDirectionTree(); // once for the page
-    await vi.waitFor(() => expect(directionTreeGroups()).toBe(true));
+    // hello, the sidebar's names and a screen drawing the tree all at once: one GET
+    const [a, b, c] = await Promise.all([readDirectionTreeOnce(), readDirectionTreeOnce(), readDirectionTreeOnce()]);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(String((fetch.mock.calls[0] as unknown[])[0])).toContain("/api/v1/assistant/directions/tree");
+    expect(a).toBe(b);
+    expect(b).toBe(c);
     expect(directionTreeGroups()).toBe(true);
-    listeners.get("directions")!.forEach((l) => l({ type: "directions" }));
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
-    await settle();
+    // a directions push reads it again
+    await refreshDirectionTree();
+    expect(fetch).toHaveBeenCalledTimes(2);
     status = 404;
-    listeners.get("hello")!.forEach((l) => l({ type: "hello" }));
-    await vi.waitFor(() => expect(directionTreeGroups()).toBe(false));
+    expect(await refreshDirectionTree()).toBeNull();
+    expect(directionTreeGroups()).toBe(false);
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("serves a hello with a read sent since the socket opened, and reads again for one sent before", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(TREE), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const opened = Date.now();
+    await readDirectionTreeOnce(); // the first screen's read
+    await readDirectionTreeOnce(opened); // the hello right after
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await readDirectionTreeOnce(Date.now() + 1000); // a later reconnect's hello
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a hello on its way instead of reading beside it", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(TREE), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    directionTreeAwaitsHello(true); // the socket is connecting
+    const screen = readDirectionTreeOnce(); // the first screen, the sidebar's names
+    await Promise.resolve();
+    expect(fetch).not.toHaveBeenCalled();
+    const hello = readDirectionTreeOnce(Date.now()); // the hello's own read
+    directionTreeAwaitsHello(false);
+    expect(await screen).toBe(await hello);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // a socket that closed before its hello: whoever waited reads it then
+    resetDirectionTree();
+    directionTreeAwaitsHello(true);
+    const waiting = readDirectionTreeOnce();
+    directionTreeAwaitsHello(false);
+    expect((await waiting)?.directions).toHaveLength(3);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("is no tree when the answer has no directions (a layer in front of an older hub)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
+    expect(await readDirectionTreeOnce()).toBeNull();
+    expect(directionTreeNow()).toBeNull();
   });
 
   it("treats a failed first read as no tree, and a later read replaces it", async () => {

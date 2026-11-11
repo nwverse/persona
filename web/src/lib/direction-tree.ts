@@ -2,15 +2,13 @@
 // "direction", shown as 常驻 / Pinned) with the open tasks it supervises, each task with its state and its agents, and
 // last the secretary's group (tasks with no leader). The hub builds it once (GET /api/v1/assistant/directions/tree); the
 // sidebar, the To-dos page and the Agents page all draw this one tree and never group or rank the tasks themselves.
-// Asked on the socket's hello and again on every {"type":"directions"} push; a hub without the route (404) answers
-// null, and the screens keep what they showed before (flat direction rows, no grouping by direction).
+// This module is the only one that reads and holds it; the Agents list's shape of it is lib/direction-agent-tree.ts
+// (kept apart so this module loads light: lib/store.ts reaches it through lib/direction-names.ts).
+// Asked on the socket's hello and again on every {"type":"directions"} push (lib/store.ts); a hub without the route
+// (404) answers null, and the screens keep what they showed before (no counts, no grouping by direction).
 import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError } from "./api";
-import { onHubEvent } from "./store";
-import type { AgentMutes } from "./agent-groups";
-import { agentTreeState, buildTodoTree, type TodoTree, type TreeAgent, type TreeProject, type TreeState, type TreeTodo, worstTreeState } from "./todo-tree";
-import type { AgentState, Machine, Session } from "./types";
 
 export const DIRECTION_TREE_PATH = "/assistant/directions/tree";
 
@@ -145,16 +143,21 @@ export function taskAgents(td: DirectionTask): DirectionAgent[] {
 export const agentRef = (a: Pick<DirectionAgent, "machine_id" | "session_id">) => `${a.machine_id}/${a.session_id}`;
 
 // ── the store: one tree for the page ─────────────────────────
+// The only place the web reads the tree. lib/store.ts asks on hello (readDirectionTreeOnce) and on every `directions`
+// push (refreshDirectionTree); the sidebar's 常驻 names and counts (lib/direction-names.ts) are taken from it, and the
+// To-dos page and the Agents list draw it, so each change costs one GET however many screens show it.
 
 /** undefined: not asked yet (or asking the first time); null: no tree (an older hub, or the first read failed). */
 type Snapshot = DirectionTree | null | undefined;
 
 const listeners = new Set<() => void>();
 let tree: Snapshot = undefined;
-let inFlight = false;
-let again = false;
+let reading: Promise<DirectionTree | null> | null = null;
+/** When the read out (or, once it answered, the last one) was sent, and what the last one that answered gave. */
+let readingSince = 0;
+let lastRead: { at: number; tree: DirectionTree } | null = null;
+let queued: Promise<DirectionTree | null> | null = null;
 let generation = 0;
-let unhook: (() => void) | null = null;
 
 function set(next: Snapshot) {
   if (next === tree) return;
@@ -162,62 +165,94 @@ function set(next: Snapshot) {
   listeners.forEach((l) => l());
 }
 
-/** Ask the hub for the tree; a push while a read is out asks once more after it. */
-export function refreshDirectionTree(): Promise<void> {
-  if (inFlight) {
-    again = true;
-    return Promise.resolve();
-  }
-  inFlight = true;
+/** An answer that is not a tree (a layer in front of an older hub): a tree always lists its secretary group. */
+class NoTree extends Error {}
+
+function read(): Promise<DirectionTree | null> {
   const n = generation;
-  return api<unknown>(DIRECTION_TREE_PATH)
-    .then(
-      (res) => {
-        if (n === generation) set(normalizeTree(res));
-      },
-      // an older hub: no tree, and the screens stay as they were. Any other failure keeps the last tree; with none yet
-      // it counts as no tree too, so no screen waits on a read that failed (the next hello or push asks again)
-      (e) => {
-        if (n !== generation) return;
-        if ((e instanceof ApiError && e.status === 404) || tree === undefined) set(null);
-      },
-    )
+  const at = Date.now();
+  const p: Promise<DirectionTree | null> = api<unknown>(DIRECTION_TREE_PATH)
+    .then((res) => {
+      if (!Array.isArray((res as { directions?: unknown } | null)?.directions)) throw new NoTree();
+      const next = normalizeTree(res);
+      if (n !== generation) return null;
+      lastRead = { at, tree: next };
+      set(next);
+      return next;
+    })
+    // an older hub: no tree, and the screens stay as they were. Any other failure keeps the last tree; with none yet
+    // it counts as no tree too, so no screen waits on a read that failed (the next hello or push asks again)
+    .catch((e: unknown) => {
+      if (n === generation && (e instanceof NoTree || (e instanceof ApiError && e.status === 404) || tree === undefined)) set(null);
+      return null;
+    })
     .finally(() => {
-      if (n !== generation) return;
-      inFlight = false;
-      if (again) {
-        again = false;
-        void refreshDirectionTree();
-      }
+      if (reading === p) reading = null;
     });
+  reading = p;
+  readingSince = at;
+  return p;
 }
 
-/** Start keeping the tree: read it now, on every hello and on every directions push (once for the page). */
-export function watchDirectionTree() {
-  if (unhook) return;
-  const offPush = onHubEvent("directions", () => void refreshDirectionTree());
-  const offHello = onHubEvent("hello", () => void refreshDirectionTree());
-  unhook = () => {
-    offPush();
-    offHello();
-  };
-  void refreshDirectionTree();
+/** Reads the tree, or joins the read already out (on hello, and for a screen that needs it first): the tree just
+ *  read, null when this read gave none. With `since` (hello: when the socket opened), a read sent since then is as good
+ *  as a new one (any change after it comes as a push). Without it, while a hello is on its way (the socket is
+ *  connecting), it waits for the hello's read instead of sending one beside it. */
+export function readDirectionTreeOnce(since?: number): Promise<DirectionTree | null> {
+  if (since === undefined) return reading ?? helloWait?.promise ?? read();
+  if (reading && readingSince >= since) return reading;
+  if (!reading && lastRead && lastRead.at >= since) return Promise.resolve(lastRead.tree);
+  return read();
 }
 
-/** Forget the tree and stop listening (another login, tests). */
+let helloWait: { promise: Promise<DirectionTree | null>; resolve: (p: Promise<DirectionTree | null>) => void } | null = null;
+
+/** lib/store.ts: a socket is connecting, so a hello that reads the tree is on its way (true); the hello came, or the
+ *  socket closed before it (false). The first screen and the sidebar's names then share the hello's one read. */
+export function directionTreeAwaitsHello(pending: boolean) {
+  if (pending) {
+    if (!helloWait) {
+      let resolve: (p: Promise<DirectionTree | null>) => void = () => {};
+      const promise = new Promise<DirectionTree | null>((r) => (resolve = r));
+      helloWait = { promise, resolve };
+    }
+    return;
+  }
+  const w = helloWait;
+  helloWait = null;
+  // the hello's read when it made one (it starts before this is called); otherwise a read for whoever waited
+  w?.resolve(reading ?? (tree === undefined ? read() : Promise.resolve(tree)));
+}
+
+/** Reads the tree because it changed (a `directions` push): a read already out may have left before the change, so
+ *  one more follows it, once however many pushes come meanwhile. */
+export function refreshDirectionTree(): Promise<DirectionTree | null> {
+  if (!reading) return read();
+  if (!queued) {
+    const n = generation;
+    queued = reading.then(() => {
+      queued = null;
+      return n === generation ? read() : null;
+    });
+  }
+  return queued;
+}
+
+/** Forget the tree (another login, tests; lib/direction-names.ts's reset calls it). */
 export function resetDirectionTree() {
   generation++;
-  inFlight = false;
-  again = false;
-  unhook?.();
-  unhook = null;
+  reading = null;
+  queued = null;
+  lastRead = null;
+  helloWait = null;
   tree = undefined;
 }
 
-const subscribe = (l: () => void) => {
+/** Calls `l` whenever the tree changes (lib/direction-names.ts keeps the 常驻 names and counts from it). */
+export function subscribeDirectionTree(l: () => void): () => void {
   listeners.add(l);
   return () => void listeners.delete(l);
-};
+}
 const snapshot = () => tree;
 
 /** Whether the last tree read has a leader to group by (the grouping shortcut offers "By pinned" then). */
@@ -225,79 +260,14 @@ export function directionTreeGroups(): boolean {
   return groupsByDirection(tree);
 }
 
-/** The tree as last read, outside React (tests). */
+/** The tree as last read, outside React. */
 export const directionTreeNow = snapshot;
 
-/** The hub's direction tree: undefined until it first answers, null on a hub without one. */
+/** The hub's direction tree: undefined until it first answers, null on a hub without one. Asks if nothing has yet. */
 export function useDirectionTree(): Snapshot {
-  useEffect(() => watchDirectionTree(), []);
-  return useSyncExternalStore(subscribe, snapshot, snapshot);
-}
-
-// ── the tree as the Agents tree draws it (lib/todo-tree.ts) ───
-
-/** The Agents tree's one-word state for a task's state: needs you, working, and waiting for stuck and review. */
-const TREE_STATE: Record<DirectionTaskState, TreeState> = { needs_you: "needs_you", working: "working", stuck: "waiting", review: "waiting" };
-
-/** What a session row needs of an agent the session list does not have (another assistant's, an in-session sub-agent):
- *  its title and the state the hub saw. */
-function standIn(a: DirectionAgent): Session {
-  const known: readonly string[] = ["needs_you", "working", "unread", "idle", "offline"];
-  return { machine_id: a.machine_id, session_id: a.session_id, title: a.title, cwd: "", status: "", state: (known.includes(a.state) ? a.state : "offline") as AgentState, ...(a.agent ? { agent: a.agent } : {}) };
-}
-
-/**
- * A task's agents as tree nodes: each found in `sessions` (by "machine/session") once, nested as the hub nested them.
- * `standIns`: an agent the list does not have is drawn from what the tree says of it (the sidebar); otherwise it is
- * left out and its children move up (the Agents page, whose list is filtered). `placed` collects the agents drawn.
- */
-export function directionAgentNodes(list: readonly DirectionAgent[] | undefined, sessions: ReadonlyMap<string, Session>, placed: Set<string>, standIns: boolean): TreeAgent[] {
-  const out: TreeAgent[] = [];
-  for (const a of list ?? []) {
-    const ref = agentRef(a);
-    const children = directionAgentNodes(a.children, sessions, placed, standIns);
-    const s = placed.has(ref) ? undefined : sessions.get(ref) ?? (standIns ? standIn(a) : undefined);
-    if (!s) {
-      out.push(...children);
-      continue;
-    }
-    placed.add(ref);
-    out.push({ key: `s:${ref}`, session: s, state: agentTreeState(s), children, folded: false });
-  }
-  return out;
-}
-
-/** A task as the Agents tree's to-do node, under `keyPrefix` (its fold is kept per key). */
-export function directionTaskNode(td: DirectionTask, sessions: ReadonlyMap<string, Session>, placed: Set<string>, { keyPrefix, folded, standIns }: { keyPrefix: string; folded: boolean; standIns: boolean }): TreeTodo {
-  const agents = directionAgentNodes(td.agents, sessions, placed, standIns);
-  const flat = (n: TreeAgent): Session[] => [n.session, ...n.children.flatMap(flat)];
-  return { key: `${keyPrefix}${td.id}`, todoId: td.id, name: td.title, state: TREE_STATE[td.state], taskState: td.state, agents, sessions: agents.flatMap(flat), folded };
-}
-
-const keyOf = (s: Session) => `${s.machine_id}/${s.session_id}`;
-
-/**
- * Agents "By pinned" (#4352): pinned direction › task › agent › sub-agent, from the hub's tree, for the sessions listed
- * (live, filtered, unpinned). A task none of whose agents is listed is left out, and so is a direction left with no task.
- * The listed agents the tree does not hold go last, in the "By to-do" tree's own groups for agents on no to-do.
- */
-export function buildDirectionAgentTree(tree: DirectionTree, all: Session[], machines: Machine[], mutes?: AgentMutes, now = Date.now()): TodoTree {
-  const sessions = new Map(all.map((s) => [keyOf(s), s]));
-  const placed = new Set<string>();
-  const projects: TreeProject[] = [];
-  for (const d of tree.directions) {
-    const todos = (d.tasks ?? []).map((td) => directionTaskNode(td, sessions, placed, { keyPrefix: `direction-agents:task:${d.id}:`, folded: false, standIns: false })).filter((td) => td.agents.length > 0);
-    if (todos.length === 0) continue;
-    projects.push({
-      key: `direction-agents:${d.id}`,
-      name: directionTitle(d),
-      state: worstTreeState(todos.map((td) => td.state)),
-      todos,
-      sessions: todos.flatMap((td) => td.sessions),
-      folded: false,
-      direction: { counts: d.counts, secretary: !!d.secretary },
-    });
-  }
-  const rest = all.filter((s) => !placed.has(keyOf(s)));
-  return { projects, loose: buildTodoTree(rest, machines, [], mutes, now).loose };
+  useEffect(() => {
+    // after this commit's other effects, where the app opens its socket: the read then waits for that hello
+    queueMicrotask(() => tree === undefined && void readDirectionTreeOnce());
+  }, []);
+  return useSyncExternalStore(subscribeDirectionTree, snapshot, snapshot);
 }
