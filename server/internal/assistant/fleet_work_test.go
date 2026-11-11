@@ -24,10 +24,10 @@ func TestInteractionLineLanguages(t *testing.T) {
 		want string
 	}{
 		{"", plan, "计划等你审批"},
-		{i18n.ZhHans, perm, "等你授权：Bash: go test"},
-		{i18n.En, plan, "Plan waiting for approval"},
-		{i18n.En, perm, "Waiting for approval: Bash: go test"},
-		{i18n.Ja, proto.Interaction{}, "ターミナルが対応待ち"},
+		{i18n.ZhHans, perm, "需要你授权：Bash: go test"},
+		{i18n.En, plan, "Plan awaiting approval"},
+		{i18n.En, perm, "Needs your permission: Bash: go test"},
+		{i18n.Ja, proto.Interaction{}, "ターミナルで対応が必要です"},
 	} {
 		if got := interactionLine(c.l, c.ix); got != c.want {
 			t.Errorf("%q %s: %q, want %q", c.l, c.ix.Kind, got, c.want)
@@ -228,7 +228,7 @@ func TestInteractionLineSaysWhatIsAsked(t *testing.T) {
 		want string
 	}{
 		{i18n.ZhHans, plan, "计划等你审批：Move the cache to Postgres"},
-		{i18n.En, plan, "Plan waiting for approval: Move the cache to Postgres"},
+		{i18n.En, plan, "Plan awaiting approval: Move the cache to Postgres"},
 		{i18n.ZhHans, two, "部署到哪？（还有 1 个问题）"},
 		{i18n.En, two, "部署到哪？ (1 more question)"},
 		{i18n.Ja, two, "部署到哪？（ほかに1問）"},

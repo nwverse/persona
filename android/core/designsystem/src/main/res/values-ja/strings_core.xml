@@ -11,14 +11,14 @@
         <item quantity="other">%1$d件が完了</item>
     </plurals>
     <string name="designsystem_core_fleet_all_done">すべて対応済み</string>
-    <string name="designsystem_core_fleet_permission_waiting">承認待ち</string>
+    <string name="designsystem_core_fleet_permission_waiting">許可が必要です</string>
     <string name="designsystem_core_fleet_permission_detail">承認：%1$s</string>
     <string name="designsystem_core_fleet_plan_waiting">プランの承認待ち</string>
     <string name="designsystem_core_fleet_plan_detail">プラン：%1$s</string>
     <string name="designsystem_core_fleet_question_waiting">質問があります</string>
     <string name="designsystem_core_fleet_item_working">作業中</string>
     <string name="designsystem_core_fleet_item_done">完了</string>
-    <string name="designsystem_core_fleet_screen_waiting">ターミナルで要対応</string>
+    <string name="designsystem_core_fleet_screen_waiting">ターミナルで対応が必要です</string>
     <string name="designsystem_core_parenthesized">%1$s（%2$s）</string>
     <string name="designsystem_core_fleet_one_permission">承認待ちが1件あります</string>
     <plurals name="designsystem_core_fleet_permissions">
@@ -296,12 +296,12 @@
     <string name="designsystem_core_headline_agent_permission">%1$sが%2$sの使用をリクエスト</string>
     <string name="designsystem_core_headline_agent_permission_detail">%1$sが%2$sの使用をリクエスト：%3$s</string>
     <string name="designsystem_core_headline_secret_run">%1$sでパスワードを使って実行</string>
-    <string name="designsystem_core_headline_screen">ターミナルのダイアログで要対応</string>
+    <string name="designsystem_core_headline_screen">ターミナルで対応が必要です</string>
     <string name="designsystem_core_headline_needs_you">要対応</string>
-    <string name="designsystem_core_ask_question">質問中</string>
-    <string name="designsystem_core_ask_permission">許可が必要</string>
+    <string name="designsystem_core_ask_question">質問があります</string>
+    <string name="designsystem_core_ask_permission">許可が必要です</string>
     <string name="designsystem_core_ask_plan">プランの承認待ち</string>
-    <string name="designsystem_core_ask_screen">ターミナルのダイアログ</string>
+    <string name="designsystem_core_ask_screen">ターミナルで対応が必要です</string>
     <string name="designsystem_core_ask_elicitation">MCPリクエスト</string>
     <string name="designsystem_core_ask_line">%1$s：%2$s</string>
     <string name="designsystem_core_todo_done">完了</string>
@@ -426,7 +426,9 @@
     <string name="designsystem_core_workflow_failed">失敗</string>
     <string name="designsystem_core_workflow_killed">停止済み</string>
     <string name="designsystem_core_workflow_stalled">反応なし</string>
-    <string name="designsystem_core_workflow_agents_done">%1$d/%2$d 個の agent が完了</string>
+    <plurals name="designsystem_core_workflow_agents_done">
+        <item quantity="other">%2$d/%1$d 個の agent が完了</item>
+    </plurals>
     <string name="designsystem_core_always_scope_commands">この会話内のすべてのコマンド</string>
     <string name="designsystem_core_always_scope_read_directory">この会話中、このディレクトリ内のすべての読み取り</string>
     <string name="designsystem_core_always_scope_edit_directory">この会話中、このディレクトリ内のすべてのファイル編集</string>

@@ -108,7 +108,7 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   JSON escapes and the truncation note. Cuts respect UTF-8 boundaries and the second pass only cuts when the string becomes
   strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes for a three-digit
   original length); a longer or more heavily escaped tail may be cut. Each implementation measures its own wire encoding:
-  `JSON.stringify` leaves `<>&` and U+2028/U+2029 raw, whereas Go's `json.Marshal` escapes them, so their shares can differ.
+  both leave `<>&` raw, but `JSON.stringify` also leaves U+2028/U+2029 raw while the hub's Go encoder escapes them, so their shares can differ.
   Top-level arrays and other non-object inputs stay unchanged. This is still **not a total input size limit**: many short
   values, large keys, or enough strings at the 256-byte floor can exceed 24 KB. Bounding those inputs remains open in #2907.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
@@ -246,6 +246,10 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
+For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
+The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
+status, model, permissions and capabilities continue to describe the running session.
+
 A runtime that declares `caps.assistant` must:
 
 1. For **assistant chats** (started with `assistant: true`, or whose directory is the assistant directory), always send permissions and questions to the phone first (when there's a hub), regardless of whether the local UI is open.
@@ -284,7 +288,9 @@ with ACP support; `--agy-bin`, `--agy-dir` and `--socket` override the executabl
 Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
 five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
 (`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
-default. An unavailable catalog returns the native error instead of advertising a built-in model list.
+default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
+settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
+their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
 
 Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
 the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.

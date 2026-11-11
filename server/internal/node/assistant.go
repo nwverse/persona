@@ -849,6 +849,9 @@ func (n *Node) assistantSessions() []proto.Session {
 			}
 			record.set(&s)
 		}
+		if p.agent == "codex" && p.cx != nil {
+			p.cx.speedRow(&s)
+		}
 		n.decorate(&s)
 		out = append(out, s)
 	}

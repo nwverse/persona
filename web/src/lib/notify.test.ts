@@ -169,7 +169,7 @@ describe("需要你的通知写清楚问什么（#4056）", () => {
 });
 
 describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
-  const n = { title: "a 要你批准", body: "go test ./...", tag: "m/a#needs", url: "/s/m/a" };
+  const n = { title: "a 需要你授权", body: "go test ./...", tag: "m/a#needs", url: "/s/m/a" };
   async function post(o: { maxActions?: number; controller?: boolean; fine?: boolean; ix?: string; before?: boolean; workerHas?: string[] }) {
     const made: string[] = [];
     const closed: string[] = [];
@@ -204,7 +204,7 @@ describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
   it("浏览器画得出按钮：经 service worker 弹，带两个按钮和卡片 id", async () => {
     const { made, showNotification } = await post({ maxActions: 2, ix: "p1" });
     expect(made).toEqual([]);
-    expect(showNotification).toHaveBeenCalledWith("a 要你批准", expect.objectContaining({
+    expect(showNotification).toHaveBeenCalledWith("a 需要你授权", expect.objectContaining({
       tag: "m/a#needs",
       data: { url: "/s/m/a", ix: "p1" },
       actions: [{ action: "allow", title: "允许" }, { action: "deny", title: "拒绝" }],
@@ -214,7 +214,7 @@ describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
   it("画不出按钮（Safari、旧 Firefox）、没有 service worker、手机、不是授权卡：照旧", async () => {
     for (const o of [{ ix: "p1" }, { maxActions: 2, controller: false, ix: "p1" }, { maxActions: 2, fine: false, ix: "p1" }, { maxActions: 2 }]) {
       const { made, showNotification } = await post(o);
-      expect(made).toEqual(["a 要你批准"]);
+      expect(made).toEqual(["a 需要你授权"]);
       expect(showNotification).not.toHaveBeenCalled();
     }
   });
@@ -228,7 +228,7 @@ describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
 
   it("同一件事只留一条：页面弹的那条出来后收回 worker 弹的同 tag 那条", async () => {
     const { made, workerClosed } = await post({ workerHas: ["m/a#needs", "m/b#needs"] });
-    expect(made).toEqual(["a 要你批准"]);
+    expect(made).toEqual(["a 需要你授权"]);
     expect(workerClosed).toEqual(["m/a#needs"]);
   });
 });

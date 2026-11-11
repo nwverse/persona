@@ -136,7 +136,7 @@ describe("PendingCards", () => {
     // a question's lines already carry what was asked
     const q = ix("q", "question", { questions: [{ question: "用哪个框架？", options: [{ label: "A" }] }] as Interaction["questions"] });
     expect(cards({ narrow: false, interactions: [], answered: [{ ix: q, resolution: { answers: { "用哪个框架？": "A" } } }] })).not.toContain("data-answered-about");
-    // a plan says its first line, not "Plan awaits your approval"; a bare one says nothing extra
+    // a plan says its first line, not "Plan awaiting approval"; a bare one says nothing extra
     const plan = ix("l", "plan", { plan: "\n## 改用 **vitest**\n1. 换配置" });
     const planHtml = cards({ narrow: false, interactions: [], answered: [{ ix: plan, resolution: { approve: true } }] });
     expect(planHtml).toContain("改用 vitest");
@@ -175,7 +175,7 @@ describe("PendingCards", () => {
     const html = cards({ narrow: false });
     expect(html).not.toContain("data-chat-cards");
     expect(html).not.toContain("还有");
-    expect(html).toContain("计划待批准");
+    expect(html).toContain("计划等你审批");
     expect(html).toContain("用哪个框架？");
     expect(html).toContain("允许使用 Bash？");
   });

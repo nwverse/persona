@@ -35,6 +35,16 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 		return err
 	}
 	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw}
+	if method == "session.start" || method == "session.send" {
+		attachNodeCaller(ctx, &p)
+		if p.Caller != nil && p.Caller.OwnerSubject != "" {
+			if store := b.h.shareRoutingStore(); store != nil {
+				if route, err := store.ShareRouting(ctx, b.h.hubID(), b.id, owner); err == nil {
+					p.Authority = &route.Authority
+				}
+			}
+		}
+	}
 	if dl, ok := ctx.Deadline(); ok {
 		p.TimeoutMS = managerTimeout(time.Until(dl)).Milliseconds()
 	}

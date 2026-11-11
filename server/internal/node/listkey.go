@@ -43,6 +43,9 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.SpaceID, '/')
 		w.quote(s.SpaceKind, '\n')
 		writeUltracodeKey(&w, s)
+		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
+			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)
+		}
 		// A completed background scan can discover a fallback without a new transcript revision or status.
 		if s.ModelFallback != nil || s.TurnErrorCode != "" {
 			fmt.Fprintf(&w.b, "model-fallback:%+v/%q\n", s.ModelFallback, s.TurnErrorCode)
@@ -51,6 +54,13 @@ func listKeySized(list []proto.Session, size int) string {
 			w.b.WriteString("activity:")
 			w.str(s.Activity, '/')
 			w.int(unixOf(s.ActivityAt), '\n')
+		}
+		// Restored runtime metadata changes assistant classification without a new runtime event.
+		if s.SourceKind == "runtime" {
+			w.b.WriteString("runtime-state:")
+			w.quote(s.Cwd, '/')
+			w.quote(s.Launcher, '/')
+			w.str(strconv.FormatBool(s.StartedByPersona), '\n')
 		}
 		// A new reason or link alone is a change.
 		w.b.WriteString("attention:")
