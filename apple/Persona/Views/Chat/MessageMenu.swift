@@ -5,7 +5,8 @@ import UIKit.UIGestureRecognizerSubclass
 #endif
 
 /// Message actions: long-press a message and it is lifted over the dimmed chat with the bar of Copy / Select Text / Quote /
-/// Share (and Edit for your own messages) next to it, as Telegram does (#603, `MessageLift`). Tapping outside closes it.
+/// Forward (and Edit for your own messages) next to it, as Telegram does (#603, `MessageLift`). Tapping outside closes it.
+/// Forward (#3807) takes Share's place on iPhone and iPad where the chat forwards; Share as Image is in its picker.
 @Observable
 final class MessageMenu {
     var selected: String?
@@ -20,6 +21,11 @@ final class MessageMenu {
     var inPlace: InPlaceSelect?
     /// The message being shared as a card.
     var sharing: ShareMessage?
+    /// Forward (#3807): the chat makes the pressed message a forward and opens its picker (`forwarding`). nil: the bar
+    /// keeps Share (the Mac, a chat that cannot forward).
+    @ObservationIgnored var forward: ((MessageBarInfo) -> Void)?
+    /// The message whose Forward was tapped: the chat shows the picker (`ForwardSheet`).
+    var forwarding: ForwardDraft?
     /// Where the chat's messages come from ("app › leader"), printed on share cards (read when sharing: the
     /// session may not be loaded yet when the chat binds the menu).
     @ObservationIgnored var source: () -> String = { "" }
@@ -259,10 +265,12 @@ extension View {
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
     /// quote (it may never reach the agent) and no Edit (a waiting one would still go out besides the edited one).
+    /// from: who wrote it when that is not the chat's Agent or Persona (a relayed or scheduled message's source, another
+    /// session's Claude), for a forward's author.
     /// delete: one only on this phone ends in Delete (#4626), on the bar and in the plain context menu alike.
-    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false,
+    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false, from: String? = nil,
                           delete: MessageBarDelete? = nil) -> some View {
-        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, delete: delete))
+        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from, delete: delete))
     }
     /// Messages shown with the bar outside the chat's list (the background tasks' drawer): a tap or a drag there closes
     /// it, as on the list, and it closes with the sheet (#1388: it stayed until one of its buttons was used).
@@ -285,28 +293,39 @@ private struct ClosesMessageBar: ViewModifier {
 private struct MessageLongPress<P: View>: ViewModifier {
     @Environment(MessageMenu.self) private var menu: MessageMenu?
     @Environment(\.messageBar) private var bar
-    @Environment(\.openFile) private var openFile
-    @Environment(\.loadImage) private var loadImage
-    @Environment(\.rowMemoScope) private var memoScope
     let id: String
     let card: Bool
     let preview: () -> P
     /// Where the part is, kept without drawing anything again (it changes on every scrolled frame).
     @State private var place = LiftPlace()
+    /// Pressed: the environment here is read (`EnvironmentCapture`, for one frame), then the part is lifted.
+    @State private var capturing = false
 
     func body(content: Content) -> some View {
         if let menu {
-            content
+            RecordsOffer(place: place) { content }
+                #if DEBUG
+                .modifier(LiftLinesReader { [id] in LiftLines.shared.chat[id] = $0 })
+                #endif
                 .onGeometryChange(for: LiftPlace.Frames.self) { g in
                     LiftPlace.Frames(global: g.frame(in: .global), row: g.frame(in: .named(MessageMenu.row)))
                 } action: { place.frames = $0 }
                 .gesture(LongPressAt(changed: menu.pressChanged) { p in
                     Haptics.tap()
                     menu.anchor = p
-                    lift(menu)
+                    capturing = true
                 })
                 // The screenshot switches (`showMenu`, `showRewind`) pick a message without a press.
-                .onChange(of: menu.selected == id) { _, on in if on, menu.lift?.bar.id != id { lift(menu) } }
+                .onChange(of: menu.selected == id) { _, on in if on, menu.lift?.bar.id != id { capturing = true } }
+                .background {
+                    if capturing {
+                        EnvironmentCapture { env in
+                            capturing = false
+                            place.environment = env
+                            lift(menu)
+                        }
+                    }
+                }
         } else {
             content
         }
@@ -316,15 +335,32 @@ private struct MessageLongPress<P: View>: ViewModifier {
         guard let bar else { return }
         let f = place.frames
         let press = CGPoint(x: menu.anchor.x - f.row.minX, y: menu.anchor.y - f.row.minY)
+        // Drawn over the page, outside the chat, in the environment it had in the chat (`MessageLift.environment`).
         let shown = preview()
-            .environment(\.openFile, openFile)
-            .environment(\.loadImage, loadImage)
-            .environment(\.rowMemoScope, memoScope)
             .environment(\.chatPin, nil) // what opens in the copy does not move the chat under it
+            #if DEBUG
+            .modifier(LiftLinesReader { LiftLines.shared.lift = $0 })
+            #endif
+        #if DEBUG
+        LiftLines.shared.lift = ""
+        LiftLines.shared.select = ""
+        #endif
         withAnimation(Theme.Motion.state) {
             menu.selected = id
-            menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card)
+            menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card,
+                                    offer: place.offer, environment: place.environment)
         }
+    }
+}
+
+/// Hands over the environment it is in once, when it appears: read only then, so the views around it don't depend on
+/// all of it the rest of the time.
+private struct EnvironmentCapture: View {
+    @Environment(\.self) private var values
+    let got: (EnvironmentValues) -> Void
+
+    var body: some View {
+        Color.clear.onAppear { got(values) }
     }
 }
 
@@ -352,6 +388,7 @@ private struct MessageActionBarHost: ViewModifier {
     let isUser: Bool
     let date: Date?
     let pending: Bool
+    let from: String?
     let delete: MessageBarDelete?
     @State private var drag: CGFloat = 0
     @State private var armed = false
@@ -359,7 +396,8 @@ private struct MessageActionBarHost: ViewModifier {
     func body(content: Content) -> some View {
         if let menu {
             swipeable(content, menu)
-                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, delete: delete))
+                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from,
+                                                            delete: delete))
                 .coordinateSpace(.named(MessageMenu.row))
                 .zIndex(menu.selected == id ? 1 : 0)
         } else {
@@ -427,6 +465,8 @@ struct MessageActionBar: View {
     var menu: MessageMenu
     /// Not in the transcript yet (`messageActionBar(pending:)`): Copy, Select Text and Share.
     var pending = false
+    /// Who wrote it, when not the chat's Agent or Persona (`messageActionBar(from:)`).
+    var from: String? = nil
     /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
     var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
@@ -447,6 +487,15 @@ struct MessageActionBar: View {
     static func rewinds(id: String, isUser: Bool, menu: MessageMenu) -> Bool {
         isUser && menu.rewind != nil && menu.rewindBlock() != nil && Rewind.entry(of: id) != nil
     }
+    /// Forward in Share's place (#3807): on iPhone and iPad, for a message in the transcript of a chat that forwards.
+    static func forwards(menu: MessageMenu, pending: Bool) -> Bool {
+        #if os(iOS)
+        return !pending && menu.forward != nil
+        #else
+        return false
+        #endif
+    }
+
     /// A reply ends in ⋯ with Branch to New Chat when the session can fork and the reply is a Claude transcript line of its
     /// own (`<uuid>#<n>`).
     static func forks(id: String, isUser: Bool, menu: MessageMenu) -> Bool {
@@ -474,8 +523,14 @@ struct MessageActionBar: View {
             if !pending {
                 action(String(localized: "Quote"), "quote.opening") { menu.quote?(text, id, isUser, nil) }
             }
-            action(String(localized: "Share"), Theme.Icon.share) {
-                menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+            if Self.forwards(menu: menu, pending: pending) {
+                action(String(localized: "Forward [Message Menu]"), Theme.Icon.forwardMessage) {
+                    menu.forward?(MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from))
+                }
+            } else {
+                action(String(localized: "Share"), Theme.Icon.share) {
+                    menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+                }
             }
             if isUser && !pending {
                 action(String(localized: "Edit [Message Menu 051836]"), "pencil") { menu.edit?(text) }

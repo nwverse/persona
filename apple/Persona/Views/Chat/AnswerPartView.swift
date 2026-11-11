@@ -80,9 +80,10 @@ struct AssistantTextPart: View, Equatable {
 
     private var last: Bool { index == count - 1 }
 
-    private func words(_ text: AssistantRowText, key: String) -> some View {
+    private func words(_ text: AssistantRowText, key: String, message: String) -> some View {
         LinkedMarkdown(plain: text.markdown, paths: text.paths, key: key)
             .markdownTheme(.persona)
+            .environment(\.replyKey, message) // its quotes' folds, the lifted copy's too (as `AssistantText`)
             .selectableInLift(part.text, as: .reply(quiet: false))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -96,9 +97,9 @@ struct AssistantTextPart: View, Equatable {
         let text = RowMemo.assistant(key) { _ in AssistantRowText(part.text) } // prewarmed with the message
         let whole = last ? RowMemo.assistant(message) { _ in AssistantRowText(item.text ?? "") } : nil
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            words(text, key: key)
+            words(text, key: key, message: message)
                 .contentShape(.rect)
-                .messageLongPress(id: item.id, card: true) { words(text, key: key) }
+                .messageLongPress(id: item.id, card: true) { words(text, key: key, message: message) }
             if let whole {
                 if let openFile {
                     // Documents as cards with their first page (#1543), the rest as chips (`AssistantText`).
