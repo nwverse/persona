@@ -14,6 +14,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.api.AppPairCode
 import persona.core.contracts.api.DeviceSettings
 import persona.core.designsystem.*
@@ -114,7 +117,10 @@ internal fun ConnectDevicePage(api: DeviceSettings, onBack: () -> Unit, onPaired
     var target by rememberSaveable { mutableStateOf(ConnectTarget.App) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(model) { model.make() }
-    LaunchedEffect(model) { model.run(onPaired) }
+    // Only while the page is shown: a hidden tab, the app in the background or the screen off asks the hub nothing.
+    // Back in front, the countdown catches up at once and the next read finds a device that paired meanwhile.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(model, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { model.tick(); model.run(onPaired) } }
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val feedback = LocalAppFeedback.current
