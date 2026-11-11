@@ -3124,6 +3124,8 @@ struct ChatView: View {
     /// capsule and the footer's 12 pt (`AssistantActionBar`). Larger text makes the row taller, and the list then ends a
     /// little above the composer, where `FooterFog` is already solid.
     static let underDock: CGFloat = Theme.Space.xxl + Theme.Space.l
+    /// The last of it, between the capsules and the composer: solid page in the fog, so nothing shows faintly there.
+    static let underDockSolid: CGFloat = Theme.Space.m
 
     /// How far the list runs on behind the top of the footer (#3696). In Persona's chats, behind the capsule row over the
     /// composer, so the chat fades out behind the capsules instead of ending in a band of page above them; the newest end
@@ -3138,12 +3140,12 @@ struct ChatView: View {
         #endif
     }
 
-    /// The fog over the list's end: from `newestGap` above the footer, where the newest message rests clear of it, down
-    /// to the list's bottom edge behind the footer, where it is solid. A fixed size at the list's bottom: scrolling and
-    /// typing do not draw it again.
+    /// The fog over the list's end: clear `newestGap` above the footer, where the newest message rests, and solid from
+    /// the bottom of the capsules behind the footer down to the list's bottom edge. A fixed size at the list's bottom:
+    /// scrolling and typing do not draw it again.
     @ViewBuilder private func footerFog(under: CGFloat) -> some View {
         #if !os(macOS)
-        FooterFog().frame(height: Self.newestGap + under)
+        FooterFog(height: Self.newestGap + under, solid: under > 0 ? Self.underDockSolid : 0)
         #endif
     }
 

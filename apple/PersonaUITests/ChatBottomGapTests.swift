@@ -181,8 +181,8 @@ final class ChatBottomFadeTests: XCTestCase {
     /// Persona's main conversation: its newest rows are a long message to a task and the task's long report (the mock's
     /// MOCK_TASKS_AT=5.5).
     private let persona = "server/b2e4d6f8-0000-4000-8000-000000000001"
-    /// An Agents chat: the blog conversation.
-    private let blog = "studio/a1f3c2d4-0000-4000-8000-000000000003"
+    /// An Agents chat whose answer is taller than the screen (the mock's MOCK_MESSAGE_LIFT=1).
+    private let longAnswer = "macbook/a1f3c2d4-0000-4000-8000-0000000c1e09"
     /// From the newest message to the footer at rest (`ChatView.newestGap`).
     private let endGap: CGFloat = 48
     /// Each look the footer has, in each appearance.
@@ -190,7 +190,7 @@ final class ChatBottomFadeTests: XCTestCase {
 
     override func setUpWithError() throws {
         guard let h = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
-            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_REPORTS=1 MOCK_EXCHANGES=1 MOCK_TASKS_AT=5.5 (PERSONA_MOCK_HUB)")
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_REPORTS=1 MOCK_EXCHANGES=1 MOCK_TASKS_AT=5.5 MOCK_MESSAGE_LIFT=1 (PERSONA_MOCK_HUB)")
         }
         hub = h
     }
@@ -222,7 +222,7 @@ final class ChatBottomFadeTests: XCTestCase {
     @MainActor func testAgentChatFadesAboveTheComposer() throws {
         for (style, appearance) in looks {
             let look = "\(style)-\(appearance)"
-            let app = launch(["-tab", "dev", "-openSession", blog], style, appearance)
+            let app = launch(["-tab", "dev", "-openSession", longAnswer], style, appearance)
             let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
             XCTAssertTrue(field.waitForExistence(timeout: 20), "no composer:\n\(app.debugDescription)")
             settle()
@@ -243,7 +243,23 @@ final class ChatBottomFadeTests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-openChatsFresh", "YES", "-openImagesFresh", "YES",
                                "-ui.style", style, "-ui.scheme", appearance] + args
         app.launchPersona()
+        // The app's icon follows the appearance: switching it, the system says so in an alert over the chat.
+        _ = waitUntil(4) { self.dismissIconNotice(app) }
         return app
+    }
+
+    /// Taps away the system's "You have changed the icon" alert, if it is up; true when it was.
+    @MainActor @discardableResult private func dismissIconNotice(_ app: XCUIApplication) -> Bool {
+        let notice = NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")
+        for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+            let alert = source.alerts.containing(notice).firstMatch
+            if alert.exists, alert.buttons.firstMatch.exists {
+                alert.buttons.firstMatch.tap()
+                settle()
+                return true
+            }
+        }
+        return false
     }
 
     /// Down a little, so a message reaches the footer and runs on into the fade; then up until the arrow comes, which is
@@ -308,6 +324,7 @@ final class ChatBottomFadeTests: XCTestCase {
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
         let env = ProcessInfo.processInfo.environment
         let full = "fade-\(name)\(env["PERSONA_SHOTS_SUFFIX"] ?? "")"
+        dismissIconNotice(app)
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = full
         attachment.lifetime = .keepAlways
