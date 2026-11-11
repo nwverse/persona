@@ -252,13 +252,13 @@ var rpcFailureKeys = map[string]string{
 	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)
 	proto.CodeDirectoryUntypable: "rpc-errors.directory_untypable",
 	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)
+	proto.CodeSwitchStale:           "rpc-errors.switch_stale",
+	proto.CodeSwitchPickModel:       "rpc-errors.switch_pick_model",
 	proto.CodeSwitchUnsupported:     "rpc-errors.switch_unsupported",
 	proto.CodeSwitchLauncherMissing: "rpc-errors.switch_launcher_missing",
 	proto.CodeSwitchOtherAgent:      "rpc-errors.switch_other_agent",
 	proto.CodeSwitchModelLocked:     "rpc-errors.switch_model_locked",
 	proto.CodeSwitchConfigDir:       "rpc-errors.switch_config_dir",
-	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
-	proto.CodeSwitchBackground:      "rpc-errors.switch_background",
 	proto.CodeSwitchNotStopped:      "rpc-errors.switch_not_stopped",
 	proto.CodeSwitchFailed:          "rpc-errors.switch_failed",
 	proto.CodeSwitchFailedStopped:   "rpc-errors.switch_failed_stopped",

@@ -741,6 +741,18 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			cancel()
 		}
 		return // the manager's alone
+	case "state.delete": // a record the node made and must not keep (node/launcher_switch.go)
+		var p struct {
+			SessionID string `json:"session_id"`
+		}
+		if s, ok := m.d.opts.Store.(nodeStateDeleter); ok && json.Unmarshal(params, &p) == nil && p.SessionID != "" {
+			ctx, cancel := m.storeCtx()
+			if err := s.DeleteNodeSession(ctx, m.cfg.ID, p.SessionID); err != nil {
+				m.d.logf("[%s] delete session state: %v", m.cfg.ID, err)
+			}
+			cancel()
+		}
+		return
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
 	case "metrics": // the monitoring is the manager's (metrics.go)

@@ -150,3 +150,28 @@ func TestNodePendingSwitchIsPersisted(t *testing.T) {
 		t.Fatalf("cleared switch came back: %q %v", out["session"].PendingSwitch, err)
 	}
 }
+
+// A record a node deletes (state.delete, node/launcher_switch.go) goes with the model settings kept beside it; another
+// machine's record of the same session stays.
+func TestNodeSessionIsDeleted(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	s := NodeSession{Launcher: "work", Cwd: "/tmp/project", StartedAt: time.Now().UTC(), Model: "opus"}
+	for _, machine := range []string{"machine", "other"} {
+		if err := d.PutNodeSession(ctx, machine, "session", s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.DeleteNodeSession(ctx, "machine", "session"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := d.NodeSessions(ctx, "machine"); err != nil || len(out) != 0 {
+		t.Fatalf("deleted record still there: %+v %v", out, err)
+	}
+	var m map[string]any
+	if ok, err := d.Setting(ctx, "node_model.machine.session", &m); err != nil || ok {
+		t.Fatalf("its model settings are still there: %v %v", m, err)
+	}
+	if out, err := d.NodeSessions(ctx, "other"); err != nil || out["session"].Model != "opus" {
+		t.Fatalf("another machine's record went too: %+v %v", out, err)
+	}
+}

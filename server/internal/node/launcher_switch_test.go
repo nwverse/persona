@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,14 +14,15 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Switching a running Claude Code Agent to another launcher with its next message (launcher_switch.go, #5035).
+// Switching a running Claude Code Agent to another launcher with the user's next message (launcher_switch.go, #5035).
 
-// withShellConfigDir makes the login shell's $CLAUDE_CONFIG_DIR dir ("" for none) without running a shell.
-func withShellConfigDir(t *testing.T, dir string) {
+// withLoginShellConfigDir makes the login shell answer dir as its $CLAUDE_CONFIG_DIR ("" for none; ok false: the
+// shell did not answer), without running one.
+func withLoginShellConfigDir(t *testing.T, dir string, ok bool) {
 	t.Helper()
-	old := shellClaudeConfigDir
-	shellClaudeConfigDir = func(context.Context) string { return dir }
-	t.Cleanup(func() { shellClaudeConfigDir = old })
+	old := loginShellConfigDir
+	loginShellConfigDir = func(context.Context) (string, bool) { return dir, ok }
+	t.Cleanup(func() { loginShellConfigDir = old })
 }
 
 // finishedTurn is a transcript whose last turn ended an hour ago: an idle agent with nothing in the background.
@@ -30,14 +32,33 @@ func finishedTurn(cwd string) []string {
 		`{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1","durationMs":1000}`}
 }
 
-// switchNode is a node with Claude session sidA in herdr pane w1:p1 with status (Persona started it on plain claude,
-// its transcript in ~/.claude: finishedTurn when transcript is nil), the managed launchers work (a gateway running Claude Code), cx (Codex) and elsewhere
-// (another Claude profile), no shell launchers, and an empty input box on the pane. persisted collects what the
-// record writes through.
+// knownProbes keeps a start from running a login shell to look at launchers it does not know (codexFunctionLauncher).
+func knownProbes(t *testing.T, names ...string) {
+	t.Helper()
+	probeCache.Lock()
+	for _, name := range names {
+		probeCache.at[name], probeCache.got[name] = time.Now(), proto.LauncherDetail{Agent: "claude"}
+	}
+	probeCache.Unlock()
+	t.Cleanup(func() {
+		probeCache.Lock()
+		for _, name := range names {
+			delete(probeCache.at, name)
+			delete(probeCache.got, name)
+		}
+		probeCache.Unlock()
+	})
+}
+
+// switchNode is a node with Claude session sidA in herdr pane w1:p1 with status (Persona started it on plain claude in
+// ~/proj, its transcript in ~/.claude: finishedTurn when transcript is nil), the managed launchers work (a gateway
+// running Claude Code on its own model), bare (one that names no model), cx (Codex) and elsewhere (another Claude
+// profile), no shell launchers, a login shell with no $CLAUDE_CONFIG_DIR and an empty input box on the pane. persisted
+// collects what the record writes through.
 func switchNode(t *testing.T, status string, transcript func(cwd string) []string) (n *Node, f *fakeHerdr, home, cwd string, persisted func() []sessionState) {
 	t.Helper()
 	n, f, home = herdrNode(t)
-	withShellConfigDir(t, "")
+	withLoginShellConfigDir(t, "", true)
 	withShellLaunchers(t)
 	cwd = mkdir(t, filepath.Join(home, "proj"))
 	if transcript == nil {
@@ -54,24 +75,12 @@ func switchNode(t *testing.T, status string, transcript func(cwd string) []strin
 		}
 	}
 	n.state.put(sidA, sessionState{Launcher: "claude", Cwd: cwd, StartedAt: time.Now().Add(-2 * time.Hour).UTC()})
-	// What a start asks of a launcher it does not know runs a login shell (codexFunctionLauncher): known here.
-	probeCache.Lock()
-	for _, name := range []string{"work", "elsewhere"} {
-		probeCache.at[name], probeCache.got[name] = time.Now(), proto.LauncherDetail{Agent: "claude"}
-	}
-	probeCache.Unlock()
-	t.Cleanup(func() {
-		probeCache.Lock()
-		for _, name := range []string{"work", "elsewhere"} {
-			delete(probeCache.at, name)
-			delete(probeCache.got, name)
-		}
-		probeCache.Unlock()
-	})
+	knownProbes(t, "work", "bare", "elsewhere")
 	n.setManaged([]proto.ManagedLauncher{
 		{Name: "work", BaseURL: "https://gateway.example.com", Model: "glm-5"},
+		{Name: "bare", BaseURL: "https://bare.example.com"},
 		{Name: "cx", Agent: "codex", BaseURL: "https://codex.example.com"},
-		{Name: "elsewhere", BaseURL: "https://gateway.example.com", Env: "CLAUDE_CONFIG_DIR=" + filepath.Join(home, ".claude-work")},
+		{Name: "elsewhere", BaseURL: "https://gateway.example.com", Model: "glm-5", Env: "CLAUDE_CONFIG_DIR=" + filepath.Join(home, ".claude-work")},
 	})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, status, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
 	f.reply("pane.process_info", map[string]any{"process_info": map[string]any{"foreground_processes": []any{
@@ -86,6 +95,28 @@ func switchNode(t *testing.T, status string, transcript func(cwd string) []strin
 		defer mu.Unlock()
 		return append([]sessionState(nil), puts...)
 	}
+}
+
+// pick is POST …/modes with params for sidA.
+func pick(t *testing.T, n *Node, params map[string]any) error {
+	t.Helper()
+	p := map[string]any{"session_id": sidA}
+	for k, v := range params {
+		p[k] = v
+	}
+	_, err := request(t, n, "session.modes", p)
+	return err
+}
+
+// tell is the user's message from the chat (apply_switch) to sidA; others false is any other sender's.
+func tell(t *testing.T, n *Node, text string, user bool) error {
+	t.Helper()
+	p := map[string]any{"session_id": sidA, "text": text}
+	if user {
+		p["apply_switch"] = true
+	}
+	_, err := request(t, n, "session.send", p)
+	return err
 }
 
 // rowOf is session id's row in a fresh list.
@@ -111,14 +142,47 @@ func typedStarts(f *fakeHerdr, pane string) []string {
 	return out
 }
 
+// drove is what a test that expects the terminal untouched finds pressed or typed there.
+func drove(f *fakeHerdr) []string {
+	return f.trace("pane.send_keys", "pane.send_input", "pane.send_text", "agent.prompt")
+}
+
+// comesUpWhen makes the claude a start types into pane come up (agent.get names it) only for a typed command up says
+// yes to, so a start of another launcher waits in vain.
+func comesUpWhen(f *fakeHerdr, pane string, up func(typed string) bool) {
+	var mu sync.Mutex
+	ok := false
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && str(c.Params["pane_id"]) == pane {
+			mu.Lock()
+			ok = up(str(c.Params["text"]))
+			mu.Unlock()
+		}
+	})
+	f.handle("agent.get", func(map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		if !ok {
+			return map[string]any{"agent": nil}
+		}
+		return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": proto.StatusIdle, "pane_id": pane,
+			"tab_id": "w1:t1", "workspace_id": "w1"}}
+	})
+}
+
+// quitsToShell makes the agent leave pane w1:p1 for its shell in dir after two Ctrl+C.
+func quitsToShell(f *fakeHerdr, dir string) {
+	quitsOn(f, "w1:p1", sidA, nil, shellPane("w1:p1", "w1:t1", "w1", dir, sidA))
+}
+
 // Picking another launcher keeps it as the session's pending switch, in the record (persisted) and on its row, and
 // touches nothing in the terminal; a new pick replaces it, and the session's own launcher drops it.
 func TestLauncherSwitchIsPendingUntilCancelled(t *testing.T) {
 	n, f, _, _, persisted := switchNode(t, proto.StatusIdle, nil)
-	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "work", "model": "opus", "effort": "high"}); err != nil {
+	if err := pick(t, n, map[string]any{"launcher": "work", "from": "claude", "model": "opus", "effort": "high"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.trace("pane.send_keys", "pane.send_input", "pane.send_text", "agent.prompt"); len(got) != 0 {
+	if got := drove(f); len(got) != 0 {
 		t.Fatalf("picking a launcher drove the terminal: %q", got)
 	}
 	row := rowOf(t, n, sidA)
@@ -131,15 +195,13 @@ func TestLauncherSwitchIsPendingUntilCancelled(t *testing.T) {
 	if puts := persisted(); len(puts) == 0 || puts[len(puts)-1].PendingSwitch == nil || puts[len(puts)-1].PendingSwitch.Launcher != "work" {
 		t.Fatalf("the switch was not kept with the record: %+v", puts)
 	}
-
-	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "work"}); err != nil {
+	if err := pick(t, n, map[string]any{"launcher": "work", "from": "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	if ps := n.pendingSwitch(sidA); ps == nil || ps.Model != "" || ps.Effort != "" {
 		t.Fatalf("a new pick did not replace the old one: %+v", ps)
 	}
-
-	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "claude"}); err != nil {
+	if err := pick(t, n, map[string]any{"launcher": "claude", "from": "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	if ps := n.pendingSwitch(sidA); ps != nil {
@@ -151,19 +213,54 @@ func TestLauncherSwitchIsPendingUntilCancelled(t *testing.T) {
 	if puts := persisted(); puts[len(puts)-1].PendingSwitch != nil {
 		t.Errorf("the cancel was not written through: %+v", puts[len(puts)-1])
 	}
-	if got := f.trace("pane.send_keys", "pane.send_input", "pane.send_text", "agent.prompt"); len(got) != 0 {
+	if got := drove(f); len(got) != 0 {
 		t.Fatalf("cancelling drove the terminal: %q", got)
 	}
 }
 
-// A session Persona did not start gets no record for a switch (a record means Persona started it): the switch waits in
-// memory and shows on its row all the same.
-func TestLauncherSwitchOfAnUnrecordedSessionStaysInMemory(t *testing.T) {
+// A pick or a cancel made against a launcher the session no longer runs on (from) is stale: nothing is recorded. A
+// permission mode that does not go through takes the switch it came with back.
+func TestLauncherSwitchPickPreconditions(t *testing.T) {
+	n, _, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	for _, params := range []map[string]any{
+		{"launcher": "work", "from": "elsewhere"},
+		{"launcher": "claude", "from": "work"},
+	} {
+		err := pick(t, n, params)
+		if code, _ := refusalOf(t, err); code != proto.CodeSwitchStale {
+			t.Errorf("%v: %v", params, err)
+		}
+	}
+	if ps := n.pendingSwitch(sidA); ps != nil {
+		t.Fatalf("a stale pick was recorded: %+v", ps)
+	}
+	if err := pick(t, n, map[string]any{"launcher": "work", "from": "claude", "model": "opus"}); err != nil {
+		t.Fatal(err)
+	}
+	err := pick(t, n, map[string]any{"launcher": "elsewhere", "from": "claude", "permission_mode": "sideways"})
+	if err == nil {
+		t.Fatal("a bad permission mode went through")
+	}
+	if ps := n.pendingSwitch(sidA); ps == nil || ps.Launcher != "work" || ps.Model != "opus" {
+		t.Fatalf("the switch before the failed request is not back: %+v", ps)
+	}
+}
+
+// A session Persona did not start gets no record for a switch (a record means Persona started it): one whose launcher
+// its process's environment names waits in memory and shows on its row; one whose launcher cannot be told is refused,
+// since it could not be brought back on it.
+func TestLauncherSwitchOfAnUnrecordedSession(t *testing.T) {
 	n, _, _, _, _ := switchNode(t, proto.StatusIdle, nil)
 	n.state.mu.Lock()
 	delete(n.state.Sessions, sidA)
 	n.state.mu.Unlock()
-	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "work"}); err != nil {
+	err := pick(t, n, map[string]any{"launcher": "work"})
+	if code, _ := refusalOf(t, err); code != proto.CodeSwitchUnsupported {
+		t.Fatalf("a launcher nothing names: %v", err)
+	}
+
+	inferredAs(t, n, "gw")
+	if err := pick(t, n, map[string]any{"launcher": "work", "from": "gw"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, recorded := n.state.get(sidA); recorded {
@@ -172,12 +269,34 @@ func TestLauncherSwitchOfAnUnrecordedSessionStaysInMemory(t *testing.T) {
 	if ps := rowOf(t, n, sidA).PendingSwitch; ps == nil || ps.Launcher != "work" {
 		t.Fatalf("row's pending switch = %+v", ps)
 	}
-	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "claude"}); err != nil {
+	if err := pick(t, n, map[string]any{"launcher": "gw", "from": "gw"}); err != nil {
 		t.Fatal(err)
 	}
 	if n.pendingSwitch(sidA) != nil {
 		t.Error("its own launcher left the switch pending")
 	}
+}
+
+// inferredAs makes sidA's claude one whose environment names launcher name (inferLauncher): a shell launcher of a
+// gateway that is a managed provider too, so its checks run no shell.
+func inferredAs(t *testing.T, n *Node, name string) {
+	t.Helper()
+	const url = "https://own.example.com"
+	launcherCache.Lock()
+	oldAt, oldList := launcherCache.at, launcherCache.list
+	launcherCache.at, launcherCache.list = time.Now(), []proto.Launcher{{Name: name, BaseURL: url}}
+	launcherCache.Unlock()
+	t.Cleanup(func() {
+		launcherCache.Lock()
+		launcherCache.at, launcherCache.list = oldAt, oldList
+		launcherCache.Unlock()
+	})
+	knownProbes(t, name)
+	n.managed.mu.Lock()
+	n.managed.byID[name] = proto.ManagedLauncher{Name: name, BaseURL: url, Model: "own-model"}
+	n.managed.mu.Unlock()
+	n.cdirs = &claudeDirs{byPID: map[int]string{}, bySession: map[string]procEnv{sidA: {BaseURL: url}}, scanned: time.Now(),
+		scan: func() map[int]procEnv { return nil }}
 }
 
 // What a switch is refused for when it is picked, with nothing kept and nothing typed.
@@ -192,22 +311,15 @@ func TestLauncherSwitchRefusals(t *testing.T) {
 		{"launcher of another agent", nil, map[string]any{"launcher": "cx"}, proto.CodeSwitchOtherAgent},
 		{"another config directory", nil, map[string]any{"launcher": "elsewhere"}, proto.CodeSwitchConfigDir},
 		{"the shell's own config directory is another", func(t *testing.T, n *Node, f *fakeHerdr, home, cwd string) {
-			withShellConfigDir(t, filepath.Join(home, ".claude-team"))
+			withLoginShellConfigDir(t, filepath.Join(home, ".claude-team"), true)
 		}, map[string]any{"launcher": "work"}, proto.CodeSwitchConfigDir},
+		{"no default model to be seen", nil, map[string]any{"launcher": "bare"}, proto.CodeSwitchPickModel},
 		{"a locked model", func(t *testing.T, n *Node, f *fakeHerdr, home, cwd string) {
 			withShellLaunchers(t, "fixed")
-			probeCache.Lock()
-			probeCache.at["fixed"], probeCache.got["fixed"] = time.Now(), proto.LauncherDetail{Agent: "claude"}
-			probeCache.Unlock()
+			knownProbes(t, "fixed")
 			modelProbeCache.Lock()
 			modelProbeCache.results[n.home+"\x00fixed\x00opus"] = modelProbeResult{at: time.Now(), agent: "claude", err: fmt.Errorf("fixed passes its own --model")}
 			modelProbeCache.Unlock()
-			t.Cleanup(func() {
-				probeCache.Lock()
-				delete(probeCache.at, "fixed")
-				delete(probeCache.got, "fixed")
-				probeCache.Unlock()
-			})
 		}, map[string]any{"launcher": "fixed", "model": "opus"}, proto.CodeSwitchModelLocked},
 		{"a Codex agent", func(t *testing.T, n *Node, f *fakeHerdr, home, cwd string) {
 			f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
@@ -218,46 +330,62 @@ func TestLauncherSwitchRefusals(t *testing.T) {
 			n.procs[sidA] = &assistantProc{}
 			n.mu.Unlock()
 		}, map[string]any{"launcher": "work"}, proto.CodeSwitchUnsupported},
+		{"a folder that is not the conversation's", func(t *testing.T, n *Node, f *fakeHerdr, home, cwd string) {
+			// the transcript is in ~/proj's project folder, and nothing names ~/proj
+			other := mkdir(t, filepath.Join(home, "other"))
+			n.state.put(sidA, sessionState{Launcher: "claude", Cwd: other})
+			f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", other, "")}, nil))
+			listSessions(t, n)
+		}, map[string]any{"launcher": "work"}, proto.CodeSwitchUnsupported},
 		{"not running", func(t *testing.T, n *Node, f *fakeHerdr, home, cwd string) {
 			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 			listSessions(t, n)
 		}, map[string]any{"launcher": "work"}, proto.CodeModesNotRunning},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n, f, home, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+			transcript := finishedTurn
+			if strings.Contains(tc.name, "folder") { // its lines name another folder than the one it is filed under
+				transcript = func(cwd string) []string { return finishedTurn(filepath.Join(filepath.Dir(cwd), "other")) }
+			}
+			n, f, home, cwd, _ := switchNode(t, proto.StatusIdle, transcript)
 			if tc.setup != nil {
 				tc.setup(t, n, f, home, cwd)
 			}
 			f.reset()
-			params := map[string]any{"session_id": sidA}
-			for k, v := range tc.params {
-				params[k] = v
-			}
-			_, err := request(t, n, "session.modes", params)
+			err := pick(t, n, tc.params)
 			if code, data := refusalOf(t, err); code != tc.code || data["delivered"] != deliveredNone {
 				t.Fatalf("refused with %q (%v), want %q", code, err, tc.code)
 			}
 			if ps := n.pendingSwitch(sidA); ps != nil {
 				t.Errorf("a refused switch was kept: %+v", ps)
 			}
-			if got := f.trace("pane.send_keys", "pane.send_input", "pane.send_text", "agent.prompt"); len(got) != 0 {
+			if got := drove(f); len(got) != 0 {
 				t.Errorf("a refused switch drove the terminal: %q", got)
 			}
 		})
 	}
 }
 
-// A launcher of another profile whose directory holds the conversation (projects/ shared through a symlink) can take
-// it: --resume there finds it at its latest.
-func TestLauncherSwitchToAProfileSharingTheConversation(t *testing.T) {
+// A launcher whose config directory cannot be told (the login shell did not answer) is let through: a resume that
+// finds no conversation fails the start, and the switch rolls back. So is a profile whose directory shares the
+// conversation (projects/ through a symlink).
+func TestLauncherSwitchConfigDirsLetThrough(t *testing.T) {
 	n, _, home, _, _ := switchNode(t, proto.StatusIdle, nil)
+	withLoginShellConfigDir(t, "", false)
+	if dir, known := n.launcherClaudeDir(t.Context(), "work"); known {
+		t.Errorf("a login shell that did not answer told %q", dir)
+	}
+	if err := pick(t, n, map[string]any{"launcher": "work"}); err != nil {
+		t.Fatalf("a directory that cannot be told: %v", err)
+	}
+	withLoginShellConfigDir(t, "", true)
 	if err := os.MkdirAll(filepath.Join(home, ".claude-work"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(home, ".claude", "projects"), filepath.Join(home, ".claude-work", "projects")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "elsewhere"}); err != nil {
+	if err := pick(t, n, map[string]any{"launcher": "elsewhere"}); err != nil {
 		t.Fatal(err)
 	}
 	if ps := n.pendingSwitch(sidA); ps == nil || ps.Launcher != "elsewhere" {
@@ -265,19 +393,28 @@ func TestLauncherSwitchToAProfileSharingTheConversation(t *testing.T) {
 	}
 }
 
-// The next message carries the switch out: the agent is quit in its pane (Ctrl+C twice, the pane kept), the
-// conversation resumed through the new launcher in the same shell with the model picked, the record moved to it and
-// the switch cleared; then the message goes to the new agent.
-func TestLauncherSwitchOnTheNextMessage(t *testing.T) {
+// The user's next message carries the switch out: the agent is quit in its pane (Ctrl+C twice, the pane kept) and the
+// conversation resumed through the new launcher in the same shell with the model picked, listed as starting
+// meanwhile; the record moves to the launcher (its folder kept) and the switch is cleared; then the message goes to the
+// new agent.
+func TestLauncherSwitchOnTheUsersNextMessage(t *testing.T) {
 	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
-	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "work", "model": "opus"}); err != nil {
+	if err := pick(t, n, map[string]any{"launcher": "work", "model": "opus"}); err != nil {
 		t.Fatal(err)
 	}
 	f.reset()
-	quitsOn(f, "w1:p1", sidA, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidA))
-	f.reply("agent.get", map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": proto.StatusIdle, "pane_id": "w1:p1",
-		"tab_id": "w1:t1", "workspace_id": "w1"}})
-	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello"}); err != nil {
+	quitsToShell(f, cwd)
+	comesUpWhen(f, "w1:p1", func(string) bool { return true })
+	var mu sync.Mutex
+	var starting []proto.Session
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" {
+			mu.Lock()
+			starting = n.starts.listed(map[string]bool{})
+			mu.Unlock()
+		}
+	})
+	if err := tell(t, n, "hello", true); err != nil {
 		t.Fatalf("send: %v\n%s", err, strings.Join(f.trace(), "\n"))
 	}
 	if got := f.trace("tab.create", "workspace.create", "tab.close", "pane.close"); len(got) != 0 {
@@ -285,7 +422,7 @@ func TestLauncherSwitchOnTheNextMessage(t *testing.T) {
 	}
 	starts := typedStarts(f, "w1:p1")
 	if len(starts) != 1 || !strings.Contains(starts[0], " launch work ") || !strings.Contains(starts[0], "--resume "+sidA) ||
-		!strings.Contains(starts[0], "--model opus") {
+		!strings.Contains(starts[0], "--model opus") || strings.HasPrefix(starts[0], "cd ") {
 		t.Fatalf("typed %q", starts)
 	}
 	trace := strings.Join(f.trace("pane.send_keys", "pane.send_input", "agent.prompt"), "\n")
@@ -295,42 +432,68 @@ func TestLauncherSwitchOnTheNextMessage(t *testing.T) {
 	if quit < 0 || start < quit || prompt < start {
 		t.Fatalf("not quit, started, then prompted:\n%s", trace)
 	}
+	mu.Lock()
+	if len(starting) != 1 || !starting[0].Starting || starting[0].Launcher != "work" {
+		t.Errorf("listed while it switched: %+v", starting)
+	}
+	mu.Unlock()
+	if n.starts.get(sidA) != nil {
+		t.Error("still listed as starting")
+	}
 	st, _ := n.state.get(sidA)
 	if st.Launcher != "work" || st.Model != "opus" || st.PendingSwitch != nil || st.Cwd != cwd {
 		t.Errorf("record after the switch = %+v", st)
 	}
-	if n.pendingSwitch(sidA) != nil {
-		t.Error("the switch is still pending")
-	}
 }
 
-// A message while the agent works, or has background work a quit would end, is refused with nothing pressed or typed,
-// and the switch waits on.
-func TestLauncherSwitchWaitsForAnIdleAgent(t *testing.T) {
-	ts := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+// Only the user's message from the chat carries a switch out: any other sender's goes on the launcher the agent runs
+// on, and the switch waits. So does the user's while the agent is busy: working, or with background work a quit would
+// end, counted from its process's start however long ago, or not read yet.
+func TestLauncherSwitchWaitsWhileBusy(t *testing.T) {
+	daysAgo := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	background := func(cwd string) []string {
+		return append(finishedTurn(cwd),
+			`{"type":"assistant","uuid":"a2","timestamp":"`+daysAgo+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"sleep 600000","run_in_background":true}}]}}`,
+			`{"type":"user","uuid":"u2","timestamp":"`+daysAgo+`","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Command running in background with ID: b1. Output is being written to: /tmp/tasks/b1.output"}]}}`,
+			`{"type":"system","subtype":"turn_duration","uuid":"d2","parentUuid":"u2","durationMs":1000}`)
+	}
 	for _, tc := range []struct {
-		name, status string
-		transcript   func(cwd string) []string
-		code         string
+		name       string
+		status     string
+		transcript func(cwd string) []string
+		user       bool
+		setup      func(t *testing.T, n *Node)
 	}{
-		{"working", proto.StatusWorking, nil, proto.CodeSwitchBusy},
-		{"background command", proto.StatusIdle, func(cwd string) []string {
-			return append(finishedTurn(cwd),
-				`{"type":"assistant","uuid":"a2","timestamp":"`+ts+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"sleep 600","run_in_background":true}}]}}`,
-				`{"type":"user","uuid":"u2","timestamp":"`+ts+`","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Command running in background with ID: b1. Output is being written to: /tmp/tasks/b1.output"}]}}`,
-				`{"type":"system","subtype":"turn_duration","uuid":"d2","parentUuid":"u2","durationMs":1000}`)
-		}, proto.CodeSwitchBackground},
+		{"another sender", proto.StatusIdle, nil, false, nil},
+		{"working", proto.StatusWorking, nil, true, nil},
+		{"a background command of this process, two days old", proto.StatusIdle, background, true, func(t *testing.T, n *Node) {
+			n.state.setUltracode(sidA, ultracodeRecord{Since: time.Now().Add(-72 * time.Hour).UTC()})
+		}},
+		{"background work not read yet", proto.StatusIdle, nil, true, func(t *testing.T, n *Node) {
+			old := bgSyncLimit
+			bgSyncLimit = 0
+			bgSlot <- struct{}{} // the read in the background waits its turn: still not done when the message comes
+			t.Cleanup(func() { <-bgSlot; bgSyncLimit = old })
+			n.mu.Lock()
+			n.bgScans, n.metas = map[string]*bgScan{}, map[string]quickMeta{}
+			n.mu.Unlock()
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, _, _, _ := switchNode(t, tc.status, tc.transcript)
+			if tc.setup != nil {
+				tc.setup(t, n)
+			}
 			n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", At: time.Now()})
 			f.reset()
-			_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
-			if code, _ := refusalOf(t, err); code != tc.code {
-				t.Fatalf("refused with %q (%v), want %q", code, err, tc.code)
+			if err := tell(t, n, "hello", tc.user); err != nil {
+				t.Fatalf("send: %v", err)
 			}
-			if got := f.trace("pane.send_keys", "pane.send_input", "pane.send_text", "agent.prompt"); len(got) != 0 {
-				t.Errorf("drove the terminal: %q", got)
+			if got := f.trace("pane.send_keys", "pane.send_input"); len(got) != 0 {
+				t.Errorf("quit or restarted the agent: %q", got)
+			}
+			if got := f.trace("agent.prompt"); len(got) != 1 {
+				t.Errorf("the message did not go on the launcher it runs on: %q", got)
 			}
 			if ps := n.pendingSwitch(sidA); ps == nil || ps.Launcher != "work" {
 				t.Errorf("the switch no longer waits: %+v", ps)
@@ -339,9 +502,82 @@ func TestLauncherSwitchWaitsForAnIdleAgent(t *testing.T) {
 	}
 }
 
-// A switch whose new launcher does not come up puts the record back and resumes the agent on its own launcher in the
-// same shell: the message is not typed, the switch stays pending, and the refusal says so. When the own launcher does
-// not come up either, the agent has stopped, and the refusal says that.
+// A switch that no longer applies goes without a word: picked over a day ago, or naming the launcher the agent runs
+// on by now. The message is sent as always.
+func TestLauncherSwitchThatNoLongerApplies(t *testing.T) {
+	for _, ps := range []proto.PendingSwitch{
+		{Launcher: "work", At: time.Now().Add(-25 * time.Hour)},
+		{Launcher: "claude", At: time.Now()},
+	} {
+		n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+		n.state.setPendingSwitch(sidA, &ps)
+		if err := tell(t, n, "hello", true); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.trace("pane.send_keys", "pane.send_input"); len(got) != 0 {
+			t.Errorf("%+v: quit or restarted the agent: %q", ps, got)
+		}
+		if got := f.trace("agent.prompt"); len(got) != 1 {
+			t.Errorf("%+v: prompts = %q", ps, got)
+		}
+		if n.pendingSwitch(sidA) != nil {
+			t.Errorf("%+v: still waits", ps)
+		}
+	}
+}
+
+// A check that fails when the message comes (the launcher went meanwhile) drops the switch and refuses the message
+// with nothing typed, as a refusal of the switch the client keeps the words for.
+func TestLauncherSwitchRefusedWhenTheMessageComes(t *testing.T) {
+	n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "gone", At: time.Now()})
+	err := tell(t, n, "hello", true)
+	if code, data := refusalOf(t, err); code != proto.CodeSwitchLauncherMissing || data["delivered"] != deliveredNone {
+		t.Fatalf("refused with %q (%v)", code, err)
+	}
+	if got := drove(f); len(got) != 0 {
+		t.Errorf("drove the terminal: %q", got)
+	}
+	if n.pendingSwitch(sidA) != nil {
+		t.Error("a refused switch still waits, for every message after")
+	}
+}
+
+// The last look before the first Ctrl+C: a draft that came into the box while the checks ran refuses the message as
+// any draft does, with nothing pressed, and the switch waits.
+func TestLauncherSwitchLooksAgainBeforeTheQuit(t *testing.T) {
+	n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", Model: "opus", At: time.Now()})
+	f.reset()
+	empty, typed := screenFixture(t, "claude-2.1.312-empty-162.ansi"), screenFixture(t, "claude-2.1.312-typed-162.ansi")
+	var mu sync.Mutex
+	reads := 0
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.read" && c.Params["format"] == "ansi" {
+			mu.Lock()
+			if reads++; reads == 1 { // the send's own look found the box empty; someone typed at the computer since
+				f.setScreens("w1:p1", screenFixture(t, "claude-2.1.312-typed-162.txt"), typed)
+			}
+			mu.Unlock()
+		}
+	})
+	f.setScreens("w1:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"), empty)
+	err := tell(t, n, "hello", true)
+	if code, _ := refusalOf(t, err); code != "input_draft" {
+		t.Fatalf("refused with %q (%v)", code, err)
+	}
+	if got := drove(f); len(got) != 0 {
+		t.Errorf("drove the terminal: %q", got)
+	}
+	if ps := n.pendingSwitch(sidA); ps == nil {
+		t.Error("the switch no longer waits")
+	}
+}
+
+// A start on the new launcher that does not come up puts the record back and resumes the agent on its own launcher in
+// the same shell, with the model it last switched to and its plan mode; what that start left in front (a claude
+// stopped on a sign-in screen) is quit first. The message is not typed, the switch is dropped, and the refusal says
+// how it ended: back on its own launcher, or stopped when that does not come up either.
 func TestLauncherSwitchFailureRollsBack(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -354,30 +590,38 @@ func TestLauncherSwitchFailureRollsBack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
 			n.claudeStart, n.claudeReady = time.Second, time.Second
-			if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "work", "model": "opus"}); err != nil {
+			n.noteModel(sidA, "sonnet", "")
+			if err := pick(t, n, map[string]any{"launcher": "work", "model": "opus"}); err != nil {
 				t.Fatal(err)
 			}
 			f.reset()
-			quitsOn(f, "w1:p1", sidA, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidA))
+			quitsToShell(f, cwd)
+			comesUpWhen(f, "w1:p1", func(typed string) bool { return tc.backUp && !strings.Contains(typed, " launch work ") })
+			// The new launcher's claude stays in front (its sign-in screen) until Ctrl+C is pressed twice after it.
 			var mu sync.Mutex
-			own := false // the last start typed is the one of its own launcher
+			stuck, presses := false, 0
 			f.after(func(c herdrCall) {
-				if c.Method == "pane.send_input" {
-					mu.Lock()
-					own = !strings.Contains(str(c.Params["text"]), " launch work ")
-					mu.Unlock()
-				}
-			})
-			f.handle("agent.get", func(map[string]any) any {
 				mu.Lock()
 				defer mu.Unlock()
-				if !own || !tc.backUp {
-					return map[string]any{"agent": nil} // the shell never runs claude
+				switch {
+				case c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), " launch work "):
+					stuck, presses = true, 0
+				case c.Method == "pane.send_keys" && stuck:
+					if presses++; presses == 2 {
+						stuck = false
+					}
 				}
-				return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": proto.StatusIdle, "pane_id": "w1:p1",
-					"tab_id": "w1:t1", "workspace_id": "w1"}}
 			})
-			_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
+			f.handle("pane.process_info", func(map[string]any) any {
+				mu.Lock()
+				name := "zsh"
+				if stuck {
+					name = "claude"
+				}
+				mu.Unlock()
+				return map[string]any{"process_info": map[string]any{"foreground_processes": []any{map[string]any{"pid": 1, "name": name, "argv0": name}}}}
+			})
+			err := tell(t, n, "hello", true)
 			if code, data := refusalOf(t, err); code != tc.code || data["delivered"] != deliveredNone {
 				t.Fatalf("refused with %q (%v), want %q", code, err, tc.code)
 			}
@@ -388,36 +632,140 @@ func TestLauncherSwitchFailureRollsBack(t *testing.T) {
 				t.Errorf("closed the agent's terminal: %q", got)
 			}
 			starts := typedStarts(f, "w1:p1")
-			if len(starts) != 2 || !strings.Contains(starts[0], " launch work ") ||
-				strings.Contains(starts[1], " launch work ") || !strings.Contains(starts[1], "--resume "+sidA) {
+			if len(starts) != 2 || !strings.Contains(starts[0], " launch work ") || strings.Contains(starts[1], " launch work ") ||
+				!strings.Contains(starts[1], "--resume "+sidA) || !strings.Contains(starts[1], "--model sonnet") {
 				t.Fatalf("typed %q", starts)
 			}
+			trace := strings.Join(f.trace("pane.send_keys", "pane.send_input"), "\n")
+			if i := strings.Index(trace, "launch work"); !strings.Contains(trace[i:], sendKeys("w1:p1", "ctrl+c")) {
+				t.Errorf("the claude left in front was not quit before the rollback:\n%s", trace)
+			}
 			st, _ := n.state.get(sidA)
-			if st.Launcher != "claude" || st.Model != "" {
+			if st.Launcher != "claude" || st.Cwd != cwd {
 				t.Errorf("record after the failed switch = %+v", st)
 			}
-			if ps := n.pendingSwitch(sidA); ps == nil || ps.Launcher != "work" || ps.Model != "opus" {
-				t.Errorf("the switch no longer waits: %+v", ps)
+			if ps := n.pendingSwitch(sidA); ps != nil {
+				t.Errorf("a failed switch still waits: %+v", ps)
+			}
+			if n.starts.get(sidA) != nil {
+				t.Error("left listed as starting")
 			}
 		})
 	}
 }
 
-// A message while no switch waits, or whose switch names the launcher the agent runs on by now, is sent as always.
-func TestLauncherSwitchToItsOwnLauncherIsNoSwitch(t *testing.T) {
-	n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
-	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "claude", At: time.Now()})
-	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello"}); err != nil {
+// A session Persona did not start whose switch failed and could not be brought back keeps no record: the ones the
+// starts made would count it as Persona's from then on.
+func TestLauncherSwitchFailureOfAnUnrecordedSessionLeavesNoRecord(t *testing.T) {
+	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	n.claudeStart, n.claudeReady = time.Second, time.Second
+	n.state.mu.Lock()
+	delete(n.state.Sessions, sidA)
+	n.state.mu.Unlock()
+	var dropped []string
+	n.state.unpersist = func(id string) { dropped = append(dropped, id) }
+	inferredAs(t, n, "gw")
+	if err := pick(t, n, map[string]any{"launcher": "work", "model": "opus"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.trace("pane.send_keys", "pane.send_input"); len(got) != 0 {
-		t.Errorf("quit or restarted the agent: %q", got)
+	f.reset()
+	quitsToShell(f, cwd)
+	comesUpWhen(f, "w1:p1", func(string) bool { return false })
+	err := tell(t, n, "hello", true)
+	if code, _ := refusalOf(t, err); code != proto.CodeSwitchFailedStopped {
+		t.Fatalf("refused with %q (%v)", code, err)
 	}
-	if got := f.trace("agent.prompt"); len(got) != 1 {
-		t.Errorf("prompts = %q", got)
+	if starts := typedStarts(f, "w1:p1"); len(starts) != 2 || !strings.Contains(starts[1], " launch gw ") {
+		t.Fatalf("typed %q", starts)
+	}
+	if _, kept := n.state.get(sidA); kept || len(dropped) != 1 {
+		t.Errorf("a record was left: kept %v, dropped %q", kept, dropped)
 	}
 	if n.pendingSwitch(sidA) != nil {
-		t.Error("the switch still waits")
+		t.Error("the failed switch still waits")
+	}
+}
+
+// The resume runs in the conversation's folder: a shell that is elsewhere changes there first, and the record keeps
+// its folder.
+func TestLauncherSwitchResumesInTheConversationsFolder(t *testing.T) {
+	n, f, home, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", Model: "opus", At: time.Now()})
+	f.reset()
+	quitsToShell(f, mkdir(t, filepath.Join(home, "elsewhere")))
+	comesUpWhen(f, "w1:p1", func(string) bool { return true })
+	if err := tell(t, n, "hello", true); err != nil {
+		t.Fatal(err)
+	}
+	starts := typedStarts(f, "w1:p1")
+	if len(starts) != 1 || !strings.HasPrefix(starts[0], "cd "+shellQuote(cwd)+" && ") {
+		t.Fatalf("typed %q", starts)
+	}
+	if st, _ := n.state.get(sidA); st.Cwd != cwd {
+		t.Errorf("record's folder = %q", st.Cwd)
+	}
+}
+
+// A plan started to go on in bypassPermissions keeps the flag that mode needs on the new launcher.
+func TestLauncherSwitchKeepsThePlanMode(t *testing.T) {
+	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.put(sidA, sessionState{Launcher: "claude", Cwd: cwd, StartedAt: time.Now().UTC(), PlanThen: proto.ModeBypass})
+	n.noteModes(sidA, "plan", "")
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", Model: "opus", At: time.Now()})
+	f.reset()
+	quitsToShell(f, cwd)
+	comesUpWhen(f, "w1:p1", func(string) bool { return true })
+	if err := tell(t, n, "hello", true); err != nil {
+		t.Fatal(err)
+	}
+	starts := typedStarts(f, "w1:p1")
+	if len(starts) != 1 || !strings.Contains(starts[0], "--permission-mode plan") || !strings.Contains(starts[0], "--allow-dangerously-skip-permissions") {
+		t.Fatalf("typed %q", starts)
+	}
+	if st, _ := n.state.get(sidA); st.PlanThen != proto.ModeBypass {
+		t.Errorf("record's plan mode = %q", st.PlanThen)
+	}
+}
+
+// From the first Ctrl+C on the switch runs on its own clock: a caller that goes away then (a hub redeploy ends the
+// connection) does not leave the agent quit and not started again.
+func TestLauncherSwitchOutlivesItsCaller(t *testing.T) {
+	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", Model: "opus", At: time.Now()})
+	f.reset()
+	quitsToShell(f, cwd)
+	comesUpWhen(f, "w1:p1", func(string) bool { return true })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_keys" {
+			cancel()
+		}
+	})
+	b, _ := json.Marshal(map[string]any{"session_id": sidA, "text": "hello", "apply_switch": true})
+	_, _ = n.handle(ctx, "session.send", b)
+	if starts := typedStarts(f, "w1:p1"); len(starts) != 1 || !strings.Contains(starts[0], " launch work ") {
+		t.Fatalf("typed %q", starts)
+	}
+	if st, _ := n.state.get(sidA); st.Launcher != "work" {
+		t.Errorf("record = %+v", st)
+	}
+}
+
+// An agent that does not quit runs on as it was: nothing is started or typed, and the switch is dropped.
+func TestLauncherSwitchWhenTheAgentDoesNotQuit(t *testing.T) {
+	withStop(t, 1, 100*time.Millisecond)
+	n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", Model: "opus", At: time.Now()})
+	err := tell(t, n, "hello", true)
+	if code, _ := refusalOf(t, err); code != proto.CodeSwitchNotStopped {
+		t.Fatalf("refused with %q (%v)", code, err)
+	}
+	if got := f.trace("pane.send_input", "agent.prompt"); len(got) != 0 {
+		t.Errorf("started or typed: %q", got)
+	}
+	if st, _ := n.state.get(sidA); st.Launcher != "claude" || st.PendingSwitch != nil {
+		t.Errorf("record = %+v", st)
 	}
 }
 
@@ -426,14 +774,14 @@ func TestLauncherSwitchToItsOwnLauncherIsNoSwitch(t *testing.T) {
 func TestLauncherSwitchOwnLauncherWithAModelGoesOn(t *testing.T) {
 	n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
 	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", At: time.Now()})
-	_, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "claude", "model": "-rf"})
+	err := pick(t, n, map[string]any{"launcher": "claude", "model": "-rf"})
 	if err == nil || !strings.Contains(err.Error(), "invalid model") {
 		t.Fatalf("own launcher with a model: %v", err)
 	}
 	if n.pendingSwitch(sidA) != nil {
 		t.Error("the switch still waits")
 	}
-	if got := f.trace("pane.send_keys", "pane.send_input", "agent.prompt"); len(got) != 0 {
+	if got := drove(f); len(got) != 0 {
 		t.Errorf("drove the terminal: %q", got)
 	}
 }
@@ -451,19 +799,38 @@ func TestResumeKeepsAPendingSwitch(t *testing.T) {
 	}
 }
 
-// An agent that does not quit runs on as it was: nothing is started or typed, and the switch waits.
-func TestLauncherSwitchWhenTheAgentDoesNotQuit(t *testing.T) {
-	withStop(t, 1, 100*time.Millisecond)
-	n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
-	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", Model: "opus", At: time.Now()})
-	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
-	if code, _ := refusalOf(t, err); code != proto.CodeSwitchNotStopped {
-		t.Fatalf("refused with %q (%v)", code, err)
+// The user's Resume waits for a switch being carried out (the agent quit, its new one not up yet) instead of starting
+// a second claude in the shell it left.
+func TestResumeWaitsForASwitch(t *testing.T) {
+	n, f, _ := keptAgent(t)
+	rec := &startRec{done: make(chan struct{})}
+	if err := n.starts.add(sidA, rec); err != nil {
+		t.Fatal(err)
 	}
-	if got := f.trace("pane.send_input", "agent.prompt"); len(got) != 0 {
-		t.Errorf("started or typed: %q", got)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		n.awaitSwitch(context.Background(), sidA)
+	}()
+	select {
+	case <-done:
+		t.Fatal("the Resume did not wait for the switch")
+	case <-time.After(200 * time.Millisecond):
 	}
-	if st, _ := n.state.get(sidA); st.Launcher != "claude" || st.PendingSwitch == nil {
-		t.Errorf("record = %+v", st)
+	n.starts.finish(sidA, nil)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Resume still waits after the switch")
+	}
+	_ = f
+}
+
+// The probe tells a launcher that unsets $CLAUDE_CONFIG_DIR (env -u): it runs claude with ~/.claude.
+func TestProbeTellsUnsetVariables(t *testing.T) {
+	out := probeMarker + " base A=1\x00CLAUDE_CONFIG_DIR=/p\x00\n" + probeMarker + " agent claude\n" + probeMarker + " env A=1\x00\n"
+	p, ok := parseProbe(out)
+	if !ok || len(p.Unset) != 1 || p.Unset[0] != "CLAUDE_CONFIG_DIR" {
+		t.Fatalf("probe = %+v", p)
 	}
 }

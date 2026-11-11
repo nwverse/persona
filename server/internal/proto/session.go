@@ -412,10 +412,17 @@ type PendingSwitch struct {
 
 // Codes a launcher switch of a running Agent refuses with (node/launcher_switch.go, #5035): 409, nothing typed, the
 // text in the request's language (apierr.Call, rpc-errors.<code>); the node's own words, with the names, are the
-// body's detail. The first five come back from POST …/modes when the switch is picked, and again from the message
-// that would carry it out when something changed since; the rest only from that message. A refused switch stays
-// pending, except where its code says it was carried out.
+// body's detail. switch_stale comes only from POST …/modes; the not-stopped and failed ones only from the user's
+// message that carries a switch out; the rest from both, a message's when something changed since the pick. A message
+// refused with one of them drops the switch: nothing tries it again by itself.
 const (
+	// CodeSwitchStale: the pick was made against another launcher than the session runs on by now (POST …/modes'
+	// from): a switch was carried out meanwhile. Nothing was recorded.
+	CodeSwitchStale = "switch_stale"
+	// CodeSwitchPickModel: no model was picked, and what the launcher runs by default cannot be seen (a wrapper script,
+	// a provider that names no model): resumed without --model, the conversation would go on with the model of the
+	// launcher it ran on.
+	CodeSwitchPickModel = "switch_pick_model"
 	// CodeSwitchUnsupported: not a Claude Code Agent running in a terminal Persona can restart it in (Codex, another
 	// CLI, a runtime's session, an assistant conversation, botmux).
 	CodeSwitchUnsupported = "switch_unsupported"
@@ -428,11 +435,6 @@ const (
 	// CodeSwitchConfigDir: the launcher runs Claude Code with another config directory than the one the conversation
 	// is in: --resume would not find it there, and the sign-in lives in that directory too.
 	CodeSwitchConfigDir = "switch_config_dir"
-	// CodeSwitchBusy: the message came while the agent works, waits for the user, or is still starting.
-	CodeSwitchBusy = "switch_busy"
-	// CodeSwitchBackground: the agent has background work running (commands, subagents, workflows, a /loop) that
-	// quitting it would end.
-	CodeSwitchBackground = "switch_background"
 	// CodeSwitchNotStopped: the agent did not quit; it runs on as before.
 	CodeSwitchNotStopped = "switch_not_stopped"
 	// CodeSwitchFailed: the agent did not come up on the new launcher; it is back on its own one.

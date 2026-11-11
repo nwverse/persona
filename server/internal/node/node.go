@@ -462,6 +462,11 @@ func (n *Node) loadState(ctx context.Context) bool {
 			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
 		}
 	}
+	n.state.unpersist = func(id string) {
+		if n.peer != nil {
+			_ = n.peer.Notify("state.delete", map[string]any{"session_id": id})
+		}
+	}
 	n.state.mu.Unlock()
 	legacyPath := filepath.Join(n.dir, "sessions.json")
 	if legacy := legacyState(legacyPath, n.logf); len(legacy) > 0 {
@@ -661,9 +666,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	// session.modes with a launcher (launcher_switch.go): a switch to another launcher is checked and kept here, before
 	// a runtime or a Codex app-server could take the call and change the model where the session runs; the session's
-	// own launcher only drops a switch that waits, and the rest of the request goes on as without one.
+	// own launcher only drops a switch that waits, and the rest of the request goes on as without one. from: the
+	// launcher the client saw the session on.
 	if method == "session.modes" && strings.TrimSpace(p.Launcher) != "" {
-		if handled, err := n.launcherModes(ctx, p.SessionID, p.Launcher, p.Model, p.PermissionMode, p.Effort); handled {
+		var pick struct {
+			From string `json:"from"`
+		}
+		_ = json.Unmarshal(params, &pick)
+		if handled, err := n.launcherModes(ctx, p.SessionID, p.Launcher, pick.From, p.Model, p.PermissionMode, p.Effort); handled {
 			return ok(err)
 		}
 	}
@@ -1049,6 +1059,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
 			execution: modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket}}
 		if p.ResumeSessionID != "" {
+			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
+			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
+			n.awaitSwitch(ctx, p.ResumeSessionID)
 			r = n.fillResume(p.ResumeSessionID, r) // what it ran with, for what the start leaves out (retire.go)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
