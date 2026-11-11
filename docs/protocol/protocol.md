@@ -1951,6 +1951,7 @@ Typing into someone else's terminal is the riskiest thing this App does. Before 
 | `open_elsewhere` | The Claude session to resume is open somewhere else: a live claude has it open in `sessions/<pid>.json` (Claude desktop, a terminal Persona doesn't drive). Another `claude --resume` would have two processes writing the session at once | `delivered: "none"`, `pid` |
 | `engine_missing` | A session is to be started or resumed, but this computer's engine (herdr) isn't running or isn't installed | `delivered: "none"`, `detail` (the engine's own error) |
 | `runtime_away` | The session belongs to an Agent runtime (DSH…) that isn't connected to the node right now ("Runtime ↔ node") | `delivered: "none"` |
+| `launcher_other_kind` | One of the assistant's conversations, and the message picks a `launcher` of the other agent kind (Claude Code vs Codex). The manager refuses it before the node is asked: a conversation keeps the agent it started on ([assistant.md](../assistant/assistant.md), #4662) | `delivered: "none"`, `conversation_agent`, `launcher`, `launcher_agent` |
 
 - Gray suggested input (Claude's predicted next line, a new session's `Try "…"`) doesn't count as a draft: telling them apart needs a colored screen read (`pane.read` with `format: ansi`) to see SGR 2 (dim);
   in plain text the two look identical. When colors can't be read, it's always treated as a draft. The rules are ported from Ovis's `claude-input.ts` (MIT). Fixtures: `server/internal/screen/testdata`.
