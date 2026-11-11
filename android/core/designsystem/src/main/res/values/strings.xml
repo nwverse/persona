@@ -148,6 +148,8 @@
     </plurals>
     <string name="designsystem_group_expand">Expand group</string>
     <string name="designsystem_group_collapse">Collapse group</string>
+    <string name="designsystem_show_all">Show All %1$d</string>
+    <string name="designsystem_show_fewer">Collapse</string>
     <string name="designsystem_machine_monitor">Machine monitor</string>
     <string name="designsystem_details">Details</string>
     <string name="designsystem_space">space</string>

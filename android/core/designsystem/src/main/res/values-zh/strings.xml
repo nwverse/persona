@@ -130,6 +130,8 @@
     </plurals>
     <string name="designsystem_group_expand">展开分组</string>
     <string name="designsystem_group_collapse">折叠分组</string>
+    <string name="designsystem_show_all">显示全部 %1$d 个</string>
+    <string name="designsystem_show_fewer">收起</string>
     <string name="designsystem_machine_monitor">机器监控</string>
     <string name="designsystem_details">详情</string>
     <string name="designsystem_space">空间</string>

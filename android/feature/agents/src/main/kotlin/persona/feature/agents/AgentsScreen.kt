@@ -254,7 +254,10 @@ internal fun AgentsScreen(
     val tabs = page.preferences.grouping == AgentGrouping.MachineSpace
     var expandedTasks by remember { mutableStateOf(emptySet<String>()) }
     val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks) {
-        agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks)
+        agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks,
+            showAll = page.settings.expandedIdle.takeIf {
+                page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
+            })
     }
     val spacesById = page.spacesById
 
@@ -528,6 +531,9 @@ internal fun AgentsScreen(
                     }
                     is TreeIdleEntry -> item(entry.key, contentType = "idle") {
                         AgentIdleRow(entry.hidden, onClick = { model.showIdle(entry.group) }, depth = entry.depth)
+                    }
+                    is TreeShowAllEntry -> item(entry.key, contentType = "idle") {
+                        AgentShowAllRow(entry.count, entry.expanded, onClick = { model.showAll(entry.group, !entry.expanded) }, depth = entry.depth)
                     }
                 }
             }
