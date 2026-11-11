@@ -179,7 +179,6 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
-		s.Inventory = m.inventory
 		s.ModelFallback = m.modelFallback
 		n.setModelRestore(&s, c.path, m)
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
@@ -239,7 +238,6 @@ func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
-		s.Inventory = m.inventory
 		s.ModelFallback = m.modelFallback
 		s.PermissionMode, s.Effort = n.currentModes(c.id, m)
 		untitled(&s, m)
