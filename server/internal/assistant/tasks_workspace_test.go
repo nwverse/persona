@@ -435,6 +435,44 @@ func TestTaskWorkspaceInferredFallsBackToCwdWhenEngineCannotPrepare(t *testing.T
 	}
 }
 
+func TestTaskWorkspaceSharedFallbackPersistsWhenBusyAppearsAtAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, f := workspaceTaskService(t)
+		f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) {
+			return nil, cannotPrepare("paseo")
+		}
+		args := `{"tasks":[
+			{"title":"Writer one","prompt":"Write one","machine":"box","cwd":"/code/app","permission":"bypassPermissions"},
+			{"title":"Writer two","prompt":"Write two","machine":"box","cwd":"/code/app","permission":"bypassPermissions"}
+		]}`
+		if _, err := s.toolTaskPlan(context.Background(), "workspace-chat", json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+		p := readonlyFeedPlan(t, s, "workspace-chat")
+		if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		saved, _ := s.loadPlan(context.Background(), p.ID)
+		if len(f.starts) != 2 {
+			t.Fatalf("starts=%v", f.starts)
+		}
+		shared := 0
+		for i, task := range saved.Tasks {
+			t.Logf("saved task %d: mode=%s resolved=%+v", i, task.Workspace.Mode, task.WorkspaceResolved)
+			if task.WorkspaceResolved != nil && task.WorkspaceResolved.Shared {
+				shared++
+				if task.Workspace.Mode != workspaceNone {
+					t.Fatalf("shared task is not none: %+v", task)
+				}
+			}
+		}
+		if shared != 1 {
+			t.Fatalf("one task actually shared the cwd, but saved plans mark %d shared: tasks=%+v", shared, saved.Tasks)
+		}
+	})
+}
+
 func TestTaskWorkspaceInferredPreferNewFallsBackToFreeCwd(t *testing.T) {
 	s, f := workspaceTaskService(t)
 	f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) { return nil, cannotPrepare("paseo") }

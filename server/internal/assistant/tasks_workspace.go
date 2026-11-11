@@ -292,7 +292,8 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 			s.tasks.mu.Unlock()
 		}
 	}
-	if t.planID != "" && t.Workspace.Mode != workspaceNone {
+	// A shared fallback has mode none, but its resolved marker must still survive the start.
+	if t.planID != "" && (t.Workspace.Mode != workspaceNone || t.WorkspaceResolved != nil && t.WorkspaceResolved.Shared) {
 		// Persist the engine's answer before starting, so a retry never creates a second tree.
 		return s.patchPlanTask(ctx, t.planID, t.planIndex, func(pt *PlanTask) {
 			pt.Cwd, pt.Workspace, pt.WorkspaceResolved = t.Cwd, t.Workspace, t.WorkspaceResolved
