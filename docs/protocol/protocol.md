@@ -573,6 +573,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "repo_root":"<main checkout of the repo cwd belongs to>",   // optional (#2840): named by the host (the Paseo bridge: its worktrees live under Paseo's own directory), else read by the node off git (#1805);
                    // "By Repository" groups by it: cwd inside it is the main checkout, otherwise one of its worktrees. When absent, clients infer from the cwd path as before
  "worktree":"<top of the git working tree cwd is in>",         // optional (#1805): the node reads it, and repo_root when no host names it, off git's files (node/gitplace.go): repo_root is the main checkout, a linked worktree resolves to its main repository
+                   // both are physical directories (symbolic links resolved, #4492), whichever way cwd is written and whichever way a host wrote the repo_root it named: every session of a repository names the same repo_root, and worktree equals repo_root for the main checkout
  "branch":"<branch checked out in worktree>",                // optional (#1805): "" / absent when detached or not a git checkout; the apps group machine → project (repo_root) → worktree (labelled branch) → sessions
  "status":"idle|working|blocked|done|unknown|offline",   // offline = not running in herdr, only a transcript, can be resumed
  "pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1","agent_name":"j-3f2a",

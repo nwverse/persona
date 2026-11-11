@@ -256,9 +256,10 @@ export function projectSpaces(placed, canon = (p) => p) {
  * The runtime.sessions row of an agent (docs/integrations/runtimes.md "What to implement"), undefined for one not listed.
  * @param {object} agent - an AgentSnapshotPayload
  * @param {{ project?: object, roots?: Record<string, string>, labels?: Record<string, string>, lastText?: string,
- *   spaceId?: string, spaceName?: string }} [o]
+ *   spaceId?: string, spaceName?: string, canon?: (path: string) => string }} [o]
  *   project: its ProjectPlacement; labels: provider id → its label (the name of a provider the apps do not know);
- *   spaceId, spaceName: its project space and that space's name (projectSpaces).
+ *   spaceId, spaceName: its project space and that space's name (projectSpaces); canon: a path as its physical
+ *   directory (the bridge resolves symbolic links).
  */
 export function agentRow(agent, o = {}) {
   const roots = o.roots ?? {}
@@ -286,8 +287,10 @@ export function agentRow(agent, o = {}) {
     row.slot_name = slotNameOf(p, cwd)
   }
   // Its repository, for "By repo" (#2840): Paseo keeps its worktrees under its own folder, where the path names none.
+  // By its physical directory (#4492), as the node names the working tree: a repository whose sessions write its path
+  // two ways (a home behind a symbolic link) is two projects in the apps.
   const repo = p?.checkout?.isGit ? repoRootOf(p) : undefined
-  if (repo) row.repo_root = repo
+  if (repo) row.repo_root = o.canon ? o.canon(repo) : repo
   if (row.agent === RUNTIME && o.labels?.[agent.provider]) row.agent_label = o.labels[agent.provider]
   const model = agent.model ?? agent.runtimeInfo?.model
   if (typeof model === 'string' && model) row.model = model
