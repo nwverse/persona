@@ -186,6 +186,7 @@
   "runs.none_new_one": "{count} item, nothing new",
   "runs.none_new_other": "{count} items, nothing new",
   "runs.ok": "Succeeded",
+  "runs.push_footer": "Only times, counts and error reasons are kept, never titles or bodies; the last 20 runs. Each run is one send from Shortcuts; an item sent again isn't added twice.",
   "runs.summary_one": "Last run",
   "runs.summary_other": "Last {count} runs",
   "runs.when": "{time} · {trigger}",

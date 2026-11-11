@@ -477,7 +477,7 @@ func (p *pages) tools() wire.View {
 // ⑥ Runs: the last twenty, newest first.
 func (p *pages) runs() wire.View {
 	v := wire.View{Title: p.t("source.runs")}
-	_, runs, err := p.svc.Get(p.ctx, p.st.ID)
+	s, runs, err := p.svc.Get(p.ctx, p.st.ID)
 	if err != nil {
 		return p.gone()
 	}
@@ -488,6 +488,9 @@ func (p *pages) runs() wire.View {
 	}
 	okN, failN, newN := 0, 0, 0
 	list := wire.Section{Key: "runs", Title: p.t("runs.each"), Footer: p.t("runs.footer")}
+	if subscriptions.IsPush(s) {
+		list.Footer = p.t("runs.push_footer") // nothing is pulled: no rounds skipped, no rate limit
+	}
 	for i, r := range runs {
 		c := row("r."+itoa(i), p.t("runs.when", i18n.Args{"time": p.clock(&r.At), "trigger": p.t("trigger." + r.Trigger)}))
 		pushed := r.Trigger == subscriptions.TriggerPush // kept as it came: no call to time

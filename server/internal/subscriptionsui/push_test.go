@@ -66,6 +66,9 @@ func TestAPushSourceHasNoRecipeIntervalOrPull(t *testing.T) {
 	if r := item(runs, "r.0"); r == nil || !strings.Contains(r.Title, "sent from Shortcuts") || strings.Contains(r.Subtitle, " s") {
 		t.Fatalf("a push in the runs: %+v", r)
 	}
+	if sec := section(runs, "runs"); sec == nil || strings.Contains(sec.Footer, "rate-limited") || !strings.Contains(sec.Footer, "Shortcuts") {
+		t.Fatalf("the runs' footer for a push source: %+v", sec)
+	}
 	// In the list it is a source like the others.
 	list := draw(t, f, env(i18n.En, true), state{})
 	if r := item(list, "s."+s.ID); r == nil || r.Icon != "bell" || !strings.Contains(r.Subtitle, "as a shortcut sends") {

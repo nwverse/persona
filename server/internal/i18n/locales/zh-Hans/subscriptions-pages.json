@@ -181,6 +181,7 @@
   "runs.none_detail": "打开一个去向后会按时拉。",
   "runs.none_new": "{count} 条，没有新的",
   "runs.ok": "成功",
+  "runs.push_footer": "只记时间、条数和出错原因，不记标题和正文；留最近 20 次。每次运行是快捷指令的一次发送；重复发来的内容不会加两次。",
   "runs.summary": "最近 {count} 次",
   "runs.when": "{time} · {trigger}",
   "setup.args": "参数",

@@ -181,6 +181,7 @@
   "runs.none_detail": "追加先をオンにすると定期的に取得します。",
   "runs.none_new": "{count} 件、新着なし",
   "runs.ok": "成功",
+  "runs.push_footer": "日時、件数、エラーの理由だけを記録し、タイトルや本文は記録しません。直近 20 回。1 回の実行はショートカットからの 1 回の送信で、同じ項目が再び届いても二重には追加しません。",
   "runs.summary": "直近 {count} 回",
   "runs.when": "{time} · {trigger}",
   "setup.args": "引数",
