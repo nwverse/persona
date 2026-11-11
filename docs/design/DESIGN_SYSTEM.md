@@ -557,6 +557,12 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
+The web user-input navigator (#4836) initially exposes the latest 50 genuine inputs, or all inputs in a shorter
+conversation. Upward transcript loading extends that range when it reaches earlier inputs; global ordinal labels
+still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
+This requested pagination correction does not add a setting or change placement. Android has no corresponding
+navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
+
 ### 4.3 Feedback and haptics
 
 `Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
