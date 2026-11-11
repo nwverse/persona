@@ -514,11 +514,14 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 	}
 	if p == nil && (m.waitWarm(ctx) || m.waitFirst(ctx)) { // the manager just started: its node is on its way (warm.go)
 		m.mu.Lock()
-		p = m.peer
+		p, info = m.peer, m.info
 		m.mu.Unlock()
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
+	}
+	if err := secretEnvRefusal(ctx, info, method, params); err != nil { // against the node it has, never one on its way
+		return err
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
@@ -861,4 +864,40 @@ func (m *Machine) isOnline() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.online
+}
+
+// secretEnvRefusal refuses a hand-off (secret.stage, a session.start with a ticket) to a node that has not announced
+// secret_env: an older one would answer "unknown method", or start the Agent without the values the card gave it.
+// Announced, never assumed: a node not yet known (no handshake) is refused too.
+func secretEnvRefusal(ctx context.Context, info proto.NodeInfo, method string, params any) error {
+	if method != proto.MethodSecretStage && (method != "session.start" || !startHasSecretTicket(params)) {
+		return nil
+	}
+	if info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.SecretEnv) {
+		return nil
+	}
+	return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_env")}
+}
+
+// startHasSecretTicket: session.start params carrying a hand-off's ticket: a secret_ticket key in any letter case,
+// whatever its value (the node reads it case-insensitively, and a re-marshalled map can reorder duplicates).
+func startHasSecretTicket(params any) bool {
+	raw, ok := params.(json.RawMessage)
+	if !ok {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return true // cannot tell: treated as one, so it is refused rather than run without its values
+		}
+		raw = b
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return true
+	}
+	for k := range fields {
+		if strings.EqualFold(k, "secret_ticket") {
+			return true
+		}
+	}
+	return false
 }

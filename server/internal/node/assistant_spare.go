@@ -30,7 +30,7 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 	defer n.mu.Unlock()
 	p := n.spare
 	if p == nil || !p.alive() || time.Since(p.born) > assistantSpareMaxAge ||
-		(p.agent == "claude" && p.personaMCPOnly != n.hubSupportsPersonaContracts()) ||
+		((p.agent == "claude" || p.agent == "codex") && p.personaMCPOnly != n.hubSupportsPersonaContracts()) ||
 		(launcher != "" && p.launcher != launcher) || (cwd != "" && p.cwd != cwd) || p.fingerprint != n.executionFingerprint(p.launcher, executionOption(options)) {
 		return nil
 	}
@@ -73,7 +73,8 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 	n.mu.Lock()
 	old := n.spare
 	if old != nil && old.alive() && old.launcher == launcher && old.cwd == cwd &&
-		(old.agent != "claude" || old.personaMCPOnly == n.hubSupportsPersonaContracts() && sameAssistantProfile(old.model.ConfigDir, execution.ConfigDir)) &&
+		((old.agent != "claude" && old.agent != "codex") || old.personaMCPOnly == n.hubSupportsPersonaContracts()) &&
+		(old.agent != "claude" || sameAssistantProfile(old.model.ConfigDir, execution.ConfigDir)) &&
 		old.fingerprint == n.executionFingerprint(launcher, execution) && time.Since(old.born) < assistantSpareMaxAge/2 {
 		n.mu.Unlock()
 		return nil

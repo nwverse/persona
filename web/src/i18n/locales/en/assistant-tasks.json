@@ -214,5 +214,6 @@
   "interrupt_batch_title_on_one": "{cause} on {machine}: {count} task interrupted",
   "interrupt_batch_title_on_other": "{cause} on {machine}: {count} tasks interrupted",
   "interrupt_batch_counts": "→ {resolved} handled / {pending} pending",
-  "interrupt_batch_all": "→ all handled"
+  "interrupt_batch_all": "→ all handled",
+  "needs_group_another": "Another conversation"
 }

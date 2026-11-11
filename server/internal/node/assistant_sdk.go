@@ -126,6 +126,7 @@ type sdkStart struct {
 	resume                         bool
 	mcp                            map[string]any // --mcp-config's {"mcpServers": …}
 	allowedTools                   string         // --allowedTools
+	tools                          string         // --tools: built-ins only; MCP tools stay available
 	deny                           []string       // permission rules denied whatever allows them (healthdeny.go)
 	settings                       string         // --settings: a file, or ""
 	plugin                         string         // --plugin-dir, or ""
@@ -144,6 +145,9 @@ func (s sdkStart) options(claude string) (map[string]any, error) {
 	}
 	if tools := strings.Split(s.allowedTools, ","); s.allowedTools != "" {
 		o["allowedTools"] = tools
+	}
+	if s.tools != "" {
+		o["tools"] = strings.Split(s.tools, ",")
 	}
 	if s.model != "" {
 		o["model"] = s.model

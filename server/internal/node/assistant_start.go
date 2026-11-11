@@ -199,7 +199,7 @@ func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) (mcpJS
 	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": compat.MCPRegistrationServers(servers, legacyMCP)})
 	allow = append(allow, healthReportRules(cwd)...) // healthdeny.go
-	toolFlags = []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ",")}
+	toolFlags = []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", assistantBuiltinTools}
 	// One --disallowedTools with a word per rule (it takes several, up to the next flag): a path may hold a comma.
 	if len(deny) > 0 {
 		deny = []string{strings.Join(deny, ",")}
@@ -264,9 +264,10 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if hooks != "" {
 		args = append(args, "--plugin-dir", hooks)
 	}
-	// Snapshot the connection capability once for both runtime paths and their permission lists.
-	// Resumes retain aliases because their history may contain calls under the old namespace.
-	legacyMCP := resume || !n.hubSupportsPersonaContracts()
+	// Snapshot the connection capability once for both runtime paths and their permission lists. Historical jarvis
+	// tool_use blocks remain valid on a resume with only Persona offered (verified on Claude Code 2.1.322); an old hub
+	// that still addresses the legacy namespace keeps the alias.
+	legacyMCP := !n.hubSupportsPersonaContracts()
 	_, toolFlags := n.claudeAssistantMCPAndTools(id, cwd, legacyMCP)
 	args = append(args, toolFlags...)
 	model := execution.Model
@@ -329,7 +330,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		}}}
 		compat.MCPRegistrationServers(mcpConfig["mcpServers"].(map[string]any), legacyMCP)
 		start := sdkStart{id: id, cwd: cwd, model: model, configDir: execution.ConfigDir, permissionMode: startMode, resume: resume, mcp: mcpConfig,
-			allowedTools: strings.Join(append([]string{n.assistantTools(legacyMCP)}, healthReportRules(cwd)...), ","), deny: n.healthDenyRules(cwd), settings: settings, plugin: hooks, compaction: &compaction}
+			allowedTools: strings.Join(append([]string{n.assistantTools(legacyMCP)}, healthReportRules(cwd)...), ","), tools: assistantBuiltinTools, deny: n.healthDenyRules(cwd), settings: settings, plugin: hooks, compaction: &compaction}
 		var err error
 		if cmd, first, err = n.sdkCommand(bridge, launcher, start, env); err != nil {
 			return nil, err

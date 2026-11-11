@@ -290,6 +290,31 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 		env[k] = v
 	}
 	s["env"] = env
+
+	// Keep the assistant's project/user instructions, data skills and auto-memory. Only the development workflows and
+	// providers it does not use are hidden; bundled-skill and per-skill switches leave the explicit Persona plugins alone.
+	env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] = "1"
+	plugins, _ := s["enabledPlugins"].(map[string]any)
+	if plugins == nil {
+		plugins = map[string]any{}
+	}
+	for _, name := range []string{
+		"feature-dev@claude-plugins-official", "frontend-design@claude-plugins-official",
+		"mattpocock-skills@claude-plugins-official", "gopls-lsp@claude-plugins-official",
+		"context7@claude-plugins-official", "claude-hud@claude-hud",
+	} {
+		plugins[name] = false
+	}
+	s["enabledPlugins"] = plugins
+	overrides, _ := s["skillOverrides"].(map[string]any)
+	if overrides == nil {
+		overrides = map[string]any{}
+	}
+	for _, name := range []string{"design", "doctor", "plugin-authoring", "ui-ux-pro-max"} {
+		overrides[name] = "off"
+	}
+	s["skillOverrides"] = overrides
+
 	b, err := json.Marshal(s)
 	if err != nil {
 		return "", err

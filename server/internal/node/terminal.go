@@ -315,7 +315,7 @@ func (n *Node) terminalControl(ctx context.Context, id string, ctlr host.Control
 		}
 		if n.peer != nil {
 			_ = n.peer.Notify("terminal.frame", map[string]any{"session_id": id, "epoch": epoch, "seq": frames,
-				"full": f.Full, "cols": f.Width, "rows": f.Height, "data": f.Data})
+				"full": f.Full, "cols": f.Width, "rows": f.Height, "data": n.scrubB64(f.Data)}) // base64: hidden here (secretenv.go)
 		}
 		if replay > termReplayLimit {
 			// A resize to the same size: herdr sends a whole frame, the programs see no change (no SIGWINCH).
@@ -529,7 +529,7 @@ func (n *Node) observeOnce(ctx context.Context, id string) (int, error) {
 		}
 		if n.peer != nil {
 			_ = n.peer.Notify("terminal.frame", map[string]any{"session_id": id, "epoch": epoch, "seq": frames,
-				"full": f.Full, "cols": f.Width, "rows": f.Height, "data": f.Data})
+				"full": f.Full, "cols": f.Width, "rows": f.Height, "data": n.scrubB64(f.Data)}) // base64: hidden here (secretenv.go)
 		}
 		if replay > termReplayLimit {
 			cancel()

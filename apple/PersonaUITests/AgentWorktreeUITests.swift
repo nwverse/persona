@@ -91,7 +91,8 @@ final class AgentWorktreeUITests: XCTestCase {
     /// New Agent opens on the first computer; the weather repository is MacBook's.
     @MainActor private func pickMacBook() {
         see(app.buttons["newChat.directory"], "the directory row", timeout: 15)
-        see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "MacBook")).firstMatch, "MacBook card").tap()
+        // By its id: a Recent setup row names MacBook too once a test has started there (#2134).
+        see(app.buttons["newChat.machine.macbook"], "MacBook card").tap()
     }
 
     /// A switch in a form: the element that flips it.

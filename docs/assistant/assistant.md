@@ -327,14 +327,24 @@ The assistant and the L2 read-only connector are available; Inbox, knowledge bas
 
 ## Built-in MCP namespaces
 
-For a new Claude, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
+For a new or resumed Claude, Codex app-server, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
 `persona` MCP namespace and matching automatic tool permissions. This avoids sending duplicate tool definitions and
-starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. Resumed
-assistant sessions also keep both namespaces, including restarts after idle recycling, until removing historically
-used aliases has been verified with the model provider. Existing transcript readers continue recognizing both names.
+starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. A real Claude Code
+2.1.322 resume verified that a transcript containing `mcp__jarvis__*` tool calls can continue with only `persona` offered;
+existing transcript readers, hooks and read-only-worker supervision continue recognizing both names. The generated
+assistant instructions map old names in stored routines to `mcp__persona__*`. Only `persona_settings` is advertised;
+the legacy `jarvis_settings` call is still normalized and runs. The shared `mcp.json` for ordinary Agent launches and
+automatic resumes remains dual-namespace.
 See [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md) ("MCP namespace / tools") for the
-negotiation and resume boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates
-remain in force; no setting is required to enable the new-session behavior.
+negotiation boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates remain in force.
+
+Ordinary Claude starts also pass a built-in allow-list (`--tools`; `tools` in the Agent SDK bridge): Bash, Read, Write,
+Edit, Monitor, Skill, Agent, ListAgents, SendMessage, TaskStop, WebFetch and WebSearch. MCP tools are unaffected. This removes the
+Claude-specific cron, worktree, notebook, LSP, design, workflow, code-review and resource-tool surfaces; Persona's own
+scheduling and question tools remain. The merged start settings disable bundled skills and the development-only
+feature-dev, frontend-design, mattpocock, gopls, context7 and HUD plugins, with overrides for the remaining development
+skills. User/project setting sources, auto-memory, Persona and connector skills are not disabled. Guest conversations keep
+their stricter `--tools ""` and `--strict-mcp-config` behavior. No setting is required.
 
 ## Extension MCP servers (Claude assistant only)
 
@@ -542,7 +552,8 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
 - hub snapshot: reuse data for 45 seconds; refresh stale data in the background, wait at most 1.5 seconds per message, then use the prior snapshot if within 30 minutes. Time is always current; ended items removed.
 - App versions (#3672): one line names the Persona app on each kind of device with the version it last reported to the hub (`iPhone App 1.4.0 (build 52)（iOS 26.1）`; iPad, Apple Watch, Mac, Vision Pro and Android too), from `devices.list`'s `apps` ([protocol.md](../protocol/protocol.md) "Client capabilities and heartbeat"), so it holds while the app is in the background. Per kind the most recent device is shown, a real one before a simulator (`assistant/client_apps.go`). The line carries no time, so a reconnect does not make it a changed section.
 - Size budget (#3203): a rendered snapshot carries at most 6000 characters (`snapshotBudget` in `assistant/context.go`). Measured on one install over 14 days before it, a full snapshot was a median 8.3k characters (12.5 KB) and the changed sections a message carried a median 6.6k; tasks, the Agents section and the knowledge digest were most of it, resent on almost every message because one of their items changed.
-  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: muted, done and waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
+  Done agents (24 hours) and muted agents always render only their counts and the exact `agents_list` filter (`state=done` / `state=muted`) that lists them on demand; their names, conclusions and session ids never occupy the snapshot. Needs-you and awaiting-reply agents, results waiting for acceptance, delivery approvals and today's meetings stay detailed.
+  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
   A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`): never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
 
 ## Compaction
@@ -722,6 +733,37 @@ and don't re-enable tasks disabled in the App. Copied leading "⏰ … (your sch
 Migration: first startup without `assistant.tasks` moves `assistant.routines` / `assistant.followups` (ids, times, prior statuses unchanged),
 then clears old follow-ups so an older hub can't rerun them; thereafter reads only the new table. Failed Postgres reads save nothing (formerly defaults overwrote).
 Legacy App `routines` / `followups` APIs still read / write this table (`docs/protocol/protocol.md`).
+
+## Background rounds
+
+Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
+`conversation_new` (a supervisor message), a scheduled task or follow-up runs, and the hub's supervision wakes the chat.
+They used to fill the main chat and push the user's own exchanges out of sight. Since #4314 the apps fold the first two
+the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"):
+
+- **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
+  the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
+  `conversation`, `followup` or `patrol`. A `followup` counts only as a scheduled follow-up (the hub gives those the
+  task's title): Persona continuing the user's own work after a usage limit reset (`injected.state: limit_continue`),
+  waking the chat for what it waits on (`wake`) or an untitled follow-up is not a background round, so the answer to
+  the user's question never folds away. Like a supervision round it lasts until the next genuine input; a queued user
+  message never joins it, and recaps or compactions inside it stay inside. Other conversations and Agent sessions are not
+  affected: a conversation another one opened shows its first message as before.
+- **Folded**: one muted line, `@<source> · Background round` (`· Running in the background` while it runs), that the
+  user can open and close at any time to see the full transcript, history included (super rule 2.4). A scheduled task's
+  prompt is never shown in the main chat while folding is on: its source block says only which task ran, closed or open.
+  A supervisor message shows its text when opened.
+- **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
+  `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
+  `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
+  with user visibility.
+- **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
+  conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
+  the rows and their order within a group are unchanged.
+- **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
+  on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
+  Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
+  notify or push is unchanged.
 
 ## Chat titles
 

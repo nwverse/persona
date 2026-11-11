@@ -1,6 +1,52 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Background round": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Background round"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后台轮次"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックグラウンドのラウンド"
+          }
+        }
+      }
+    },
+    "Running in the background": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running in the background"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后台运行中"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックグラウンドで実行中"
+          }
+        }
+      }
+    },
     "Background workflow": {
       "extractionState": "manual",
       "localizations": {
@@ -15808,6 +15854,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Another conversation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another conversation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他对话"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "別の会話"
+          }
+        }
+      }
     },
     "All Caught Up": {
       "localizations": {
@@ -40104,6 +40173,29 @@
         }
       }
     },
+    "Couldn't search for places. Check the connection and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't search for places. Check the connection and try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "場所を検索できませんでした。接続を確認して、もう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能搜索地点，检查连接后再试。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't send back the plan": {
       "localizations": {
         "en": {
@@ -45203,6 +45295,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "私聊、@我、群消息和云文档里提到你的地方，AI 先分拣、起草回复"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Directions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "方向性"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "方向"
           }
         }
       },
@@ -84167,6 +84282,52 @@
       },
       "extractionState": "manual"
     },
+    "Fold background rounds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fold background rounds"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后台轮次默认折叠"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックグラウンドのラウンドを折りたたむ"
+          }
+        }
+      }
+    },
+    "Rounds that another conversation, a scheduled task or a follow-up started in the main chat show as one line you can open. Rounds that ask or tell you something stay shown.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rounds that another conversation, a scheduled task or a follow-up started in the main chat show as one line you can open. Rounds that ask or tell you something stay shown."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主对话里由别的对话、定时任务或跟进发起的轮次折成一行，点开能看全部；问过你或通知过你的轮次照常显示。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メインチャットで別の会話・定期タスク・フォローアップが始めたラウンドを1行にまとめ、開くと全体を表示します。質問や通知をしたラウンドはそのまま表示します。"
+          }
+        }
+      }
+    },
     "Notify Only in Main Chat": {
       "localizations": {
         "en": {
@@ -90794,6 +90955,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "其他缓存"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Other Chats": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other Chats"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その他のチャット"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他对话"
           }
         }
       },
@@ -108496,6 +108680,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "搜索地址或地点"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Search, use your current location, or tap the map where the place is.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search, use your current location, or tap the map where the place is."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "検索するか、現在地を使うか、地図上でその場所をタップしてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可以搜索、使用当前位置，或在地图上点一下地点所在的位置。"
           }
         }
       },

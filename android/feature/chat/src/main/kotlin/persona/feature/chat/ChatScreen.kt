@@ -219,6 +219,24 @@ private fun ChatPage(
             catch (_: Exception) { /* A failed read retains the last confirmed schedule list. */ }
         }
     }
+    // #4314 "Fold background rounds": the hub's switch (until read, the value last read this run, else on; on for a hub without it) and the main
+    // conversation's id. Only the main conversation folds; read again each time the page opens.
+    var foldSetting by remember(chrome.assistantManagement, key) { mutableStateOf(BackgroundFoldSetting.lastKnown(key.sessionId)) }
+    LaunchedEffect(chrome.assistantManagement, connection) {
+        if (renderStyle != ChatRenderStyle.Assistant) return@LaunchedEffect
+        try {
+            chrome.assistantManagement?.config()?.let {
+                foldSetting = BackgroundFoldSetting(it.backgroundFolded, it.main)
+                BackgroundFoldSetting.store(key.sessionId, foldSetting)
+            }
+        }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Unread: the default (folded) stands, as on a hub without the setting. */ }
+    }
+    val mainConversation by (chrome.tasks?.mainConversation ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) })
+        .collectAsStateWithLifecycle()
+    val foldsBackground = renderStyle.compactToolSummary && foldSetting.on &&
+        key.sessionId == (mainConversation ?: foldSetting.main)
     LaunchedEffect(chrome.inboxTrays, chrome.inboxScope, assistantTrays.expanded) {
         if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.NeedsYou) {
             try { chrome.inboxScope?.let { chrome.inboxTrays?.refresh(it) } }
@@ -355,16 +373,17 @@ private fun ChatPage(
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<AssistantTaskCard>>())
     }).collectAsStateWithLifecycle()
     var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
-    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle) {
+    // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
+    var jumpItem by remember { mutableStateOf<String?>(null) }
+    val backgroundFolding = if (foldsBackground) persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem) else null
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding) {
         if (renderStyle.compactToolSummary) {
-            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items)
+            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
                 persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
-    var jumpItem by remember { mutableStateOf<String?>(null) }
     val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
@@ -716,7 +735,7 @@ private fun ChatPage(
     taskHost?.let { AssistantTaskSheets(it) }
     if (backgroundOpen) CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
         AssistantBackgroundRecords(assistantPresentation.background, key, loader,
-            onToggle = ::toggle, onFold = ::expand, folding = folding, foldErrors = foldErrors,
+            onToggle = ::toggle, onFold = ::expand, folding = folding, foldErrors = foldErrors, hideTaskPrompts = foldsBackground,
             onFullText = { item -> scope.launch {
                 try { fullText = repository.fullText(key, item.id) }
                 catch (e: CancellationException) { throw e }
@@ -956,7 +975,8 @@ private fun ChatPage(
                                             trayReview = interaction.id
                                             requestCollapsed = false
                                         }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
-                                        backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground)
+                                        backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
+                                        groupByOrigin = foldsBackground)
                                 }
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
@@ -1046,7 +1066,7 @@ private fun ChatPage(
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
-                                        closeoutReply = closeoutReply)
+                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground)
                                         }
                                     }
                                 }
