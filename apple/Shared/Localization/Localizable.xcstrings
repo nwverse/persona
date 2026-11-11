@@ -19645,6 +19645,28 @@
       },
       "extractionState": "manual"
     },
+    "Answer Question %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answer Question %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問 %lld に回答"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答第 %lld 题"
+          }
+        }
+      }
+    },
     "Answer for You": {
       "localizations": {
         "en": {
@@ -67145,6 +67167,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Leave Allow Everything?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave Allow Everything?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて許可をやめますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "离开全部放行？"
+          }
+        }
+      }
     },
     "Leave Worktree": {
       "localizations": {
@@ -130962,6 +131006,29 @@
       },
       "extractionState": "manual"
     },
+    "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「閉じる」の隣の「ピクチャ・イン・ピクチャ」ボタンで画面を小さなウインドウにして、ほかのAppやホーム画面の上に表示し続けます。タップするとここに戻ります。表示のみで、閉じると切断されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭按钮旁边的「小窗」把画面放进画中画，切到别的 App 或回到桌面也浮着；点小窗回到这里。小窗只能看，关掉小窗就断开。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "The pinned list is incomplete. Reload it.": {
       "localizations": {
         "en": {
@@ -133697,6 +133764,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "This agent wasn't started with Allow Everything, so it can't be switched back to it from here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This agent wasn't started with Allow Everything, so it can't be switched back to it from here."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このエージェントはすべて許可で起動していないため、切り替えるとここからは戻せません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 Agent 不是以全部放行启动的，切走后在这里切不回来。"
+          }
+        }
+      }
     },
     "This agent can't be stopped and closed from the phone": {
       "localizations": {
@@ -152204,6 +152293,29 @@
           }
         }
       }
+    },
+    "Couldn't read this iPhone's clipboard: tap Allow Paste when asked, or allow Paste from Other Apps for this app in Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read this iPhone's clipboard: tap Allow Paste when asked, or allow Paste from Other Apps for this app in Settings"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneのクリップボードを読み取れませんでした。確認が出たら「ペーストを許可」をタップするか、設定でこのAppの「ほかのAppからペースト」を許可してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读不到这台 iPhone 的剪贴板：弹出提示时点「允许粘贴」，或在设置里允许本 App「从其他 App 粘贴」"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Works In": {
       "localizations": {
