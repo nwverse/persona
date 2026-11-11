@@ -3,6 +3,8 @@
   "index": "ステージ",
   "before_commit": "{hash}より前",
   "versions_failed": "2つのバージョンを取得できません",
+  "rename_path_unavailable": "名前を変更する前のパスを取得できません。Gitの状態を更新するか、このコンピュータをアップデートしてください。",
+  "version_unavailable": "このバージョンのパスがコンピュータから返されませんでした。再試行してください。",
   "loading_versions": "2つのバージョンを取得中",
   "open_old": "旧版を開く",
   "open_new": "新版を開く",

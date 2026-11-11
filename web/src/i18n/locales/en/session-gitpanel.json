@@ -5,6 +5,7 @@
   "commits": "Commits",
   "load_older_commits": "Load earlier commits",
   "status_failed": "Couldn't read Git status",
+  "change_gone": "This change is no longer in Git status. Go back or refresh.",
   "retry": "Retry",
   "not_repo": "Not a Git repository",
   "reading": "Loading",

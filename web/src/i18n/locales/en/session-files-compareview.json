@@ -3,6 +3,8 @@
   "index": "Staged",
   "before_commit": "Before {hash}",
   "versions_failed": "Couldn't get the two versions",
+  "rename_path_unavailable": "The original path for this rename isn't available. Refresh Git status or update the computer.",
+  "version_unavailable": "The computer didn't return a path for this version. Try again.",
   "loading_versions": "Getting both versions",
   "open_old": "Open old",
   "open_new": "Open new",

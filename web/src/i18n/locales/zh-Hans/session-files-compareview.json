@@ -3,6 +3,8 @@
   "index": "暂存区",
   "before_commit": "{hash} 之前",
   "versions_failed": "取不到这两个版本",
+  "rename_path_unavailable": "无法取得重命名前的路径。请刷新 Git 状态或更新这台电脑。",
+  "version_unavailable": "这台电脑没有返回此版本的路径。请重试。",
   "loading_versions": "正在取两个版本",
   "open_old": "打开旧版",
   "open_new": "打开新版",

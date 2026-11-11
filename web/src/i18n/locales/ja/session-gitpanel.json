@@ -5,6 +5,7 @@
   "commits": "コミット",
   "load_older_commits": "以前のコミットを読み込む",
   "status_failed": "Gitの状態を読み取れません",
+  "change_gone": "この変更はGitの状態にありません。戻るか更新してください。",
   "retry": "再試行",
   "not_repo": "Gitリポジトリではありません",
   "reading": "読み込み中",

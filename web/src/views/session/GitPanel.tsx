@@ -1,8 +1,8 @@
 // A session's Git, read-only (docs/apple/ios.md "Information architecture", iOS GitPane): branch, upstream ↑↓ and stashes; the changes with
 // their diffs (staged / unstaged when a file has both); the history, older pages on demand, each commit's message and
 // per-file diffs.
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, enc, errorText, isAbort } from "../../lib/api";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { api, credentialOwner, enc, errorText, isAbort, subscribeCredentialOwner } from "../../lib/api";
 import {
   diffTotals,
   dirName,
@@ -21,6 +21,7 @@ import {
 } from "../../lib/files";
 import { ago, shortPath } from "../../lib/format";
 import { useStore } from "../../lib/store";
+import { onManagerChoice, shownManager } from "../../lib/manager-choice";
 import { openPanel, type GitSpot } from "../../lib/panel";
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { useFsLive } from "../../lib/use-fs-live";
@@ -46,15 +47,42 @@ type View =
 
 const PAGE = 50;
 
-export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: string; cwd: string; at?: GitSpot; onClose: () => void }) {
+type GitPanelProps = { mid: string; sid: string; cwd: string; at?: GitSpot; onClose: () => void };
+
+// A switch away and back still retires requests made for the earlier selection.
+let managerGeneration = 0;
+let managerIdentity = shownManager();
+onManagerChoice(() => {
+  const next = shownManager();
+  if (next !== managerIdentity) {
+    managerIdentity = next;
+    managerGeneration++;
+  }
+});
+const managerSnapshot = () => managerGeneration;
+
+export function GitPanel(props: GitPanelProps) {
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const manager = useSyncExternalStore(onManagerChoice, managerSnapshot, managerSnapshot);
+  const ownerCurrent = useCallback(() => credentialOwner() === owner && managerSnapshot() === manager, [owner, manager]);
+  return <GitPanelContent key={JSON.stringify([owner, manager, props.mid, props.sid, props.cwd])} {...props} ownerCurrent={ownerCurrent} />;
+}
+
+function GitPanelContent({ mid, sid, cwd, at, onClose: closePanel, ownerCurrent }: GitPanelProps & { ownerCurrent: () => boolean }) {
   const base = `/machines/${enc(mid)}/git`;
   const [status, setStatus] = useState<GitStatus | null>(null);
+  const [statusVersion, setStatusVersion] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [older, setOlder] = useState<GitCommit[]>([]);
   const [noMore, setNoMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [views, setViews] = useState<View[]>([]);
+  const viewEpoch = useRef(0);
+  const statusEpoch = useRef(0);
+  const panelActive = useRef(true);
+  const panelCurrent = useCallback(() => panelActive.current && ownerCurrent(), [ownerCurrent]);
+  const onClose = () => { panelActive.current = false; viewEpoch.current++; closePanel(); };
   const [reloads, setReloads] = useState(0);
   const lastReload = useRef(reloads);
   const head = useRef<string | undefined>(undefined);
@@ -79,7 +107,9 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
         setNoMore(false);
       }
       head.current = s.head?.hash;
+      statusEpoch.current++;
       setStatus(s);
+      setStatusVersion((n) => n + 1);
     },
     // a refusal may have changed the tree (a stash apply that stopped on conflicts): read it again, quietly
     () => setLive((n) => n + 1),
@@ -93,9 +123,12 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
     const silent = live > 0 && reloads === lastReload.current;
     lastReload.current = reloads;
     if (!silent) setLoading(true);
-    api<GitStatus>(`${base}/status?cwd=${enc(cwd)}`, { signal: ac.signal })
+    api<GitStatus>(`${base}/status?cwd=${enc(cwd)}`, { signal: ac.signal, isAuthContextCurrent: () => !ac.signal.aborted && panelCurrent() })
       .then((s) => {
+        if (ac.signal.aborted || !panelCurrent()) return;
+        statusEpoch.current++;
         setStatus(s);
+        setStatusVersion((n) => n + 1);
         // a silent read keeps the older pages the reader loaded, unless a commit moved the history under them
         if (!silent || head.current !== s.head?.hash) {
           setOlder([]);
@@ -105,15 +138,15 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
         setError("");
       })
       .catch((e) => {
-        if (isAbort(e)) return;
+        if (ac.signal.aborted || !panelCurrent() || isAbort(e)) return;
         setError(errorText(e));
         // A reader's reload over a status already shown says it failed; a silent fs-live read stays quiet (the next
         // change reads again, and a toast per background hiccup would be noise).
         if (shown.current && !silent) toast(errorText(e), "error");
       })
-      .finally(() => !ac.signal.aborted && setLoading(false));
+      .finally(() => !ac.signal.aborted && panelCurrent() && setLoading(false));
     return () => ac.abort();
-  }, [base, cwd, reloads, live]);
+  }, [base, cwd, reloads, live, panelCurrent]);
 
   const loadMore = async () => {
     if (!status) return;
@@ -139,16 +172,25 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
     opened.current = at;
     if (at.diff.kind === "commit") {
       const sha = at.diff.sha;
+      viewEpoch.current++;
       setViews([{ kind: "commit", commit: { hash: sha, short: sha.slice(0, 8), subject: "", author: "" }, at }]);
       return;
     }
     const file = status.files.find((f) => f.path === at.path);
-    if (file) setViews([{ kind: "diff", file, staged: at.diff.kind === "staged", at }]);
+    if (file) {
+      viewEpoch.current++;
+      setViews([{ kind: "diff", file, staged: at.diff.kind === "staged", at }]);
+    }
     else toast(t("chat-comments.jump_code_gone"));
   }, [at, status]);
-  const push = (v: View) => setViews((vs) => [...vs, v]);
-  const back = () => setViews((vs) => vs.slice(0, -1));
+  const push = (v: View) => { viewEpoch.current++; setViews((vs) => [...vs, v]); };
+  const back = () => { viewEpoch.current++; setViews((vs) => vs.slice(0, -1)); };
   const top = views[views.length - 1];
+  const viewIntent = viewEpoch.current;
+  const statusIntent = statusEpoch.current;
+  const comparisonCurrent = useCallback(() => panelCurrent() && viewEpoch.current === viewIntent && statusEpoch.current === statusIntent, [panelCurrent, viewIntent, statusIntent]);
+  const selectedFile = top?.kind === "diff" ? status?.files.find((f) => f.path === top.file.path) : undefined;
+  const binarySelection = top?.kind === "diff" && Boolean(compareKind(top.file.path));
   const reload = () => {
     setReloads((n) => n + 1);
     pr.reload();
@@ -208,7 +250,10 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
         </div>
       </div>
       {top?.kind === "diff" && (
-        <DiffView key={`${top.file.path}:${top.at?.line ?? ""}`} mid={mid} sid={sid} root={status?.root ?? cwd} base={base} cwd={cwd} file={top.file} staged={top.staged} at={top.at} refreshed={live} onStaged={(staged) => setViews((vs) => [...vs.slice(0, -1), { ...top, staged, at: undefined }])} onBack={back} onClose={onClose} />
+        <DiffView key={JSON.stringify([top.file.path, top.at?.line])} mid={mid} sid={sid} root={status?.root ?? cwd} base={base} cwd={cwd} file={binarySelection ? selectedFile ?? top.file : top.file} selectionGone={Boolean(binarySelection && status && (!selectedFile || (top.staged ? !isStaged(selectedFile) : !hasUnstaged(selectedFile) && selectedFile.index !== "?")))} staged={top.staged} at={top.at} refreshed={live} statusVersion={statusVersion} isAuthContextCurrent={comparisonCurrent} onRefresh={() => setReloads((n) => n + 1)} onStaged={(staged) => { viewEpoch.current++; setViews((vs) => {
+          const current = vs[vs.length - 1];
+          return current?.kind === "diff" && current.file.path === top.file.path ? [...vs.slice(0, -1), { ...current, staged, at: undefined }] : vs;
+        }); }} onBack={back} onClose={onClose} />
       )}
       {top?.kind === "branches" && status && <BranchesView base={base} cwd={cwd} s={status} writer={writer} onBack={back} onClose={onClose} />}
       {top?.kind === "stashes" && status && <StashesView s={status} writer={writer} onBack={back} onClose={onClose} />}
@@ -221,7 +266,7 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
         <>
           <BackHeader title={fileName(top.file.path)} subtitle={`${top.commit.short} · ${dirName(top.file.path) || t("session-gitpanel.repo_root")}`} onBack={back} onClose={onClose} actions={<IconButton icon="copy" label={t("session-gitpanel.copy_diff")} onClick={() => copyText(top.diff)} />} />
           {compareKind(top.file.path) ? (
-            <CompareView mid={mid} cwd={cwd} root={status?.root ?? cwd} path={top.file.path} before={`${top.commit.hash}^`} after={top.commit.hash} />
+            <CompareView mid={mid} cwd={cwd} root={status?.root ?? cwd} path={top.file.path} before={`${top.commit.hash}^`} after={top.commit.hash} isAuthContextCurrent={comparisonCurrent} />
           ) : (
             <DiffLines diff={top.diff} truncated={top.truncated} comment={{ mid, sid, cwd, path: top.file.path, diff: { kind: "commit", sha: top.commit.hash }, at: top.at && { line: top.at.line, to: top.at.to, old: top.at.old } }} />
           )}
@@ -395,9 +440,13 @@ function DiffView({
   base,
   cwd,
   file,
+  selectionGone,
   staged,
   at,
   refreshed,
+  statusVersion,
+  isAuthContextCurrent,
+  onRefresh,
   onStaged,
   onBack,
   onClose,
@@ -408,10 +457,14 @@ function DiffView({
   base: string;
   cwd: string;
   file: GitFile;
+  selectionGone: boolean;
   staged: boolean;
   at?: GitSpot;
   /** Counts the Git changes seen on the computer: the diff is read again, in place, when it moves. */
   refreshed: number;
+  statusVersion: number;
+  isAuthContextCurrent: () => boolean;
+  onRefresh: () => void;
   onStaged: (staged: boolean) => void;
   onBack: () => void;
   onClose: () => void;
@@ -422,12 +475,12 @@ function DiffView({
     (signal?: AbortSignal, silent = false) => {
       if (!silent) setDiff(null);
       setError("");
-      if (compareKind(file.path)) return; // compared as versions, not as text
-      api<GitDiff>(`${base}/diff?cwd=${enc(cwd)}&path=${enc(file.path)}&staged=${staged ? 1 : 0}`, { signal })
-        .then(setDiff)
-        .catch((e) => !isAbort(e) && setError(errorText(e)));
+      if (selectionGone || compareKind(file.path)) return; // compared as versions, not as text
+      api<GitDiff>(`${base}/diff?cwd=${enc(cwd)}&path=${enc(file.path)}&staged=${staged ? 1 : 0}`, { signal, isAuthContextCurrent: () => !signal?.aborted && isAuthContextCurrent() })
+        .then((d) => !signal?.aborted && isAuthContextCurrent() && setDiff(d))
+        .catch((e) => !signal?.aborted && isAuthContextCurrent() && !isAbort(e) && setError(errorText(e)));
     },
-    [base, cwd, file.path, staged],
+    [base, cwd, file.path, staged, selectionGone, isAuthContextCurrent],
   );
   useEffect(() => {
     const ac = new AbortController();
@@ -443,6 +496,11 @@ function DiffView({
     return () => ac.abort();
   }, [refreshed, load]);
   const both = isStaged(file) && hasUnstaged(file);
+  const change = staged ? file.index : file.worktree;
+  const renamed = change === "R" || change === "C";
+  // A single orig_path cannot describe three paths when both columns claim a rename.
+  const bothRenamed = (file.index === "R" || file.index === "C") && (file.worktree === "R" || file.worktree === "C");
+  const missingOriginal = renamed && (!file.orig_path || bothRenamed);
   return (
     <>
       <BackHeader
@@ -452,14 +510,18 @@ function DiffView({
         onClose={onClose}
         actions={<IconButton icon="copy" label={t("session-gitpanel.copy_diff")} onClick={() => diff && copyText(diff.diff)} disabled={!diff} />}
       />
-      {both && (
+      {both && !selectionGone && (
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
           <Segmented<"0" | "1"> label={t("session-gitpanel.which_changes")} value={staged ? "1" : "0"} onChange={(v) => onStaged(v === "1")} options={[["0", t("session-gitpanel.unstaged")], ["1", t("session-gitpanel.staged")]]} />
         </div>
       )}
-      {compareKind(file.path) ? (
+      {selectionGone ? (
+        <Empty icon="info" title={t("session-gitpanel.diff_failed")} detail={<span className="break-normal">{t("session-gitpanel.change_gone")}</span>} action={<Button icon="retry" className="touch-hit" onClick={onRefresh}>{t("session-gitpanel.retry")}</Button>} />
+      ) : compareKind(file.path) && missingOriginal ? (
+        <Empty icon="info" title={t("session-files-compareview.versions_failed")} detail={<span className="break-normal">{t("session-files-compareview.rename_path_unavailable")}</span>} action={<Button icon="retry" className="touch-hit" onClick={onRefresh}>{t("session-gitpanel.retry")}</Button>} />
+      ) : compareKind(file.path) ? (
         // documents and pictures: the two versions themselves (unstaged: index → disk; staged: HEAD → index)
-        <CompareView key={staged ? "s" : "w"} mid={mid} cwd={cwd} root={root} path={file.path} before={staged ? "HEAD" : "INDEX"} after={staged ? "INDEX" : "WORKTREE"} deleted={!staged && file.worktree === "D"} />
+        <CompareView mid={mid} cwd={cwd} root={root} path={file.path} beforePath={renamed ? file.orig_path : undefined} before={staged ? "HEAD" : "INDEX"} after={staged ? "INDEX" : "WORKTREE"} deleted={!staged && file.worktree === "D"} refreshed={statusVersion} isAuthContextCurrent={isAuthContextCurrent} />
       ) : diff ? (
         <DiffLines diff={diff.diff} truncated={diff.truncated} comment={{ mid, sid, cwd, path: file.path, diff: { kind: staged ? "staged" : "unstaged" }, at: at && { line: at.line, to: at.to, old: at.old } }} />
       ) : error ? (
