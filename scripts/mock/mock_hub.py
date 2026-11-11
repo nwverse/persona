@@ -10118,7 +10118,7 @@ def providers_route(h, method, p, q, body):
         h.send_json(PROVIDER_LOG); return True
     if MOCK_PROVIDERS:
         b = json.loads(body or b"{}") if method != "GET" else {}
-    else:  # a body that is not this wizard's goes on to the routes after this one
+    else:  # a body that is not a typed-in gateway's probe goes on to the routes after this one
         try:
             b = json.loads(body or b"{}")
         except ValueError:
@@ -10161,7 +10161,7 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
         if "bad" in (b.get("base_url") or ""):
-            h.send_json({"models": [], "error": "网关没有 /v1/models"}); return True
+            h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
