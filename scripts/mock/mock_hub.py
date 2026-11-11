@@ -2801,9 +2801,44 @@ RECORDINGS_TRIMMED = {}
 # recording (`kind: meeting`) as soon as it is stored, from its own sentences; pending leaves them being written; failed says
 # writing them failed; POST /mock/recording_minutes {"mode": …} switches it and forgets the recordings stored so far (a UI
 # test's fresh start on a shared mock).
-# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked").
+# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked"); as the hub, the minutes
+# shown stay while new ones are written (pending), and in `ready` mode the next version comes 3 s later.
+# POST /api/v1/recordings/{id}/minutes/todos {version, actions} confirms action items as to-dos (#4062): each gets a to-do and
+# its todo_id; an old version is 409 minutes_stale. POST /mock/recording_minutes_rewrite {"id"} writes the next version at once
+# (what the user sees is then stale).
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
 RECORDING_MINUTES_ASKED = []
+
+
+def recording_minutes_next(rid):
+    """The next version of a stored recording's minutes, written: what regenerating them ends in."""
+    with PHOTO_LOCK:
+        detail = KB_DETAIL.get(("recordings", rid))
+        if not detail or rid not in RECORDINGS: return
+        cited = photos_cited(rid)
+        version = (detail.get("minutes") or {}).get("version", 0) + 1
+        detail["minutes"] = {**recording_minutes(RECORDINGS[rid], rid), "version": version}
+        detail.setdefault("meta", {})["minutes_state"] = "ready"
+        moved = photos_of(rid) is not None and photos_cited(rid) != cited
+    if moved and meeting_conversation_on(): meeting_changed(rid, ["photos"])  # each photo's `cited` follows the minutes
+
+
+def minutes_span(body):
+    """`when`, `start` and `end` as the hub writes them (server/internal/kb/minutes.go `minutesWhen`, #4713): the recording's
+    own start to its end (`duration`, or `ended_at` when later; at least a minute) in the local zone. `when` adds the end's
+    date when it is another day; `start` / `end` are RFC 3339 with the offset, whole seconds, for the apps to format."""
+    def at(v):
+        try: return datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone().replace(microsecond=0)
+        except (TypeError, ValueError): return None
+    start = at(body.get("started_at"))
+    if not start: return {"when": None}
+    end = start + timedelta(seconds=int(float(body.get("duration") or 0)))
+    ended = at(body.get("ended_at"))
+    if ended and ended > end: end = ended
+    end = max(end, start + timedelta(minutes=1))
+    same = start.date() == end.date()
+    return {"when": start.strftime("%Y-%m-%d %H:%M") + "–" + end.strftime("%H:%M" if same else "%Y-%m-%d %H:%M"),
+            "start": start.isoformat(timespec="seconds"), "end": end.isoformat(timespec="seconds")}
 
 
 def recording_minutes(body, rid=None):
@@ -2814,17 +2849,21 @@ def recording_minutes(body, rid=None):
     segs = [x for x in body.get("segments", []) if x.get("text")]
     cal = body.get("calendar") or {}
     item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
+    acts = [x for x in segs if "负责" in x["text"]]
     out = {
+        "version": 1,
         "title": cal.get("title") or body.get("title") or None,
-        "when": "2027-01-15 16:00–17:00",
-        "start": "2027-01-15T16:00:00+08:00", "end": "2027-01-15T17:00:00+08:00",  # the same span, for the apps to format (#4713)
+        **minutes_span(body),  # `when`, and the same span as `start` / `end` for the apps to format (#4713)
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
         "points": [item(x) for x in segs[:2]] + [
             {"text": (x.get("caption") or (x.get("text") or x.get("note") or "").split("\n")[0])[:200], "at": x["at"], "photo": x["n"]}
             for x in (photos_listed(rid) if rid else []) if x.get("caption") or x.get("text") or x.get("note")],
         "decisions": [item(x) for x in segs if "决定" in x["text"]],
-        "actions": [{"who": "张三", "what": x["text"].rstrip("。"), "by": "周五前", "at": x["start"]} for x in segs if "负责" in x["text"]],
+        # Who is named before 负责 ("does"), and a deadline when one is said ("周五前").
+        "actions": [{k: v for k, v in {"id": "a%d" % (i + 1), "who": x["text"].split("负责")[0][-3:] or None, "what": x["text"].rstrip("。"),
+                                      "by": "周五前" if "周五前" in x["text"] else None, "at": x["start"], "todo_id": ""}.items() if v is not None}
+                    for i, x in enumerate(acts)],
         "open": [item(x) for x in segs if "没定" in x["text"]],
     }
     return {k: v for k, v in out.items() if v}
@@ -4397,6 +4436,12 @@ def recordings_route(h, method, p):
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True
+    if p == "/mock/recording_minutes_rewrite" and method == "POST":
+        rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
+        if not (KB_DETAIL.get(("recordings", rid)) or {}).get("minutes"):
+            return h.send_json({"error": "no stored recording with minutes"}, 404) or True
+        recording_minutes_next(rid)
+        return h.send_json({"id": rid, "version": KB_DETAIL[("recordings", rid)]["minutes"]["version"]}) or True
     if p == "/mock/recording_trim" and method == "POST":
         rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
         detail = KB_DETAIL.get(("recordings", rid))
@@ -4423,6 +4468,27 @@ def recordings_route(h, method, p):
     if not re.fullmatch(UUID_RE, rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
     if p.endswith("/live") or p.endswith("/ask"): return meeting_route(h, method, p, rid)
+    if p.endswith("/minutes/todos") and method == "POST":
+        detail = KB_DETAIL.get(("recordings", rid)) or {}
+        minutes = detail.get("minutes")
+        if rid not in RECORDINGS or not minutes: return h.send_json({"error": "没有这条录音的纪要"}, 404) or True
+        body = json.loads(h.last_body or b"{}")
+        if body.get("version") != minutes.get("version"):
+            return h.send_json({"error": "纪要已更新", "code": "minutes_stale"}, 409) or True
+        ids = body.get("actions") or []
+        if not ids: return h.send_json({"error": "actions 不能为空"}, 400) or True
+        acts = {a.get("id"): a for a in minutes.get("actions", [])}
+        if any(i not in acts for i in ids): return h.send_json({"error": "没有这个行动项"}, 404) or True
+        made = []
+        for i in ids:
+            a = acts[i]
+            if a.get("todo_id"): continue  # confirmed before: not again
+            now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            todo = {"id": "todo_" + uuid.uuid4().hex[:8], "title": (a["who"] + ": " if a.get("who") else "") + a["what"],
+                    "notes": "", "done_at": None, "created_at": now_str, "updated_at": now_str, "agents": []}
+            TODOS.insert(0, todo); made.append(todo); a["todo_id"] = todo["id"]
+        if made: push_todos()
+        return h.send_json({"todos": made, "minutes": minutes}) or True
     if p.endswith("/minutes") and method == "POST":
         if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音"}, 404) or True
         if rid in RECORDINGS_TRIMMED:
@@ -4430,10 +4496,10 @@ def recordings_route(h, method, p):
         if not RECORDINGS[rid].get("complete"): return h.send_json({"error": "转写还没完成"}, 409) or True
         RECORDING_MINUTES_ASKED.append(rid)
         with PHOTO_LOCK:
-            cited = photos_cited(rid)
             detail = KB_DETAIL.setdefault(("recordings", rid), {})
-            detail.pop("minutes", None); detail.setdefault("meta", {})["minutes_state"] = "pending"
-        if cited and meeting_conversation_on(): meeting_changed(rid, ["photos"])  # `cited` follows the minutes
+            detail.setdefault("meta", {})["minutes_state"] = "pending"  # the minutes shown stay meanwhile, as the hub's
+        if RECORDING_MINUTES[0] == "ready":  # the next version; each photo's `cited` follows it then
+            threading.Timer(3, recording_minutes_next, args=(rid,)).start()
         return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
     if p.rstrip("/") != "/api/v1/recordings/" + p.split("/")[4]:  # a path below a recording that no route took
@@ -14314,7 +14380,8 @@ def png(w, h, rgb):
 # …&slow=S: it answers S seconds late (the small window's "Connecting…"); …&down=1: it hangs up on everyone, now and on
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
-               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False}
+               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False,
+               "events": []}  # clipboard writes (node / rfb) and keys, in the order they came (#3075: ⌘V after the write)
 # MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
 # numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
 # with "2:node" it sends none, as macOS's does, and MacBook's computer status carries them as the node reads them
@@ -14325,6 +14392,69 @@ FAKE_EXTENDED = FAKE_DISPLAYS > 1 and "node" not in _displays[1:]
 FAKE_W, FAKE_H = 480 * FAKE_DISPLAYS, 300
 FAKE_NODE_DISPLAYS = [{"id": i + 1, "x": 240 * i, "y": 0, "width": 240, "height": 150, **({"main": True} if i == 0 else {})}
                       for i in range(FAKE_DISPLAYS)] if FAKE_DISPLAYS > 1 and not FAKE_EXTENDED else []
+# MOCK_SCREEN_BG=black|white|gray|terminal (#3075): the mock Mac is 1920×1080 as a real one is, one plain color (a
+# terminal: near black with lines of light-gray text), and like macOS's its Screen Sharing sends no pointer (the app
+# draws its own); MOCK_SCREEN_CURSOR=1 sends macOS's arrow when asked, as other servers do (the Cursor pseudo-encoding:
+# its 1× pixels, black with a white outline, and its mask). GET /mock/screen-password?bg=… changes the background on
+# the screens connected (the pointer's look over each, VNCTests.testThePointerReads).
+FAKE_BG = {"kind": os.environ.get("MOCK_SCREEN_BG", "")}
+FAKE_BG_COLORS = {"black": (0, 0, 0), "white": (255, 255, 255), "gray": (128, 128, 128), "terminal": (30, 30, 32)}
+FAKE_TEXT = (204, 204, 204)
+if FAKE_BG["kind"]:
+    FAKE_W, FAKE_H = 1920, 1080
+# macOS's arrow at 1× as its Screen Sharing sends it ("#" black, "o" white), its hot spot at its tip.
+FAKE_ARROW = ["oo........", "o#o.......", "o##o......", "o###o.....", "o####o....", "o#####o...", "o######o..", "o#######o.",
+              "o########o", "o########o", "o#####oooo", "o##o##+o..", "o+ooo##o..", ".o+.o##+o.", "....o+##o.", ".....o++o.",
+              "......oo.."]
+FAKE_ARROW_HOT = (1, 1)
+
+
+def fake_cursor_rect():
+    """The Cursor pseudo-encoding of FAKE_ARROW: x, y the hot spot; its pixels in the client's format (B G R and a
+    byte of padding); then its mask, a bit a pixel, rows padded to a byte."""
+    w, h = len(FAKE_ARROW[0]), len(FAKE_ARROW)
+    shade = {"#": 0, "o": 255, "+": 128}
+    px, mask = b"", b""
+    for row in FAKE_ARROW:
+        bits = 0
+        for i, ch in enumerate(row):
+            v = shade.get(ch, 0)
+            px += bytes([v, v, v, 0])
+            if ch in shade: bits |= 1 << (((w + 7) // 8) * 8 - 1 - i)
+        mask += bits.to_bytes((w + 7) // 8, "big")
+    return struct.pack(">HHHHi", FAKE_ARROW_HOT[0], FAKE_ARROW_HOT[1], w, h, -239) + px + mask
+
+
+def fake_text(x, y):
+    """1 where a terminal's text is: lines 36 pixels apart, characters 16 wide, of lengths that vary, with spaces."""
+    if not (40 <= x < 1400 and 40 <= y < 760): return 0
+    line, ly = divmod(y - 40, 36)
+    col, lx = divmod(x - 40, 16)
+    return 1 if ly < 18 and lx < 11 and col < (line * 37) % 70 + 8 and (col * 7 + line) % 11 else 0
+
+
+def fake_bg_rect(z):
+    """The whole of a plain background in ZRLE: solid tiles, and two-color ones where a terminal has text."""
+    base = FAKE_BG_COLORS.get(FAKE_BG["kind"], (0, 0, 0))
+    cp = lambda c: bytes([c[2], c[1], c[0]])
+    out = bytearray()
+    for ty in range(0, FAKE_H, 64):
+        for tx in range(0, FAKE_W, 64):
+            tw, th = min(64, FAKE_W - tx), min(64, FAKE_H - ty)
+            if FAKE_BG["kind"] != "terminal" or not (tx < 1400 and ty < 760 and tx + tw > 40 and ty + th > 40):
+                out += b"\x01" + cp(base)
+                continue
+            out += bytes([2]) + cp(base) + cp(FAKE_TEXT)
+            for j in range(th):
+                acc = n = 0
+                for i in range(tw):
+                    acc = acc << 1 | fake_text(tx + i, ty + j); n += 1
+                    if n == 8: out.append(acc); acc = n = 0
+                if n: out.append(acc << (8 - n))
+    comp = z.compress(bytes(out)) + z.flush(zlib.Z_SYNC_FLUSH)
+    return struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, 16) + struct.pack(">I", len(comp)) + comp
+
+
 # The displays' numbers, 3×5 cells each, drawn 12 pixels a cell.
 FAKE_DIGITS = {1: [".#.", "##.", ".#.", ".#.", "###"], 2: ["###", "..#", "###", "#..", "###"],
                3: ["###", "..#", "###", "..#", "###"], 4: ["#.#", "#.#", "###", "..#", "..#"]}
@@ -14432,9 +14562,22 @@ def fake_screen_sharing():
             c.sendall(struct.pack(">HH", FAKE_W, FAKE_H) + fmt + struct.pack(">I", len(name)) + name)
             FAKE_SCREEN["conns"].append(conn)
             encodings, z, t, sent = [], zlib.compressobj(6), 0, False
-            frame = fake_frame()
+            frame = [] if FAKE_BG["kind"] else fake_frame()
+
+            def redraw():  # a plain background again (?bg=…), on the update request the client left waiting
+                if 16 not in encodings: return
+                with lock:
+                    c.sendall(struct.pack(">BxH", 0, 1) + fake_bg_rect(z))
+                FAKE_SCREEN["frames"] += 1
+            conn["redraw"] = redraw
 
             def update(rects, extended=False):
+                if FAKE_BG["kind"]:
+                    cursor = -239 in encodings and os.environ.get("MOCK_SCREEN_CURSOR") == "1"
+                    with lock:
+                        c.sendall(struct.pack(">BxH", 0, 1 + cursor) + (fake_cursor_rect() if cursor else b"") + fake_bg_rect(z))
+                    FAKE_SCREEN["frames"] += 1
+                    return
                 body = b""
                 if extended:  # ExtendedDesktopSize: reason 0, status 0, the framebuffer's size, then each display
                     body += struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, -308) + struct.pack(">B3x", FAKE_DISPLAYS)
@@ -14457,10 +14600,11 @@ def fake_screen_sharing():
                     encodings = list(struct.unpack(">%di" % n, exact(c, 4 * n)))
                 elif kind == 3:
                     exact(c, 9)
+                    conn["waiting"] = sent
                     if not sent:
                         sent = True
                         update([(0, 0, FAKE_W, FAKE_H)], extended=FAKE_EXTENDED and -308 in encodings)
-                    elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1":  # a box moving at ~30 frames a second
+                    elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1" and not FAKE_BG["kind"]:  # a box moving at ~30 frames a second
                         time.sleep(1 / 30)
                         old = (80 + (t * 7) % 300, 120 + (t * 3) % 120)
                         t += 1
@@ -14472,6 +14616,7 @@ def fake_screen_sharing():
                         update([(0, 0, 2, 1), (x0, y0, min(FAKE_W - x0, abs(new[0] - old[0]) + 40), min(FAKE_H - y0, abs(new[1] - old[1]) + 40))])
                 elif kind == 4:  # a key: what is typed on the lock screen ("Unlock", #1507 a-2), Return as \n
                     down, _, key = struct.unpack(">BHI", exact(c, 7))
+                    FAKE_SCREEN["events"].append({"key": key, "down": bool(down)})
                     if down and key == 0xff0d: FAKE_SCREEN["typed"] += "\n"
                     elif down and (0x20 <= key <= 0xff): FAKE_SCREEN["typed"] += chr(key)
                     elif down and key >= 0x01000000: FAKE_SCREEN["typed"] += chr(key - 0x01000000)
@@ -14489,6 +14634,7 @@ def fake_screen_sharing():
                 elif kind == 6:  # the client's clipboard
                     exact(c, 3); n = struct.unpack(">I", exact(c, 4))[0]
                     FAKE_SCREEN["clipboard"] = exact(c, n).decode("latin-1")
+                    FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "rfb"})
                 else: return
         except OSError:
             pass
@@ -17496,8 +17642,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(GIT_PULL_STATE)
         if p == "/mock/screen-password":  # MOCK_SCREEN=fake: the Mac's password changed; who signed in how; what was typed
             if "p" in q: FAKE_SCREEN["password"] = q["p"][0]
-            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="")
+            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[])
             if "clip" in q: fake_screen_clip(q["clip"][0])  # the Mac copied this
+            if "bg" in q and q["bg"][0] in FAKE_BG_COLORS and FAKE_BG["kind"]:  # another background (MOCK_SCREEN_BG)
+                FAKE_BG["kind"] = q["bg"][0]
+                for conn in list(FAKE_SCREEN["conns"]):
+                    if conn.pop("waiting", False):
+                        try: conn["redraw"]()
+                        except OSError: pass
             if "slow" in q: FAKE_SCREEN["slow"] = float(q["slow"][0])
             if "down" in q:
                 FAKE_SCREEN["down"] = q["down"][0] == "1"
@@ -17505,7 +17657,8 @@ class H(BaseHTTPRequestHandler):
                     try: conn["sock"].shutdown(socket.SHUT_RDWR)
                     except OSError: pass
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
-                                   "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"]})
+                                   "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
+                                   "events": FAKE_SCREEN["events"][-200:]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -18500,6 +18653,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"pane": pane["pane"], "terminal": pane["terminal"], "tab_id": pane["tab_id"]})
         if p.startswith("/api/v1/machines/") and p.endswith("/computer/clipboard") and os.environ.get("MOCK_SCREEN") == "fake":
             FAKE_SCREEN["clipboard"] = json.loads(self.last_body or b"{}").get("text", "")  # pbcopy on the Mac (#1343)
+            FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "node"})
             return self.send_json({"ok": True})
         if p == "/test/lark-pins/state" and os.environ.get("MOCK_LARK_PINS"):
             req = json.loads(self.last_body or b"{}")
