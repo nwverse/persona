@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -57,37 +58,40 @@ class PhoneConfirmationsTest {
         assertEquals(PhoneConfirmation.Allowed, answer.await())
     }
 
-    /** #1875: 90 seconds without an answer is not a Deny; the confirmation and its notification go. */
-    @Test @Config(sdk = [35]) fun nobodyAnsweringIsUnanswered() = runTest {
+    /**
+     * #4456: there is no app-side timeout that withdraws a card. The hub owns how long a confirmed write may
+     * wait; advancing the clock alone never completes the confirmation.
+     */
+    @Test @Config(sdk = [35]) fun waitingIsNotInterruptedByTheClock() = runTest {
         val confirmations = PhoneConfirmations(context)
         val answer = async { confirmations.confirm { "Add an event" } }
         runCurrent()
         assertEquals(1, notifications.allNotifications.size)
-        advanceTimeBy(PhoneConfirmations.TIMEOUT_MILLIS - 1)
+        // Far longer than the old 90-second countdown, and than the hub's confirmed-write wait: still pending.
+        advanceTimeBy(30 * 60 * 1000L + 5_000)
         runCurrent()
         assertFalse(answer.isCompleted)
-        advanceTimeBy(2)
-        runCurrent()
-        assertEquals(PhoneConfirmation.Unanswered, answer.await())
-        assertNull(confirmations.pending.value)
-        assertEquals(0, notifications.allNotifications.size)
+        assertNotNull(confirmations.pending.value)
+        assertEquals(1, notifications.allNotifications.size)
+        // Only the user's answer ends it.
+        confirmations.resolve(confirmations.pending.value!!.token, false)
+        assertEquals(PhoneConfirmation.Denied, answer.await())
     }
 
     /**
-     * #3861: swiping the notification away ends the confirmation at once as Dismissed (not after 90 seconds, and not
-     * as a Deny); the system's own timeout comes after the app's, so a timeout still reads as Unanswered.
+     * #3861: swiping the notification away ends the confirmation at once as Dismissed (not as a Deny). The
+     * notification no longer carries a system-side timeout: the hub decides how long the call may be answered.
      */
     @Test @Config(sdk = [35]) fun swipingTheNotificationAwayDismissesItAtOnce() = runTest {
         val confirmations = PhoneConfirmations(context)
         val answer = async { confirmations.confirm { "Add an event" } }
         runCurrent()
         val notification = notifications.allNotifications.single()
-        assertTrue(notification.timeoutAfter > PhoneConfirmations.TIMEOUT_MILLIS)
         assertNotNull("the notification needs a delete intent", notification.deleteIntent)
         // what the system sends when the user swipes the notification away
         PhoneConfirmationReceiver().onReceive(context, shadowOf(notification.deleteIntent).savedIntent)
         runCurrent()
-        assertTrue("a dismissal must not wait for the timeout", answer.isCompleted)
+        assertTrue("a dismissal must not wait for any timer", answer.isCompleted)
         assertEquals(PhoneConfirmation.Dismissed, answer.await())
         assertNull(confirmations.pending.value)
         assertEquals(0, notifications.allNotifications.size)
@@ -135,5 +139,123 @@ class PhoneConfirmationsTest {
         runCurrent()
         confirmations.close()
         assertEquals(PhoneConfirmation.Withdrawn, answer.await())
+    }
+
+    /**
+     * #4456: a second write arriving while one is on screen waits behind it instead of taking its place.
+     * Each answer goes to the token it names; an answer to an already-finished token does not affect the next.
+     */
+    @Test @Config(sdk = [35]) fun aSecondConfirmationQueuesBehindTheFirstAndAnswersDoNotCross() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        val firstToken = confirmations.pending.value!!.token
+        val second = async { confirmations.confirm { "Add event two" } }
+        runCurrent()
+        // Only one card visible; the second is queued, not shown.
+        assertEquals(firstToken, confirmations.pending.value?.token)
+        assertEquals(1, notifications.allNotifications.size)
+        // Answering the first promotes the second; the first resolves, the second stays open.
+        confirmations.resolve(firstToken, true)
+        runCurrent()
+        assertEquals(PhoneConfirmation.Allowed, first.await())
+        val secondToken = confirmations.pending.value!!.token
+        assertNotEquals(firstToken, secondToken)
+        assertFalse(second.isCompleted)
+        // A late answer to the first token must not resolve the second.
+        confirmations.resolve(firstToken, false)
+        runCurrent()
+        assertFalse(second.isCompleted)
+        // A stale dismissal of the first token must not dismiss the second either.
+        confirmations.dismiss(firstToken)
+        runCurrent()
+        assertFalse(second.isCompleted)
+        confirmations.resolve(secondToken, false)
+        assertEquals(PhoneConfirmation.Denied, second.await())
+        assertNull(confirmations.pending.value)
+    }
+
+    /** close() finishes the current card and every queued one as Withdrawn, and cancels their notifications. */
+    @Test @Config(sdk = [35]) fun closeWithdrawsCurrentAndEveryQueuedEntry() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        val second = async { confirmations.confirm { "Add event two" } }
+        val third = async { confirmations.confirm { "Add event three" } }
+        runCurrent()
+        confirmations.close()
+        assertEquals(PhoneConfirmation.Withdrawn, first.await())
+        assertEquals(PhoneConfirmation.Withdrawn, second.await())
+        assertEquals(PhoneConfirmation.Withdrawn, third.await())
+        assertNull(confirmations.pending.value)
+        assertEquals(0, notifications.allNotifications.size)
+    }
+
+    /**
+     * A cancelled awaiter (the call was dropped) removes only its own entry: if it was still queued the current
+     * card stays; if it was current the next queued one is promoted.
+     */
+    @Test @Config(sdk = [35]) fun aCancelledAwaiterLeavesOnlyItsOwnEntry() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        val firstToken = confirmations.pending.value!!.token
+        val second = async { confirmations.confirm { "Add event two" } }
+        runCurrent()
+        // Cancel the queued one: the current card is unaffected.
+        second.cancel()
+        runCurrent()
+        assertEquals(firstToken, confirmations.pending.value?.token)
+        assertFalse(first.isCompleted)
+        // Cancel the current one: it withdraws (Cancelled on the awaiter), and the queue is empty so nothing promotes.
+        first.cancel()
+        runCurrent()
+        assertNull(confirmations.pending.value)
+    }
+
+    /** Moving to background posts a notification for the current card only; queued entries wait their turn. */
+    @Test @Config(sdk = [35]) fun foregroundToBackgroundPostsOnlyTheCurrentCard() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        confirmations.setForeground(true)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        val second = async { confirmations.confirm { "Add event two" } }
+        runCurrent()
+        assertEquals(0, notifications.allNotifications.size) // foreground dialog
+        confirmations.setForeground(false)
+        runCurrent()
+        assertEquals(1, notifications.allNotifications.size) // only the current one
+        // Back to foreground: the dialog takes over and the notification goes.
+        confirmations.setForeground(true)
+        runCurrent()
+        assertEquals(0, notifications.allNotifications.size)
+        // Resolve and the queued one becomes current.
+        confirmations.resolve(confirmations.pending.value!!.token, true)
+        runCurrent()
+        assertEquals(PhoneConfirmation.Allowed, first.await())
+        // In the foreground the promoted card posts no notification.
+        assertEquals(0, notifications.allNotifications.size)
+        confirmations.resolve(confirmations.pending.value!!.token, false)
+        assertEquals(PhoneConfirmation.Denied, second.await())
+    }
+
+    /**
+     * Going to background with notifications off ends only the current card as NotShown; a queued entry stays
+     * queued and is then promoted (where it also cannot post and resolves as NotShown on its own).
+     */
+    @Test @Config(sdk = [35]) fun notificationsOffEndsOnlyTheCurrentCard() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        confirmations.setForeground(true)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        val second = async { confirmations.confirm { "Add event two" } }
+        runCurrent()
+        notifications.setNotificationsEnabled(false)
+        confirmations.setForeground(false)
+        runCurrent()
+        assertEquals(PhoneConfirmation.NotShown, first.await())
+        // The second one was promoted and also could not post: NotShown too, but on its own.
+        assertEquals(PhoneConfirmation.NotShown, second.await())
+        assertNull(confirmations.pending.value)
     }
 }
