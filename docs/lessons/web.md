@@ -1,5 +1,12 @@
 # Lessons: web UI and interactions
 
+## A Go toolchain's files are not always under GOROOT (#4559)
+
+Homebrew's Go sets `GOROOT` to the formula's `libexec` directory and keeps `LICENSE` one level up, so a build step that
+reads `$(go env GOROOT)/LICENSE` works with the official distribution and fails on a Homebrew machine. Look in every
+place a supported install keeps the file and, when none has it, fail naming each place tried
+(`web/scripts/go-license.mjs`). Check a build script that reads the toolchain's files on Homebrew's Go too.
+
 ## Remembered task rules need their exact owner and retry context (#4418)
 
 A remembered task rule's key is opaque: encode the returned value as a query parameter, not a reconstruction from its
@@ -348,6 +355,14 @@ A settings editor must wait for the loaded document, preserve history, optional 
 A panel can stay mounted when another tab replaces its credential. Capture the opaque generation and matching authorization when admitting files, including when opening the native chooser. Retire queued files, conflicts and retry controls on replacement or sign-out; fence dispatch, progress and completion independently of React cleanup. Settle cancellation before asking XHR to abort, since transports can ignore abort or deliver late callbacks. An already dispatched server write may still finish.
 
 Exercise the actual hook and upload helper together with a synthetic XHR transport and a real storage event, keeping the same panel mounted. Assert both file identity and Authorization headers: a helper mock can hide a queued file borrowing the next credential. Also cover same-document changes, sign-out followed by the same token, fresh selection recovery, normal progress/cancel/retry and both conflict choices.
+
+### Pending file changes belong to their admitted context (#4453)
+
+Capture the credential generation and panel context before opening a confirmation, editing a name or offering Undo. Retire the action, its retries and its success, error and cleanup callbacks when that context changes; check again immediately before each dispatch. A completed delete's Undo belongs to its workspace and absolute trash identity, so ordinary navigation to another folder does not discard it. Explicit-token requests must still opt into current-owner 401 recovery, while a retired context cannot sign out or reload its replacement. An already dispatched write can still finish on the server.
+
+Hand off the move picker to its conflict question as one sheet, retaining the chosen destination. If a fast replacement closes two stacked history entries together on a phone, their Back cleanup can close the underlying Files panel.
+
+A successful new sign-in is a new generation even when the token is identical. A nonsecret shared epoch lets another tab and its feed cache observe that change synchronously before the storage event. Token and epoch are separate storage writes: a tab that admits work between them retires it when the epoch arrives, and a write already dispatched may still finish remotely. Older web clients that do not read the epoch cannot observe a same-token generation change; if shared storage rejects the epoch, only the signing-in tab can retire that generation. Exercise mounted file controls, the real REST client and synthetic deferred responses, including same-token reauthentication, conflict retry, Undo and ordinary current-owner behavior.
 
 ## Popup menus
 
