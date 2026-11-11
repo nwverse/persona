@@ -197,6 +197,7 @@ Lives at the root of the extension package. Example (a connector for a fictional
 | `permissions` | No | See "Permissions" |
 | `tools` | No | Command-line programs it needs (#4507); the hub installs them in the extension's own directory and puts them on its `PATH`, see "Command-line programs (tools)"; requires `runtime` |
 | `auth` | No | `{title, description?, page?}`: the extension needs a sign-in (#4507); the program implements `auth.*`, see "Sign-in (auth)"; requires a `runtime` that speaks the protocol |
+| `host_integrations` | No | `[{id, version}]`: a configured host CLI integration, by its closed ID and a semantic-version range. At most one; requires an RPC runtime. The program calls `cli.call`, see "Host CLI integrations". This grants no shell, arbitrary command, write or credential access |
 
 Manifests are at most 256 KB and are read strictly: an unknown field at any level means it can't be installed (a misspelled `permission` is not silently ignored).
 
@@ -851,6 +852,29 @@ Exactly one of `archive` and `npm`; if this hub's platform has no `archive` entr
 - **No sudo, nothing global**: it writes only the hub's state directory; anything else the program needs (credentials, caches) goes in the extension's data directory, e.g. by pointing its config directory there with an env var.
 - `tools` in the list and details are the programs this version uses: `[{name, title?, version, reused}]`.
 
+### Host CLI integrations
+
+`tools` installs a program for an extension. `host_integrations` instead names a command-line integration that the owner has already configured on the manager. It is not an alternative way to write an executable or a shell command: the closed integration ID is resolved by the manager, and the extension gets no binary path, profile, configuration or credential.
+
+```json
+"host_integrations": [{"id": "lark-cli", "version": ">=1.0.72 <2.0.0"}]
+```
+
+The supported integration is `lark-cli`, configured by the manager's `lark.cli` section. The owner must additionally set `lark.cli.extensions: true`; without it every request is refused. A configured binary and the manager's effective profile stay in the manager. Installing or upgrading an extension with a newly declared integration requires consent. The integration is optional: a connector can continue serving its own transport when the CLI is unavailable, but must not pretend its auxiliary reads succeeded.
+
+An RPC-speaking program calls the hub with `cli.call`. It must name exactly one declared integration in its manifest; a missing declaration, disabled integration or incompatible installed version fails closed. Input is an object with one `operation` and the bounded fields below. The answer is `{integration, result}`.
+
+| Operation | Input | Result |
+| --- | --- | --- |
+| `auth_status` | None | `{logged_in, expired, user_name?}`; no app binding, tokens or profile configuration |
+| `chats` | `limit?` (0–50; 0 uses the adapter default) | The adapter's bounded chat list |
+| `messages` | `chat_id` or `thread`, `before?`, `limit?` (0–50) | A page of messages |
+| `search` | `query`, `kind`: `messages` / `chats` / `docs` / `people`, `limit?` | `{data}`: the adapter's read-only normalized result; at most 1 MiB |
+
+`query`, chat and thread identifiers and cursors have input bounds. Unknown operations, unsupported search kinds and extra input beyond these contracts are refused. Every invocation has the adapter's bounded timeout. Errors carry only a generic code and category (`permission_denied`, `unsupported`, `rate_limited`, `timeout`, `unavailable` or `invalid_params`): raw command lines, stderr, paths and configuration never enter logs or replies.
+
+This RPC is **read-only**. Message sends and other writes remain connector actions or gated assistant commands, with their existing confirmations. Go SDK programs can call `hub.Call(ctx, "cli.call", params, &result)`.
+
 ### Sign-in (auth)
 
 When an extension needs the user to sign in to some service (scan a QR code, device code, enter a token), the manifest has `auth` and the program implements three methods; the hub turns this into the extension's sign-in state, and every client signs in with the same UI (#4507).
@@ -1149,7 +1173,7 @@ Mirror settings belong to **one extension manager**, not a globally distributed 
 | `GET /api/v1/extensions/-/market-settings` | `{"registry_mirror":"","catalog_mirror":""}` |
 | `PUT /api/v1/extensions/-/market-settings` | Both fields; empty strings clear them |
 
-`registry_mirror` is an HTTPS registry base, optionally with a path prefix; requests use `<base>/v2/<repository>/…`. `catalog_mirror` is a complete official catalog JSON URL, ignored for nonofficial markets. Neither setting changes specs, package references, digests or install origins. URLs cannot contain credentials, queries, fragments or noncanonical paths. Loopback HTTP is reserved for isolated registry tests. Settings use the manager's existing Postgres setting store, with retryable reads and saves. Opening settings does not initialize markets or fetch catalogs. Clients select the manager through the existing manager query routing.
+`registry_mirror` is an HTTPS registry base, optionally with a path prefix; requests use `<base>/v2/<repository>/…`. `catalog_mirror` is a complete official catalog JSON URL, ignored for nonofficial markets. Neither setting changes specs, package references, digests or install origins. URLs cannot contain credentials, queries, fragments or noncanonical paths. Loopback HTTP is reserved for isolated registry tests. Settings use the manager's existing Postgres setting store, with retryable reads and saves. Opening settings does not initialize markets or fetch catalogs. Web pins the selected manager in both the header and the query, which also supports older query-routed hubs. A detected manager or credential-generation change retires the old editor and reloads both fields. The shared pairing epoch lets a current client detect same-token reauthentication and a cross-tab credential round trip at request boundaries before storage events arrive. Older writers, or writers unable to store the shared epoch, cannot announce those transitions in advance; an older writer's same-token sign-in cannot be detected by the token alone. An already dispatched write may still finish; a returning editor waits for it before reading that manager.
 
 Mirrors have an independent eight-second budget and receive **no market token**, even when their origin matches the market. Their bearers are independent and origin-bound. Missing files, timeouts, partial archives and any catalog/manifest/blob/package verification failure fall back upstream with a new staging file, hash and download context. A catalog mirror cannot downgrade the official catalog to unsigned. The configured GitHub network proxy covers GHCR, token and GitHub CDN traffic separately from mirror settings.
 
