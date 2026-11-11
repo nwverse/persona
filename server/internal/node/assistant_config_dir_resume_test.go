@@ -77,27 +77,41 @@ func TestAssistantResumesHomeProfileConversationWithTheVariableUnset(t *testing.
 	}
 }
 
-// A recorded profile that lacks the conversation's transcript (the conversation moved launchers, a rollback resumed it
-// elsewhere) never wins over the transcript: the conversation resumes where its newest transcript is.
+// A recorded profile that holds no copy of the conversation's transcript (the conversation moved launchers, a rollback
+// resumed it elsewhere) never wins over the transcript. One that holds a copy keeps the conversation, also when the copy
+// is older or its projects/ is a symlink to another profile's.
 func TestAssistantResumeFollowsTheTranscriptOverARecordedProfile(t *testing.T) {
 	for _, runtime := range []string{"", proto.AssistantRuntimeAgentSDK} {
-		for _, scenario := range []string{"recorded-lacks-transcript", "recorded-holds-older-copy"} {
+		for _, scenario := range []string{"recorded-lacks-transcript", "recorded-holds-older-copy", "recorded-shares-projects"} {
 			t.Run(runtime+"/"+scenario, func(t *testing.T) {
-				f, _ := resumeTest(t)
+				f, real := resumeTest(t)
 				n := f.n
 				id := "a5500000-0000-4000-8000-000000000102"
 				cwd := filepath.Join(n.dir, "assistant")
 				private := filepath.Join(n.dir, "profiles", "cc-old")
-				machine := t.TempDir()
-				n.cdirs.known = []string{machine}
-				if scenario == "recorded-holds-older-copy" {
+				other := t.TempDir()
+				n.cdirs.known = []string{other}
+				want := private
+				switch scenario {
+				case "recorded-lacks-transcript":
+					want = other
+					writeProfileTranscript(t, other, cwd, id)
+				case "recorded-holds-older-copy":
 					writeProfileTranscript(t, private, cwd, id)
 					old := filepath.Join(private, "projects", "-assistant", id+".jsonl")
 					if err := os.Chtimes(old, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)); err != nil {
 						t.Fatal(err)
 					}
+					writeProfileTranscript(t, other, cwd, id)
+				case "recorded-shares-projects":
+					writeProfileTranscript(t, filepath.Join(real, ".claude"), cwd, id)
+					if err := os.MkdirAll(private, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(filepath.Join(real, ".claude", "projects"), filepath.Join(private, "projects")); err != nil {
+						t.Fatal(err)
+					}
 				}
-				writeProfileTranscript(t, machine, cwd, id)
 				raw, _ := json.Marshal(map[string]any{"launcher": "cc-old", "cwd": cwd, "config_dir": private})
 				var st sessionState
 				if err := json.Unmarshal(raw, &st); err != nil {
@@ -109,16 +123,22 @@ func TestAssistantResumeFollowsTheTranscriptOverARecordedProfile(t *testing.T) {
 					t.Fatalf("resume failed: %v (child saw %q)", err, f.file("cli-profile"))
 				}
 				p := f.proc(id)
-				if got := envValue(p.cmd.Environ(), "CLAUDE_CONFIG_DIR"); !sameScopePath(got, machine) {
-					t.Fatalf("process profile %q, want %q", got, machine)
+				if got := envValue(p.cmd.Environ(), "CLAUDE_CONFIG_DIR"); !sameScopePath(got, want) {
+					t.Fatalf("process profile %q, want %q", got, want)
 				}
 				if runtime == "" {
-					if got := strings.TrimSuffix(f.file("cli-profile"), "\n"); !sameScopePath(strings.TrimPrefix(got, "set:"), machine) {
-						t.Fatalf("CLI child profile %q, want %q", got, machine)
+					if got := strings.TrimSuffix(f.file("cli-profile"), "\n"); !sameScopePath(strings.TrimPrefix(got, "set:"), want) {
+						t.Fatalf("CLI child profile %q, want %q", got, want)
 					}
 				}
-				if st, _ := n.state.get(id); !sameScopePath(st.ConfigDir, machine) {
-					t.Fatalf("recorded profile %q, want %q", st.ConfigDir, machine)
+				if st, _ := n.state.get(id); !sameScopePath(st.ConfigDir, want) {
+					t.Fatalf("recorded profile %q, want %q", st.ConfigDir, want)
+				}
+				// The recorded profile, asked for explicitly, is no move.
+				n.stopAssistant(id)
+				params["config_dir"] = want
+				if _, err := nodeCall(t, n, "assistant.send", params); err != nil {
+					t.Fatalf("resume naming its own profile: %v", err)
 				}
 			})
 		}

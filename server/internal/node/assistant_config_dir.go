@@ -49,13 +49,15 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 				p.mu.Unlock()
 			}
 		}
-		// The newest transcript decides where the conversation resumes. A recorded
-		// profile without it (a launcher switch, a rollback that resumed elsewhere)
-		// would make Claude answer "No conversation found".
+		// A recorded profile holding no copy of the transcript (a launcher switch, a
+		// rollback that resumed elsewhere) would make Claude answer "No conversation
+		// found": resume where the transcript is. A profile that holds a copy, its
+		// projects/ shared through a symlink included, keeps the conversation.
 		if path := n.transcriptPath(id); path != "" {
 			project := filepath.Dir(path)
 			projects := filepath.Dir(project)
-			if filepath.Base(projects) == "projects" && (selected == "" || !sameScopePath(n.assistantConfigPath(selected), filepath.Dir(projects))) {
+			if filepath.Base(projects) == "projects" && (selected == "" ||
+				!fileExists(filepath.Join(n.assistantConfigPath(selected), "projects", filepath.Base(project), filepath.Base(path)))) {
 				selected = filepath.Dir(projects)
 				if sameScopePath(selected, filepath.Join(n.home, ".claude")) {
 					// Preserve the old unset-profile global config, unless
@@ -200,19 +202,29 @@ func (n *Node) claudeProcessEnv(base []string, dir string) []string {
 	if n.sessionScope != nil {
 		dir = n.sessionScope.claude
 	}
+	if dir == "" {
+		// "default" is Claude's unset directory. Claude takes an empty CLAUDE_CONFIG_DIR as a directory of its own (a
+		// resume then finds no conversation), so the variable is removed, not set empty.
+		out := make([]string, 0, len(base))
+		for _, entry := range base {
+			if !strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+				out = append(out, entry)
+			}
+		}
+		return out
+	}
 	return identity.Environment(base, "CLAUDE_CONFIG_DIR="+dir)
 }
 
 // Terminal Agents keep launcherCommand unchanged; only this assistant start
-// overrides a shell's default after startup, using its saved selection. An
-// empty dir is "default": unset, because Claude Code reads an empty
-// CLAUDE_CONFIG_DIR as a directory and a resume then finds no conversation.
+// overrides a shell's default after startup, using its saved selection.
 func (n *Node) launcherCommandIn(name, dir string, q func(string) string) string {
 	cmd := name
 	if _, managed := n.managedLauncher(name); managed {
 		cmd = q(n.bin) + " launch " + name
 	}
 	if dir == "" {
+		// "default": unset after the shell's rc files, not an empty value (claudeProcessEnv)
 		return "unset CLAUDE_CONFIG_DIR; " + cmd
 	}
 	return "CLAUDE_CONFIG_DIR=" + q(dir) + " " + cmd
