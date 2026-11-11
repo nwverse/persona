@@ -26,6 +26,7 @@ const handoffTestValue = "synthetic-handoff-value-5b1e9d"
 func handoffTestNode() *Node {
 	n := launchKeyTestNode()
 	n.secrets = newSecretStage()
+	n.keeper = newAssistantKeeper() // resident: only such a node takes hand-offs
 	return n
 }
 
@@ -497,5 +498,25 @@ func BenchmarkSecretScrubberLine(b *testing.B) {
 	b.SetBytes(int64(len(line)))
 	for b.Loop() {
 		_ = s.line(line)
+	}
+}
+
+// A node that serves one connection takes no hand-off: it would forget what it hides with that connection.
+func TestSecretStageNeedsAResidentNode(t *testing.T) {
+	n := handoffTestNode()
+	n.keeper = nil
+	if _, err := n.secretStageCall(json.RawMessage(`{"check":true}`)); err == nil || !strings.Contains(err.Error(), "resident") {
+		t.Fatalf("one connection's node: %v", err)
+	}
+}
+
+// A value that had CRLF itself, printed to a terminal (each LF becomes CRLF): CR CR LF.
+func TestSecretScrubberCRLFValueInATerminal(t *testing.T) {
+	s := &secretScrubber{}
+	v := "-----BEGIN SYNTHETIC-----\r\nAAAAsyntheticline1\r\n-----END SYNTHETIC-----"
+	s.add([]byte(v))
+	shown := strings.ReplaceAll(v, "\n", "\r\n")
+	if got := s.bytes([]byte("$ cat key\r\n" + shown + "\r\n")); bytes.Contains(got, []byte("AAAAsyntheticline1")) {
+		t.Fatalf("terminal: %q", got)
 	}
 }

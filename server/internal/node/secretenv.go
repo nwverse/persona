@@ -99,6 +99,9 @@ func (n *Node) secretStageCall(params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if n.keeper == nil { // capabilities: only a resident node keeps hiding them after a reconnect
+		return nil, errors.New("secret.stage: only a resident node (Persona Link, personad node --attach) takes hand-offs")
+	}
 	if runtime.GOOS == "windows" {
 		// personad launch stays alive as claude's parent there (osproc.Exec), holding the values for the run.
 		return nil, errors.New("secret.stage: secrets are not handed to Agents on Windows yet")
@@ -149,9 +152,6 @@ func (n *Node) secretStageCall(params json.RawMessage) (any, error) {
 		return nil, err
 	}
 	expires := now.Add(proto.SecretStageKeep)
-	for _, v := range env {
-		s.scrub.add(v.Value) // hidden from now on, the start's own output included
-	}
 	s.mu.Lock()
 	s.dropExpired(now)
 	if len(s.staged) >= secretStageMost {
@@ -161,6 +161,9 @@ func (n *Node) secretStageCall(params json.RawMessage) (any, error) {
 	}
 	s.staged[ticket] = stagedSecrets{env: env, expires: expires}
 	s.mu.Unlock()
+	for _, v := range env { // staged: hidden from now on, the start's own output included
+		s.scrub.add(v.Value)
+	}
 	time.AfterFunc(proto.SecretStageKeep, func() { s.take(ticket, false) }) // not used in time: gone
 	return proto.SecretStageResult{Ticket: ticket, ExpiresAt: expires.UTC()}, nil
 }
@@ -171,10 +174,7 @@ func checkSecretEnv(env []proto.SecretEnvVar) error {
 	}
 	seen := map[string]bool{}
 	for i, v := range env {
-		label := v.Name // said only when it reads as a name: never what could be a value put in its place
-		if !proto.IsSecretEnvName(v.Name) {
-			label = "variable " + strconv.Itoa(i+1)
-		}
+		label := "variable " + strconv.Itoa(i+1) // never the name: a value swapped into its place could read as one
 		if why := compat.SecretEnvNameProblem(v.Name); why != "" {
 			return errors.New("secret.stage: " + label + ": " + why)
 		}
@@ -303,10 +303,7 @@ func fetchSecretEnv(ctx context.Context, ticket string) ([]string, error) {
 	for _, kv := range resp.Env {
 		name, _, _ := strings.Cut(kv, "=")
 		if why := compat.SecretEnvNameProblem(name); why != "" {
-			if !proto.IsSecretEnvName(name) {
-				name = "a variable"
-			}
-			return nil, errors.New(name + ": " + why)
+			return nil, errors.New("a variable the node gave: " + why) // never the name (checkSecretEnv)
 		}
 	}
 	return resp.Env, nil
@@ -360,14 +357,15 @@ func (s *secretScrubber) add(value []byte) {
 	s.rawIdx = newScrubIndex(append(raw, b64...))
 }
 
-// lineEndings is v, and for a value of several lines the same with LF and with CRLF line ends.
+// lineEndings is v, and for a value of several lines the same with LF, with CRLF, and as a terminal shows v itself.
 func lineEndings(v []byte) [][]byte {
 	if !bytes.ContainsAny(v, "\r\n") {
 		return [][]byte{v}
 	}
 	lf := bytes.ReplaceAll(v, []byte("\r\n"), []byte("\n"))
 	crlf := bytes.ReplaceAll(lf, []byte("\n"), []byte("\r\n"))
-	return [][]byte{v, lf, crlf}
+	// A terminal turns each LF into CRLF: a value that had CRLF itself shows with CR CR LF.
+	return [][]byte{v, lf, crlf, bytes.ReplaceAll(v, []byte("\n"), []byte("\r\n"))}
 }
 
 func appendForm(list []scrubForm, f scrubForm) []scrubForm {

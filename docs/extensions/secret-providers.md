@@ -94,12 +94,14 @@ Values handed to one Agent start after the user approves a card (#3962). The com
 - **Hidden in what the computer sends**: from staging on, the node process (every connection it makes to its manager, so a
   reconnect keeps them) replaces each value with `***` in what it sends: inside every JSON string value (transcript items,
   live text, screens, text files read from the computer, cards and their tool input, and the Agent's own requests to Persona,
-  so a value passed to a Persona tool arrives as `***`), and in terminal frames and the full herdr view (decoded, hidden,
-  encoded again; a value of several lines with either line ending). A value's own base64 standing alone (`base64` of the
+  so a value passed to a Persona tool arrives as `***`), and in terminal output (decoded, hidden, encoded again): the full
+  herdr view's raw output, a value of several lines with either line ending included, and terminal frames, which redraw the
+  screen, where the value sits on one row. A value's own base64 standing alone (`base64` of the
   value in the output) becomes base64 of the same length. It keeps the 64 values most recently handed over. This is best
   effort, and does not catch: a value split across two pieces of live text or terminal output, or wrapped across a screen's
   rows; a value inside a larger base64 payload (binary file chunks, forwarded ports, the clipboard), where its base64 lines up
-  only sometimes; other encodings (a JSON number, `\/` escapes, URL encoding); object keys, which are never changed; and
+  only sometimes; a value of several lines in a redrawn terminal frame; other encodings (a JSON number, `\/` or `\u00e9`
+  escapes in JSON passed through from another encoder, URL encoding); object keys, which are never changed; and
   anything after a node restart. An Agent that prints a value still writes it into its own transcript file on that computer
   (as the node's queue of events kept while its manager is away does, before they are sent). Go cannot reliably wipe memory:
   the node zeroes the copies it holds when they are no longer needed, but other copies may stay in its memory until it is

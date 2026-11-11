@@ -118,15 +118,13 @@ var secretEnvReserved = []string{
 	// more that load code or change where things go
 	"OPENSSL_CONF", "OPENSSL_ENGINES", "GOFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER",
 	"ELECTRON_RUN_AS_NODE", "SSLKEYLOGFILE", "GLIBC_TUNABLES", "PHPRC", "PHP_INI_SCAN_DIR", "DOCKER_HOST", "DOCKER_CONFIG",
-	"KUBECONFIG", "BUN_OPTIONS",
+	"KUBECONFIG", "BUN_OPTIONS", "DOTNET_STARTUP_HOOKS", "GOTOOLCHAIN", "GOPROXY", "PS0", "CLASSPATH", "RUSTFLAGS",
+	"PYTHONUSERBASE", "TERMINFO", "CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS",
 	// the Agent's own settings: its launcher's
 	"CODEX_HOME"}
 
 var secretEnvReservedPrefixes = []string{"PERSONA_", "LD_", "DYLD_", "LC_", "HERDR_", "GIT_", "XDG_", "NPM_CONFIG_",
-	"ANTHROPIC_", "CLAUDE_", "OPENAI_BASE", "SUDO_", "LUA_INIT"}
-
-// IsSecretEnvName: name reads as an environment variable name (it may still be a reserved one).
-func IsSecretEnvName(name string) bool { return secretEnvName.MatchString(name) }
+	"ANTHROPIC_", "CLAUDE_", "OPENAI_BASE", "SUDO_", "LUA_INIT", "CORECLR_"}
 
 // SecretEnvNameProblem is why name cannot be a hand-off's variable, "" when it can: an environment variable name
 // (capital letters, digits, underscores, not starting with a digit, at most 64), none of the reserved ones. The old
