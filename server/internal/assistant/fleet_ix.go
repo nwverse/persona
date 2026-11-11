@@ -810,12 +810,15 @@ func (s *Service) expireLoop(ctx context.Context) {
 }
 
 // errReservedCard: a card from a node (a hook, a runtime, a daemon, a Codex list) or an extension may not pass for the
-// password card: only the assistant's secret_run tool makes one (secret_run.go), and the clients show it as that card,
-// with no Agent's name on it.
-var errReservedCard = errors.New("the tool name " + proto.SecretRunTool + " is reserved for the assistant's password card")
+// password card or the hand-off card: only the assistant's secret_run tool makes the one (secret_run.go) and only the
+// manager's Agent start the other, and the clients show them as those cards, the password card with no Agent's name on it.
+var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + " and " + proto.SecretHandoffTool +
+	" are reserved for the manager's password and hand-off cards")
 
-// reservedCard: ix calls itself the password card.
-func reservedCard(ix proto.Interaction) bool { return ix.ToolName == proto.SecretRunTool }
+// reservedCard: ix calls itself the password card or the hand-off card.
+func reservedCard(ix proto.Interaction) bool {
+	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool
+}
 
 // askHub is fleet.ask: a card one of the hub's own features asks (a mail send, Cua's apps, persona_settings),
 // waited for like a hook's.
@@ -991,22 +994,27 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 
 // restoreInteractions takes back, as the manager starts, the resumable cards the last one left pending: their hooks
 // reconnect through the next node and claim them again (waitInteraction), without a second push; the others it left
-// are over (cancelled in the history). A card that was on its way up to the user finds its route again (restoreRoute);
-// one the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
+// are over (cancelled in the history), and the hub is told so: a hub that took over from the one they were shown by
+// does not know them, and an app that resumed its event stream across the switch would keep them up, next to the
+// question asked again (#4568). A card that was on its way up to the user finds its route again (restoreRoute); one
+// the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
 func (s *Service) restoreInteractions(ctx context.Context) {
 	st, ok := s.store().(interface {
-		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, error)
+		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []string, error)
 	})
 	if !ok {
 		return
 	}
-	resumable, err := func() (out []proto.Interaction, err error) {
+	resumable, cancelled, err := func() (out []proto.Interaction, cancelled []string, err error) {
 		defer guard(&err) // a test's store may not keep the table
 		return st.ExpireStaleInteractions(ctx)
 	}()
 	if err != nil {
 		s.logf("expire stale interactions: %v", err)
 		return
+	}
+	for _, id := range cancelled {
+		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
 	}
 	var back []proto.Interaction
 	s.fleet.mu.Lock()
