@@ -239,6 +239,28 @@ check('a message to it: Paseo takes it over under the same id and it goes on', (
 const back = (await paseo.request('fetch_agent_request', { agentId })).agent
 check('the same Paseo agent, back from the archive', back && !back.archivedAt && back.labels?.['persona.session'] === claudeSid, JSON.stringify(back?.labels))
 
+// ---- an agent started in Paseo itself, never driven from the phone ----
+
+// Paseo runs Claude Code's command line itself, so such an agent's transcript reads like a script's one-shot run, which
+// the node leaves out. Archived in Paseo's own app it is a session not running all the same: the bridge names it.
+const inPaseo = async () => {
+  const res = await paseo.request('agent.create.request', { agentId: randomUUID(), config: { provider: 'e2e-claude', cwd: work }, initialPrompt: 'Please E2E_HELLO' },
+    { timeoutMs: 60_000 }).catch(() => undefined)
+  const id = res?.agent?.id
+  return until('its first turn over', async () => {
+    const a = id && (await paseo.request('fetch_agent_request', { agentId: id })).agent
+    const claude = a?.persistence?.sessionId ?? a?.runtimeInfo?.sessionId
+    return a?.status === 'idle' && claude ? { id, claude } : undefined
+  }, 60_000).catch(() => undefined)
+}
+const row = (a, runtime) => node.sessions().find((s) => s.session_id === a?.claude && (s.source_kind === 'runtime') === runtime)
+const kept = await inPaseo()
+await until('listed', () => row(kept, true), 30_000).catch(() => {})
+check('an agent started in Paseo is a session under its Claude id', kept && row(kept, true), kept?.claude)
+await paseo.request('archive_agent_request', { agentId: kept?.id }).catch(() => {})
+await until('the archived one listed as 未运行', () => !row(kept, true) && row(kept, false)?.status === 'offline', 60_000).catch(() => {})
+check('archived in Paseo\'s own app: its transcript is a session not running (未运行)', !row(kept, true) && row(kept, false)?.status === 'offline', kept?.claude)
+
 // ---- the engine changed: the bridge stops ----
 
 await node.call('engine.use', { engine: 'herdr' })
