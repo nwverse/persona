@@ -10,6 +10,14 @@ session. Give all mixed actions one synchronous admission guard, fence late repl
 owner, and exercise both the legacy row and structured choices with a real browser. Load the extra controls lazily;
 the collapsed tray does not need their code on the first screen.
 
+## Viewport ownership must not create a second hover-width peak (#4792)
+
+The user-input rail's viewport-current identity is separate from the pointer or keyboard preview. Apply the existing
+preview-centered bell width to every mark, rather than imposing a minimum width on the current input. Preserve idle
+geometry and current-position accessibility/color. Browser acceptance must hover well away from the current input
+and check all rendered widths against the bell in both themes; a screenshot with both identities on one input hides
+this regression.
+
 ## Profile selections do not follow the catalog revision (#4528)
 
 The model-profile revision versions definitions, not the active selection or rollback. Retire earlier reads, errors,
