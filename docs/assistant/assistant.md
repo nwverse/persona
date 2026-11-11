@@ -653,6 +653,20 @@ Status above input (`MainConversationActionsView.swift`): "Compacting context…
 show `done` / `failed` only if this page observed `running` transition or completion is recent (within 1 / 10 minutes), never ancient results on opening (`MainConversationActions.shown`, same as web).
 New-chat confirmation is a form sheet, "Carry the old chat's summary" on by default; success returns to empty main-chat page, and the first message starts it via the no-main-chat flow. Divider wording matches web / Android.
 
+### Clear context (2026-11-12, #5095)
+
+"Clear context" (web: `/clear` in the main chat and its ⋯ menu) is Cindy's `/clear` for the main chat: the context is cleared in place and the next message starts with a fresh one.
+`POST /api/v1/assistant/main/clear` (hub feature `assistant_main_clear`, `clearMain` in `assistant/start.go`), under the same lock as `main/new` and `startMain`:
+
+1. `expect` as for `main/new`: another device's change since is refused (409 `main_changed`).
+2. A turn is no refusal (Cindy stops it too): Persona's own process for the conversation is closed (`session.close`; the node stops it with what it ran in the background, so nothing starts another turn there), a question it waits on is withdrawn and a Feishu request it reports on is stopped (`UserStopped`). A conversation the user resumed in a terminal (a pane) is not closed: the node's `session.close` would close that terminal. A failed close is logged and the clear goes on.
+3. It is put away as `main/new` puts it (`putAwayMain`): first in `former` (so its machine keeps listing it), renamed "旧主对话 · 至 M月D日" and archived.
+4. Nothing is carried over: no summary, not even the old id, and a background an earlier `main/new` left waiting (`assistant.main_handoff`) is dropped. The next main-chat message starts a new conversation without `--resume` (`startMain`) and with that message alone.
+
+Why archive and not delete or hide in place: the old conversation's id is what other flows keep: to-dos and tasks it handed out (their origin, reports and briefs), `conversation_read`, the knowledge base's reading of past conversations and the run history. Archiving keeps all of them working and the messages reachable under **All chats › Archived**; sending to it again restores it (`unarchiveOnSend`). Why a new conversation and not the same id: the session id is the runtime's own (Claude Code's transcript, Codex's thread), and a fresh context is a new one.
+Why no confirmation: nothing is lost (`docs/design/DESIGN_SYSTEM.md` 4.4, the reversible rung), and Cindy's `/clear` asks nothing either. "New main chat…" stays for carrying a summary over.
+
+iOS and Android do not offer it yet (#5100).
 ## Scheduled tasks
 
 Previously two systems: routines (daily time) and follow-ups (one-shot wakeups from `schedule_followup`), in separate settings;
