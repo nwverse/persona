@@ -1133,7 +1133,9 @@ final class RecordingCapture {
     }
 
     private static var segmentLength: Double {
-        #if os(iOS) || os(visionOS)
+        #if SHARE_EXTENSION
+        RecordingAudioSpec.segmentSeconds // Share › Persona compiles Shared but never records (no UIApplication there)
+        #elseif os(iOS) || os(visionOS)
         UIApplication.shared.applicationState == .active ? RecordingAudioSpec.liveSegmentSeconds : RecordingAudioSpec.segmentSeconds
         #else
         WatchRecordingTransfer.shared.reachable ? RecordingAudioSpec.liveSegmentSeconds : RecordingAudioSpec.segmentSeconds

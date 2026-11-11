@@ -132,7 +132,10 @@ final class AppModel {
     @ObservationIgnored private var spaceCells: [String: SpaceCell] = [:]
     /// Pending interactions by `uid` (the hub's id, with the group for another group).
     private(set) var interactions: [String: Interaction] = [:] {
-        didSet { saveSnapshot(); countBadges(); withdrawSettled(Set(oldValue.keys).subtracting(interactions.keys)) }
+        didSet {
+            saveSnapshot(); countBadges(); withdrawSettled(Set(oldValue.keys).subtracting(interactions.keys))
+            PermissionDiff.prewarm(interactions.lazy.filter { oldValue[$0.key] == nil }.map(\.value))
+        }
     }
     /// When each group's whole list of pending interactions was last asked for (NotificationWithdrawal.stale).
     @ObservationIgnored var interactionsListedAt: [String: Date] = [:]
@@ -262,6 +265,9 @@ final class AppModel {
     /// The directions' names by leader conversation id (`GET /api/v1/assistant/leaders`): the sidebar's Directions group
     /// shows these instead of the conversations' titles. Read again with the assistant; empty without leaders.
     private(set) var directionNames: [String: String] = [:]
+    /// How much work each direction holds (`GET /api/v1/assistant/directions/tree`, read on its `directions` push and on
+    /// every (re)connect): the sidebar's "N working · N need you" under its name. Empty from a hub without the tree.
+    private(set) var directionCounts: [String: APIClient.DirectionCounts] = [:]
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
     /// The assistant conversation shown in the Chat tab (persisted across launches).
     ///
@@ -318,7 +324,8 @@ final class AppModel {
     #if DEBUG
     @ObservationIgnored var inboxHandOffDoneForTests: ((PendingMessage.InboxHandOff) -> Void)?
     #endif
-    /// Per group: the task asking a member-connected group's center whether it answers again (HubLinks.watchCenter).
+    /// Per group: the task asking whether a preferred candidate (the center, a hub's earlier address) answers again
+    /// while the socket is on a fallback (HubLinks.watchCenter).
     @ObservationIgnored var centerWatch: [String: Task<Void, Never>] = [:]
     @ObservationIgnored let outboxWriter = Debouncer(.milliseconds(300))
     /// By group and machine.
@@ -383,6 +390,7 @@ final class AppModel {
             assistantCurrent = SessionKey(path: v)
         }
         connection.lives = { [weak self] in self?.links.map(\.live) ?? [] }
+        connection.onPathChange = { [weak self] in self?.recheckRoutes() }
         buildLinks()
         if registry.hubs.isEmpty, !registryUnreadable, UserDefaults.standard.bool(forKey: Self.demoKey) {
             links = [makeLink("", .demo)]
@@ -413,6 +421,16 @@ final class AppModel {
         }
         applyPersonaPalette()
         connection.onCaughtUp = { [weak self] in self?.flushOutbox() }
+        #if os(iOS) || os(visionOS)
+        let leaving = [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
+        #else
+        let leaving = [NSApplication.willTerminateNotification]
+        #endif
+        for name in leaving {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable [weak self] _ in
+                MainActor.assumeIsolated { self?.flushSnapshot() }
+            }
+        }
         #if os(iOS) || os(visionOS)
         if registryUnreadable {
             NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
@@ -541,6 +559,9 @@ final class AppModel {
             let parts = s.split(separator: ":", maxSplits: 1).map(String.init)
             r.hubs[0].config.access = parts.count == 2 ? HubAccess(clientID: parts[0], clientSecret: parts[1]) : nil
         }
+        // `-seedHubAddresses <base64 of a [HubAddress] JSON>`: the first hub's added addresses (screenshots, #4670).
+        if let s = UserDefaults.standard.string(forKey: "seedHubAddresses"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
+           let list = try? JSONDecoder().decode([HubAddress].self, from: json) { r.hubs[0].addresses = list.isEmpty ? nil : list }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()
@@ -579,7 +600,7 @@ final class AppModel {
         var new = new
         if new.access == nil { new.access = registry.hubs.first { $0.config.url == new.url }?.config.access }
         if let ssh, ssh.isUsable {
-            let direct = ssh.always ? false : await HubRoute.healthProbe(new)
+            let direct = ssh.always ? false : await HubRoute.healthProbe(.init(config: new))
             if !direct { try await tunnels.open(SSHTunnels.pairingID, route: ssh, hub: new.url) }
         }
         let client = APIClient(config: new)
@@ -735,7 +756,10 @@ final class AppModel {
         phoneConfirmations.denyAll()
         toolResults.forget(groups: Set(links.map(\.group)))
         // Where Hand to AI sent each source's items: ids on a hub that is gone (#2121).
-        for group in Set(links.map(\.group)).union([hubGroup]) { InboxHandOffMemory.forget(group: group) }
+        for group in Set(links.map(\.group)).union([hubGroup]) {
+            InboxHandOffMemory.forget(group: group)
+            ForwardMemory.forget(group: group) // and where forwards went (#3807)
+        }
         LarkDrafts.shared.forget()
         pairingEngineMachine = nil
         checklistPending = false
@@ -945,6 +969,12 @@ final class AppModel {
         return assistantLists.group == group && assistantLists.shown == shown ? assistantLists : AssistantLists(allSessions, group: group, shown: shown)
     }
 
+    /// Whether this device writes its time zone to the hub: when it differs, and the user did not pick one by hand
+    /// (#1855, on Android); a hub that never says follows the devices, as before.
+    nonisolated static func syncsZone(_ st: APIClient.AssistantState, device zone: String) -> Bool {
+        st.timezonePicked != true && !zone.isEmpty && st.timezone != zone
+    }
+
     /// Loads the assistant config; with no remembered conversation, picks up the newest one.
     func refreshAssistant() async {
         guard let api else { return }
@@ -963,14 +993,14 @@ final class AppModel {
                 }
             }
             // Routines and the assistant's sense of "now" follow this device's time zone (the Mac app writes its
-            // own too; the hub keeps whichever came last).
+            // own too; the hub keeps whichever came last), unless the user picked one by hand (#1855): then it stays.
             let tz = TimeZone.current.identifier
-            if st.timezone != tz, let updated = try? await api.setAssistant(timezone: tz) {
+            if Self.syncsZone(st, device: tz), let updated = try? await api.setAssistant(timezone: tz) {
                 guard showsPage(of: api) else { return }
                 assistantConfig = updated
             }
             guard showsPage(of: api) else { return }
-            await refreshDirectionNames(api, leaders: st.leaders ?? [])
+            await refreshDirectionInfo(api, leaders: st.leaders ?? [])
             guard showsPage(of: api) else { return }
             // A hub that names no launcher gets the same retry state as a failed read (#4200): current hubs always
             // resolve one (their default), so an empty answer means an old hub — show Couldn't Load Settings instead of an
@@ -982,21 +1012,58 @@ final class AppModel {
         }
     }
 
-    /// The directions' names for `leaders`: none without leaders; a hub that cannot list them keeps the names held
-    /// (or none), and the sidebar shows those conversations' titles.
-    private func refreshDirectionNames(_ api: APIClient, leaders: [String]) async {
+    /// The directions' names for `leaders`: none without leaders; a hub that cannot list them keeps what is held (or
+    /// none), and the sidebar shows those conversations' titles. The counts come from the direction tree alone.
+    private func refreshDirectionInfo(_ api: APIClient, leaders: [String]) async {
         guard !leaders.isEmpty else {
             if !directionNames.isEmpty { directionNames = [:] }
+            if !directionCounts.isEmpty { directionCounts = [:] }
             return
         }
-        guard let names = try? await api.directionNames(), showsPage(of: api), names != directionNames else { return }
-        directionNames = names
+        guard let list = try? await api.leaders(), showsPage(of: api) else { return }
+        let names = APIClient.directionNames(list)
+        if names != directionNames { directionNames = names }
     }
 
-    /// The assistant's leader conversations (the sidebar's Directions), in the hub's order, never the main one.
+    /// The assistant's leader conversations (the sidebar's Directions), never the main one, in the hub's order.
     var assistantLeaders: [String] {
         let main = assistantConfig?.main
         return (assistantConfig?.leaders ?? []).filter { !$0.isEmpty && $0 != main }
+    }
+
+    /// Makes conversation `id` a direction on the hub, or ends it (#4331): the hub's new list is read back, and an
+    /// error is shown as it is.
+    func setDirectionLead(_ id: String, _ lead: Bool) async {
+        guard let api else { return }
+        Haptics.tap()
+        do {
+            if lead { try await api.makeDirection(id) } else { try await api.endDirection(id) }
+            await refreshAssistant()
+            toast = Toast(lead ? String(localized: "Direction Pinned [Assistant Sidebar 2e8a51]")
+                               : String(localized: "Direction Ended [Assistant Sidebar 9c07f3]"), style: .success)
+        } catch { show(error) }
+    }
+
+    /// The hub's direction tree (#4352): its current directions in order, their names and counts. Read on the hub's
+    /// `directions` push and on every (re)connect. The tree answers for the default manager alone, so another manager's
+    /// page keeps what `GET /api/v1/assistant/leaders` gave it; a hub older than the tree (404) changes nothing.
+    private func refreshDirectionTree(_ api: APIClient) async {
+        guard assistantShows(nil), showsPage(of: api) else { return }
+        guard let tree = try? await api.directionsTree(), assistantShows(nil), showsPage(of: api) else { return }
+        let directions = APIClient.directions(tree)
+        let names = APIClient.directionNames(tree)
+        let counts = APIClient.directionCounts(tree)
+        if names != directionNames { directionNames = names }
+        if counts != directionCounts { directionCounts = counts }
+        let ids = directions.map(\.id)
+        if ids != assistantLeaders, var cfg = assistantConfig {
+            cfg.leaders = ids
+            assistantConfig = cfg
+        }
+        // A direction the page's conversations do not list yet: the whole settings are read, so its row appears
+        // without a relaunch.
+        let known = Set((assistantConfig?.conversations ?? []).map(\.sessionID))
+        if ids.contains(where: { !known.contains($0) }) { await refreshAssistant() }
     }
 
     /// The Couldn't Load Settings retry: the page flips back to Reading at once, and repeated taps share the one request (#4200).
@@ -1176,6 +1243,9 @@ final class AppModel {
         if let c = chats[key] { return c }
         let c = ChatStore(key: key, cacheFolder: stateFolder)
         c.onArrived = { [weak self] in self?.saveOutbox() }
+        if let current = session(key), current.assistant == true {
+            c.updateQueuePhotoMarks(queued: current.queued, own: current.ownQueuedCount)
+        }
         chats[key] = c
         evictChats()
         return c
@@ -1227,11 +1297,25 @@ final class AppModel {
             // still reported, by the read of the transcript itself.
             guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else { return }
             guard self.api(key.group)?.config.url == api.config.url else { return }
-            let list = (sessionsByMachine[key.machineRef] ?? []).filter { $0.key != key } + [full]
-            applySessions([key.machineRef: list])
+            // In its place: the same row again must leave the list equal, or every reader of the sessions redraws
+            // for nothing (#4683).
+            applySessions([key.machineRef: Self.replacing(full, in: sessionsByMachine[key.machineRef] ?? [])])
         } catch {
             if isSubscribed(key), !error.isQuiet { chat(key).error = error.localizedDescription }
         }
+    }
+
+    /// `row` where the list has its session (any other copy of it dropped), or at the end when it has none: an unchanged
+    /// row leaves the list equal.
+    nonisolated static func replacing(_ row: Session, in list: [Session]) -> [Session] {
+        let key = row.key
+        guard let first = list.firstIndex(where: { $0.key == key }) else { return list + [row] }
+        var out = list
+        out[first] = row
+        if out[(first + 1)...].contains(where: { $0.key == key }) {
+            out = out.enumerated().filter { $0.offset <= first || $0.element.key != key }.map(\.element)
+        }
+        return out
     }
 
     func subscribe(_ key: SessionKey, by owner: UUID) {
@@ -1427,8 +1511,10 @@ final class AppModel {
         visibleSession = shown.last?.key
     }
 
-    /// Asks for everything after what the chat holds without holes (`covered`), or the last exchanges if nothing.
+    /// Asks for everything after what the chat holds without holes (`covered`), or the last exchanges if nothing. Built
+    /// only to be sent: the moves of the session's rev heard so far count as read (`AgentSync.subscribing`).
     private func subscribeMessage(_ key: SessionKey) -> [String: Any] {
+        AgentSync.shared.subscribing(key)
         var msg: [String: Any] = ["type": "subscribe", "machine_id": key.machineID, "session_id": key.sessionID, "lazy_images": true,
                                   "fold_work": true]
         let covered = chat(key).covered
@@ -1532,6 +1618,8 @@ final class AppModel {
         registerPhone(link)
         // Phone tool results answered while the socket was down: the hub matches them to their calls by call_id (#4456).
         toolResults.flush(group: group, on: link.live)
+        // Items the Handle Notification shortcut kept while this hub could not be reached (#3848).
+        if let api = api(group) { Task { await ShortcutItemFlow.flush(api) } }
         // The hub resumed its broadcasts (docs/operations/hub-restart.md): what this app missed follows the hello, and the
         // connection's snapshot (machines, sessions, pending interactions) is whole: nothing to fetch again, no Updating….
         let plan = ReconnectPlan(resumed: link.live.resumed)
@@ -1726,12 +1814,16 @@ final class AppModel {
         var olds: [(old: [Session], new: [Session])] = []
         for (machineID, list) in byMachine {
             let old = lists[machineID] ?? []
-            if old != list { lists[machineID] = list }
+            guard old != list else { continue } // the same rows again: no transition, nothing new for AgentSync (#4683)
+            lists[machineID] = list
             olds.append((old, list))
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
         WatchSync.shared.push(summary: watchSummary())
         for (old, new) in olds {
+            for session in new where session.assistant == true {
+                chats[session.key]?.updateQueuePhotoMarks(queued: session.queued, own: session.ownQueuedCount)
+            }
             notifyTransitions(old: old, new: new)
             AgentSync.shared.sessions(new)
         }
@@ -1775,6 +1867,8 @@ final class AppModel {
                 Task { await self.refresh(link) }
             }
             if isHub { PersonalAgentSync.shared.received([]) }
+            // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
+            if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
             Task { await refreshInAppTunnel(group) }
             Task { await refreshManagerRoster(group) }
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
@@ -1872,6 +1966,10 @@ final class AppModel {
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
             Task { await refreshManagerRoster(group) }
+        case .directions:
+            // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
+            // manager's page keeps what GET leaders gave it (docs/assistant/managers.md "Clients").
+            if isHub, let hubAPI = api, assistantShows(nil) { Task { await refreshDirectionTree(hubAPI) } }
         case .assistantFeed(let item):
             if isHub { TasksStore.shared.received(item, group: group) }
         case .assistantView(let view):
@@ -1901,6 +1999,7 @@ final class AppModel {
             if isHub, pushedBy(manager) == nil { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
+            if ext == SubscriptionsUI.id { SubscriptionsRefresh.shared.changed() } // the entry rows' counts
             #if os(iOS) || os(visionOS)
             ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
             #endif
@@ -2001,6 +2100,7 @@ final class AppModel {
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
+        case .directions: "directions"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
         case .assistantViewAction: "assistant_view_action"
@@ -2203,28 +2303,106 @@ final class AppModel {
     /// A send the computer refused because its input box holds a draft (SendSafety.swift).
     var sendRefusal: SendRefusal?
 
-    /// Edit or delete one queued message: everything is pulled back out of claude and the others re-queued.
+    /// Edit or delete one queued message: everything is pulled back out of claude and the others re-queued. One taken
+    /// back to edit goes into the composer as it was written (#3022), not as the text Claude's queue keeps of it.
     func editQueued(_ key: SessionKey, index: Int, delete: Bool) async {
-        guard allowSend(key), let api = api(key.group), let queue = session(key)?.queued, queue.indices.contains(index) else { return }
+        guard allowSend(key), let api = api(key.group), let session = session(key), let queue = session.queued,
+              queue.indices.contains(index), index < session.ownQueuedCount else { return }
         do {
-            let pulled = try await api.editQueue(key, keep: queue.indices.filter { $0 != index })
+            let response = try await api.editQueue(key, keep: queue.indices.filter { $0 < session.ownQueuedCount && $0 != index })
+            let pulled = response.queue
+            let taken = pulled.indices.contains(index) ? pulled[index] : nil
+            // A Persona hub returns its photos with the queue. An Agent queue has only text, so use this phone's outbox.
+            let local = taken.flatMap { t in chat(key).pending.first { $0.state == .sent && PendingMessage.same(t, $0.text) } }?.images ?? []
+            let sent = response.images.flatMap { images in images.indices.contains(index) ? images[index] : nil } ?? local
             // The one taken out will not reach the transcript: its sent bubble goes now, not when the turn ends.
-            if pulled.indices.contains(index), chat(key).pulledBack(pulled[index]) { saveOutbox() }
-            if !delete, pulled.indices.contains(index) {
-                let current = drafts[key] ?? ""
-                drafts[key] = current.isEmpty ? pulled[index] : current + "\n" + pulled[index]
+            if let taken, chat(key).pulledBack(taken) { saveOutbox() }
+            var outcome = (left: 0, unpreviewable: 0)
+            if !delete, let taken {
+                outcome = await restoreQueued(key, QueuedDraft(taken, photoCount: sent.count), sent: sent,
+                                              preservePayloads: response.images != nil)
             }
             Haptics.success()
-            toast = Toast(delete ? String(localized: "Removed from the queue") : String(localized: "Moved back to the input box. Edit it and send again."), style: .success)
+            if outcome.unpreviewable > 0 {
+                toast = Toast(String(localized: "Moved back to the input box. \(outcome.unpreviewable) photos could not be previewed; their original data is kept."), style: .info)
+            } else {
+                toast = outcome.left > 0
+                    ? Toast(String(localized: "Moved back to the input box. \(outcome.left) attachments couldn't be put back and stay in the message as text."), style: .info)
+                    : Toast(delete ? String(localized: "Removed from the queue") : String(localized: "Moved back to the input box. Edit it and send again."), style: .success)
+            }
         } catch {
             show(error)
         }
     }
 
+    /// A queued message taken back to edit (#3022): its words under what the box holds, its photos (the ones this phone
+    /// sent, else read from the conversation's machine by their paths), videos and quotes back in their bars. A pathful
+    /// photo that can't be had, or doesn't fit beside the ones already in the box, leaves its path in the words (a video
+    /// its tag). A pathless Persona photo stays in the composer even past the picker's cap, and an unreadable preview
+    /// keeps its original payload: nothing is silently lost. Returns the text fallbacks and unreadable preview counts.
+    private func restoreQueued(_ key: SessionKey, _ draft: QueuedDraft, sent: [ImagePayload],
+                               preservePayloads: Bool) async -> (left: Int, unpreviewable: Int) {
+        let held = composerAttachments(key)
+        // Each photo with its path on the machine (the outbox's in the order they went, as the paths are).
+        var photos: [(path: String?, photo: (UIImage, ImagePayload))] = []
+        var left: [String] = []
+        var copies: [(UIImage, ImagePayload)] = []
+        var unpreviewable = 0
+        for payload in sent {
+            if let photo = await Self.composerPhoto(payload) {
+                copies.append(photo)
+            } else if preservePayloads {
+                copies.append((UIImage(), payload))
+                unpreviewable += 1
+            }
+        }
+        if copies.count >= draft.imagePaths.count {
+            photos = copies.enumerated().map { (draft.imagePaths.indices.contains($0.offset) ? draft.imagePaths[$0.offset] : nil, $0.element) }
+        } else { // sent from elsewhere, or its copy here is gone
+            for path in draft.imagePaths {
+                if let photo = await machinePhoto(key, path) { photos.append((path, photo)) } else { left.append(path) }
+            }
+        }
+        let room = max(0, MessagePhotos.limit - held.images.count)
+        let overflow = photos.dropFirst(room)
+        left += overflow.compactMap(\.path)
+        held.images += photos.prefix(room).map(\.photo)
+        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still enforces the four-photo cap.
+        held.images += overflow.filter { $0.path == nil }.map(\.photo)
+        left += held.videos.restore(draft.files).map(\.xml)
+        if !draft.contexts.isEmpty { composerContexts[key] = (composerContexts[key] ?? []) + draft.contexts }
+        let words = ([draft.text] + left).filter { !$0.isEmpty }.joined(separator: "\n")
+        if !words.isEmpty {
+            let current = drafts[key] ?? ""
+            drafts[key] = current.isEmpty ? words : current + "\n" + words
+        }
+        return (left.count, unpreviewable)
+    }
+
+    /// A photo as the composer holds it, from the bytes a message carried: decoded off the main actor and no larger than
+    /// a picked one (`MessagePhotos.maxSide`), as `LarkMedia` decodes (docs/apple/performance.md, P8).
+    private static func composerPhoto(_ payload: ImagePayload) async -> (UIImage, ImagePayload)? {
+        let side = MessagePhotos.maxSide
+        let image = await Task.detached(priority: .userInitiated) {
+            Data(base64Encoded: payload.data).flatMap { LarkMedia.decode($0, maxPixel: side) }
+        }.value
+        return image.map { ($0, payload) }
+    }
+
+    /// A photo a message carried, read back from the conversation's machine.
+    private func machinePhoto(_ key: SessionKey, _ path: String) async -> (UIImage, ImagePayload)? {
+        guard let api = api(key.group), let file = try? await api.file(machine: key.machineID, path: path, cwd: nil) else { return nil }
+        let mime = file.mime ?? "image/jpeg"
+        if let data = file.data, let photo = await Self.composerPhoto(ImagePayload(mime: mime, data: data)) { return photo }
+        // A big one comes described, its bytes from the download.
+        guard let bytes = try? await api.fileBytes(machine: key.machineID, path: path, cwd: nil) else { return nil }
+        return await Self.composerPhoto(ImagePayload(mime: mime, data: bytes.base64EncodedString()))
+    }
+
     /// Moves a queued message one place up or down (#6088): the queue is pulled back and re-queued in the new order.
     func moveQueued(_ key: SessionKey, index: Int, by step: Int) async {
-        guard allowSend(key), let api = api(key.group), let queue = session(key)?.queued,
-              let keep = QueueOrder.moved(count: queue.count, index: index, by: step) else { return }
+        guard allowSend(key), let api = api(key.group), let session = session(key),
+              let keep = QueueOrder.moved(count: session.ownQueuedCount, index: index, by: step) else { return }
         do {
             _ = try await api.editQueue(key, keep: keep)
             Haptics.tap()
@@ -2235,7 +2413,7 @@ final class AppModel {
 
     /// Gives the agent its queued messages now instead of at its next tool boundary (#6088).
     func sendQueuedNow(_ key: SessionKey) async {
-        guard allowSend(key), let api = api(key.group) else { return }
+        guard allowSend(key), let api = api(key.group), (session(key)?.ownQueuedCount ?? 0) > 0 else { return }
         do {
             try await api.sendQueuedNow(key)
             Haptics.success()
@@ -2260,14 +2438,22 @@ final class AppModel {
         return true
     }
 
-    /// Puts the message on screen immediately and sends it in the background; a failure marks it for retry.
-    func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = []) {
-        guard allowSend(key) else { return }
+    /// Puts the message on screen immediately and sends it in the background; a failure marks it for retry. Returns whether
+    /// the send was accepted, so a composer clears only then (a refusal must leave everything typed or restored in place).
+    @discardableResult
+    func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = []) -> Bool {
+        guard allowSend(key) else { return false }
+        // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
+        guard images.count <= MessagePhotos.limit else {
+            toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+            return false
+        }
         let msg = PendingMessage(text: text, images: images)
         chat(key).pending.append(msg)
         saveOutbox()
         Haptics.tap()
         deliver(key, msg)
+        return true
     }
 
     /// Sends /clear to a herdr pane's claude and waits for the pane to show up under its new session id (Claude Code
@@ -2326,9 +2512,26 @@ final class AppModel {
         }
     }
 
+    /// Deletes a message only on this phone (`PendingMessage.onlyHere`: failed, or waiting for the network), from its
+    /// mark's menu or its long press: the bubble and its outbox entry go and nothing is sent. Undo in the toast puts it
+    /// back where it was (#4626).
     func discard(_ key: SessionKey, _ msg: PendingMessage) {
-        chat(key).pending.removeAll { $0.id == msg.id }
+        let store = chat(key)
+        guard let i = store.pending.firstIndex(where: { $0.id == msg.id }) else { return }
+        let gone = store.pending.remove(at: i)
         saveOutbox()
+        toast = .messageDeleted { [weak self] in self?.undoDiscard(key, gone, at: i) }
+    }
+
+    /// `discard`'s Undo: the message comes back as it was, where it was; a waiting one goes out once the app is
+    /// connected. Not when its transcript copy came in meanwhile (one that may have arrived after all).
+    func undoDiscard(_ key: SessionKey, _ msg: PendingMessage, at i: Int) {
+        let store = chat(key)
+        guard !store.pending.contains(where: { $0.id == msg.id }),
+              !store.items.contains(where: { PendingMessage.tied($0, to: msg.id) == true }) else { return }
+        store.pending.insert(msg, at: min(i, store.pending.count))
+        saveOutbox()
+        if msg.state == .waiting { flushOutbox() }
     }
 
     private func deliver(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
@@ -2883,7 +3086,9 @@ final class AppModel {
         }
     }
 
-    @ObservationIgnored private let snapshotWriter = Debouncer(.seconds(2))
+    /// At most one write a minute (#4684): about 390 KB on a hub with about 230 sessions, which change all the time. A
+    /// cold start paints from it, and a minute-old copy paints as well; the app leaving writes what is waiting.
+    @ObservationIgnored private let snapshotWriter = Throttle(gap: .seconds(60))
     /// Each group's default manager's Persona settings, kept for when its page shows again (`assistantConfig` is the page's
     /// of the moment).
     @ObservationIgnored var assistantByGroup: [String: APIClient.AssistantState] = [:]
@@ -2921,6 +3126,9 @@ final class AppModel {
         interactions = Dictionary(allInteractions.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         assistantConfig = heldAssistant(hub?.group ?? "")
     }
+
+    /// The snapshot waiting for its turn, written now: the app is going to the background or quitting.
+    func flushSnapshot() { snapshotWriter.flush() }
 
     func saveSnapshot() {
         snapshotWriter.run { [weak self] in
@@ -2964,6 +3172,7 @@ final class AppModel {
             defaultAssistantReads.remove(g)
             assistantItemManagers = assistantItemManagers.filter { $0.key.group != g }
             InboxHandOffMemory.forget(group: g)
+            ForwardMemory.forget(group: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
         }
         if links.contains(where: { $0.fleet != nil }) { LiveActivityController.shared.apply(mergedFleet()) }
@@ -3381,6 +3590,11 @@ struct Toast: Identifiable, Equatable {
     }
 
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }
+
+    /// A message only on this phone was deleted (#4626): Undo brings it back.
+    static func messageDeleted(undo: @escaping @MainActor () -> Void) -> Toast {
+        Toast(String(localized: "Message deleted"), style: .success, action: Action(title: String(localized: "Undo"), run: undo))
+    }
 }
 
 #if os(visionOS)
