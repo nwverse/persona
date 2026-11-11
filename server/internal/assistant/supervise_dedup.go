@@ -36,6 +36,10 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	if len(e.Asks) > 0 { // the cards it lists are what is new about it
 		fields = append(fields, e.Asks)
 	}
+	// Each park's time, and each new Inbox message, is news of its own, whatever its agent said last.
+	if g.Kind == sigParkedDue || g.Kind == sigInbox {
+		fields = append(fields, g.Key)
+	}
 	payload, _ := json.Marshal(fields)
 	sum := sha256.Sum256(payload)
 	return string(key), hex.EncodeToString(sum[:])
@@ -103,8 +107,10 @@ func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
 		if b.sent[g.id()] == g.Key {
 			delete(b.sent, g.id())
 		}
-		if _, newer := b.pending[g.id()]; !newer {
+		if cur, newer := b.pending[g.id()]; !newer {
 			b.pending[g.id()] = g
+		} else if g.Kind == sigInbox && cur.Key != g.Key {
+			b.pending[g.id()] = joinInbox(g, cur) // the newer item, with the messages of both
 		}
 	}
 	s.retryDigestLocked(s.superviseTimings().urgent)

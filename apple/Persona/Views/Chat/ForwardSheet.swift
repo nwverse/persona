@@ -15,15 +15,22 @@ struct ForwardSheet: View {
     @State private var sessions: [Session] = []
     @State private var busy: ForwardTarget?
     @State private var error: String?
+    /// The recent targets, read once when the sheet opens.
+    @State private var recents: [SessionKey] = []
+    /// The lists, made when the sheet opens and again as the search changes, never in `body`.
+    @State private var sections: [ForwardTargets.Section] = []
 
     private var from: SessionKey { draft.source.key }
-    private var main: SessionKey? { model.assistantMain.flatMap { $0.group == from.group ? $0 : nil } }
-    private var machines: [(ref: MachineRef, name: String)] {
-        model.machines.filter { $0.group == from.group }.map { ($0.ref, $0.name) }
+    private var main: SessionKey? {
+        guard let main = model.assistantMain, main.group == from.group else { return nil }
+        return main
     }
-    private var sections: [ForwardTargets.Section] {
-        ForwardTargets.sections(sessions, from: from, recents: ForwardMemory(group: from.group).sessions, main: main,
-                                machines: machines, query: query) { model.machine($0)?.online == true }
+
+    private func list() {
+        let machines = model.machines.filter { $0.group == from.group }.map { (ref: $0.ref, name: $0.name) }
+        sections = ForwardTargets.sections(sessions, from: from, recents: recents, main: main, machines: machines, query: query) {
+            model.machine($0)?.online == true
+        }
     }
 
     var body: some View {
@@ -68,8 +75,8 @@ struct ForwardSheet: View {
                     Text(error).font(Theme.Font.caption).foregroundStyle(Theme.danger)
                 }
             }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: Text("Search chats, computers or projects"))
+            .pageSearchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                            prompt: String(localized: "Search chats, computers or projects"))
             .navigationTitle("Forward To")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -79,7 +86,12 @@ struct ForwardSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .onAppear { sessions = model.sessionsNow }
+        .onAppear {
+            sessions = model.sessionsNow
+            recents = ForwardMemory(group: from.group).sessions
+            list()
+        }
+        .onChange(of: query) { list() }
         .accessibilityIdentifier("forward.sheet")
     }
 

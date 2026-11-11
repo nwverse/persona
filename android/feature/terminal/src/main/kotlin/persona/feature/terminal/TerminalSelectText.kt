@@ -1,7 +1,5 @@
 package persona.feature.terminal
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -12,7 +10,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -26,17 +23,12 @@ import persona.core.terminal.TerminalText
  */
 @Composable
 internal fun TerminalSelectText(text: String, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val feedback = LocalAppFeedback.current
+    val copy = rememberCopy()
     val palette = PersonaTheme.palette
-    val clipLabel = stringResource(R.string.terminal_clip_label)
-    val copied = stringResource(R.string.terminal_copied)
     JFullScreen(onDismiss) {
         JPage(stringResource(R.string.terminal_select_text), onBack = onDismiss, actions = {
             JTextButton(stringResource(R.string.terminal_copy_all), {
-                context.getSystemService(ClipboardManager::class.java)
-                    ?.setPrimaryClip(ClipData.newPlainText(clipLabel, text))
-                feedback?.notice(copied)
+                copy(text, null)
                 onDismiss()
             }, enabled = text.isNotEmpty())
         }) { padding ->

@@ -165,6 +165,12 @@ type receiptBody struct {
 	PR      string         `json:"pr,omitempty"`
 	Machine string         `json:"machine,omitempty"`
 	Review  *receiptReview `json:"review,omitempty"`
+	// Criteria: a done receipt's list of its brief's criteria as they stood when the agent stopped (#3822,
+	// briefCriteriaNow): met or not met as the supervision ledger tracks them (#3635: the agent's reports and the
+	// reviews), unchecked while pending there, or dropped by a scope change.
+	// Absent without a brief or criteria. CriteriaMore: how many the list left out.
+	Criteria     []BriefCriterion `json:"criteria,omitempty"`
+	CriteriaMore int              `json:"criteria_more,omitempty"`
 	// Reroute names the machine a flexible task was moved off and where it landed, with the health-check reason;
 	// absent when it ran where it was asked (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
@@ -360,6 +366,13 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 			body.Review = &receiptReview{State: state, Criteria: len(v.DoneWhen)}
 		}
 	}
+	if current, ok := s.todoNow(t.ID); ok {
+		if list := s.briefCriteriaNow(current); len(list) > briefCriteriaMost {
+			body.Criteria, body.CriteriaMore = list[:briefCriteriaMost], len(list)-briefCriteriaMost
+		} else {
+			body.Criteria = list
+		}
+	}
 	if body.Summary == "" {
 		body.Summary = i18n.T(s.lang(cctx), "assistant-tasks.done")
 	}
@@ -441,12 +454,24 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 	if len(agents) == 0 {
 		return FeedItem{}, i18n.Err("assistant-tasks.route_no_agent")
 	}
-	c := pickTaskAgent(agents)
+	live, last := liveTaskAgents(agents)
+	if len(live) == 0 { // every agent has stopped (read-only, #4754): the user's message starts a new one (tasks_successor.go)
+		if relay != "" {
+			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_stopped")
+		}
+		started, err := s.startTaskSuccessor(ctx, t, last, text)
+		if err != nil {
+			return FeedItem{}, err
+		}
+		return s.appendFeed(ctx, conversation, feedRouted, todoID, map[string]string{"text": text,
+			"new_agent": started.SessionID, "new_agent_machine": started.MachineID})
+	}
+	c := pickTaskAgent(live)
 	if _, ok := s.device(ctx, c.MachineID); !ok {
 		return FeedItem{}, i18n.Err("assistant-tasks.route_offline")
 	}
-	// An agent closed after its task was done (tasks_close.go) is resumed first: that can take minutes, and goes
-	// on when the phone stops waiting, as a send from the chat does.
+	// An offline row a node before #4754 lists is resumed first: that can take minutes, and goes on when the phone
+	// stops waiting, as a send from the chat does.
 	wait := 90 * time.Second
 	if c.Status == proto.StatusOffline {
 		wait = 5 * time.Minute

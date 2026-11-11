@@ -69,8 +69,11 @@ final class ForwardMessageTests: XCTestCase {
     }
 
     @MainActor private func type(_ note: String, in app: XCUIApplication) {
-        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer:\n\(app.debugDescription)")
+        let fields = app.descendants(matching: .any).matching(identifier: "shell-composer-field")
+        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 10), "no composer:\n\(app.debugDescription)")
+        // The chat the card opened stays in the tree under Persona with its own composer: type into the one in use.
+        let all = fields.allElementsBoundByIndex
+        let field = all.first { ($0.value(forKey: "hasKeyboardFocus") as? Bool) == true } ?? all.first { $0.isHittable } ?? fields.firstMatch
         field.tap()
         field.typeText(note)
     }

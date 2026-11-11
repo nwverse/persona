@@ -139,7 +139,8 @@ private struct QuoteLines: View {
                 if let meta { Text(meta).font(Theme.Font.label).foregroundStyle(ink).lineLimit(1) }
                 Text(summary).font(Theme.Font.caption).foregroundStyle(ink).lineLimit(lines).truncationMode(.tail)
                 if let note {
-                    Text(note).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    // Two lines: a computer's and an Agent's names are both in it, and a cut in the middle hides one.
+                    Text(note).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2).truncationMode(.tail)
                         .accessibilityIdentifier("composer.forwardRoute")
                 }
             }

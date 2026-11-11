@@ -28,9 +28,11 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     /// A plugin from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
     /// happened last with an upgrade (docs/extensions/extensions.md「Auto-upgrade」).
     var autoUpgrade: Bool?
-    /// Why its own switch does not apply now: "disabled" while the extension is switched off (the hub keeps the switch
-    /// for when it is on again). Nil from a hub from before it.
+    /// Why its own switch does not apply now: "market_removed" once its market is gone, or "disabled" while it is off.
     var autoUpgradePaused: String?
+    var marketWasRemoved: Bool { autoUpgradePaused == "market_removed" }
+    /// The market it upgrades from, retained after that market is removed (nil: a hub from before this field).
+    var market: String?
     var upgrade: ExtensionUpgrade?
     var upgradeNote: ExtensionUpgradeNote?
     /// An extension with a program on computers: how that program is on each machine it is switched on for.
@@ -44,9 +46,14 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var manager: String?
     var attached: ExtensionAttached?
     var sandbox: ExtensionSandbox?
+    /// Optional catalog artwork/popularity on newer hubs; absent on legacy responses.
+    var iconURL: String?
+    var downloads: Int?
+    var downloadsUpdatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, upgrade, nodes, auth, tools, manager, attached, sandbox
+        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, market, upgrade, nodes, auth, tools, manager, attached, sandbox, downloads
+        case iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at"
         case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 
@@ -560,7 +567,10 @@ enum ExtensionText {
             async let managers = ManagerRoster.read(api, keeping: last)
             let list = try await api.pluginList()
             roster = await managers
-            plugins = list.plugins
+            plugins = list.plugins.sorted {
+                ExtensionPopularity.precedes(downloads: $0.downloads, name: $0.name, identity: $0.listKey,
+                                             downloads: $1.downloads, name: $1.name, identity: $1.listKey)
+            }
             for p in list.plugins where p.auth != nil { deps.auth.received(p.id, p.auth, manager: manager(of: p)) }
             markets = list.markets
             error = nil
@@ -601,6 +611,8 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
     private(set) var changingEnabled = false
     private(set) var changingAutoUpgrade = false
     var disableConfirmation: ExtensionDisableConfirmation?
+    /// A pack's members by the names they're installed under (#4122), read only for a pack; a member not installed keeps its id.
+    private(set) var memberNames: [String: String] = [:]
     /// The hub's word on a field it refused, by its dotted path ("proxy.host").
     private(set) var fieldErrors: [String: String] = [:]
     /// The extension's own word on the settings it refused when they were saved (#5906), under the form; nothing was saved.
@@ -647,6 +659,9 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         let (whose, base) = (managerName == nil ? manager : nil, deps.api())
         async let name = ManagerRoster.name(of: whose, base)
         await run(preservingDraft: true) { api in try await api.plugin(self.id) }
+        if detail?.extensionPack?.isEmpty == false, let list = try? await api?.plugins() {
+            memberNames = ExtensionPackMemberLine.names(list)
+        }
         if let name = await name { managerName = name }
     }
 

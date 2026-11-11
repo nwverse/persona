@@ -27,6 +27,7 @@ func (s *Service) toolAgentArchive(ctx context.Context, machine, self string, ar
 		Machine   string `json:"machine"`
 		SessionID string `json:"session_id"`
 		Close     bool   `json:"close"`
+		Force     bool   `json:"force"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -37,6 +38,9 @@ func (s *Service) toolAgentArchive(ctx context.Context, machine, self string, ar
 	}
 	if c.Assistant {
 		return "", fmt.Errorf("that is a Persona conversation, not a coding agent: use conversation_archive / conversation_unarchive")
+	}
+	if a.Force && !archived {
+		return "", fmt.Errorf("force is only for archiving a confirmation-blocked Agent")
 	}
 	who := fmt.Sprintf("%s on %s (session %s)", agentLabel(c), am.Name, c.SessionID)
 	switch {
@@ -50,6 +54,11 @@ func (s *Service) toolAgentArchive(ctx context.Context, machine, self string, ar
 		s.logf("agent_unarchive %s on %s (from %s)", short(c.SessionID), am.ID, short(self))
 		return fmt.Sprintf("Restored %s to the Agents list. Nothing was reopened on the computer; a message to it (agent_send) resumes it.%s",
 			who, nativeArchiveWords(s.nativeArchiveAwaited(ctx, am.ID, c.SessionID))), nil
+	case a.Force:
+		if err := s.forceArchiveConfirmation(ctx, am.ID, c.SessionID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Archived and closed %s. Pending confirmations were rejected or cancelled; nothing was approved. Its transcript was kept; agent_unarchive restores the session.", who), nil
 	case a.Close:
 		return s.archiveAndCloseTool(ctx, machine, self, am, c, who, args)
 	case c.Archived:

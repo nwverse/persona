@@ -10,6 +10,7 @@ import {
   entryFromDetail,
   factsOf,
   formatAt,
+  formatSpan,
   groupEntries,
   momentFeed,
   groupResults,
@@ -18,7 +19,11 @@ import {
   kindOf,
   linkGroups,
   markParts,
+  citedPhoto,
+  meetingKind,
+  minutesKeptUntil,
   parseLogLine,
+  recordingPhotos,
   recordingView,
   recordingClock,
   transcriptLineId,
@@ -271,6 +276,13 @@ describe("detail", () => {
     expect(dayTitle("nope", NOW)).toBe("nope");
     expect(formatAt("2026-10-30T14:05:00", NOW)).toBe("10月30日 周五 14:05");
     expect(formatAt("2025-01-02T09:00:00", NOW)).toBe("2025年1月2日 09:00");
+    // The minutes' span (#4713): the same dates, the end's time only on the start's day; the hub's when without them.
+    expect(formatSpan("2026-10-30T14:05:00", "2026-10-30T15:10:00", "x", NOW)).toBe("10月30日 周五 14:05–15:10");
+    expect(formatSpan("2026-10-30T23:30:00", "2026-10-31T00:20:00", "x", NOW)).toBe("10月30日 周五 23:30 – 10月31日 周六 00:20");
+    expect(formatSpan("2025-01-02T09:00:00", "2025-01-02T10:00:00", "x", NOW)).toBe("2025年1月2日 09:00–10:00");
+    expect(formatSpan(undefined, undefined, "2026-10-30 14:05–15:10", NOW)).toBe("2026-10-30 14:05–15:10");
+    expect(formatSpan("2026-10-30T14:05:00", undefined, "fallback", NOW)).toBe("fallback");
+    expect(formatSpan("nope", "2026-10-30T15:10:00", "fallback", NOW)).toBe("fallback");
   });
 
   it("reads a chat's recent messages by day", () => {
@@ -397,5 +409,53 @@ describe("recordingView", () => {
     const v = recordingView("recordings", meta, [])!;
     expect(v.attendance).toBe(attendance);
     expect(v.attendingSession).toEqual(attendingSession);
+  });
+  it.each([
+    [{ trimmed_at: "2026-11-25T02:00:00Z" }, "2026-11-25T02:00:00Z"],
+    [{ trimmed_at: "soon" }, undefined],
+    [{ trimmed_at: 1 }, undefined],
+    [{}, undefined],
+  ])("reads trimmed_at of %j", (meta, trimmedAt) => {
+    expect(recordingView("recordings", meta, [])!.trimmedAt).toBe(trimmedAt);
+  });
+});
+
+describe("minutesKeptUntil", () => {
+  it("is the start plus the minutes' days, as a date", () => {
+    const start = new Date(2026, 10, 5, 9, 0, 0);
+    expect(minutesKeptUntil(start.toISOString(), 30)).toBe(minutesKeptUntil(new Date(start.getTime() + 29 * 86_400_000).toISOString(), 1));
+    expect(minutesKeptUntil(start.toISOString(), 30)).not.toBe(minutesKeptUntil(start.toISOString(), 29));
+    expect(minutesKeptUntil(start.toISOString(), 365)).toContain("2027");
+  });
+  it.each([[undefined, 30], ["not a time", 30], ["2026-11-05T09:00:00Z", 0], ["2026-11-05T09:00:00Z", 1.5], ["2026-11-05T09:00:00Z", "30"], ["2026-11-05T09:00:00Z", undefined]])(
+    "is unknown for %j and %j", (start, days) => {
+      expect(minutesKeptUntil(start, days)).toBeUndefined();
+    });
+});
+
+// #3862 phase 3: a meeting's photos (GET …/photos) and the minutes items that cite one.
+describe("meeting photos", () => {
+  it("reads the list defensively, oldest first, blank words as absent", () => {
+    const photos = recordingPhotos({ photos: [
+      { n: 2, id: "b", at: 90.5, mime: "image/png", width: 800, height: 600, caption: "  ", text: "Q3 budget", cited: true, forwarded: true, added_at: "2026-11-10T06:02:00Z" },
+      { n: 1, id: "a", at: -3, mime: "image/jpeg", width: 1600, height: 1200, caption: " Whiteboard ", note: "A table.", cited: false, forwarded: false, added_at: "2026-11-10T06:01:00Z" },
+      { n: 0, id: "zero" }, { n: 1.5, id: "half" }, { n: 3 }, null, "x",
+    ] });
+    expect(photos.map((p) => p.n)).toEqual([1, 2]);
+    expect(photos[0]).toEqual({ n: 1, id: "a", at: 0, mime: "image/jpeg", width: 1600, height: 1200, caption: "Whiteboard", note: "A table.", cited: false, forwarded: false, added_at: "2026-11-10T06:01:00Z" });
+    expect(photos[1]).toMatchObject({ text: "Q3 budget", cited: true, forwarded: true });
+    expect(photos[1]).not.toHaveProperty("caption");
+    for (const v of [undefined, null, [], { photos: "x" }, { photos: null }]) expect(recordingPhotos(v)).toEqual([]);
+  });
+
+  it("knows the photo a minutes item cites", () => {
+    expect(citedPhoto({ photo: 3 })).toBe(3);
+    for (const photo of [undefined, 0, -1, 2.5, "3", null]) expect(citedPhoto({ photo })).toBeUndefined();
+  });
+
+  it("takes photos only on a recording whose kind is meeting", () => {
+    expect(meetingKind({ kind: " Meeting " })).toBe(true);
+    expect(meetingKind({ kind: "note", minutes_asked: true })).toBe(false);
+    expect(meetingKind(undefined)).toBe(false);
   });
 });

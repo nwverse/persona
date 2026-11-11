@@ -93,8 +93,8 @@ nonisolated enum SessionModes {
 
     /// What applying a model pick sends: the alias, unless the session already runs it (Default too, while it runs a
     /// typed ID: that is not the default, #1644).
-    @MainActor static func modelPatch(_ picked: String, current: String?) -> String? {
-        picked == PromptItems.runningModelID(current) ? nil : picked
+    @MainActor static func modelPatch(_ picked: String, current: String?, list: [AgentModel]? = nil) -> String? {
+        picked == PromptItems.runningModelID(current, list: list) ? nil : picked
     }
 
     static func modeTint(_ id: String?) -> Color {
@@ -212,10 +212,11 @@ struct SessionModeBar: View {
                 // The model in the same chip (#3119, the web's #2434): Claude Code takes `/model`, typed by the node.
                 if SessionModes.switchesModel(session) {
                     let busy = SessionModes.modelBusy(session)
+                    let list = RunningModelLists.shared.models(key, session)
                     Section("Model [Assistant View c98e11]") {
                         // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it.
-                        Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model) }, set: { id in change(model: id) })) {
-                            ForEach(PromptItems.runningModels(session?.model), id: \.id) { m in
+                        Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model, list: list) }, set: { id in change(model: id) })) {
+                            ForEach(PromptItems.runningModels(session?.model, list: list), id: \.id) { m in
                                 Text(m.name).tag(m.id)
                             }
                         }
@@ -260,7 +261,8 @@ struct SessionModeBar: View {
     }
 
     private func change(mode: String? = nil, effort: String? = nil, model picked: String? = nil) {
-        let newModel = picked.flatMap { SessionModes.modelPatch($0, current: session?.model) }
+        let list = RunningModelLists.shared.models(key, session)
+        let newModel = picked.flatMap { SessionModes.modelPatch($0, current: session?.model, list: list) }
         if picked != nil, newModel == nil { return } // the model it runs already
         guard mode != session?.permissionMode || effort != session?.effort || newModel != nil, !changing else { return }
         changing = true
@@ -305,16 +307,9 @@ struct SessionModesMenu: View {
         }
         Section("Model [Assistant View c98e11]") {
             if picksModel {
-                // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it, and Default switches back.
-                Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model) }, set: { id in
-                    guard case .send(let text) = PromptItems.modelPick(id, running: session?.model) else { return }
-                    model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
-                })) {
-                    ForEach(PromptItems.runningModels(session?.model), id: \.id) { m in
-                        Text(m.name).tag(m.id)
-                    }
-                }
-                .pickerStyle(.inline)
+                let list = RunningModelLists.shared.models(key, session)
+                // First, next to the button the menu opens up from: a launcher's list can be long enough to scroll
+                // (#3754), and the last item would be out of reach at the far end.
                 if let otherModel {
                     // Goes through POST …/modes (the node's checks), not a typed `/model` message.
                     let busy = SessionModes.modelBusy(session)
@@ -324,6 +319,16 @@ struct SessionModesMenu: View {
                     .disabled(busy != nil)
                     .accessibilityIdentifier("sessionModes.otherModel")
                 }
+                // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it, and Default switches back.
+                Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model, list: list) }, set: { id in
+                    guard case .send(let text) = PromptItems.modelPick(id, running: session?.model, list: list) else { return }
+                    model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
+                })) {
+                    ForEach(PromptItems.runningModels(session?.model, list: list), id: \.id) { m in
+                        Text(m.name).tag(m.id)
+                    }
+                }
+                .pickerStyle(.inline)
             } else {
                 Text(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model")) // what it runs; changed where it was started
             }
@@ -370,7 +375,8 @@ struct SessionTypedModelSheet: View {
     var session: Session?
 
     var body: some View {
-        TypedModelSheet(machine: key.machineRef, launcher: SessionModes.launcher(session), initial: PromptItems.unlistedModel(session?.model) ?? "",
+        TypedModelSheet(machine: key.machineRef, launcher: SessionModes.launcher(session),
+                        initial: PromptItems.unlistedModel(session?.model, list: RunningModelLists.shared.models(key, session)) ?? "",
                         note: String(localized: "The model you pick also becomes the default for new sessions")) { id in
             Task { await model.setModes(key, model: id) }
         }

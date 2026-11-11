@@ -126,9 +126,12 @@ class ShellLaneTests(unittest.TestCase):
         for name in ("android.sh", "android-shards.py"):
             shutil.copyfile(HERE / name, self.root / "scripts/ci" / name)
         (self.root / "scripts/ci/test_android_shards.py").write_text("pass\n")
-        for name in ("test_android_i18n_check.py", "test_android_token_baseline.py",
-                     "android_i18n_check.py", "android_token_baseline.py"):
+        for name in ("test_android_i18n_check.py", "test_android_token_baseline.py", "test_android_slot_order.py",
+                     "android_i18n_check.py", "android_token_baseline.py", "android_slot_order.py"):
             (self.root / "scripts/app" / name).write_text("pass\n")
+        (self.root / "scripts/assets").mkdir()
+        (self.root / "scripts/assets/gen_tokens.py").write_text("pass\n")  # the generated-tokens check (#4209)
+        (self.root / "scripts/assets/gen_icon_meanings.py").write_text("pass\n")  # the icon meanings check (#4209)
         (self.root / "android/settings.gradle.kts").write_text(SETTINGS)
         (self.root / "android/gradle/libs.versions.toml").write_text('[versions]\njdk = "21"\ncompileSdk = "37"\nbuildTools = "37.0.0"\n')
         (self.root / "android/gradle/wrapper/gradle-wrapper.jar").touch()

@@ -47,8 +47,10 @@ interface ExtensionMarkets {
     /**
      * `DELETE /api/v1/extensions/{id}/-/` (only those installed from a market, on a phone); its data stays unless told
      * otherwise. With enabled dependents it is a [ExtensionHasDependents] unless [cascade] (`cascade=1`) switches them off.
+     * [members] (`members=1`, #1154): a pack's installed members go first, the pack only when all of them did; some
+     * gone and some not is an [ExtensionPartialUninstall]. The answer names the members removed.
      */
-    suspend fun uninstall(id: String, keepData: Boolean = true, cascade: Boolean = false)
+    suspend fun uninstall(id: String, keepData: Boolean = true, cascade: Boolean = false, members: Boolean = false): ExtensionRemoval
 
     /** `GET /api/v1/extensions/-/upgrades`: the auto-upgrade switch for all market extensions; null on a hub without it. */
     suspend fun autoUpgrades(): Boolean? = null
@@ -75,8 +77,11 @@ interface ExtensionMarkets {
     /** The user agreed to an operation's preview: `POST …/-/install` (or `{upgradeOf}/-/upgrade`) with `async`, the same operation goes on. */
     suspend fun agree(preview: ExtensionPreview, upgradeOf: String? = null): ExtensionOperation = unsupported()
 
-    /** `DELETE …/{id}/-/?async=1`; with enabled dependents it fails with `has_dependents` unless [cascade] (`cascade=1`). */
-    suspend fun startUninstall(id: String, keepData: Boolean = true, cascade: Boolean = false): ExtensionOperation = unsupported()
+    /**
+     * `DELETE …/{id}/-/?async=1`; with enabled dependents it fails with `has_dependents` unless [cascade] (`cascade=1`).
+     * [members] as for [uninstall]; the hub keeps the options for the operation's Retry.
+     */
+    suspend fun startUninstall(id: String, keepData: Boolean = true, cascade: Boolean = false, members: Boolean = false): ExtensionOperation = unsupported()
 
     /** `GET …/-/operations`: those going on and those ended in the last minutes. */
     suspend fun operations(): List<ExtensionOperation> = emptyList()
@@ -121,6 +126,8 @@ data class ExtensionMarket(
     val signature: MarketSignature? = null,
     /** The official market every hub has (#2351), which the hub lists first; false on others and older hubs. */
     val official: Boolean = false,
+    /** When this market's signed cumulative package download counts were refreshed (RFC3339). */
+    @SerialName("downloads_updated_at") val downloadsUpdatedAt: String? = null,
 ) {
     val label: String get() = name.ifBlank { spec }
 }
@@ -176,6 +183,11 @@ data class CatalogExtension(
     val replaces: String? = null,
     /** The installed extension this one upgrades under a new ID, once the hub checked it came from this market. */
     @SerialName("rename_from") val renameFrom: String? = null,
+    /** An anonymous, absolute HTTPS logo URL from the signed catalog, not a hub image route. */
+    @SerialName("icon_url") val iconUrl: String? = null,
+    /** GHCR package downloads across all versions; null means no count was provided, not zero. */
+    val downloads: Long? = null,
+    @SerialName("downloads_updated_at") val downloadsUpdatedAt: String? = null,
 ) {
     val label: String get() = name.ifBlank { id }
 }
@@ -232,3 +244,7 @@ data class PreviewManifest(
     val publisher: String? = null,
     @SerialName("extension_pack") val extensionPack: List<ExtensionPackMember> = emptyList(),
 )
+
+/** What an uninstall removed (#1154): [removedMembers] the pack's members that went with it; null from a hub that doesn't say. */
+@Serializable
+data class ExtensionRemoval(@SerialName("removed_members") val removedMembers: List<String>? = null)

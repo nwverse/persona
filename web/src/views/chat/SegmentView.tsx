@@ -67,7 +67,9 @@ export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[]):
  *  (spec/fixtures/sync); the transcript's own bubbles have none. `starting`: the first message of a conversation still
  *  starting (the new-conversation page, #1697): drawn as it will be once sent, without actions (there is nothing yet to
  *  act on) and without "Sending…" (the page says it is preparing). */
-export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean }) {
+/** `onDelete`: a message only on this device (a failed send): its menu ends in Delete, and it has no Rewind (it is not in
+ *  the transcript to go back to). */
+export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDelete }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean; onDelete?: () => void }) {
   const own = isOwnMessage(msg);
   // forwards (#3899) are cards at the top of the bubble; the other contexts fold in the row above it
   const forwards = msg.contexts.filter((c) => c.kind === "forward");
@@ -90,7 +92,8 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { ms
         ) : pending ? (
           <BubbleText text={msg.text} forwards={forwards} mid={mid} sid={sid} own={own} pending />
         ) : (
-          <MessageActions text={msg.text} isUser ts={msg.ts} side messageId={msg.id} images={msg.images} photos={msg.photos} className="max-w-full">
+          <MessageActions text={msg.text} isUser ts={msg.ts} side messageId={onDelete ? undefined : msg.id} onDelete={onDelete}
+            images={msg.images} photos={msg.photos} className="max-w-full">
             <BubbleText text={msg.text} forwards={forwards} ts={msg.ts} mid={mid} sid={sid} own={own} />
           </MessageActions>
         ))}
@@ -291,7 +294,7 @@ export const SegmentView = memo(function SegmentView({
   const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes]);
   return (
     <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3" : "flex flex-col gap-3"} style={guess} data-segment>
-      {trace && seg.user?.rawInput ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
+      {trace && seg.user?.rawInput && !seg.user.promptHidden && !seg.user.sourceInTrace ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
       {/* Work stays collapsed above the single latest-text slot. */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />

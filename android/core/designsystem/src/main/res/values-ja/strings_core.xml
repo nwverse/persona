@@ -92,6 +92,7 @@
     <string name="designsystem_core_state_unread">未確認</string>
     <string name="designsystem_core_state_awaiting_reply">返信待ち</string>
     <string name="designsystem_core_state_working">作業中</string>
+    <string name="designsystem_core_state_background_waiting">バックグラウンドで待機中</string>
     <string name="designsystem_core_state_waiting">待機中</string>
     <string name="designsystem_core_state_muted">ミュート中</string>
     <string name="designsystem_core_state_idle">確認済み</string>
@@ -178,6 +179,24 @@
         <item quantity="other">%1$d時間後に起こします</item>
     </plurals>
     <string name="designsystem_core_wake_in_hours_minutes">%1$d時間%2$d分後に起こします</string>
+    <string name="designsystem_core_dot_joined">%1$s · %2$s</string>
+    <string name="designsystem_core_closeout_merged_yes">マージ済み</string>
+    <string name="designsystem_core_closeout_merged_no">未マージ</string>
+    <string name="designsystem_core_closeout_merged_confirmed">マージ済み ✓</string>
+    <string name="designsystem_core_closeout_merged_contradicted">✗ マージ済みと報告、実際は未マージ</string>
+    <string name="designsystem_core_closeout_deployed_yes">デプロイ済み</string>
+    <string name="designsystem_core_closeout_deployed_no">未デプロイ</string>
+    <string name="designsystem_core_closeout_deployed_confirmed">デプロイ済み ✓</string>
+    <string name="designsystem_core_closeout_deployed_contradicted">✗ デプロイ済みと報告、実際は未デプロイ</string>
+    <string name="designsystem_core_closeout_blocked_on">ブロック中：%1$s</string>
+    <string name="designsystem_core_closeout_blocked">ブロック中</string>
+    <string name="designsystem_core_closeout_not_done_missing">未完了：%1$s</string>
+    <string name="designsystem_core_closeout_not_done">未完了</string>
+    <string name="designsystem_core_closeout_done">完了と報告</string>
+    <string name="designsystem_core_todo_orphaned">誰も作業していません</string>
+    <string name="designsystem_core_todo_orphaned_error">エラー後に終了</string>
+    <string name="designsystem_core_todo_orphaned_closed">終了済み</string>
+    <string name="designsystem_core_todo_orphaned_offline">パソコンがオフライン</string>
     <string name="designsystem_core_source_codex_live">Codexライブ</string>
     <string name="designsystem_core_source_codex_history">Codex履歴</string>
     <string name="designsystem_core_source_identity_conflict">ID競合</string>
@@ -299,7 +318,7 @@
     <string name="designsystem_core_headline_screen">ターミナルで対応が必要です</string>
     <string name="designsystem_core_headline_needs_you">要対応</string>
     <string name="designsystem_core_ask_question">質問があります</string>
-    <string name="designsystem_core_ask_permission">許可が必要です</string>
+    <string name="designsystem_core_ask_permission">承認を待っています</string>
     <string name="designsystem_core_ask_plan">プランの承認待ち</string>
     <string name="designsystem_core_ask_screen">ターミナルで対応が必要です</string>
     <string name="designsystem_core_ask_elicitation">MCPリクエスト</string>
@@ -426,7 +445,9 @@
     <string name="designsystem_core_workflow_failed">失敗</string>
     <string name="designsystem_core_workflow_killed">停止済み</string>
     <string name="designsystem_core_workflow_stalled">反応なし</string>
-    <string name="designsystem_core_workflow_agents_done">%1$d/%2$d 個の agent が完了</string>
+    <plurals name="designsystem_core_workflow_agents_done">
+        <item quantity="other">%2$d/%1$d 個の agent が完了</item>
+    </plurals>
     <string name="designsystem_core_always_scope_commands">この会話内のすべてのコマンド</string>
     <string name="designsystem_core_always_scope_read_directory">この会話中、このディレクトリ内のすべての読み取り</string>
     <string name="designsystem_core_always_scope_edit_directory">この会話中、このディレクトリ内のすべてのファイル編集</string>

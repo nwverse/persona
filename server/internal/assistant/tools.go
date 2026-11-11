@@ -42,15 +42,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.hello(ctx).PersonaView {
 		names = append(names, "view_show", "view_update", "view_get")
 	}
-	tools := toolsNamed(names)
-	for _, tool := range tools {
-		if tool.Name == "persona_settings" {
-			alias := tool
-			alias.Name = compat.SettingsTool
-			tools = append(tools, alias)
-		}
-	}
-	return tools
+	return toolsNamed(names)
 }
 
 // toolsNamed are the MCP tools of these names, as prompts/mcp has them.
@@ -174,6 +166,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
 			return "", fmt.Errorf("title and body are required")
 		}
+		if s.justMeNow(machine, self) {
+			// A Just me turn (meeting_justme.go): no push and no copy anywhere; the text stays in the conversation,
+			// which the meeting page shows.
+			return justMeNotice(s.lang(ctx)), nil
+		}
 		if s.inHealth(ctx, self) { // the lock screen and the channels hear there is news, not what it is (health.go)
 			a.Title, a.Body = healthNotice(s.lang(ctx))
 		}
@@ -181,6 +178,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body, Asked: true})
 		// The Feishu bot and the channels with pushes on (channels_handler.go).
 		s.channelsPushed(machine, self, a.Title, a.Body)
+		s.recordNotify(ctx, machine, self) // an interruption (north_star.go)
 		s.promoteSupervision(self)
 		return "Notification sent.", nil
 	case "conversations_list":
@@ -265,6 +263,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
 		}
+		if stoppedAgent(c) { // read-only (#4754): nothing here starts it again
+			if exitText(a.Text) {
+				return fmt.Sprintf("%s has already stopped: nothing was sent.", agentLabel(c)), nil
+			}
+			return "", fmt.Errorf("%s has stopped and is read-only: its conversation and terminal stay, it takes no messages, "+
+				"and nothing here starts it again. Read it with agent_read; to go on, start a new agent with agent_start in its "+
+				"directory (with the task when it worked on one) and give it what it needs. Only the user can resume it, with "+
+				"Resume on its terminal page. Nothing was sent", agentLabel(c))
+		}
 		atts, err := cleanAttachments(a.Attachments)
 		if err == nil {
 			atts, err = s.checkAttachments(ctx, machine, self, atts)
@@ -276,6 +283,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err := s.sendTaskAllowed(ctx, self, am, c, *a.Task, a.Text); err != nil {
 				return "", err
 			}
+		} else if err := s.exitAllowed(ctx, self, am, c, a.Text, len(atts)); err != nil {
+			return "", err
 		}
 		if ok, err := s.confirmOutbound(ctx, machine, self, name, agentLabel(c)+" · "+am.Name+"\n\n"+a.Text, args); err != nil {
 			return "", err
@@ -290,11 +299,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		text := a.Text
 		if a.Task == nil {
-			if err := s.ensureTodosLoaded(ctx); err != nil {
+			if t, theirs, err := s.supervisedElsewhere(ctx, self, am, c); err != nil {
 				return "", err // Unknown task ownership must not strip message provenance.
-			}
-			if assigned, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && assigned.Supervision != nil && assigned.Supervision.Supervisor != self {
+			} else if theirs {
+				// Read after the phone: the agent may have become another conversation's task while the user was asked.
+				if err := exitRefused(c, t, a.Text, len(atts)); err != nil {
+					return "", err
+				}
 				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
+			}
+		}
+		if a.Task != nil {
+			text, err = s.withStandingAuthorizations(ctx, am.ID, c.Cwd, text)
+			if err != nil {
+				return "", task.sendFailed(ctx, s, err)
 			}
 		}
 		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
@@ -311,8 +329,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
 		}
-		// Not running (a finished task's agent is closed: hub tasks_close.go): its node resumes it first, which can
-		// take minutes and goes on if this call stops waiting.
+		// Not running and not read-only: a branch nothing has started yet (node fork.go), or a node from before #4754
+		// that still resumes a stopped agent. Its node starts it first, which can take minutes and goes on if this call
+		// stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		if err := s.call(sctx, am.ID, DeviceSessionSend, params, nil); err != nil {
@@ -473,7 +492,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		knownIDs := s.knownSessionIDs(lctx, am.ID)
 		lcancel()
 		s.setPlanThen(ctx, am.ID, params)
-		if err := s.call(sctx, am.ID, DeviceSessionStart, params, &res); err != nil {
+		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
+			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
+			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
+			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+		}
+		if err != nil {
 			s.recordStartFailure(ctx, am.ID, launcher, err)
 			if startResultUnknown(err) {
 				// The node may already have the session and a running agent although the answer never came back:
@@ -877,6 +902,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	if state == "" {
 		state = "active"
 	}
+	now := time.Now()
 	var res struct {
 		Interactions []proto.Interaction `json:"interactions"`
 	}
@@ -914,7 +940,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		if !m.Online {
 			offline = append(offline, m.Name)
 		}
-		list, _ := s.sessions(ctx, m.ID)
+		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
 			if c.Assistant {
 				continue
@@ -929,6 +955,14 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			case "active":
 				if c.State != proto.StateNeedsYou && c.State != proto.StateWorking && c.State != proto.StateUnread && !c.AwaitsReply {
 					continue // a seen one still asking the user is active too (#5096)
+				}
+			case "done":
+				if snapshotAgentGroup(c, now) != snapshotAgentDone || muted[c.SessionID] {
+					continue
+				}
+			case "muted":
+				if snapshotAgentGroup(c, now) == snapshotAgentOutside || !muted[c.SessionID] {
+					continue
 				}
 			default:
 				if c.State != state {
@@ -986,8 +1020,17 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		if n := len(c.Background); n > 0 {
 			fmt.Fprintf(&b, " · 后台任务 %d", n)
 		}
+		if state == "done" {
+			b.WriteString(" · work=done")
+		}
+		if state == "muted" {
+			b.WriteString(" · muted")
+		}
 		b.WriteString("\n")
-		for _, w := range runningWorkflows(c, time.Now()) { // its turn ended to wait for them: not done (#2935)
+		if (state == "done" || state == "muted") && c.Work != nil && c.Work.Phase != proto.WorkWorking && c.Work.Line != "" {
+			fmt.Fprintf(&b, "    结论：%s\n", clip(oneLine(c.Work.Line), 200)) // i18n-ignore: agents_list output for the model, as the lines around it
+		}
+		for _, w := range runningWorkflows(c, now) { // its turn ended to wait for them: not done (#2935)
 			fmt.Fprintf(&b, "    后台 workflow 在跑（在等它的结果，没做完）：%s\n", prompts.RenderSnapshotWorkflow(w))
 		}
 		for _, p := range pending[[2]string{r.m.ID, c.SessionID}] {

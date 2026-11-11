@@ -258,8 +258,10 @@ User rejected it: the terminal should contain only what it emitted.
 ## 14. Terminal rises from the bottom, Moshi-style key bar
 
 - Previously Terminal was a chat-page tab under the header (title, companion bar, tabs). Scrolling or keyboard-driven header expansion changed terminal height, **resizing the pane under control** and making Claude reflow every time.
-- Tapping Terminal now opens from the bottom over the full page (`TerminalCover`, fullScreenCover + transparent background). Only a thin top bar (size, handle, settings), following a downward drag;
-  dismiss after 140pt or projected travel over 420pt, otherwise spring back. Tapping the handle closes too (Close Terminal, test `terminal-close`). Dimensions only change with keyboard. Measured 47×35 (previous tab 45×29).
+- Tapping Terminal now opens from the bottom over the full page (`TerminalCover`, fullScreenCover + transparent background). Only a thin top bar (size, handle, settings, Close), following a downward drag;
+  dismiss after 140pt or projected travel over 420pt, otherwise spring back. Tapping the handle or Close (Close Terminal, 44pt, test `terminal-close`; the bar is `terminal-bar`) closes too, as does VoiceOver's escape. Dimensions only change with keyboard. Measured 47×35 (previous tab 45×29).
+- The bar sits above the screen, so it is there in every state (#4328: the no-terminal state used to replace the view that held it, and nothing closed the cover). With no terminal (the stream ends "not running") the screen is an `EmptyStateView`: a Claude Code session offers **Resume Session** (`POST /api/v1/sessions` with `resume_session_id`; the node keeps the launcher, model, modes, directory and tab name it ran with), other agents say a message resumes them; the key bar is hidden and the area drags down like the bar (`TerminalNotRunningTests`).
+  Android (#4345) shows the same empty state in place of the terminal, drawn in the dark palette since the terminal is dark in either appearance (`TerminalScreen.kt` `TerminalNotRunning`); Resume Session retries the stream at once on success and shows the hub's words on failure (`TerminalViewModel.resume`, `TerminalCriticalPathTest`). Its key bar stays: the page has its own Back.
 - Key bar follows Moshi's Toolbar (measured its settings preview): glass capsule (`TerminalKeyBar`), 44pt high, padding 5 horizontal / 4 vertical, 36pt keys, gap 6.
   Ctrl / Esc / Tab use JetBrains Mono, others SF Symbols (Moshi uses Lucide; not added). Double-tap Keyboard = Return. Previously separate 40pt glass circles.
 - Chat top bar no longer has Chat / Terminal / Git / Files tabs: Terminal is top-right button; Files / Git via left swipe or ··· menu (`docs/apple/ios.md`).
@@ -485,6 +487,7 @@ No new polling: `lookAt` (node's `session.snapshot` on each herdr change) alread
 `panes.list` reads this cache, taking a snapshot only if over 3 seconds old (or host never captured). Response grouped by host:
 `{hosts: [{kind, stream, control, new_tab, workspaces, tabs, panes}]}`; panes include `agent` / `status` (host-reported) / `title` / `cwd` / `session_id` (with Agent session) / `terminal` (address above).
 Hub: `GET /api/v1/machines/{mid}/panes`, feature `terminal_panes`.
+A pane with no Agent carries `foreground`, the program in front as the host names it (`zsh` at its prompt, `vim`, `npm`…; herdr `pane.process_info`, asked for each such pane on every list, at most 1.5 s, nothing on the screen read; #4754). A pane Persona opened for an Agent that has stopped (its `persona_tab` mark, no Agent in it now) carries `agent_session`, the stopped Agent's session (#4754): clients label it as that Agent's terminal, and **Close finished terminals** (`POST /api/v1/machines/{mid}/panes/close_finished`, `docs/protocol/protocol.md`) closes those the user confirms.
 
 ### New terminal: `panes.new` (optional, explicit action)
 
@@ -643,6 +646,10 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
 - **Tests**: `node/worktree_test.go` (real Git + fake herdr: prepare repo name/branch/config directory/linked worktree/detached HEAD/nonrepo; herdr creation with new/existing branches; rejected paths/branches never touch herdr; Git errors; Git fallback/repeated checkout; `panes.list` includes `worktree`),
   `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a workspace Orca does not list),
   `herdr/worktrees_test.go` (config parsing, slug, folder name, socket args, CLI fallback), `hub/panes_test.go` (permissions, named fields only), `web/src/lib/worktree.test.ts`, `node-actions.test.ts`, `node-palette.test.ts`, `views/NewWorktree.test.tsx`.
+
+### Advanced Orca worktree actions
+
+The local Orca adapter also provides a capability-gated composer, GitHub issue/PR source lookup, sparse presets and preview-confirmed workspace removal. The exact HTTP fields, adapter/runtime capability distinction, receipt handling and deletion reconciliation are specified in [the protocol](../protocol/protocol.md#orca-worktree-composer-and-removal). Legacy branch/path creation remains available. Removal keeps branches by default, unregisters folder workspaces without deleting their directories, and requires a fresh instance-bound preview when identity or dirty content changes. A background acknowledgement is not completion; clients reconcile without automatically repeating the destructive request.
 
 ### A new agent in a worktree (#6115)
 

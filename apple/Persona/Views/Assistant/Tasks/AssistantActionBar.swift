@@ -178,6 +178,8 @@ nonisolated enum AssistantEntries {
         var folded = Set<String>()
         var asking: [(row: Row, first: Date?)] = []
         var deciding: [Ranked] = [], open: [Ranked] = [], shelved: [Ranked] = []
+        // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
+        let superseded = TodoTriageLogic.supersededFailedStarts(todos)
         for todo in todos {
             guard let when = at[todo.id] else { continue }
             let status = status(todo, lookup: lookup, plans: plans)
@@ -185,7 +187,8 @@ nonisolated enum AssistantEntries {
             let asks = active.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
             let row = Row.task(id: todo.id, status: status, agents: active.count)
             let listed = { folded.formUnion(active.map { pair($0.machineID, $0.sessionID) }) }
-            let bucket = TodoTriageLogic.bucket(todo, lookup: lookup, now: now, restoredAt: restored[todo.id])
+            let bucket = TodoTriageLogic.bucket(todo, lookup: lookup, now: now, restoredAt: restored[todo.id],
+                                                superseded: superseded.contains(todo.id))
             // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
             let waits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
             if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
@@ -253,10 +256,22 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
         }
     }
 
+    /// Needs You's rows from one supervising conversation (docs/apple/ios.md "Background rounds").
+    struct NeedsYouGroup: Equatable, Sendable, Identifiable {
+        /// The supervising conversation's id; "" for the conversation's own group.
+        var id: String
+        /// Its header; nil for the conversation's own group, which comes first.
+        var title: String?
+        var rows: [Row]
+    }
+
     var needsYou: [Row] = []
     var running: [Row] = []
     /// Folded under In Progress, not counted.
     var shelved: [AssistantEntries.Row] = []
+    /// Needs You's rows grouped by supervising conversation (`grouped`); empty when the tray is one list, as it always
+    /// was. Grouping never changes the rows or the count.
+    var needsYouGroups: [NeedsYouGroup] = []
 
     init() {}
 
@@ -275,6 +290,35 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
 
     /// The number its entry shows: its rows (shelved ones are not counted).
     func count(_ tray: ActionTray) -> Int { rows(tray).count }
+
+    /// Groups Needs You (`grouped`) when `enabled` (the main conversation folding background rounds); otherwise one list.
+    mutating func groupNeedsYou(_ enabled: Bool, conversation: String, origin: (String) -> String?, title: (String) -> String?) {
+        needsYouGroups = enabled ? Self.grouped(needsYou, conversation: conversation, origin: origin, title: title) : []
+    }
+
+    /// Needs You's rows by the conversation that supervises each task (its `origin`), the conversation's own group first
+    /// and the others in the order their first row comes. Rows that are not tasks (asks, agents, plans, messages) and
+    /// tasks without another origin are the conversation's own. Within a group rows keep their order. Empty with only
+    /// one group: the tray then looks as it always did. `title` names another conversation; "Another conversation"
+    /// when it has no name.
+    static func grouped(_ rows: [Row], conversation: String, origin: (String) -> String?,
+                        title: (String) -> String?) -> [NeedsYouGroup] {
+        var order: [String] = [""]
+        var byGroup: [String: [Row]] = [:]
+        for row in rows {
+            var group = ""
+            if case .entry(.task(let id, _, _)) = row, let o = origin(id), !o.isEmpty, o != conversation { group = o }
+            if byGroup[group] == nil, !group.isEmpty { order.append(group) }
+            byGroup[group, default: []].append(row)
+        }
+        let ids = order.filter { byGroup[$0]?.isEmpty == false }
+        guard ids.count > 1 else { return [] }
+        return ids.map { id -> NeedsYouGroup in
+            guard !id.isEmpty else { return NeedsYouGroup(id: id, title: nil, rows: byGroup[id] ?? []) }
+            let name = title(id)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return NeedsYouGroup(id: id, title: name.isEmpty ? String(localized: "Another conversation") : name, rows: byGroup[id] ?? [])
+        }
+    }
 }
 
 extension ActionTray {
@@ -316,7 +360,7 @@ struct AssistantActionBar: View {
             HStack(spacing: Theme.Space.s) {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
                 if ComputerActivityPill.shows(computer) {
-                    ComputerActivityPill(activity: computer)
+                    ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
                 }
             }
             .padding(.horizontal, Theme.Space.xs)
@@ -325,13 +369,7 @@ struct AssistantActionBar: View {
             #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        #if !os(macOS)
-        // On the whole bar, after its full-width frame (#3643): as wide as the chat, and over whatever is topmost, the
-        // capsules or the open tray. On the capsule row it was as wide as the capsules and under the tray.
-        .dockChatFade()
-        // Drawn under the question and the @ list over it in the footer, so the fade reaches only the chat.
-        .zIndex(-1)
-        #endif
+        // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil }
         #if DEBUG
         .onAppear {
@@ -358,11 +396,20 @@ struct AssistantActionBar: View {
             feed: store.feed(conversation), restored: TodoRestores.load(), going: model.goingAgents,
             // the hub's fields, the inbox's word on the item, and Later
             messageWaits: { item in
-                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(id) else { return false }
+                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(item.id) else { return false }
                 return store.messageState(item, itemID: id) == .open
             })
         let asks = (key.map { model.interactions(for: $0) } ?? []).sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
-        return ActionTrayContent(entries, asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title) })
+        var content = ActionTrayContent(entries, asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title) })
+        // The main conversation, while it folds background rounds, groups Needs You by supervising conversation.
+        content.groupNeedsYou(conversation == model.assistantMain?.sessionID && model.mainBackgroundFolded,
+                              conversation: conversation, origin: { store.todos[$0]?.origin },
+                              title: { id in
+                                  if let name = model.directionNames[id] { return name }
+                                  let title = model.assistantConfig?.conversations.first(where: { $0.sessionID == id })?.title
+                                  return title == "Claude Code" ? nil : title
+                              })
+        return content
     }
 
     private func entry(_ tray: ActionTray, count: Int) -> some View {
@@ -378,6 +425,9 @@ struct AssistantActionBar: View {
                 if count > 0 { Text(count > 99 ? "99+" : "\(count)").monospacedDigit() }
             }
             .dockCapsule(look)
+            // On the page under its see-through fill: the chat fading out behind the row does not read through the
+            // words (#3696); with nothing behind, the same pixels as before.
+            .background(Theme.pageBackground, in: .capsule)
             .fixedSize()
         }
         .buttonStyle(.plain)
@@ -422,7 +472,21 @@ struct AssistantActionBar: View {
                 // As tall as its rows; past the cap they scroll inside the tray, the bar stays where it is.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(rows) { row($0) }
+                        if tray == .needsYou, !content.needsYouGroups.isEmpty {
+                            ForEach(content.needsYouGroups) { group in
+                                if let title = group.title {
+                                    // The tray's own header style: a group reads as a section of the tray.
+                                    Text(title).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                                        .padding(.horizontal, Theme.Space.m)
+                                        .padding(.top, Theme.Space.s)
+                                        .accessibilityAddTraits(.isHeader)
+                                        .accessibilityIdentifier("action-tray.group")
+                                }
+                                ForEach(group.rows) { row($0) }
+                            }
+                        } else {
+                            ForEach(rows) { row($0) }
+                        }
                         if tray == .running, !content.shelved.isEmpty { shelvedLine(content.shelved.count) }
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }

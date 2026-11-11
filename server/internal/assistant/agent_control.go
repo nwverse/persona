@@ -61,6 +61,12 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Interrupt || then != "" && !c.Capabilities.Send) {
 		return "", fmt.Errorf("this agent can only be read: %s", c.ReadOnlyReason)
 	}
+	if stoppedAgent(c) { // read-only (#4754): nothing runs to stop, and nothing here starts it again
+		return "", fmt.Errorf("%s has already stopped and is read-only: nothing to interrupt, and nothing was sent", agentLabel(c))
+	}
+	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil { // refused before the turn is stopped or the user asked
+		return "", err
+	}
 	summary := i18n.T(s.lang(ctx), "assistant-tasks.interrupt_summary", i18n.Args{"agent": agentLabel(c), "machine": am.Name})
 	if then != "" {
 		summary += "\n\n" + then
@@ -69,6 +75,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 		return "", err
 	} else if !ok {
 		return "The user declined on the phone: the agent goes on as it was.", nil
+	}
+	// Again after the phone: the agent may have become another conversation's task while the user was asked.
+	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {
+		return "", err
 	}
 	// Only a turn under way is stopped: an agent still starting has none yet (then is queued for it, as agent_send does).
 	working := c.Status == proto.StatusWorking
@@ -276,8 +286,8 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 	if !s.isMain(ctx, self) {
 		return fmt.Errorf("only the main conversation hands out tasks: send it without task")
 	}
-	if t := strings.TrimSpace(text); t == "/exit" || t == "/quit" {
-		return fmt.Errorf("%s closes the agent, it hands it no work: send it without task", t)
+	if exitText(text) {
+		return fmt.Errorf("%s closes the agent, it hands it no work: send it without task", strings.TrimSpace(text))
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
@@ -290,6 +300,51 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 		return fmt.Errorf("%w; nothing was sent (send it without task to only send it)", err)
 	}
 	return otherWork(c, t, task)
+}
+
+// exitText: text is only the agents' own command to quit, which the node runs by closing the agent (node exitCommand).
+func exitText(text string) bool {
+	t := strings.TrimSpace(text)
+	return t == "/exit" || t == "/quit"
+}
+
+// supervisedElsewhere is the task agent c works for when a conversation other than self supervises it: a reply to it
+// goes as a side conversation, and /exit to it is refused (exitAllowed). Ownership that cannot be read is an error, so
+// a reply never goes without its provenance.
+func (s *Service) supervisedElsewhere(ctx context.Context, self string, am Device, c proto.Session) (Todo, bool, error) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return Todo{}, false, err
+	}
+	t, ok := s.taskOf(ctx, am.ID, c.SessionID)
+	return t, ok && t.Supervision != nil && t.Supervision.Supervisor != self, nil
+}
+
+// exitAllowed refuses /exit or /quit to an agent on a task another conversation supervises (#3537): a plain
+// agent_send of it, or agent_interrupt's then, before anything is stopped, sent or confirmed on the phone. The node
+// closes an agent only for the bare command without attachments (node send.go), so wrapped as a side conversation it
+// would be typed in as a prompt while the tool said it went; and closing the agent that conversation's task runs on is
+// not this conversation's to do. With attachments the text is no command, and goes as any reply does.
+func (s *Service) exitAllowed(ctx context.Context, self string, am Device, c proto.Session, text string, attachments int) error {
+	if !exitText(text) || attachments > 0 {
+		return nil
+	}
+	t, theirs, err := s.supervisedElsewhere(ctx, self, am, c)
+	if err != nil || !theirs {
+		return err
+	}
+	return exitRefused(c, t, text, attachments)
+}
+
+// exitRefused is exitAllowed's answer once c is known to work for t, a task another conversation supervises: the
+// refusal for a bare /exit or /quit, nil for any other text. A tool that asked the phone first reads the task again
+// after the answer and checks with it, since the agent may have become that task's while the user was asked.
+func exitRefused(c proto.Session, t Todo, text string, attachments int) error {
+	if !exitText(text) || attachments > 0 {
+		return nil
+	}
+	return fmt.Errorf("%s works for task %q (%s) of another conversation: %s asks to close the agent that task runs on, which is "+
+		"not this conversation's to do; nothing was sent or stopped. The user can close it in the app, or with agent_archive "+
+		"and close once it is idle and they confirm on the phone", agentLabel(c), t.Title, t.ID, strings.TrimSpace(text))
 }
 
 // otherWork refuses task for agent c on self's own task t when its title is another (other work, not to be filed under
@@ -538,12 +593,13 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 // false is no signal: it goes into the queue of questions that can wait (later.go) when a briefing will list it.
 func (s *Service) reportToSupervisor(ctx context.Context, machine, session string, args json.RawMessage, now time.Time) (string, error) {
 	var a struct {
-		Kind     string   `json:"kind"`
-		Text     string   `json:"text"`
-		Evidence []string `json:"evidence"`
-		Step     int      `json:"step"`
-		Steps    int      `json:"steps"`
-		Urgent   *bool    `json:"urgent"`
+		Kind     string            `json:"kind"`
+		Text     string            `json:"text"`
+		Evidence []string          `json:"evidence"`
+		Step     int               `json:"step"`
+		Steps    int               `json:"steps"`
+		Urgent   *bool             `json:"urgent"`
+		Criteria []criterionReport `json:"criteria"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -571,8 +627,26 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if !ok {
 		return "Nobody receives this: your work is not a task Persona supervises. Ask the user what you need the usual way.", errNoSupervisor
 	}
+	if s.agentSupervised(t) {
+		// A leader whose task closed leaves the worker to the conversation above it: rehome it now, so this report is
+		// told to that conversation instead of being lost until the next watch (task_leader.go). With nobody above, the
+		// worker is cancelled and says so.
+		if lead, _, _ := s.leaderAbove(t); lead.ID == "" || !s.leaderOpen(lead) {
+			var cancelled bool
+			if t, cancelled = s.rehomeWorker(ctx, t); cancelled {
+				return "Your task leader is gone and nobody is above it, so this task was cancelled. Stop here; the user is not asked.", errNoSupervisor
+			}
+		}
+	}
+	reports, err := cleanCriterionReports(a.Criteria, t.Supervision.DoneWhen)
+	if err != nil {
+		return "", err
+	}
 	if !s.upReports.allow(machine, session, now) {
 		return "", fmt.Errorf("too many reports: at most %d in %d minutes; put what is left into one report later", reportLimit, int(reportWindow.Minutes()))
+	}
+	if err := s.recordCriterionReports(ctx, t, machine, session, reports, now.UTC()); err != nil {
+		return "", err
 	}
 	evidence := make([]string, 0, len(a.Evidence))
 	for _, e := range a.Evidence {
@@ -585,7 +659,8 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if steps > 0 {
 		step = min(step, steps)
 	}
-	notUrgent := a.Urgent != nil && !*a.Urgent
+	// A task leader's worker has no owner briefing to wait for: its report goes to the leader at once, urgent or not.
+	notUrgent := a.Urgent != nil && !*a.Urgent && !s.agentSupervised(t)
 	if notUrgent && a.Kind == upReportQuestion {
 		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, now)
 		if queued {
@@ -652,4 +727,11 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	}
 	return "Sent to your supervisor: it reads it within minutes and answers you by message. Don't wait idle for it if there is " +
 		"other work in the task; stop when you cannot go on.", nil
+}
+
+// stoppedAgent: c is an agent that has stopped and is read-only (node stopped.go, #4754): its terminal engine keeps its
+// conversation and terminal, and a message to it is refused (agent_stopped).
+func stoppedAgent(c proto.Session) bool {
+	return c.SourceKind == "" && c.Capabilities != nil && !c.Capabilities.Send &&
+		(c.Status == proto.StatusOffline || c.Status == proto.StatusInterrupted)
 }

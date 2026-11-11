@@ -12,6 +12,7 @@ import { withContexts } from "../lib/context-xml";
 import type { ContextRef } from "../lib/links";
 import { ForwardBar } from "./chat/ForwardBar";
 import { browserStartKeys, launchAgent, presetPrompt, type NewAgentPreset } from "../lib/new-agent";
+import type { WorkspaceTarget } from "../lib/workspace-target";
 import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
@@ -39,7 +40,9 @@ import { useScopedMachines } from "../lib/current-assistant";
 import { currentHosts, engineName, startHosts } from "../lib/engines";
 import { initialLauncher, launcherBlock } from "../lib/launcher-health";
 import { navigate } from "../lib/router";
+import { settingsHref } from "./settings/nav";
 import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
+import { WorkSessionForm } from "./WorkSessionForm";
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
 function draftImageFile(img: DraftImage): File {
@@ -56,7 +59,14 @@ interface Dirs {
   recent?: { path: string; name: string; last_used?: string }[];
 }
 
-export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: () => void; /** Filled in when another page opens it (the knowledge base's "Open agent"). */ preset?: NewAgentPreset | null }) {
+type NewAgentProps = { open: boolean; onClose: () => void; preset?: NewAgentPreset | null };
+
+export function NewAgent(props: NewAgentProps) {
+  if (props.preset?.workSession) return <WorkSessionForm open={props.open} onClose={props.onClose} />;
+  return <AgentForm {...props} />;
+}
+
+function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // with several assistants, the current one's computers: the agent started here shows in its list (docs/assistant/managers.md "Clients")
   const machines = useScopedMachines();
   const online = useMemo(() => machines.filter((m) => m.online), [machines]);
@@ -66,6 +76,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const adding = useAddComputer();
   const [mid, setMid] = useState(() => localStorage.getItem("new.machine") ?? "");
   const [cwd, setCwd] = useState("");
+  const [workspace, setWorkspace] = useState<WorkspaceTarget | null>(null);
   const [launcher, setLauncher] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
   const [unified, setUnified] = useState(true);
@@ -115,6 +126,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const knownDefault = useKnownDefault();
   const manager = machines.find((m) => m.id === mid)?.manager || knownDefault || defaultManager();
   const targetOnline = online.some((m) => m.id === mid);
+  const workspaceCurrent = !workspace || (workspace.owner === credential && workspace.manager === manager
+    && workspace.machineId === mid && workspace.cwd === cwd && Boolean(workspace.host.trim() && workspace.workspaceId.trim()));
   const retirePreparation = () => {
     const previous = preparation.current;
     preparation.current = null;
@@ -168,22 +181,27 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     setWtBusy(false);
     setWtError("");
     return retirePreparation;
-  }, [open, mid, cwd, manager, credential, targetOnline]);
+  }, [open, preset, mid, cwd, workspace, manager, credential, targetOnline]);
   const [repo, setRepo] = useState<WorktreeStatus | null>(null);
   useEffect(() => {
     setRepo(null);
     const dir = cwd.trim();
-    if (!open || !mid || !dir) return;
+    if (!open || !mid || !dir || workspace) return;
     const c = new AbortController();
     const timer = setTimeout(() => void worktreeStatus(mid, dir, c.signal).then((st) => { if (!c.signal.aborted) setRepo(st); }), 400);
     return () => {
       clearTimeout(timer);
       c.abort();
     };
-  }, [open, mid, cwd]);
-  const worktreeOffered = Boolean(repo?.path);
+  }, [open, mid, cwd, workspace, manager, credential]);
+  const worktreeOffered = !workspace && Boolean(repo?.path);
   useEffect(() => {
-    if (!open || !preset) return;
+    if (!open) return;
+    presetCwd.current = null;
+    if (!preset) {
+      setWorkspace(null);
+      return;
+    }
     if (preset.prompt) {
       promptRevision.current++;
       setPrompt((draft) => presetPrompt(preset.prompt, draft));
@@ -197,9 +215,20 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
       }
       setAttachments((current) => [...current, ...picked]);
     }
+    const target = preset.workspace;
+    setWorkspace(target ? { ...target, owner: target.owner ?? credentialOwner(),
+      manager: target.manager ?? (getState().machines.find((m) => m.id === target.machineId)?.manager || defaultManager()) } : null);
+    if (target) {
+      presetCwd.current = { mid: target.machineId, cwd: target.cwd };
+      setMid(target.machineId);
+      setCwd(target.cwd);
+      setInWorktree(false);
+      return;
+    }
     if (preset.machineId && preset.cwd && online.some((m) => m.id === preset.machineId)) {
       presetCwd.current = { mid: preset.machineId, cwd: preset.cwd };
       setMid(preset.machineId);
+      setCwd(preset.cwd);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, preset]);
@@ -220,8 +249,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
 
   useEffect(() => {
     // a preset's computer (set just above, in the same commit) is not overridden by the first one online
-    if (open && !presetCwd.current && (!mid || !online.some((m) => m.id === mid)) && online[0]) setMid(online[0].id);
-  }, [open, online, mid]);
+    if (open && !workspace && !preset?.workspace && !presetCwd.current && (!mid || !online.some((m) => m.id === mid)) && online[0]) setMid(online[0].id);
+  }, [open, online, mid, workspace, preset]);
 
   // The launcher a computer's pick puts in once its launchers are read, and the model that goes with it (#2134): a card's own
   // when its launcher is still there; else the model configuration (`effective`; null: not followed) or the last one used
@@ -289,7 +318,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   }, [open, mid]);
 
   useEffect(() => {
-    if (!open || !mid) return;
+    if (!open || !mid || workspace) return;
     const controller = new AbortController();
     setLoadingDirs(true);
     api<Dirs>(`/machines/${enc(mid)}/dirs?path=${enc(browse)}`, { signal: controller.signal })
@@ -297,7 +326,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
       .catch((error) => { if (!controller.signal.aborted && !isAbort(error)) setDirs(null); })
       .finally(() => { if (!controller.signal.aborted) setLoadingDirs(false); });
     return () => controller.abort();
-  }, [open, mid, browse]);
+  }, [open, mid, browse, workspace, manager, credential]);
 
   // The model list of the launcher that will run (the chosen one, or the model configuration's); a launcher picked by hand starts
   // over from the default, the one a computer's pick put in has its model (restoreLauncher). Starting never waits for it.
@@ -427,7 +456,10 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   };
 
   const start = () => {
-    if (!open || submitted.current || loadingModels || !online.some((m) => m.id === mid) || !cwd.trim()) return;
+    if (!open || submitted.current || loadingModels || !workspaceCurrent || !online.some((m) => m.id === mid) || !cwd.trim()) return;
+    // Read ownership at admission too: credential/store changes can precede React's next render.
+    if (workspace && (workspace.owner !== credentialOwner()
+      || workspace.manager !== (getState().machines.find((m) => m.id === mid)?.manager || defaultManager()))) return;
     submitted.current = true;
     const controller = new AbortController();
     preparation.current = controller;
@@ -448,7 +480,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
     }
-    const opensIn = host && host !== currentHosts(picked ?? {}).default ? host : undefined; // only a choice away from the default
+    const opensIn = workspace?.host ?? (host || undefined);
     // this start as a recent setup (#2134): the folder picked (not the worktree made from it), the model and effort sent;
     // mode and effort only for Claude Code
     const claude = agent === "claude";
@@ -460,7 +492,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
       rememberSetup({ ...setup, at: setupTime() });
-      launchAgent({ machineId: mid, cwd: dir, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent });
+      launchAgent({ machineId: mid, cwd: dir, workspaceId: workspace?.workspaceId, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent });
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
       attachmentsRef.current = attachmentsRef.current.filter((a) => !ids.has(a.id));
@@ -470,7 +502,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
       dismiss();
     };
     // in a worktree of its own (#6115): made first; a failure says why here, and nothing starts
-    if (inWorktree && worktreeOffered) {
+    if (!workspace && inWorktree && worktreeOffered) {
       setWtBusy(true);
       setWtError("");
       void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner })
@@ -489,7 +521,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
         });
       return;
     }
-    launch(cwd.trim());
+    launch(workspace ? workspace.cwd : cwd.trim());
   };
 
   if (none)
@@ -545,7 +577,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
-            <Button tone="primary" busy={wtBusy} disabled={loadingModels || !online.some((m) => m.id === mid) || !cwd.trim()} onClick={start}>
+            <Button tone="primary" busy={wtBusy} disabled={loadingModels || !workspaceCurrent || !online.some((m) => m.id === mid) || !cwd.trim()} onClick={start}>
               {t("newagent.start")}
             </Button>
           </>
@@ -571,10 +603,11 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                 <button
                   key={m.id}
                   type="button"
-                  disabled={!m.online}
+                  disabled={Boolean(workspace) || !m.online}
                   onClick={() => setMid(m.id)}
                   className={cx(
-                    "flex h-8 items-center gap-1.5 rounded-control px-2.5 text-[12.5px] whitespace-nowrap transition-[background-color,box-shadow,color] disabled:opacity-40",
+                    "flex h-8 items-center gap-1.5 rounded-control px-2.5 text-[12.5px] whitespace-nowrap transition-[background-color,box-shadow,color]",
+                    workspace && mid === m.id ? "disabled:opacity-100" : "disabled:opacity-40",
                     mid === m.id ? "bg-ink font-medium text-surface" : "bg-surface text-ink-2 shadow-btn enabled:hover:bg-hover enabled:hover:text-ink",
                   )}
                 >
@@ -586,7 +619,23 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             </div>
           </Field>
 
-          <Field label={t("newagent.folder")}>
+          {workspace ? <Field label={t("newagent-workspace.destination")}>
+            <div data-testid="new-agent-workspace" className="flex min-w-0 flex-col gap-1.5 rounded-control bg-inset px-3 py-2.5 text-[12.5px] text-ink shadow-hairline">
+              <span className="font-medium [overflow-wrap:anywhere]">{workspace.label || baseName(workspace.cwd) || t("newagent-workspace.destination")}</span>
+              <span className="font-mono text-ink-2 [overflow-wrap:anywhere]">{workspace.cwd}</span>
+              <span className="text-ink-2 [overflow-wrap:anywhere]">{engineName(workspace.host, picked)}</span>
+              <p className="text-[11.5px] text-ink-3">{t("newagent-workspace.existing_hint")}</p>
+              {!workspaceCurrent && <p role="alert" className="text-red">{t("newagent-workspace.owner_changed")}</p>}
+              <Button tone="quiet" onClick={() => {
+                retirePreparation();
+                presetCwd.current = null;
+                setWorkspace(null);
+                setHost("");
+                setInWorktree(false);
+                setRepo(null);
+              }}>{t("newagent-workspace.choose_folder")}</Button>
+            </div>
+          </Field> : <Field label={t("newagent.folder")}>
             <input
               value={cwd}
               onChange={(e) => setCwd(e.target.value)}
@@ -616,7 +665,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                 <DirRow key={d.path} name={d.name} path={d.path} git={d.is_git} selected={cwd === d.path} onPick={() => setCwd(d.path)} onOpen={() => setBrowse(d.path)} />
               ))}
             </div>
-          </Field>
+          </Field>}
           {worktreeOffered && (
             <div data-testid="new-agent-worktree" className="-mt-2 rounded-control bg-surface px-3 py-2 shadow-hairline">
               <div className="flex items-center gap-2">
@@ -650,7 +699,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             </div>
           )}
 
-          {hosts.length > 1 && (
+          {!workspace && hosts.length > 1 && (
             <Field label={t("lib-engines.start_in")}>
               <div role="radiogroup" aria-label={t("lib-engines.start_in")} data-testid="start-host" className="flex flex-wrap gap-1.5">
                 {hosts.map((h) => (
@@ -782,6 +831,19 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                   <span className="min-w-0 truncate">{launcher ? t("newagent.override_hint") : modelDefault || t("newagent.default_hint")}</span>
                 </p>
               )}
+              {/* add, hide or restore launchers (#4384): Settings › Model providers */}
+              <button
+                type="button"
+                data-testid="new-agent-manage-launchers"
+                onClick={() => {
+                  onClose();
+                  navigate(settingsHref("models", null, false, null, "providers"));
+                }}
+                className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium whitespace-nowrap text-accent-ink hover:underline"
+              >
+                <Icon name="gear" size={11} />
+                {t("newagent.manage_launchers")}
+              </button>
             </Field>
           )}
 
