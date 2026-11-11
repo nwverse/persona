@@ -411,6 +411,10 @@ SYSTEMS = {
             "kernel": "6.1.0-26-arm64", "arch": "arm64", "model": "Raspberry Pi 5 Model B Rev 1.0", "cpu": "", "cores": 4,
             "memory": 8 * GB},
 }
+MACHINE_CONCERN_LEVELS = {}
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_machines
+    MACHINE_CONCERN_LEVELS.update(install_machines(MACHINES, SYSTEMS))
 if not os.environ.get("MOCK_MACHINES"):  # that mode has its own offline machine (MachinePagesTests counts them)
     MACHINES.append({"id": "nas", "name": "NAS", "kind": "ssh", "icon": "server", "ssh_host": "nas", "online": False,
                      "error": "ssh: connect to host nas port 22: Operation timed out", "hostname": "nas", "os": "linux",
@@ -455,13 +459,22 @@ def metric_at(mid, t):
     if mid == "server" and t > T0 - 25 * 60:  # a build running since 25 minutes before the mock started
         cpu = 92 + 6 * h  # always over the 90 % "critical" line
     cpu = max(0.5, min(99.5, cpu))
+    concern_level = MACHINE_CONCERN_LEVELS.get(mid)
+    if concern_level == "critical":
+        cpu = 95.0
+    elif concern_level == "warning":
+        cpu = 80.0
     mem_frac = {"server": 0.62, "macbook": 0.55, "studio": 0.31, "nas": 0.42}[template] + 0.05 * day + 0.04 * wave
     if mid == "server" and t > T0 - 25 * 60:
         mem_frac = 0.88 + 0.02 * h
+    if concern_level == "critical":
+        mem_frac = 0.95
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
+    if concern_level == "critical":
+        disk_frac = 0.95
     return {"cpu": round(cpu, 1), "load": round(load, 2), "mem": round(mem_frac * sys_["memory"]),
             "swap": round({"server": 0.0, "macbook": 1.2, "studio": 0.0, "nas": 0.4}[template] * GB),
             "rx": round(rx, 1), "tx": round(tx, 1), "disk": round(disk_frac * {"nas": 4000, "studio": 2000}.get(mid, 1000) * GB)}
@@ -945,6 +958,9 @@ if MOCK_MACHINES:
                              "/Users/me/code/" + proj, status, state, proj, 4 + i % 4, "t%d" % (i // 4 + 1), i // 4 + 1,
                              i * 7, "第 %d 个 Agent 的最新一句话，长一点好看看会不会被截断或者挤到别的地方去。" % (i + 1),
                              pending=1 if state == "needs_you" else 0))
+if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
+    from machine_concerns import install_sessions
+    install_sessions(SESSIONS, sess)
 # MOCK_AGENTS=1: a long Agents list (AgentsListTests): ~120 agents, one big space with 35 finished-unread, a quiet
 # space, idle ones to fold. Sessions marked seen (WS "seen" or POST …/seen) turn idle; GET /mock/seen lists them.
 # MOCK_QUIET=1: a quiet space (two seen agents, nothing running) under "Idle spaces", for screenshots of its card
