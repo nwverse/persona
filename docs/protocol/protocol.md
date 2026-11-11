@@ -722,6 +722,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "ts":"...","role":"user|assistant|system",
  "kind":"text|thinking|tool_use|tool_result|notice|image|fold|turn_duration",
  "text":"…",                                           // text of text / thinking / notice / tool_result
+ "model":"claude-opus-5-5",                           // assistant items only, optional: the model that wrote the item as the transcript records it (Claude Code's message.model, never its "<synthetic>";
+                                                      // a Codex turn's turn_context model). Absent when the transcript does not say and from older nodes; clients draw a divider where the replies' model changes (#5034)
  "model_refusal":{"subtype":"model_refusal_fallback","original_model":"primary-model","fallback_model":"fallback-model","category":"synthetic-policy","scope":"session","explanation":"Upstream refused the request","text":"<the refusal's own words>"}, // optional, kind=notice: the record's values as recorded (unknown model_refusal_* subtypes, categories and scopes too) and `text`, its string `content`. Never the record's line or its other fields (#2528): they stay in the transcript and the node. Older builds also sent `raw` (the whole line) and used it as the notice's text; clients must not show or keep it. The notice's `text` is the refusal's words, which the hub writes again in the reader's language
  "tool_use_id":"toolu_…",                             // shared by tool_use and tool_result; the App merges them into one card by it
  "tool_name":"Bash", "tool_input":{...},              // tool_use only
