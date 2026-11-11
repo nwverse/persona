@@ -32,7 +32,13 @@ func (n *Node) terminalPane(ctx context.Context, id string) (string, error) {
 	if pane, ok := strings.CutPrefix(id, panePrefix); ok {
 		return n.shellPane(ctx, pane)
 	}
-	return n.paneFor(ctx, id)
+	pane, err := n.paneFor(ctx, id)
+	if err != nil {
+		if p, ok := n.keptPane(id); ok { // a stopped agent's terminal: the shell it left (stopped.go, #4754)
+			return p.PaneID, nil
+		}
+	}
+	return pane, err
 }
 
 // shellPane checks that pane is one the host lists (a snapshot is taken when the one kept does not have it: a tab
