@@ -615,7 +615,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "subagents":[{"id":"a849e1f0…","session_id":"<id>@a849e1f0…","type":"Explore","description":"…","tool_use_id":"toolu_…",
                 "parent_id":"c27d03b1…","fork":true,   // who started it: the id of the subagent that started it (absent when the main session did); fork = forked off. Treated as top-level when the parent isn't in the list
                 "running":true,"background":true,"started_at":"...","updated_at":"...","last_text":"…",   // subagents are read as sessions
-                "steps":7,"last_tool":{"id":"toolu_…","name":"Bash","summary":"running the tests"}}],   // #5602: tool calls made, the latest one (what it does now; summary in the request's language, like a workflow agent's latest_tool); updated_at is its last message's time, not the file's mtime
+                "steps":7,"last_tool":{"id":"toolu_…","name":"Bash","summary":"running the tests"},   // #5602: tool calls made, the latest one (what it does now; summary in the request's language, like a workflow agent's latest_tool); updated_at is its last message's time, not the file's mtime
+                "model":"claude-haiku-4-5-…","tokens":23456}],   // #5030: the model it ran on, its latest reply's in its own transcript (never <synthetic>), not the one its Agent call asked for; tokens is its latest reply's context + output tokens, as a workflow agent's. Each absent until it has replied; old nodes don't have them. sessions.changed goes out when its running, steps, last_tool or updated_at change; these ride along
  "loop":{"kind":"wakeup|cron","prompt":"/loop …","reason":"…","interval_seconds":1800,"next_at":"...","cron":"*/5 * * * *","ticks":12},
  "goal":{"objective":"…","status":"active|paused|blocked|usage_limited|budget_limited|complete","reason":"…",   // the goal it's working on (docs/integrations/agent-goal.md)
         "tokens_used":12345,"token_budget":500000,"seconds":600,"updated_at":"..."},                              // absent when there is no goal
@@ -722,6 +723,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "ts":"...","role":"user|assistant|system",
  "kind":"text|thinking|tool_use|tool_result|notice|image|fold|turn_duration",
  "text":"…",                                           // text of text / thinking / notice / tool_result
+ "model":"claude-opus-5-5",                           // assistant items only, optional: the model that wrote the item as the transcript records it (Claude Code's message.model, never its "<synthetic>";
+                                                      // a Codex turn's turn_context model). Absent when the transcript does not say and from older nodes; clients draw a divider where the replies' model changes (#5034)
  "model_refusal":{"subtype":"model_refusal_fallback","original_model":"primary-model","fallback_model":"fallback-model","category":"synthetic-policy","scope":"session","explanation":"Upstream refused the request","text":"<the refusal's own words>"}, // optional, kind=notice: the record's values as recorded (unknown model_refusal_* subtypes, categories and scopes too) and `text`, its string `content`. Never the record's line or its other fields (#2528): they stay in the transcript and the node. Older builds also sent `raw` (the whole line) and used it as the notice's text; clients must not show or keep it. The notice's `text` is the refusal's words, which the hub writes again in the reader's language
  "tool_use_id":"toolu_…",                             // shared by tool_use and tool_result; the App merges them into one card by it
  "tool_name":"Bash", "tool_input":{...},              // tool_use only
