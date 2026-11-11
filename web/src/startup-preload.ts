@@ -128,10 +128,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * (#5095 added 405 B to ja, 593,185 B to 593,590 B: /clear in the main chat's command list, its ⋯ row, the cleared page's
  * state in lib/main-clear.ts and their words); main was already 595 B over its budget at 286d88fb2 (ja 593,185 B against
  * 592,590 B), and that overage is kept here, not new room. And 2,304 B for child sessions folded into their parent
- * (#5120 added 2,323 B to ja, 593,323 B to 595,646 B: every list's folding and the parent row's folded state and running
+ * (#5120 added 2,350 B to ja, 593,323 B to 595,673 B: every list's folding and the parent row's folded state and running
  * line, a child's request counted and opened under its parent, the paged list's roots, the parent chat's placement of its
- * children's cards, the hook that reads them and the old child links' redirect; the child card and what it reads when
- * opened load with the card). Raise it on purpose, in the change that needs it.
+ * children's cards, the hook that reads and holds their rows and the old child links' redirect; the child card and what
+ * it reads when opened load with the card). Raise it on purpose, in the change that needs it.
  */
 export const FIRST_SCREEN_BUDGET = 595_937;
 
