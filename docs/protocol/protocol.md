@@ -620,7 +620,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
      // Triage is done by the manager (the assistant process); the hub fills it in from what it reports in the snapshot (only for sessions still stopped on that turn), see "Agents" under "Bus" below
  "activity":"running tests","activity_at":"...",   // only when the latest step is a tool call with no new text since: what this step is doing (summarized by the node from the transcript, within 40 characters) and when it started; gone once new text is written or a new turn starts
  "queued":["messages typed while working, not yet picked up"],
- "queued_relayed":1,   // a Persona chat: the last this many of queued came from other conversations, which its manager delivers when the turn ends (docs/assistant/assistant.md "Queue while running"); apps show them but take back, delete, move and send now only the others (#4342). Absent: none
+ "queued_relayed":1,   // a Persona chat: the last this many of queued came from other conversations or the system, which its manager delivers when the turn has ended and the owner is not talking in it, by rank and not in this order (docs/assistant/assistant.md "Messages from the system wait for the owner"); an idle chat has them too; apps show them but take back, delete, move and send now only the others (#4342). Absent: none
  "subagents":[{"id":"a849e1f0…","session_id":"<id>@a849e1f0…","type":"Explore","description":"…","tool_use_id":"toolu_…",
                 "parent_id":"c27d03b1…","fork":true,   // who started it: the id of the subagent that started it (absent when the main session did); fork = forked off. Treated as top-level when the parent isn't in the list
                 "running":true,"background":true,"started_at":"...","updated_at":"...","last_text":"…",   // subagents are read as sessions
@@ -774,6 +774,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "always_keys":["tool:Bash"],  // node → hub: what "Always Allow" on an assistant chat's permission card lets through; the hub records it and answers the same card itself (docs/assistant/assistant.md "Always allow in this session"); not used by clients
  "always_honored":false,       // manager → clients: whether answering Always is kept; see "Always allow" below
  "tool_title":"iPhone control", // manager → clients: its own tool's name for people, in the user's language; see "Always allow" below
+ "tool_name_title":"Report to supervisor", // manager → clients: the tool alone, beside a tool_title that also says what the call does; see "Always allow" below
  "agent":"codex", "reason":"…", "always_label":"本会话不再问这个命令"} // a card the node read from the Codex / compatible forks TUI ("Codex questions and approvals"); always_label is emitted in Chinese: "don't ask about this command again this session"
 
 // Resolution (by kind)
@@ -813,8 +814,14 @@ allows once, as before, and is no longer recorded as an Always. The value is the
 the field (or in `tool_title`) is dropped.
 
 `tool_title` is the tool's name for people in the user's language (`assistant-tool_titles` in the hub's catalog,
-"iPhone control" for `iphone_do`), set by the manager on its own tools' cards only. Clients title the card with it,
-and otherwise with `tool_name` as before; Agents sessions' cards never carry it.
+"iPhone control" for `iphone_do`), set by the manager on its own tools' cards and on a node's card for one of
+Persona's own MCP tools (`mcp__persona__…` under either namespace, #4966: "Report to supervisor · Done", the phone's
+tools as "iPhone · contacts search", any other "Persona · agent read"). Clients title the card with it, and otherwise
+with `tool_name` as before; Agents sessions' cards for any other tool never carry it. Where the title also says what
+this call does (a report's kind), `tool_name_title` names the tool alone ("Report to supervisor"): a line about what
+Always covers, every call of the tool, uses it, else `tool_title`, else the tool's name in words. Both are in the
+hub's language (the manager's `lang`, from the hub's locale) like the rest of the text it writes, whatever language
+the app is in. A node's value for either is dropped.
 
 ### Subagent deliveries as tool results
 
