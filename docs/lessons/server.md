@@ -1,5 +1,12 @@
 # Lessons: hub / node and networking
 
+## Shared web fixtures belong in the Docker build context (2026-11-11, #4260)
+
+The web production build typechecks test files. A JSON fixture imported from `spec/fixtures/` needs both a
+`.dockerignore` exception and a `COPY` into the web stage at the same relative path. A native build sees the
+whole checkout and can pass while the Docker build fails with TS2307. The Docker entrypoint suite now checks
+shared JSON imports, including globs, against both files, catching new fixture groups before an image build.
+
 ## Sharing frontiers and migration lanes (#3604)
 
 - Migration numbers are global across the hub and manager sets, even though their
