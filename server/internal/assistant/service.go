@@ -122,6 +122,8 @@ type Service struct {
 	supervise superviseBook // supervise_signals.go
 	preempt   preemptBook   // owner_preempt.go
 	tbriefs   taskBriefBook // task_brief.go
+
+	modelPicks modelPickBook // model_pick.go
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
@@ -220,6 +222,7 @@ func New(o Options) *Service {
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
+	s.modelPickRoutes()
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.standingAuthorizationRoutes()
@@ -556,6 +559,11 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
+	}
+	picks, ok := s.modelPicksSet()
+	snap.Partial = snap.Partial || !ok
+	for id, p := range picks {
+		view(id, p.MachineID).ModelPick = p.wire()
 	}
 	directions, ok := s.directionViews(ctx)
 	snap.Partial = snap.Partial || !ok

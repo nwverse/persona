@@ -72,7 +72,8 @@ func BenchmarkAssistantViewLargeInventory(b *testing.B) {
 }
 
 // The view copies only the assistant's 14 conversations out of the machine's 8,200 sessions: 100,665 bytes a view
-// measured, where it allocated 12.3 MB when it copied the whole list to pick them.
+// measured, where it allocated 12.3 MB when it copied the whole list to pick them; 109,007 since a session copied alone
+// takes a 1,792-byte block (proto.Session past 1,528 bytes, #5033: TestSessionReadersCopyNoList).
 func TestAssistantViewCopiesOnlyItsConversations(t *testing.T) {
 	if !isolated(t) {
 		return
@@ -87,7 +88,7 @@ func TestAssistantViewCopiesOnlyItsConversations(t *testing.T) {
 		s.view(ctx, false)
 	}
 	runtime.ReadMemStats(&after)
-	if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 103685 {
-		t.Fatalf("one view allocated %d bytes, want at most 103685", per)
+	if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 112277 {
+		t.Fatalf("one view allocated %d bytes, want at most 112277", per)
 	}
 }

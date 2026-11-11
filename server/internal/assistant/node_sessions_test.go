@@ -101,7 +101,9 @@ func busyBoard(t *testing.T) *Service {
 // agentGone and the board read once each before, completionChildrenRunning twice (25.1 MB) and decoratedUnarchived
 // twice (25.8 MB; it still needs one, as its own to decorate). publishList, telling the same list again, also encoded
 // it into new bytes (28.4 MB in all); now it allocates the decorated list alone. Each bound is the measured bytes per
-// call + 3%.
+// call + 3%. A row copied alone takes a 1,792-byte block since proto.Session grew past 1,528 bytes (model_pick, #5033):
+// with the 8-byte header the allocator puts on a pointerful object over 512 bytes it no longer fits the 1,536-byte
+// class, which took agentGone, completionChildrenRunning and the board 256 bytes a copied row up.
 func TestSessionReadersCopyNoList(t *testing.T) {
 	if !isolated(t) {
 		return
@@ -113,11 +115,11 @@ func TestSessionReadersCopyNoList(t *testing.T) {
 		most uint64
 		read func()
 	}{
-		{"agentGone", 2225, func() { s.agentGone(proto.Interaction{MachineID: "box", SessionID: "session-08199"}) }},
-		{"completionChildrenRunning", 1690, func() { s.completionChildrenRunning("box", proto.Session{SessionID: "session-00100"}) }},
+		{"agentGone", 2554, func() { s.agentGone(proto.Interaction{MachineID: "box", SessionID: "session-08199"}) }},
+		{"completionChildrenRunning", 1953, func() { s.completionChildrenRunning("box", proto.Session{SessionID: "session-00100"}) }},
 		{"decoratedUnarchived", 13710700, func() { s.decoratedUnarchived("box") }},
 		{"publishList", 13715100, func() { s.publishList("box") }},
-		{"GET /api/v1/workspaces", 177600, func() { boardCall(board, "GET", "/api/v1/workspaces", "", roleFull) }},
+		{"GET /api/v1/workspaces", 193061, func() { boardCall(board, "GET", "/api/v1/workspaces", "", roleFull) }},
 	} {
 		c.read()
 		const runs = 20
