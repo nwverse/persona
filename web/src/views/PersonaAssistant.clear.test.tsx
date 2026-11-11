@@ -152,6 +152,19 @@ describe("清理主对话上下文 (#5095)", () => {
     expect(host.textContent).toContain(WELCOME);
   });
 
+  it("离开这一页时别的设备开了新主对话又清掉：回来是平常的欢迎页", async () => {
+    await act(async () => root.render(<PersonaAssistant onToggleSidebar={() => {}} />));
+    await act(async () => { await clearMainContext("c1"); });
+    await flush();
+    act(() => root.render(<div />));
+    await hubMain("c2");
+    await hubMain("");
+    await act(async () => root.render(<PersonaAssistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(cleared()).toBeNull();
+    expect(host.textContent).toContain(WELCOME);
+  });
+
   it("没有在这里清理过：没有主对话时还是平常的欢迎页", async () => {
     await hubMain("");
     await act(async () => root.render(<PersonaAssistant onToggleSidebar={() => {}} />));

@@ -9,7 +9,7 @@ import { toast } from "../ui/atoms";
 import { api, ApiError, errorText } from "./api";
 import type { ComposerCommand } from "./extension-prompts";
 import { navigate } from "./router";
-import { refreshAssistant } from "./store";
+import { getState, refreshAssistant, subscribe } from "./store";
 
 export const CLEAR_MAIN_FEATURE = "assistant_main_clear";
 export const CLEAR_MAIN_PATH = "/assistant/main/clear";
@@ -25,16 +25,26 @@ export function isClearCommand(text: string, images: number): boolean {
 }
 
 // ── the conversation this tab cleared, while the main one is still to start ──
-// The page keeps the conversation's layout for it (an empty chat, the composer at the bottom); a main conversation
-// showing again (PersonaAssistant) forgets it, so a later "New main chat" or another device's change shows the
-// ordinary start page.
+// The page keeps the conversation's layout for it (an empty chat, the composer at the bottom). Any other main
+// conversation in the store forgets it, whether the page is open or not, so a later "New main chat" or another
+// device's change shows the ordinary start page.
 
 let cleared = "";
 const listeners = new Set<() => void>();
+let unwatch: (() => void) | null = null;
 
 function setCleared(sid: string) {
   if (cleared === sid) return;
   cleared = sid;
+  if (sid && !unwatch) {
+    unwatch = subscribe(() => {
+      const main = getState().assistant?.main;
+      if (main && main !== cleared) forgetMainCleared();
+    });
+  } else if (!sid && unwatch) {
+    unwatch();
+    unwatch = null;
+  }
   listeners.forEach((l) => l());
 }
 

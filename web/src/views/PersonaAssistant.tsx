@@ -15,7 +15,7 @@ import { navigate } from "../lib/router";
 import { refreshAssistant, useStore } from "../lib/store";
 import { effectiveLauncher, NEW_CONVERSATION, pickedLauncher, pickLauncher } from "../lib/assistant-chat";
 import { adoptedConversation, noteSent, outboxMessage } from "../lib/outbox";
-import { forgetMainCleared, useMainCleared } from "../lib/main-clear";
+import { useMainCleared } from "../lib/main-clear";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { ChatView, Header } from "./chat/ChatView";
@@ -153,12 +153,8 @@ export function PersonaAssistant({ sid, fresh, routed, onToggleSidebar }: { sid?
   }, [scope, manager, sid, fresh, assistant]);
   const main = assistant?.main ?? cached?.sessionID;
   // this tab cleared the main conversation's context (/clear, lib/main-clear.ts): until the next one starts, its page
-  // keeps the conversation's layout; a main conversation showing again ends that
+  // keeps the conversation's layout
   const cleared = useMainCleared();
-  const hasMain = Boolean(assistant?.main);
-  useEffect(() => {
-    if (hasMain) forgetMainCleared();
-  }, [hasMain]);
   const machine = home ? homeMachine || read.machine : ((sid && sid !== main ? assistant?.machine_id : mainConversationMachine(assistant)) ?? cached?.machineID);
   if (fresh) return <Starter onToggleSidebar={onToggleSidebar} />;
   const id = sid ?? main;
