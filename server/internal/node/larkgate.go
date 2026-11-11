@@ -22,8 +22,11 @@ import (
 //     on the phone first with method, path and body on the card, or deny; none matching is confirmed); lark-cli's
 //     by its own risk level (larkcligate.go). Assistant bypass skips cards only for classified reads and ordinary
 //     writes; Lark sends as the user, deletion and calls it cannot classify still ask. Non-Lark commands such as
-//     rm, git and tee remain outside this gate; interpreters, scripts and substitutions that could hide a CLI call
-//     require confirmation. Explicit deny and health rules take priority.
+//     rm, git and tee remain outside this gate. Opaque execution requires confirmation when the
+//     command text names the CLI (including paths or interpreter code), or an expansion supplies
+//     a command name. A script file with no CLI name in the command text is outside this gate:
+//     its contents may still invoke the CLI. This residual risk is accepted; we do not read scripts.
+//     Explicit deny and health rules take priority.
 //   - anything naming a gate's secret, a process's environ, curl / wget at a gate's API, or curl flags that would
 //     print or redirect the credentials: denied.
 //   - anything else: no decision; the usual permission flow applies, including its bypass mode.
@@ -105,13 +108,14 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			}
 		}
 		// Classified reads and ordinary writes can be mixed with non-Lark commands in bypass.
-		// Unknown indirect execution cannot prove the Lark boundary is respected and must ask.
+		// Unknown CLI-related execution or an expanded command name must ask; ordinary
+		// interpreter calls and argument substitutions without a CLI name stay outside this gate.
 		// Proxy-authenticated writes above must remain standalone so their one-use grants cannot be lost.
 		if bypass && safe {
 			return "allow", "Conversation permission mode allows these classified calls.", nil
 		}
 		g, write := gateWrite(cfg.Gates, command)
-		if write || v.cliWrite || v.unknown || v.unparsed || larkCLIRe.MatchString(command) && !safe {
+		if write || v.cliWrite || v.unknown || larkCLIRe.MatchString(command) && !safe {
 			title := "飞书" // lark-cli's
 			if write {
 				title = g.Title

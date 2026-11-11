@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 var (
@@ -29,7 +30,7 @@ func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRi
 func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
 	var v larkVerdict
 	if depth > 16 {
-		v.other, v.unparsed, v.unknown = true, true, true
+		v.other, v.unparsed, v.unknown = true, true, larkCLIRe.MatchString(cmd)
 		return v
 	}
 	merge := func(child larkVerdict) {
@@ -37,7 +38,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		if child.deny != "" {
 			v.deny = child.deny
 		}
-		v.unknown = v.unknown || child.unknown || child.unparsed
+		v.unknown = v.unknown || child.unknown || child.unparsed && larkCLIRe.MatchString(cmd)
 		v.cliWrite = v.cliWrite || child.cliWrite
 	}
 	for _, g := range gates {
@@ -58,7 +59,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 	}
 	segs, ok := shellSegments(cmd)
 	if !ok {
-		v.other, v.unparsed, v.unknown = true, true, true
+		v.other, v.unparsed, v.unknown = true, true, larkCLIRe.MatchString(cmd) || unparsedLarkCommand(cmd)
 		return v
 	}
 	vars := map[string]string{}
@@ -66,7 +67,8 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 	executableEnv := false
 	for _, s := range segs {
 		if s.subst {
-			v.unsure, v.other, v.unknown = true, true, true
+			v.unsure, v.other = true, true
+			v.unknown = v.unknown || larkCLIRe.MatchString(cmd)
 		}
 		for _, nested := range s.nested {
 			child := classifyLarkDepth(nested, gates, cwd, risk, depth+1)
@@ -135,6 +137,9 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 			v.other = true
 			merge(classifyLarkDepth(words[2], gates, cwd, risk, depth+1))
 		case isLarkCLI(name):
+			if strings.ContainsAny(strings.Join(words[1:], " "), "$`") {
+				v.other, v.unknown = true, true
+			}
 			c, deny, ok := parseLarkCLI(words[1:], risk)
 			if deny != "" {
 				v.deny = deny
@@ -181,7 +186,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		case larkFilters[name] && len(env) == 0 && (s.redirect == "" || safeRedirect(s.redirect)):
 		default:
 			v.other = true
-			if larkCLIRe.MatchString(s.text) || indirectLarkCommand(name) {
+			if larkCLIRe.MatchString(s.text) || strings.ContainsAny(name, "$`*?[]{}") || larkCLIRe.MatchString(cmd) && indirectLarkCommand(name) {
 				v.unknown = true // an interpreter, wrapper or script may invoke the CLI
 			}
 		}
@@ -193,6 +198,44 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		v.other = true
 	}
 	return v
+}
+
+// The small classifier grammar rejects groups and here-strings. Inspect only command
+// names in their syntax tree so argument substitutions and quoted code remain outside
+// the CLI gate, while expanded or escaped command names still require confirmation.
+func unparsedLarkCommand(cmd string) bool {
+	// Shells may execute complete lines before a later syntax error. Parse retains
+	// those statements, so inspect the partial tree even when it returns an error.
+	tree, _ := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	unknown := false
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		if unknown {
+			return false
+		}
+		call, ok := node.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return !unknown
+		}
+		var name strings.Builder
+		dynamic := false
+		syntax.Walk(call.Args[0], func(part syntax.Node) bool {
+			switch p := part.(type) {
+			case *syntax.Lit:
+				name.WriteString(strings.ReplaceAll(p.Value, "\\", ""))
+			case *syntax.SglQuoted:
+				name.WriteString(p.Value)
+				return false
+			case nil, *syntax.Word, *syntax.DblQuoted:
+			default:
+				dynamic = true
+				return false
+			}
+			return true
+		})
+		unknown = dynamic || isLarkCLI(name.String()) || strings.ContainsAny(name.String(), "*?[]{}")
+		return !unknown
+	})
+	return unknown
 }
 
 func isAssignment(w string) bool {
@@ -210,9 +253,8 @@ func isAssignment(w string) bool {
 	return true
 }
 
-// indirectLarkCommand cannot be proven free of CLI calls without interpreting a program
-// or reading a script whose contents may change before execution. Ordinary commands remain
-// outside this gate in bypass mode.
+// indirectLarkCommand identifies opaque execution in a command already naming the CLI.
+// Without that context, interpreters and script files stay outside this gate.
 func indirectLarkCommand(name string) bool {
 	if strings.ContainsAny(name, "$`*?[]{}~") {
 		return true
