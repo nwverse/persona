@@ -1,5 +1,12 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A task trust key combines a machine and directory with an unescaped delimiter (#4421). Either field can contain
+  that delimiter, and an old ID need not obey current registration rules, so a split can assign the rule to the wrong
+  place. Keep its exact key for matching and deletion; mark an ambiguous listing and give older clients the key as a
+  path-escaped identifier, so a path-component title retains it. A failed settings read is not an empty list:
+  propagate it to the list caller while retaining the fail-closed admission and no-overwrite behavior of writers.
+  Exercise the handler after service reconstruction.
+
 - Reusing a topic to-do must retire the previous plan's execution binding (#3985). Released or dismissed Agents let
   a later plan take over the same to-do, while the old plans stay in storage. A historical `TodoID` match cannot
   impose that plan's read-only constraint on the current session. Clear old execution bindings under the takeover
@@ -285,6 +292,12 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   it the same ending fields as the normal path.
 
 - **A model asked for an option's label copies whatever the input put next to it** (#3929). `delegate_input.md` lists an option as `label：description`, and with Chinese descriptions the delegation model often answered the whole line (`表驱动：和这个包现有的测试一致`): #3923's live runs saw it in 4 of 4, 2 of 5 and 1 of 4 runs of three cases. `interactionAnswers` found no such option, so a choice the assistant had decided to answer went to the user. `optionLabel` (`assistant/tools_apps.go`) now maps an answer to a label only when it writes out exactly one option, its label then a separator (`：`, `:`, a dash, or brackets) and that option's own description, with quotes or spaces; anything else is still refused. Don't widen it to prefixes or the model's own words after a label: those are free text, and a refused answer only costs the user one question. When a prompt shows options with extra text, expect it back and test the hub's check with the exact line the prompt renders.
+
+- **A new scheduled-task `repeat` must survive the apps that don't know it** (#4399). iOS decodes an unknown `repeat`
+  as `once`, and Android and the web send it back as they got it, all without the new rule's field. A `PUT` without
+  `cron` therefore keeps a cron task's `repeat` and `cron` and saves only the rest; otherwise switching such a task
+  off on an older iPhone turned it into a one-off with no time. Keep the new rule's own field out of a body whose
+  task doesn't have one (`cron` is sent only when set), and gate the editor on the hello feature (`task_cron`).
 
 ## Cancel confirmation-blocked Agents without granting approval (#4277)
 
