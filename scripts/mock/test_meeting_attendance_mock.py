@@ -196,7 +196,7 @@ class MeetingAttendanceMockTests(Hub, unittest.TestCase):
         self.upload(rid)
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 3})[1]["code"], "not_attending")
         live = self.call("GET", f"/api/v1/recordings/{rid}/live")[1]
-        self.assertEqual(live, {"next": 3, "attendance": "off", "fed": 3, "asks": []})
+        self.assertEqual(live, {"next": 3, "attendance": "off", "fed": 3, "asks": [], "revs": {"asks": 0}})  # revs: meeting_conversation
         self.assertEqual(self.call("GET", f"/api/v1/recordings/{rid}/live", headers={"X-Mock-Role": "watch"})[1]["code"], "forbidden")
         self.call("DELETE", f"/api/v1/recordings/{rid}")
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 0})[1]["code"], "recording_deleted")
