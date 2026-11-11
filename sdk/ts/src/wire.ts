@@ -54,6 +54,19 @@ export interface Manifest {
    */
   tools?: ToolSpec[];
   auth?: AuthSpec;
+  /**
+   * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+   * executable; writes and arbitrary command lines are not part of this contract.
+   */
+  host_integrations?: HostIntegrationSpec[];
+}
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+export interface HostIntegrationSpec {
+  id: string;
+  version: string;
 }
 
 /**
@@ -4562,8 +4575,8 @@ export interface ChannelEditParams {
   text: string;
 }
 
-export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | (string & {});
-export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
+export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | "topics" | (string & {});
+export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"] as const;
 
 /**
  * error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params,
@@ -4693,7 +4706,10 @@ export interface KBDetail {
   id: string;
   /** Where it is on the manager's machine, for its own file tools. */
   path: string;
-  /** The entity's own fields (meta.json). */
+  /**
+   * The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+   * Status uses the same locked_fields and provenance as other corrected fields.
+   */
   meta: unknown;
   summary?: string;
   log?: string[];
@@ -4703,6 +4719,34 @@ export interface KBDetail {
   segments?: KBRecordingSegment[];
   /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
   minutes?: unknown;
+  /** A topic's knowledge points (docs/assistant/knowledge.md "Topics"). */
+  points?: KBTopicPoint[];
+}
+
+/**
+ * One knowledge point of a topic, under up to two levels of subtopics (path).
+ */
+export interface KBTopicPoint {
+  id: string;
+  path?: string[];
+  kind: string;
+  text: string;
+  /** A decision's reason, a pitfall's cause. */
+  why?: string;
+  sources?: KBTopicSource[];
+  /** YYYY-MM-DD: when it was last confirmed. */
+  when?: string;
+}
+
+/**
+ * An entry a knowledge point came from.
+ */
+export interface KBTopicSource {
+  /** projects or chats */
+  kind: string;
+  id: string;
+  /** YYYY-MM-DD */
+  day?: string;
 }
 
 /**
@@ -4804,6 +4848,10 @@ export interface KBUpdateParams {
   name?: string;
   /** A project's: short or long. */
   project_kind?: string;
+  /**
+   * People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+   * ignored. Omitted or empty keeps the current status; active restores a person.
+   */
   status?: string;
   goal?: string;
   my_role?: string;

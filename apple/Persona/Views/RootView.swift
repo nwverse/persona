@@ -205,6 +205,9 @@ struct RootView: View {
         // The Theme Color on the windows too, for what UIKit draws in the window's tint (Settings' row icons, `WindowTint`).
         .onChange(of: model.look, initial: true) { WindowTint.apply() }
         #endif
+        #if DEBUG || PERF_SIGNPOST
+        .task { MainThreadWatchdog.shared.start() }
+        #endif
         #if DEBUG
         .overlay(alignment: .bottomTrailing) { PerfCountProbe() }
         // UI tests see the small window (VNC in picture in picture, #1343), which is the system's.
@@ -365,6 +368,18 @@ struct PageTabSwitchRow: View {
         .background(Theme.pageBackground)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("page-tab-switch")
+    }
+}
+
+/// The switch as a row over a page opened in Agents' split column on a phone's tabs. The column's stack has it as an
+/// inset (`SplitNavigation`), and that reached only its root page: an opened page covers the whole column, so the switch
+/// went as soon as an agent was opened, and nothing led back to Assistant (#3680). Only where it shows: everywhere else
+/// the page is left exactly as it was.
+struct PageTabSwitchInset: ViewModifier {
+    var shown: Bool
+
+    func body(content: Content) -> some View {
+        if shown { content.safeAreaInset(edge: .top, spacing: 0) { PageTabSwitchRow() } } else { content }
     }
 }
 

@@ -204,15 +204,19 @@ func TestModelConfigurationPreservesLegacyBaselines(t *testing.T) {
 			t.Errorf("%s: %+v %v", id, b, err)
 		}
 	}
-	if err := s.putSetting(ctx, modelKey(purposeLarkAgent), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.claude" {
-		t.Fatal("deprecated use override still applied")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if err := s.putSetting(ctx, modelKey(id), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.claude" {
+			t.Fatalf("%s: deprecated use override still applied", id)
+		}
 	}
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.new"})
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.new" {
-		t.Fatal("category selection did not reach the slash agent")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.new" {
+			t.Fatalf("%s: category selection did not reach it", id)
+		}
 	}
 	// manager.json's inbox.agent.machine (the hub has it) is where the AI twin runs.
 	f.hello.Models.InboxAgentMachine = "server"
@@ -490,16 +494,16 @@ func TestFourModelCategoriesCatalog(t *testing.T) {
 	ids := []string{}
 	for _, p := range catalog.Purposes {
 		ids = append(ids, p.ID)
-		if p.ID == purposeLarkAgent {
+		if agentsOverride(p.ID) {
 			if p.CategoryID != "agent.new" || p.Parent != "agent.new" || len(p.Fields) == 0 {
-				t.Fatalf("Lark /agent missing independent editor: %+v", p)
+				t.Fatalf("%s missing independent editor: %+v", p.ID, p)
 			}
 		} else if p.CategoryID != p.ID || len(p.Uses) == 0 || len(p.Fields) == 0 {
 			t.Fatalf("category missing scope or editor: %+v", p)
 		}
 	}
 	if !reflect.DeepEqual(ids, modelConfigIDs) {
-		t.Fatalf("catalog is not the ordered categories and Lark /agent: %v", ids)
+		t.Fatalf("catalog is not the ordered categories, the AI twin and Lark /agent: %v", ids)
 	}
 }
 
@@ -511,14 +515,14 @@ func TestModelUsesAreReadOnlyAndIgnoreDeprecatedOverrides(t *testing.T) {
 		"assistant":    {Provider: "launcher.conversation", Model: "conversation", Effort: "high"},
 		"agent.new":    {Provider: "launcher.agent", Model: "agent", Effort: "xhigh"},
 		"kb":           {Provider: "legacy.kb", Model: "processing"},
-		"inbox.triage": {Provider: "legacy.triage", Model: "screening"},
+		"inbox.triage": {Provider: "legacy.triage", Model: "screening", Effort: "off"},
 	}
 	for id, binding := range bindings {
 		setModel(t, s, id, binding)
 	}
 	ids := []string{}
 	for _, p := range modelPurposes {
-		if p.Parent != "" && p.ID != purposeLarkAgent {
+		if p.Parent != "" && !agentsOverride(p.ID) {
 			ids = append(ids, p.ID)
 		}
 	}
@@ -812,6 +816,59 @@ func TestLaunchersListHideRestoreDelete(t *testing.T) {
 	}
 }
 
+// Automatic selection is not a user's assignment: deleting its provider leaves the next automatic pick, while an
+// explicit choice still protects the provider underneath it (#3198).
+func TestAutomaticProviderDeletionDoesNotCountAsExplicitUse(t *testing.T) {
+	s, _, _ := modelService(t)
+	key, err := s.sealKey("synthetic-provider-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "first", Kind: "api", BaseURL: "https://api.example.com", Model: "first-model"}, KeySealed: key},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "second", Kind: "api", BaseURL: "https://api.example.com", Model: "second-model"}, KeySealed: key})
+	ctx := context.Background()
+	for _, id := range []string{"kb", "inbox.triage", "agent.delegate"} {
+		p := purposeOf(t, s, id)
+		if p.Override != (ModelBinding{}) || p.Effective.Provider != "launcher.first" {
+			t.Fatalf("%s did not start on the automatic provider: %+v", id, p)
+		}
+	}
+	if rec := request(s, http.MethodDelete, "/api/v1/launchers/first", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"deleted":true`) {
+		t.Fatalf("automatic selection blocked deletion: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []string{"kb", "inbox.triage", "agent.delegate"} {
+		if b, err := s.resolveModel(ctx, id); err != nil || b.Provider != "launcher.second" {
+			t.Fatalf("%s did not move to the next automatic provider: %+v %v", id, b, err)
+		}
+	}
+	setModel(t, s, "kb", ModelBinding{Provider: "launcher.second"})
+	use := purposeOf(t, s, "kb").Name
+	if rec := request(s, http.MethodDelete, "/api/v1/launchers/second", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), use) {
+		t.Fatalf("an explicit provider was not protected: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// When only one provider is eligible, deleting it leaves automatic API categories with no model, so deletion is
+// still refused with 409 Conflict naming the affected purposes.
+func TestDeletingLastAutomaticProviderStillProtectsBuiltinPurposes(t *testing.T) {
+	s, _, _ := modelService(t)
+	key, err := s.sealKey("synthetic-provider-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "only", Kind: "api", BaseURL: "https://api.example.com", Model: "only-model"}, KeySealed: key})
+	p := purposeOf(t, s, "kb")
+	if p.Effective.Provider != "launcher.only" {
+		t.Fatalf("kb did not start on the automatic provider: %+v", p)
+	}
+	rec := request(s, http.MethodDelete, "/api/v1/launchers/only", "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), p.Name) {
+		t.Fatalf("deleting the last automatic provider was not protected: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func slicesContain(list []string, s string) bool {
 	for _, x := range list {
 		if x == s {
@@ -1088,5 +1145,63 @@ func TestProviderModelsListedAndCountForTheSendCheck(t *testing.T) {
 	}
 	if s.launcherHasModel(context.Background(), "server", "relay", "gw/gone") {
 		t.Fatal("a model in no list")
+	}
+}
+
+func TestTriageDefaultEffortIsOffAndHonoursMessagesAPI(t *testing.T) {
+	s, _, _ := modelService(t)
+	ctx := context.Background()
+
+	b, err := s.resolveModel(ctx, "inbox.triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Effort != "off" {
+		t.Fatalf("expected triage default effort off, got %q", b.Effort)
+	}
+
+	key, err := s.sealKey("test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "anthropic", Kind: "api", API: "messages", BaseURL: "https://api.anthropic.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		},
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "other", Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		})
+
+	p := purposeOf(t, s, "inbox.triage")
+	if !slices.Contains(p.Fields, "effort") {
+		t.Fatalf("expected Fields to include effort, got %v", p.Fields)
+	}
+
+	r := modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"provider":"launcher.other"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("select Messages provider: %d %s", r.Code, r.Body.String())
+	}
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Provider != "launcher.other" || b.Effort != "off" {
+		t.Fatalf("provider-only selection must keep triage's default off: %+v, %v", b, err)
+	}
+	cfg, err := s.apiConfig(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReasoningEffort != "off" {
+		t.Fatalf("expected apiConfig ReasoningEffort to be off, got %q", cfg.ReasoningEffort)
+	}
+
+	p = purposeOf(t, s, "inbox.triage")
+	r = modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"effort":"low"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("save Messages effort: %d %s", r.Code, r.Body.String())
+	}
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Effort != "low" {
+		t.Fatalf("explicit Messages effort was not preserved: %+v, %v", b, err)
 	}
 }

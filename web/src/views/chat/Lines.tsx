@@ -6,9 +6,11 @@ import { useExpanded } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { ago, clock } from "../../lib/format";
 import { retryable, type APIErrorInfo } from "../../lib/api-errors";
+import { refusalFacts } from "../../lib/model-fallback";
 import { runAction, turnErrorFix } from "../../lib/readiness";
 import { wakeSummary } from "../../lib/tasks";
 import { type ChatLine, type OpenRecap } from "../../lib/turns";
+import { sourceLabel } from "../../lib/message-source";
 import type { Item } from "../../lib/types";
 import { Button, Collapse, copyText, cx, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -92,10 +94,10 @@ function SupervisionLine({ line, ...props }: LineProps & { line: Extract<ChatLin
     return () => setOpen(false);
   });
   return (
-    <section className="flex min-w-0 flex-col gap-3" data-supervision={line.live ? "running" : "done"}>
+    <section className="flex min-w-0 flex-col gap-3" data-supervision={line.live ? "running" : "done"} data-background-round={line.source?.kind}>
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="touch-hit flex w-full min-w-0 items-center gap-1.5 rounded-control py-1 text-left text-[length:var(--chat-secondary)] whitespace-nowrap text-ink-3 hover:text-ink-2">
-        <span className="shrink-0 text-accent-ink">@{t("chat-messages.source_supervision")} · </span>
-        <span className="min-w-0 truncate">{t(line.live ? "chat-lines.supervision_running" : "chat-lines.supervision_done")}</span>
+        <span className={cx("text-accent-ink", line.source ? "max-w-[60%] min-w-0 shrink-0 truncate" : "shrink-0")}>@{line.source ? sourceLabel(line.source) : t("chat-messages.source_supervision")} · </span>
+        <span className="min-w-0 truncate">{t(line.source ? (line.live ? "chat-lines.background_running" : "chat-lines.background_done") : line.live ? "chat-lines.supervision_running" : "chat-lines.supervision_done")}</span>
         <Icon name="chevronRight" size={14} className="shrink-0" style={{ transform: open ? "rotate(90deg)" : undefined }} />
       </button>
       {open && <div className="flex min-w-0 flex-col gap-3 border-l-2 border-tool-rail pl-3" data-supervision-trace>
@@ -108,6 +110,7 @@ function SupervisionLine({ line, ...props }: LineProps & { line: Extract<ChatLin
 /** A notice on a line of its own: a wake opening new work (a centered capsule), "Interrupted", a long local command's output. */
 function LineNotice({ item }: { item: Item }) {
   const [open, setOpen] = useState(false);
+  if (item.model_refusal) return <RefusalNotice item={item} />;
   if (item.wake) {
     const w = wakeSummary(item);
     return (
@@ -134,6 +137,38 @@ function LineNotice({ item }: { item: Item }) {
       <Icon name="info" size={13} className="mt-[3px] shrink-0 text-ink-3" />
       <span className={cx("min-w-0 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2", !open && "line-clamp-4")}>{text}</span>
     </button>
+  );
+}
+
+/** A Claude Code model_refusal_* record (#2528): the refused model, the one Claude Code switched to, the category and
+ *  scope as recorded, and the refusal's own words verbatim (never reworded, never the record's line). */
+function RefusalNotice({ item }: { item: Item }) {
+  const r = item.model_refusal!;
+  const f = refusalFacts(r);
+  const fallback = r.subtype === "model_refusal_fallback" && f.fallback;
+  return (
+    <div role="note" data-testid="refusal-notice" title={clock(item.ts)} className="flex w-full items-start gap-2 rounded-card bg-orange-tint px-3 py-2 text-left shadow-hairline">
+      <Icon name="warning" size={13} className="mt-[3px] shrink-0 text-orange" />
+      <span className="flex min-w-0 flex-col gap-0.5 text-[12.5px] leading-relaxed text-ink-2">
+        <span className="font-semibold text-ink">{t("chat-modelfallback.refusal_title")}</span>
+        {fallback ? (
+          <span className="[overflow-wrap:anywhere]">{t("chat-modelfallback.refusal_fallback", { from: f.original ?? "?", to: f.fallback! })}</span>
+        ) : (
+          <span>{t("chat-modelfallback.refusal_no_switch")}</span>
+        )}
+        {fallback && f.scope === "session" && <span>{t("chat-modelfallback.refusal_session")}</span>}
+        {f.category && <span className="[overflow-wrap:anywhere]">{t("chat-modelfallback.refusal_category", { category: f.category })}</span>}
+        {f.explanation && <span className="whitespace-pre-wrap">{t("chat-modelfallback.refusal_explanation", { text: f.explanation })}</span>}
+        {f.text && (
+          <span className="flex min-w-0 flex-col">
+            <span className="text-ink-3">{t("chat-modelfallback.refusal_text")}</span>
+            <span className="whitespace-pre-wrap [overflow-wrap:anywhere]" data-testid="refusal-text">
+              {f.text}
+            </span>
+          </span>
+        )}
+      </span>
+    </div>
   );
 }
 

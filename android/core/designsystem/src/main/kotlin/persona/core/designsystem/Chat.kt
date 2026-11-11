@@ -523,8 +523,10 @@ fun SendButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Bool
     val fill = when { kind == SendKind.Stop -> palette.danger.dot; enabled -> palette.action; else -> palette.surfaceStrong }
     val ink = when { kind == SendKind.Stop -> palette.danger.onDot; enabled -> palette.onAction; else -> palette.ink3 }
     val spoken = stringResource(if (kind == SendKind.Stop) R.string.designsystem_send_stop else R.string.designsystem_send)
+    // Send and Stop are felt, as on iOS (DESIGN_SYSTEM.md 4.3).
+    val haptics = rememberHaptics()
     Box(
-        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = onClick)
+        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = haptics.tapped(onClick))
             .semantics { contentDescription = spoken },
         contentAlignment = Alignment.Center,
     ) {
