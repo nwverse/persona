@@ -137,7 +137,7 @@ Decisions the user has made for this task ("Decision records"):
 ### 5. todo_supervision table
 Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-entry.md`, "Supervision"), one row each; unsupervised to-dos have no row:
 - `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE).
-- `supervisor` (text, NOT NULL): supervisor, the chat that created it. With Agent tasks on (#3617, `docs/assistant/unified-entry.md` "Agent tasks") a to-do another chat or the user opened can have one too: the main chat or a leader, with `done_when` empty unless given.
+- `supervisor` (text, NOT NULL): supervisor, the chat that created it. With Agent tasks on (#3617, `docs/assistant/unified-entry.md` "Agent tasks") a to-do another chat or the user opened can have one too: the main chat or a leader, with `done_when` empty unless given. The background supervisor (#4927) is never stored here: a task it follows up keeps the main chat as `supervisor` (`docs/assistant/unified-entry.md` "Background supervisor").
 - `done_when` (jsonb, NOT NULL, DEFAULT '[]'): acceptance criteria (string array); `expect_minutes` (integer, NOT NULL, DEFAULT 0): expected minutes.
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).

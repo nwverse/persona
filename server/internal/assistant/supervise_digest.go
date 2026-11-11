@@ -20,8 +20,9 @@ import (
 const superviseTool = "supervise"
 
 // sendDigest puts the due signals into their supervisors' conversations, one supervision message each: now, or queued
-// behind its turn (a message still queued takes these in too). A signal goes to the main conversation unless its task
-// is a leader's (digestTo, supervise_leader.go). A signal that no longer holds (answered, done, reviewed meanwhile) is
+// behind its turn (a message still queued takes these in too). A signal goes to its task's leader, to the background
+// supervisor for a task no leader supervises (made here on first use, supervise_background.go), or to the main
+// conversation (digestTo, supervise_leader.go). A signal that no longer holds (answered, done, reviewed meanwhile) is
 // dropped.
 func (s *Service) sendDigest(ctx context.Context) {
 	b := &s.supervise
@@ -80,6 +81,22 @@ func (s *Service) sendDigest(ctx context.Context) {
 	var leaderOrder []TodoAgent
 	gone := map[string]bool{}      // leaders whose conversation is not there: their signals go to the main one
 	s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed gets a supervisor that can act, before routing
+	if s.backgroundNeeded(here, list) {
+		// The background supervisor is made the first time a signal is for it, and again when it is gone. One that
+		// cannot start leaves here as it was: the gone check below sends its signals to the main conversation.
+		id, was := s.ensureBackground(ctx)
+		if id != "" {
+			here = s.settings(ctx)
+		}
+		if lost := s.backgroundLost(ctx, was, web); len(lost) > 0 { // what waited for the one that is gone goes out with these
+			list = mergeSignals(lost, list)
+			b.mu.Lock()
+			for _, g := range list {
+				b.sent[g.id()] = g.Key
+			}
+			b.mu.Unlock()
+		}
+	}
 	for _, g := range list {
 		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
 			if reachable {
@@ -101,7 +118,8 @@ func (s *Service) sendDigest(ctx context.Context) {
 		if to != here.Main {
 			if _, seen := gone[to]; !seen {
 				c, ok := s.session(ctx, here.MachineID, to)
-				gone[to] = !ok || !c.Assistant
+				// The background supervisor just started is there before its machine lists it: its message queues.
+				gone[to] = (!ok || !c.Assistant) && !s.backgroundFresh(here, to)
 			}
 			if gone[to] {
 				to = here.Main
@@ -129,9 +147,9 @@ func (s *Service) sendDigest(ctx context.Context) {
 	}
 }
 
-// deliverDigest puts the signals list into conversation to (the main conversation or a leader) as one supervision
-// message; now is when sendDigest marked it as the last message and prev the last message before. True when it went in
-// or was queued.
+// deliverDigest puts the signals list into conversation to (the main conversation, a leader or the background
+// supervisor) as one supervision message; now is when sendDigest marked it as the last message and prev the last
+// message before. True when it went in or was queued.
 func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, list []superviseSignal, web string, now, prev time.Time) bool {
 	b := &s.supervise
 	var entries []prompts.SuperviseEntry
@@ -168,8 +186,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 	}()
 	leader := to != here.Main
+	background := leader && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
 	render := func(list []prompts.SuperviseEntry) string {
-		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Escalated: escalatedIn(list),
+		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Escalated: escalatedIn(list),
 			LeaderStuck: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:     slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
 			ParkedDue:   slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),
@@ -203,7 +222,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 	}
 	msg.Text = render(entries)
-	if leader {
+	if background {
+		s.logf("supervise: %d signal(s) to the background supervisor %s", len(entries), short(to))
+	} else if leader {
 		s.logf("supervise: %d signal(s) to leader conversation %s", len(entries), short(to))
 	} else {
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
@@ -397,6 +418,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind == sigEscalated {
 		e.Recommend = g.Ask // the leader's recommendation (escalate)
 		e.Asks = g.Cards
+		e.Background = !s.isLeader(ctx, v.Supervisor) // only the background supervisor escalates a task no leader supervises
 	}
 	if g.Kind == sigDecide {
 		e.Recommend = g.Ask // the task leader's recommendation

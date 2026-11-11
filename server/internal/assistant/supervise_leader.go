@@ -56,9 +56,17 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 
 // digestTo is the conversation signal g goes to, with cfg the settings in effect: the one it names (To), else its task's
 // supervisor when that is a leader, unless the main conversation handles it (a leader's needs_user, a start to remedy, a task waiting for the
-// user); else the main conversation.
+// user); else, for a task no leader supervises, the background supervisor, or the main conversation while there is
+// none (ownSupervisor, supervise_background.go).
 func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
+	own := s.ownSupervisor(cfg)
 	if g.To != "" {
+		switch {
+		case g.Kind == sigDecide && g.To == cfg.Main:
+			return own // a task leader's decision for the conversation above it, whose task is one no leader conversation supervises
+		case g.To == cfg.BackgroundSupervisor && g.To != own:
+			return cfg.Main // named the background supervisor, which was switched off or moved meanwhile
+		}
 		return g.To
 	}
 	switch g.Kind {
@@ -70,7 +78,10 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 		return cfg.Main
 	}
 	lead := t.Supervision.Supervisor
-	if lead == "" || lead == cfg.Main || !slices.Contains(cfg.Leaders, lead) || t.Supervision.state(t) == reviewNeedsUser {
+	if lead == "" || lead == cfg.Main || !slices.Contains(cfg.Leaders, lead) {
+		return own
+	}
+	if t.Supervision.state(t) == reviewNeedsUser {
 		return cfg.Main
 	}
 	return lead
@@ -139,6 +150,9 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 		}
 		if id == cfg.Main {
 			return nil, errors.New("the main conversation supervises already: a leader is a side conversation")
+		}
+		if id == cfg.BackgroundSupervisor {
+			return nil, errors.New("the background supervisor is built in and follows up the tasks no leader supervises: a leader is another side conversation")
 		}
 		if c, ok := s.session(ctx, cfg.MachineID, id); !ok || !c.Assistant {
 			return nil, fmt.Errorf("%s is not a Persona conversation on the assistant's machine (conversations_list has their ids)", id)

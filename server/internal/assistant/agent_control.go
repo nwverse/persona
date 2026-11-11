@@ -310,13 +310,14 @@ func exitText(text string) bool {
 
 // supervisedElsewhere is the task agent c works for when a conversation other than self supervises it: a reply to it
 // goes as a side conversation, and /exit to it is refused (exitAllowed). Ownership that cannot be read is an error, so
-// a reply never goes without its provenance.
+// a reply never goes without its provenance. The background supervisor speaks to the tasks no leader supervises as
+// their supervisor (supervise_background.go).
 func (s *Service) supervisedElsewhere(ctx context.Context, self string, am Device, c proto.Session) (Todo, bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
 	t, ok := s.taskOf(ctx, am.ID, c.SessionID)
-	return t, ok && t.Supervision != nil && t.Supervision.Supervisor != self, nil
+	return t, ok && t.Supervision != nil && t.Supervision.Supervisor != self && !s.backgroundSupervises(ctx, self, t), nil
 }
 
 // exitAllowed refuses /exit or /quit to an agent on a task another conversation supervises (#3537): a plain

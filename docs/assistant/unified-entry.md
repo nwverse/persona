@@ -377,6 +377,8 @@ When enabled, tasks dispatched from the main chat (`task_plan`; also `agent_star
 
 The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos created by `agent_start` in quiet-task mode). The assistant owns their completion and quality, rather than merely relaying "done."
 
+Who does the follow-up: by default the **background supervisor** (#4927, "Background supervisor" below), a built-in conversation that gets these tasks' supervision messages and reviews them, so the main chat stays free for the owner. Where this section says the main chat receives a supervision message or reviews a task, that is the background supervisor unless the paragraph says otherwise or `main_supervises_own_tasks` is on; the ledger still names the main chat as `supervisor`.
+
 - **Supervised by default** (#4669): a task any other chat (neither the main chat nor a leader) hands out with `task_plan` is the main chat's to supervise too: it gets a ledger, its signals go into the main chat's supervision messages, and when it ends (`accepted` or `cancelled`, `reviewDoneTodo`) the chat that planned it gets one line with the task's link (`prompts/assistant/task_ended.md`, relay kind `task_end`: no hop, no push of its own). A failed start still pushes as before (#5081). Without a main chat, a reporting chat's task (#4101) and a task leader's workers keep their old supervision. `start_paths_test.go` lists every function that starts an Agent or opens a conversation and requires each to make a ledger or be on its opt-out list with a reason, so a new entry point cannot skip supervision silently.
 
 - **Ledger**: each `task_plan` task may include `done_when` (up to 6 acceptance criteria) and `expect_minutes` (estimated minutes). Criteria are appended to the assignment prompt, asking the Agent to provide evidence for each when finished.
@@ -533,6 +535,22 @@ Off by default: with no leaders, everything above is unchanged and only the main
 - **In the clients** (#4331): the sidebars call leaders **常驻** (en "Pinned"; the code, API and events keep leader / direction) and list only them under Persona chats, after the main chat, each with the direction tree's Working and Waiting on you counts ("The direction tree"); a conversation's menu has **设为常驻** / **取消常驻** (`…/make` / `…/end`). The clients read the tree again on its `directions` message, so an open sidebar follows a leader made or ended anywhere at once (a sixth leader once stayed hidden until a reload: the clients had read the leaders only when they loaded).
 - **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
 
+### Background supervisor (#4927)
+
+On by default. One built-in conversation follows up every supervised task no leader supervises, so the owner's message to the main chat is not behind a review round (`docs/design/proposals/main-chat-availability.md` section 3a). Code: `server/internal/assistant/supervise_background.go`.
+
+- **What it is**: an assistant conversation on the assistant's computer, made the first time a signal is for it (`ensureBackground`, from `sendDigest`), started with `prompts/assistant/supervisor_start.md` and listed however quiet (`keptSessions`). Its id is in the assistant's settings (`background_supervisor`, with `background_supervisor_machine_id` and `background_supervisor_at`; read with `GET /api/v1/assistant`, never written by `PUT`). It is not in `assistant.leaders`, is not a direction, takes none of the 20 leader slots, and cannot be archived or made a leader or a direction. Its context starts with "这是后台督办对话" (`prompts/assistant/context.md`).
+- **The setting**: `main_supervises_own_tasks` ("The main chat supervises its own tasks": `GET/PUT /api/v1/assistant`, `persona_settings` key `assistant.main_supervises_own_tasks`), off by default. On means there is no background supervisor in effect: signals raised from then on go to the main chat, as before #4927. Open tasks keep running either way, and a supervision message the background supervisor was already sent it still finishes.
+- **Nothing is written on the tasks**: a task's ledger keeps the main chat as `supervisor` and its `origin` stays the chat that planned it. Who gets a task's signals is decided when they are sent (`ownSupervisor`): the background supervisor while it is on and exists on the assistant's computer, else the main chat. Why not store it as `supervisor`: task cards, the dock, receipts, to-do events and the direction tree (tasks without a leader sit under the secretary) read the ledger and stay as they were; the main chat's right to review these tasks is the rule it always had; switching the setting moves every open task at once; and a background supervisor that is gone leaves no task naming a conversation that does not exist.
+- **Routing** (`digestTo`, `server/internal/assistant/supervise_leader.go`): a signal of a task whose ledger names no current leader goes to the background supervisor, in the leader variant of `prompts/assistant/supervise.md` with a line saying the tasks are not its own; this includes a task waiting for the user and a task leader's decision sent up to the main chat. What always went to the main chat stays there: `escalated`, failed and retried starts (the start remedies are main-chat tools) and `leader_stuck`. A leader's tasks stay the leader's.
+- **What it may do**: `task_review` (accepted, rework, cancelled, needs_user, parked), `task_scope`, `agent_read`, `agent_send` (as the task's supervisor, not as a side conversation), `interaction_answer` and `ask_escalate`, for the tasks above only (`backgroundSupervises`). The main chat may still review or message any of them.
+- **What the main chat gets**: an accepted task takes no main-chat turn: the conclusion card goes to the owner as before, the review is an entry in the chat activity of the chat that planned the task, and the outcome is in the main chat's next snapshot. A `needs_user` sends the decision card as before and the `escalated` entry a leader's sends, which is a supervision message to the main chat (folded, not pushed). A concern's outcome is still a main-chat turn.
+- **Announced once**: the first main-chat message after the background supervisor exists carries one line saying its tasks are followed up there from now on and which setting turns it off (`announceBackground`; `background_supervisor_announced` in the settings).
+- **Model**: purpose `assistant.supervise`, which follows Main chat until it is given its own (`docs/assistant/model-config.md`). It applies when the conversation starts and on every message sent to it.
+- **Gone or unable to start**: a background supervisor its computer no longer lists (after a 2-minute grace from its start, `backgroundGrace`), or one left on another computer after the assistant moved, is replaced by a new one, and the supervision message still queued for the old one is told again (`backgroundLost`; the watch loop checks this too, `backgroundStranded`). While a start fails the signals go to the main chat, and the start is tried again after 10 minutes (`backgroundRetry`). No signal is dropped.
+- **Pushes**: its turns are held from the pushes as any supervision round is (a normal finish is not pushed; a failed turn is). It counts as an assistant conversation everywhere else: not triaged, not in the dock's agents, no badge; a round of it shows as "assistant answering" on the Live Activity, as a supervision round in the main chat does.
+- **In the clients today**: it has `origin: "task"` with no `origin_ref`, so the apps list it with the scheduled tasks' conversations, titled "Background supervisor" (zh 后台督办, ja バックグラウンド監督). The clients have no page for the setting or the model yet (step B2 of the proposal).
+
 ### Task leaders (#3656)
 
 The depth is dot (the main chat or a leader conversation) → task leader → worker. Off unless a `task_plan` task says `role: "leader"`; every other task is an ordinary worker and nothing about it changes.
@@ -587,14 +605,16 @@ creation endpoint: additions use the main conversation's approval flow. The empt
 #### Asks go to the supervisor first (#3589)
 
 Only with leaders configured (`assistant.leaders` not empty); without them every card goes to the user as above.
-Code: `server/internal/assistant/ask_route.go`.
+The background supervisor does not change that: it alone routes no card, since asking a supervisor first is a switch
+the owner turns on by making a leader. Code: `server/internal/assistant/ask_route.go`.
 
 - **What goes up**: a card raised by an agent of a supervised task (not waiting for the user, not closed): a question
   (not `ask_user`, not a form or a password card), a tool permission or a plan. Terminal dialogs read off the screen
   and the conversations' own cards stay the user's. The card is shown on the apps marked `delegating` (an answer given
   there still wins) and rings nothing: no push, no bot card, no Persona Link notification.
-- **Who gets it**: the task's supervisor as an `ask` entry in its "📋 督办" message (its leader; the main chat when the
-  main chat supervises it or the leader's conversation is gone), with the card's `interaction_id`, what it asks and the
+- **Who gets it**: the task's supervisor as an `ask` entry in its "📋 督办" message (its leader; for a task no leader
+  supervises the background supervisor, or the main chat while `main_supervises_own_tasks` is on or there is no
+  background supervisor yet; the main chat when the leader's conversation is gone), with the card's `interaction_id`, what it asks and the
   task's decisions in effect. Concurrent cards of one task are one entry. The agent's `needs_you` signal is not sent
   while its card is on its way up.
 - **What the supervisor does**: answers a question that is the agent's own call with `interaction_answer` (with
@@ -603,14 +623,16 @@ Code: `server/internal/assistant/ask_route.go`.
   a red line, a goal change, a conflict with a decision already made — goes up with `ask_escalate {todo_id, reason,
   recommend}`: every card of the task the user has not been told of rings at once, as one push (the first card pushes;
   the others go to the apps and channels without one), each carrying `delegate.reason` / `delegate.recommend`. Only the
-  task's supervisor and the main chat may. A leader's escalation adds an `escalated` entry to the main chat with the
-  cards, the reason and the recommendation, so it does not ask again.
+  task's supervisor and the main chat may. A leader's or the background supervisor's escalation adds an `escalated`
+  entry to the main chat with the cards, the reason and the recommendation, so it does not ask again. The main chat may
+  answer a card either of them still holds, and its answer is kept as the task's decision too.
 - **Answers**: the user's answers go to the agents as any card's; a question's is kept as every card's is
   (`source: card`), and an escalated permission or plan becomes a `card` decision too ("Allow …" → "Allowed"), so a
   later card cannot quietly go the other way.
 - **Nothing hangs**: a card not handled within 5 minutes (`askHoldFor`) goes up a rung: from a leader to the main chat
-  (its entry marked as raised), from the main chat to the user (all of the task's cards reaching the user then ring
-  as one, without supervisor context). The 5 minutes do not count while the conversation holding the card is on a
+  (its entry marked as raised), from the main chat or the background supervisor to the user (all of the task's cards
+  reaching the user then ring as one, without supervisor context; a card the background supervisor held does not pass
+  the main chat). The 5 minutes do not count while the conversation holding the card is on a
   turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends. A
   conversation still on a turn an hour (`askBusyMax`) after the card came is counted as stuck instead, and the card
   climbs all the same, so no card waits on a conversation for ever.

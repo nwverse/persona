@@ -31,6 +31,9 @@ type AssistantClaudeMD struct {
 	PersonaView bool
 	// Language is the language the user reads, by its own name ("English", or Japanese written in Japanese); "" is Chinese, as before i18n.
 	Language string
+	// BackgroundSupervisor: the background supervisor follows up the tasks no leader supervises (#4927), so the main
+	// conversation is told it no longer reviews them itself. False keeps the text as it was.
+	BackgroundSupervisor bool
 }
 
 func RenderAssistantClaudeMD(d AssistantClaudeMD) string { return render("assistant/claude_md", d) }
@@ -343,7 +346,18 @@ type AssistantContext struct {
 	// LeaderName: for a leader, its direction's name.
 	Directions []ContextDirection
 	LeaderName string
+	// Background: this is the background supervisor (#4927), which follows up the tasks no leader supervises.
+	// BackgroundStarted: for the main conversation, once: the background supervisor's id, the first message after it
+	// began to follow up the main conversation's tasks.
+	Background        bool
+	BackgroundStarted string
 }
+
+// SupervisorStart is the message the background supervisor's conversation starts with (assistant/supervisor_start):
+// what it is for, before its first supervision message.
+type SupervisorStart struct{ Owner string }
+
+func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
 
 // ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
 type ContextDirection struct{ ID, Name string }
@@ -553,6 +567,9 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// Background: with Leader, it goes to the background supervisor (#4927): the leader's message, for tasks other
+	// conversations handed out, whose cards go from it to the user.
+	Background bool
 	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
 	// Overdue: an entry is a task past its brief's clock (#3822).
@@ -579,6 +596,7 @@ type SuperviseEntry struct {
 	Ask             string             // needs_you: what it asks
 	Recommend       string             // escalated: the option the leader recommends
 	LeaderGone      bool               // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	Background      bool               // escalated: by the background supervisor, not a leader conversation (#4927)
 	DoneWhen        []string           // what done means
 	Round           int                // reworks so far
 	Machine         string             // where its agent runs (a name)

@@ -252,13 +252,23 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 	}
 	b.WriteString("This is not confirmation that any agent started. Startup can still fail; the task cards and context snapshot show the outcome.")
+	background := s.backgroundOn(s.settings(ctx)) // who follows up a task no leader supervises (supervise_background.go)
 	switch {
 	case lead != "":
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", lead)
+	case background && s.isBackground(ctx, sessionID):
+		b.WriteString(" You follow them up as the background supervisor: a supervision message comes when one needs you (review it with task_review).")
+	case background && s.isMain(ctx, sessionID):
+		b.WriteString(" The background supervisor follows them up: their supervision messages go to it and it reviews them with " +
+			"task_review, so none comes to you for them. You still hear of a start that failed and of what it hands to the user, " +
+			"and may review any of them yourself (task_review).")
 	case s.supervises(ctx, sessionID):
 		b.WriteString(" You supervise them: a supervision message comes when one needs you (review it with task_review).")
 	default:
-		if _, ok := s.defaultPlanSupervisor(ctx, sessionID, ""); ok {
+		if _, ok := s.defaultPlanSupervisor(ctx, sessionID, ""); ok && background {
+			b.WriteString(" The background supervisor follows them up (their supervision messages and task_review); this conversation " +
+				"gets a one-line notice with the task's link when each one ends.")
+		} else if ok {
 			b.WriteString(" The main conversation supervises them (its supervision messages and task_review); this conversation " +
 				"gets a one-line notice with the task's link when each one ends.")
 		}

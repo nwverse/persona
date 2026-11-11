@@ -24,10 +24,11 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		return ContextResult{}
 	}
 	c := prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
-		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)}
+		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID), Background: s.isBackground(ctx, p.SessionID)}
 	switch {
 	case c.Main:
 		cfg := s.settings(ctx)
+		c.BackgroundStarted = s.announceBackground(ctx) // said once: its tasks are followed up in the background now (supervise_background.go)
 		names := s.leaderNames(ctx, cfg.Leaders)
 		for _, id := range cfg.Leaders {
 			if id != "" && id != cfg.Main {

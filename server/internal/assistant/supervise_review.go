@@ -107,9 +107,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	// The main conversation may review any supervised task: after the main conversation changes, the old tasks'
 	// supervision messages come to the new one, which has to be able to close them (#4262).
+	// The background supervisor reviews the tasks no leader supervises, whose ledgers name the main conversation
+	// (supervise_background.go); the main conversation may still review them, as it may a leader's.
 	isMain := s.isMain(ctx, self)
+	background := s.backgroundSupervises(ctx, self, t)
 	if t.Origin == "" || t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self && !isMain) {
-		if !s.mayReviewForLeader(ctx, self, t) {
+		if !background && !s.mayReviewForLeader(ctx, self, t) {
 			return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 		}
 	}
@@ -318,7 +321,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		if over { // the note is the rework asked for, written to the agent: not the owner's question
 			conclusion.Note = ""
 		}
-		if !isMain && s.isLeader(ctx, v.Supervisor) { // a leader's: the main conversation hears of it too (supervise_leader.go)
+		if !isMain && (background || s.isLeader(ctx, v.Supervisor)) { // a leader's or the background supervisor's: the main conversation hears of it too (supervise_leader.go)
 			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), decision.Recommend)
 		}
 		carded := s.askConclusion(ctx, t, conclusion)
