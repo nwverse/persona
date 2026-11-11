@@ -78,12 +78,6 @@ enum ModelFallbackText {
     }
 }
 
-extension APIClient {
-    /// Closes a headless Persona conversation so its next start uses the configured model (docs/protocol/protocol.md「Going
-    /// back to the configured model」). Claims nothing: the session's `model_restore` says it is pending.
-    func restoreModel(_ k: SessionKey) async throws { try await post(sp(k) + "/restore-model") }
-}
-
 extension AppModel {
     /// Back to configured model on a Persona conversation's fallback card; a refusal is said in a toast. True when the
     /// hub took it (the card then waits for the session to say the next start is pending).
