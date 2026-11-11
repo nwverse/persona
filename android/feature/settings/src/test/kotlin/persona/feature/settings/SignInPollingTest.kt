@@ -16,7 +16,7 @@ class SignInPollingTest {
         var asks = 0
         var catchUps = 0
         backgroundScope.launch {
-            pollWhileShown(shown, awayMillis = 10_500, catchUp = { catchUps++ }, poll = { while (true) { delay(2_000); asks++ } })
+            pollWhileShown(shown, SignInAway(), awayMillis = 10_500, now = { testScheduler.currentTime }, catchUp = { catchUps++ }, poll = { while (true) { delay(2_000); asks++ } })
         }
         runCurrent()
         assertEquals(0, catchUps) // the first time shown is not a return
@@ -54,12 +54,54 @@ class SignInPollingTest {
         assertEquals(2, catchUps)
     }
 
+    /**
+     * A new code while away (the hub made another WeChat QR code, so the page's effect starts again for it) does not
+     * start the grace period again: the asks still stop five minutes after the page first left, and the return still
+     * asks at once.
+     */
+    @Test fun aNewCodeWhileAwayKeepsTheOriginalDeadline() = runTest {
+        val shown = MutableStateFlow(true)
+        val away = SignInAway()
+        var asks = 0
+        var catchUps = 0
+        fun effect() = backgroundScope.launch {
+            pollWhileShown(shown, away, now = { testScheduler.currentTime }, catchUp = { catchUps++ },
+                poll = { while (true) { delay(2_000); asks++ } })
+        }
+        var running = effect()
+        runCurrent()
+        shown.value = false // left at 0
+        runCurrent()
+        // Every 2 minutes away a new code comes: the effect for the old one goes, one for the new one starts.
+        repeat(2) {
+            advanceTimeBy(120_000)
+            running.cancel()
+            running = effect()
+            runCurrent()
+        }
+        advanceTimeBy(60_001) // 5 minutes since the page left
+        val atDeadline = asks
+        assertEquals(59 + 59 + 29, atDeadline) // each new effect waits its first interval afresh
+        advanceTimeBy(30 * 60_000)
+        assertEquals(atDeadline, asks)
+        running.cancel()
+        running = effect()
+        advanceTimeBy(30 * 60_000)
+        assertEquals(atDeadline, asks) // a new code after the deadline asks nothing either
+
+        shown.value = true
+        runCurrent()
+        assertEquals(1, catchUps)
+        advanceTimeBy(2_001)
+        assertEquals(atDeadline + 1, asks)
+    }
+
     @Test fun firstSeenHiddenAsksForTheGracePeriodOnly() = runTest {
         val shown = MutableStateFlow(false)
         var asks = 0
         var catchUps = 0
         backgroundScope.launch {
-            pollWhileShown(shown, awayMillis = 4_500, catchUp = { catchUps++ }, poll = { while (true) { delay(1_000); asks++ } })
+            pollWhileShown(shown, SignInAway(), awayMillis = 4_500, now = { testScheduler.currentTime }, catchUp = { catchUps++ }, poll = { while (true) { delay(1_000); asks++ } })
         }
         advanceTimeBy(30_000)
         assertEquals(4, asks) // at 1, 2, 3 and 4 seconds; the grace period ends half way through the fifth wait

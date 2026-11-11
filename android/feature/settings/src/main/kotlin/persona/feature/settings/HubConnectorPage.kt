@@ -78,10 +78,12 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
     // while after (the user signs in in another app); back in front, ask at once (`pollWhileShown`).
     val polled = signInState.bind.prompt?.takeIf { signInState.bind.polled }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(signIn, lifecycle, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
+    // When the page left, once per sign-in: a new code (the effect below starting again) keeps it.
+    val away = remember(signIn, polled != null) { SignInAway() }
+    LaunchedEffect(signIn, lifecycle, away, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
         val model = signIn ?: return@LaunchedEffect
         if (polled != null) kotlinx.coroutines.withContext(requestManager) {
-            pollWhileShown(lifecycle.startedFlow(), catchUp = { model.catchUp() }, poll = { model.poll() })
+            pollWhileShown(lifecycle.startedFlow(), away, catchUp = { model.catchUp() }, poll = { model.poll() })
         }
     }
     LaunchedEffect(signInState.signedInAs) {

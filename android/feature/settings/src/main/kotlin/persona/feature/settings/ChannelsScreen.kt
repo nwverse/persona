@@ -140,8 +140,10 @@ internal fun ChannelPage(channels: ChannelManagement?, channelId: String, onBack
     // while after (the user scans with another app); back in front, ask at once (`pollWhileShown`).
     val polled = state.bind.prompt?.takeIf { state.bind.polled }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(model, lifecycle, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
-        if (polled != null) pollWhileShown(lifecycle.startedFlow(), catchUp = { model.catchUp() }, poll = { model.poll() })
+    // When the page left, once per sign-in: a new code (the effect below starting again) keeps it.
+    val away = remember(model, polled != null) { SignInAway() }
+    LaunchedEffect(model, lifecycle, away, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
+        if (polled != null) pollWhileShown(lifecycle.startedFlow(), away, catchUp = { model.catchUp() }, poll = { model.poll() })
     }
     LaunchedEffect(state.boundAs) {
         val who = state.boundAs ?: return@LaunchedEffect
