@@ -174,7 +174,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 3. A Python test that every name exists in `Icons.swift` and every glyph in the Phosphor list.
 4. A ratchet in `scripts/app/android_token_baseline.py` that moves pages from `PhIcons.*` to meaning names, file by file.
 
-Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout.
+Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout. Done: `spec/icons/meanings.json` maps 168 of iOS's meanings (the ones with a fitting glyph among the 170 generated), `PersonaIcons` is generated from it, and the ratchet's `icon` category starts at the 1,190 direct glyph references in pages.
 
 ### T8. Guards
 

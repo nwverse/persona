@@ -741,7 +741,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
 | Toast | capsule, top | dark capsule, bottom | Snackbar, 3 mechanisms | different |
 | Haptics | 4 kinds, 393 sites | none | 4 kinds, 35 sites | thin on Android |
-| Icons | SF Symbols | custom strokes | Phosphor | no shared map |
+| Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
