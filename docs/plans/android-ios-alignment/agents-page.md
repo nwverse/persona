@@ -131,6 +131,8 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 
 Port `AgentListProjection.swift`'s query parser to core/domain with its cases as tests.
 
+Done (11-12): `AgentSearch.kt` (`AgentQuery.parse`, `searchFields`, `admits`) with `AgentSearchTest`: every word in one of twelve fields, and the conditions with iOS's aliases. A paged list sends the hub the words only (it matches one piece of text) and checks the conditions here. Not ported: iOS's search scopes and evidence snippets.
+
 ### Order of work
 
 1. A1, which fixes a rule the spec already has.

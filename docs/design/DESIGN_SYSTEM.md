@@ -334,6 +334,10 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - User bubble: trailing, radius 20, padding 16 x 12, `ChatBox.user` fill in the unified layout, otherwise the theme's bubble gradient (`apple/Persona/DesignSystem/QuoteViews.swift:295-345`, `apple/Persona/Views/Chat/MessageViews.swift:151`).
 - Assistant text: unboxed in Agents chats; boxed in `ChatBox.persona` in Assistant chats. Streaming text re-parses only the tail.
 - Quotes sit above the words and jump to the original on tap.
+- Forwards (#3807) use the quote card with the forward arrow before the heading ("Forwarded from Claude · chat"), a line
+  for the computer and time, and four lines of the original; a tap opens the original chat at that message. Over the
+  composer the same row adds a line saying where it comes from and goes. Forward takes Share's place in the message bar
+  (the bar keeps its width); Share as Image is the first row of the Forward To sheet.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 
@@ -940,13 +944,16 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 Where a form exists to connect to something with an address or key the user types (the web provider wizard's preset
 key step and its custom gateway's Connect step), the check runs without a button: once what it needs is valid and has
-stopped changing for 0.7 s, it runs once for that input. An address being typed counts only once its field is left or
-an address is pasted, so a key never goes to a half-typed host. It never runs on opening something already saved, only
-after the fields the form names as its connection change (the provider wizard: address, key, sign-in method); fields
-that play no part in the connection (a name) never block or repeat it. A line says it will check by itself, then shows
-progress with a spinner, then the result; a failure keeps the server's words and offers to run it again (Retry on the
-Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay; pressing one
-counts as the check. Once the check found what the next step needs, that step's button is the one primary action
-(section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path already
-answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and status-
-line styles and adds no setting.
+stopped changing for 0.7 s, it runs once for that input. An address being typed counts only once focus moves from its
+field to something else on the page (not when the window loses focus), the step is left, or a paste fills all of it,
+so a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never runs
+on opening something already saved, only after the fields the form names as its connection change (the provider
+wizard: address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it.
+Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
+without listing models); a part that is running or passed is not sent again. A line says it will check by itself, then
+shows progress with a spinner, then the result; a failure keeps the server's words and offers to run that part again
+(Retry on the Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay;
+pressing one counts as the check. Once the check found what the next step needs, that step's button is the one primary
+action (section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path
+already answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and
+status-line styles and adds no setting.
