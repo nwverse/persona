@@ -364,6 +364,8 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/readiness/dismiss
 -                    POST /api/v1/assistant/route/agent
 -                    POST /api/v1/assistant/routines/{id}/run
+-                    POST /api/v1/assistant/rule-suggestions/{id}/always
+-                    POST /api/v1/assistant/rule-suggestions/{id}/not-now
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run

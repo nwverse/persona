@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +68,8 @@ type ruleSuggestState struct {
 	mu    sync.Mutex
 	at    time.Time
 	cands map[string]*ruleCandidate
+	// evidence: what is counted, when it is not the database (tests).
+	evidence ruleEvidenceStore
 }
 
 func (r *ruleSuggestState) forget() {
@@ -158,13 +159,145 @@ func ruleAction(question, choice string) (action string, yes, ok bool) {
 
 // ---- counting ----
 
-// ruleEvidenceStore is what the count reads besides the settings: the database has both.
+// ruleEvidenceStore is what the count reads besides the settings; the database has all three.
 type ruleEvidenceStore interface {
 	TodoDecisionsSince(ctx context.Context, since time.Time) ([]db.TodoDecisionRow, error)
 	TaskPlansMadeSince(ctx context.Context, since time.Time) ([]db.TaskPlanRow, error)
+	WorkEventsBetween(ctx context.Context, since, until time.Time, kinds []string) ([]db.WorkEvent, error)
 }
 
 var _ ruleEvidenceStore = (*db.DB)(nil)
+
+// ruleEvidence is where the answers are read from; nil without a database: nothing is counted or suggested then.
+func (s *Service) ruleEvidence() ruleEvidenceStore {
+	if s.rules.evidence != nil {
+		return s.rules.evidence
+	}
+	st, _ := s.store().(ruleEvidenceStore)
+	return st
+}
+
+// ruleStartable: Start on a plan with t in it is an answer about t's kind: a task of its own that changes files. A
+// read-only task never waits for Start, and a task leader's worker is started by its leader.
+func ruleStartable(t PlanTask) bool {
+	return !t.Readonly && t.Parent == "" && t.Machine != "" && t.Cwd != ""
+}
+
+// rulePlanRuns counts, per kind (trustKey), the plans (oldest first) the owner started in a row up to the latest; a
+// dismissed plan starts its kinds' count again, and a plan the hub started without asking counts neither way. task is
+// what tasks.trust would remember for the kind.
+func rulePlanRuns(plans []*TaskPlan) (runs map[string]int, task map[string]PlanTask) {
+	runs, task = map[string]int{}, map[string]PlanTask{}
+	for _, p := range plans {
+		seen := map[string]bool{} // a plan counts once for a kind, however many of its tasks are of it
+		for _, t := range p.Tasks {
+			k := trustKey(t)
+			if !ruleStartable(t) || seen[k] {
+				continue
+			}
+			seen[k] = true
+			switch {
+			case p.State == planDismissed:
+				runs[k] = 0
+			case p.State == planStarted && t.OwnerStarted:
+				runs[k]++
+				task[k] = PlanTask{Machine: t.Machine, Cwd: t.Cwd}
+			}
+		}
+	}
+	return runs, task
+}
+
+// ruleEscalation is a card a supervisor passed up to the owner, as its ask_escalated work event keeps it.
+type ruleEscalation struct {
+	question  bool   // a question card: an approval's or a plan's answer is never counted
+	recommend string // what the supervisor recommended; "": nothing
+}
+
+// ruleEscalations reads the ask_escalated events by card; an event from before the card was kept names none.
+func ruleEscalations(events []db.WorkEvent) map[string]ruleEscalation {
+	out := map[string]ruleEscalation{}
+	for _, e := range events {
+		card, _ := e.Detail["card"].(string)
+		if e.Kind != "ask_escalated" || card == "" {
+			continue
+		}
+		kind, _ := e.Detail["kind"].(string)
+		recommend, _ := e.Detail["recommend"].(string)
+		out[card] = ruleEscalation{question: kind == proto.IxQuestion, recommend: recommend}
+	}
+	return out
+}
+
+// ruleStandingRun is the go-aheads the owner gave in a row for one action in one directory of one computer.
+type ruleStandingRun struct {
+	n                            int
+	machineID, directory, action string
+	quote                        string // the latest: the question and the owner's answer
+}
+
+// ruleDecisionRuns counts the decisions kept on to-dos (rows, oldest first). Only the owner's own count: a card they
+// answered, or a decision's option they chose (kept as manual); never the answer to an approval or a plan card.
+// runs: the go-aheads for one action in one directory in a row, by ruleStandingScope (a No to the same confirmation
+// starts the count again); scopeOf says where a to-do works (false: nowhere a rule may name). recommended: how many
+// passed-up question cards in a row, up to the latest, were answered with what their supervisor recommended (a card
+// answered another way starts the count again; one nobody answered, or passed up with no recommendation, counts
+// neither way).
+func ruleDecisionRuns(rows []db.TodoDecisionRow, passed map[string]ruleEscalation,
+	scopeOf func(todo string) (machineID, directory string, ok bool)) (runs map[string]*ruleStandingRun, recommended int) {
+	runs = map[string]*ruleStandingRun{}
+	byCard := map[string][]db.TodoDecisionRow{}
+	var cards []string // in the order they were answered
+	for _, row := range rows {
+		if row.Source != db.DecisionCard && row.Source != db.DecisionManual {
+			continue
+		}
+		if e, up := passed[row.SourceMessage]; up && row.Source == db.DecisionCard {
+			if !e.question {
+				continue
+			}
+			if e.recommend != "" {
+				if len(byCard[row.SourceMessage]) == 0 {
+					cards = append(cards, row.SourceMessage)
+				}
+				byCard[row.SourceMessage] = append(byCard[row.SourceMessage], row)
+			}
+		}
+		action, yes, ok := ruleAction(row.Question, row.Choice)
+		if !ok {
+			continue
+		}
+		machineID, directory, ok := scopeOf(row.TodoID)
+		if !ok {
+			continue
+		}
+		k := ruleStandingScope(machineID, directory, action)
+		if runs[k] == nil {
+			runs[k] = &ruleStandingRun{machineID: machineID, directory: directory, action: action}
+		}
+		if !yes {
+			runs[k].n = 0
+			continue
+		}
+		runs[k].n++
+		runs[k].quote = clip(oneLine(row.Question), 300) + " → " + clip(oneLine(row.Choice), 120)
+	}
+	for _, card := range cards {
+		if answers := byCard[card]; len(answers) == 1 && ruleSameAnswer(answers[0].Choice, passed[card].recommend) {
+			recommended++
+		} else {
+			recommended = 0
+		}
+	}
+	return runs, recommended
+}
+
+func ruleSameAnswer(choice, recommend string) bool {
+	norm := func(v string) string {
+		return strings.ToLower(strings.TrimSpace(ruleRecommendedSuffix.ReplaceAllString(strings.TrimSpace(v), "")))
+	}
+	return norm(choice) != "" && norm(choice) == norm(recommend)
+}
 
 // ruleCandidates are the rules the owner's answers earned as of now, by id, with the quiet ones marked. They are read
 // again after ruleCacheFor, and at once when fresh.
@@ -176,13 +309,8 @@ func (s *Service) ruleCandidates(ctx context.Context, fresh bool) (map[string]*r
 	if !fresh && r.cands != nil && now.Sub(r.at) < ruleCacheFor {
 		return r.cands, nil
 	}
-	since := now.Add(-ruleSuggestWindow)
-	out := map[string]*ruleCandidate{}
-	add := func(c *ruleCandidate) { out[c.id] = c }
-	if err := s.rulePlanStarts(ctx, since, add); err != nil {
-		return nil, err
-	}
-	if err := s.ruleDecisions(ctx, since, add); err != nil {
+	out, err := s.ruleCount(ctx, now)
+	if err != nil {
 		return nil, err
 	}
 	var book ruleSuggestBook
@@ -200,146 +328,72 @@ func (s *Service) ruleCandidates(ctx context.Context, fresh bool) (map[string]*r
 	return out, nil
 }
 
-// rulePlansSince are the plans made since then that were started or dismissed, oldest first.
-func (s *Service) rulePlansSince(ctx context.Context, since time.Time) ([]*TaskPlan, error) {
-	var plans []*TaskPlan
-	switch st := s.store().(type) {
-	case nil:
-		s.tasks.mu.Lock()
-		for _, p := range s.tasks.plans {
-			if !p.CreatedAt.Before(since) && p.State != planOpen {
-				cp := *p
-				cp.Tasks = append([]PlanTask(nil), p.Tasks...)
-				plans = append(plans, &cp)
-			}
-		}
-		s.tasks.mu.Unlock()
-		sort.Slice(plans, func(i, j int) bool { return plans[i].CreatedAt.Before(plans[j].CreatedAt) })
-	case ruleEvidenceStore:
-		rows, err := st.TaskPlansMadeSince(ctx, since)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			plans = append(plans, planFromRow(row))
-		}
+// ruleCount reads the last ruleSuggestWindow of answers and returns what they earned that no rule covers yet.
+func (s *Service) ruleCount(ctx context.Context, now time.Time) (map[string]*ruleCandidate, error) {
+	out := map[string]*ruleCandidate{}
+	ev := s.ruleEvidence()
+	if ev == nil {
+		return out, nil
 	}
-	return plans, nil
-}
+	since := now.Add(-ruleSuggestWindow)
 
-// ruleStartable: Start on a plan with t in it is an answer about t's kind: a task of its own that changes files. A
-// read-only task never waits for Start, and a task leader's worker is started by its leader.
-func ruleStartable(t PlanTask) bool {
-	return !t.Readonly && t.Parent == "" && t.Machine != "" && t.Cwd != ""
-}
-
-// rulePlanStarts counts, per kind (trustKey), the plans the owner started in a row; a dismissed plan starts its
-// kinds' count again. A kind already in tasks.trust earns nothing.
-func (s *Service) rulePlanStarts(ctx context.Context, since time.Time, add func(*ruleCandidate)) error {
-	plans, err := s.rulePlansSince(ctx, since)
-	if err != nil || len(plans) == 0 {
-		return err
+	rows, err := ev.TaskPlansMadeSince(ctx, since)
+	if err != nil {
+		return nil, err
 	}
-	runs := map[string]int{}
-	tasks := map[string]PlanTask{}
-	for _, p := range plans {
-		seen := map[string]bool{} // a plan counts once for a kind, however many of its tasks are of it
-		for _, t := range p.Tasks {
-			k := trustKey(t)
-			if !ruleStartable(t) || seen[k] {
-				continue
-			}
-			seen[k] = true
-			switch {
-			case p.State == planDismissed:
-				runs[k] = 0
-			case t.OwnerStarted:
-				runs[k]++
-				tasks[k] = PlanTask{Machine: t.Machine, Cwd: t.Cwd}
-			}
-		}
+	plans := make([]*TaskPlan, 0, len(rows))
+	for _, row := range rows {
+		plans = append(plans, planFromRow(row))
 	}
+	starts, task := rulePlanRuns(plans)
 	trusted, err := s.trustedKindsErr(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for k, n := range runs {
+	for k, n := range starts {
 		if n >= ruleSuggestAfter && !trusted[k] {
-			add(&ruleCandidate{id: ruleSuggestionID(ruleKindPlanStart, k), kind: ruleKindPlanStart, count: n, task: tasks[k]})
+			out[ruleSuggestionID(ruleKindPlanStart, k)] = &ruleCandidate{id: ruleSuggestionID(ruleKindPlanStart, k),
+				kind: ruleKindPlanStart, count: n, task: task[k]}
 		}
 	}
-	return nil
-}
 
-// ruleDecisions counts the decisions kept on to-dos: the go-aheads for one action in one directory in a row (a No to
-// the same confirmation starts the count again), and the escalated questions answered as their supervisor recommended.
-func (s *Service) ruleDecisions(ctx context.Context, since time.Time, add func(*ruleCandidate)) error {
-	st, ok := s.store().(ruleEvidenceStore)
-	if !ok {
-		return nil
+	decisions, err := ev.TodoDecisionsSince(ctx, since)
+	if err != nil || len(decisions) == 0 {
+		return out, err
 	}
-	rows, err := st.TodoDecisionsSince(ctx, since)
-	if err != nil || len(rows) == 0 {
-		return err
+	events, err := ev.WorkEventsBetween(ctx, since, now, []string{"ask_escalated"})
+	if err != nil {
+		return nil, err
 	}
-	type run struct {
-		n                            int
-		machineID, directory, action string
-		quote                        string
-	}
-	runs := map[string]*run{}
-	plans := map[string]*TaskPlan{}
-	byCard := map[string][]db.TodoDecisionRow{}
-	for _, row := range rows {
-		// The owner's own answers only: a card they answered, or a decision's option they chose (kept as manual).
-		if row.Source != db.DecisionCard && row.Source != db.DecisionManual {
-			continue
-		}
-		if row.Source == db.DecisionCard && row.SourceMessage != "" {
-			byCard[row.SourceMessage] = append(byCard[row.SourceMessage], row)
-		}
-		action, yes, ok := ruleAction(row.Question, row.Choice)
-		if !ok {
-			continue
-		}
-		t, found := s.todoNow(row.TodoID)
+	seen := map[string]*TaskPlan{}
+	runs, recommended := ruleDecisionRuns(decisions, ruleEscalations(events), func(todo string) (string, string, bool) {
+		t, found := s.todoNow(todo)
 		if !found {
-			continue
+			return "", "", false
 		}
-		machineID, directory, ok := s.ruleTodoScope(ctx, t, plans)
-		if !ok {
-			continue
-		}
-		k := ruleStandingScope(machineID, directory, action)
-		if runs[k] == nil {
-			runs[k] = &run{machineID: machineID, directory: directory, action: action}
-		}
-		if !yes {
-			runs[k].n = 0
-			continue
-		}
-		runs[k].n++
-		runs[k].quote = clip(oneLine(row.Question), 300) + " → " + clip(oneLine(row.Choice), 120)
-	}
+		return s.ruleTodoScope(ctx, t, seen)
+	})
+	var grants StandingAuthorizations
 	if len(runs) > 0 {
-		grants, err := s.standingAuthorizations(ctx)
-		if err != nil {
-			return err
-		}
-		for k, r := range runs {
-			if r.n < ruleSuggestAfter || slices.ContainsFunc(grants.Authorizations, func(g StandingAuthorization) bool {
-				return g.MachineID == r.machineID && slices.Contains(g.Actions, r.action) && standingDirectoryContains(g.Directory, r.directory)
-			}) {
-				continue
-			}
-			add(&ruleCandidate{id: ruleSuggestionID(ruleKindStanding, k), kind: ruleKindStanding, count: r.n,
-				machineID: r.machineID, directory: r.directory, action: r.action, quote: r.quote})
+		if grants, err = s.standingAuthorizations(ctx); err != nil {
+			return nil, err
 		}
 	}
-	if n := s.ruleRecommendedRun(ctx, since, byCard); n >= ruleSuggestAfter {
-		add(&ruleCandidate{id: ruleSuggestionID(ruleKindDelegate, ""), kind: ruleKindDelegate, count: n})
+	for k, r := range runs {
+		if r.n < ruleSuggestAfter || slices.ContainsFunc(grants.Authorizations, func(g StandingAuthorization) bool {
+			return g.MachineID == r.machineID && slices.Contains(g.Actions, r.action) && standingDirectoryContains(g.Directory, r.directory)
+		}) {
+			continue
+		}
+		id := ruleSuggestionID(ruleKindStanding, k)
+		out[id] = &ruleCandidate{id: id, kind: ruleKindStanding, count: r.n,
+			machineID: r.machineID, directory: r.directory, action: r.action, quote: r.quote}
 	}
-	return nil
+	if recommended >= ruleSuggestAfter {
+		id := ruleSuggestionID(ruleKindDelegate, "")
+		out[id] = &ruleCandidate{id: id, kind: ruleKindDelegate, count: recommended}
+	}
+	return out, nil
 }
 
 // ruleTodoScope is where task t works, as a standing authorization names it: the computer and the directory its plan
@@ -372,60 +426,6 @@ func (s *Service) ruleTodoScope(ctx context.Context, t Todo, plans map[string]*T
 		return "", "", false
 	}
 	return machineID, directory, true
-}
-
-// ruleRecommendedRun is how many question cards in a row, up to the latest, the owner answered with what the
-// supervisor that passed them up recommended (the ask_escalated work event keeps the card and the recommendation).
-// A card answered another way starts the count again; one nobody answered does not count either way.
-func (s *Service) ruleRecommendedRun(ctx context.Context, since time.Time, byCard map[string][]db.TodoDecisionRow) int {
-	if len(byCard) == 0 {
-		return 0
-	}
-	var events []db.WorkEvent
-	if st := s.workDB(); st != nil {
-		var err error
-		if events, err = st.WorkEvents(ctx, since); err != nil {
-			s.logf("rule suggestions: work events: %v", err)
-			return 0
-		}
-	} else {
-		s.work.mu.Lock()
-		events = append(events, s.work.testEvents...)
-		s.work.mu.Unlock()
-	}
-	type answered struct {
-		at  time.Time
-		yes bool
-	}
-	var cards []answered
-	seen := map[string]bool{}
-	for _, e := range events {
-		card, _ := e.Detail["card"].(string)
-		recommend, _ := e.Detail["recommend"].(string)
-		rows := byCard[card]
-		if e.Kind != "ask_escalated" || card == "" || recommend == "" || seen[card] || len(rows) == 0 {
-			continue
-		}
-		seen[card] = true
-		cards = append(cards, answered{at: rows[0].CreatedAt, yes: len(rows) == 1 && ruleSameAnswer(rows[0].Choice, recommend)})
-	}
-	sort.Slice(cards, func(i, j int) bool { return cards[i].at.Before(cards[j].at) })
-	n := 0
-	for _, c := range cards {
-		if c.yes {
-			n++
-		} else {
-			n = 0
-		}
-	}
-	return n
-}
-
-func ruleSameAnswer(choice, recommend string) bool {
-	norm := func(v string) string {
-		return strings.ToLower(strings.TrimSpace(ruleRecommendedSuffix.ReplaceAllString(strings.TrimSpace(v), "")))
-	}
-	return norm(choice) != "" && norm(choice) == norm(recommend)
 }
 
 // ---- on the cards ----

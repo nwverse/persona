@@ -387,8 +387,8 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 			Session: short(ix.SessionID), Text: noticeAsk(ix)})
 	}
 	for _, ix := range rung {
-		// card and recommend: what a suggested rule counts the owner's answer against (rule_suggest.go).
-		s.workEvent(ix.MachineID, ix.SessionID, "ask_escalated", map[string]any{"by": self, "todo": t.ID, "card": ix.ID, "recommend": recommend})
+		// card, kind and recommend: what a suggested rule counts the owner's answer against (rule_suggest.go).
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_escalated", map[string]any{"by": self, "todo": t.ID, "card": ix.ID, "kind": ix.Kind, "recommend": recommend})
 	}
 	if !main {
 		// The main conversation knows the user was asked, and what this leader recommends: it does not ask again.

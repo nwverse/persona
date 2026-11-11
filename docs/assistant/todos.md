@@ -471,6 +471,10 @@ presented as a fresh user click. The grant itself is managed through the main co
 and the list/delete API in [Unified entry](unified-entry.md#standing-authorizations); established task decisions keep
 their provenance even after that grant is revoked.
 
+The owner's own decisions (`source` `card` and `manual`) are also what a suggested rule is counted from: after the same
+go-ahead three times in 14 days, the next decision offers to make it a standing authorization
+([Unified entry](unified-entry.md#a-rule-after-the-same-answer-three-times-4929)).
+
 
 The costliest long-task mistake is an Agent forgetting a decision already made: asking again or silently overturning it (#1618). Decisions scattered across Agent chats disappear when switching Agents or compacting, so collect them by to-do:
 

@@ -583,6 +583,50 @@ App API (the conversation's manager, with full-access role):
 DELETE is idempotent; deleting a missing entry keeps the revision. A concurrent update returns 409 and the caller
 refreshes before retrying; storage unavailable returns 503, and insufficient role returns 403. There is no HTTP grant
 creation endpoint: additions use the main conversation's approval flow. The empty default list authorizes nothing.
+The one other way a grant is made is the owner's **Always** on a suggested rule, below.
+
+#### A rule after the same answer three times (#4929)
+
+When the owner gave the same answer to the same kind of card for the same scope 3 times in a row within 14 days, the
+next card of that kind and scope carries one more line, a `suggestion`, with two actions: **Always** makes the rule,
+**Not now** hides the line for that kind and scope for 30 days. The line is computed by the manager with no model
+call; nothing is turned on for the owner without the tap.
+
+| Repeated answer | Counted from | Shown on | Always creates |
+| --- | --- | --- | --- |
+| **Start** on plan cards for tasks that change files in one directory of one computer (the kind "Start These Directly" remembers) | Started plans whose tasks carry `owner_started`; a dismissed plan starts the count again, and a plan the hub started without asking counts neither way | The next open plan with a task of that kind (`TaskPlan.suggestion`) | The `tasks.trust` entry, as "Start These Directly" does |
+| The go-ahead to `merge`, `push` or `deploy-test` in one directory of one computer: Yes to a plain confirmation ("Merge the PR now?"), or a decision's option that is the action itself ("Merge") | The to-do's decisions of source `card` and `manual` (the owner's own; a decision's chosen option is kept as `manual`); a No to the same confirmation starts the count again | The next `needs_user` decision that offers that go-ahead (`ask.suggestion` on `GET /api/v1/todos`), or the next such question a supervisor passes up (`interaction.suggestion`) | A standing authorization for that computer, directory and action, with the question and the owner's answer as its `quote`; a merge carries `ci_green` and `no_conflicts` |
+| A question a supervisor passed up (`ask_escalate` with a recommendation), answered with what it recommended | The card's decision and the `ask_escalated` work event, which keeps the card, its kind and the recommendation | The next question a supervisor passes up, while `agents.delegate` is off | Nothing: the suggestion names the setting `agents.delegate` for the app to open |
+
+- **Whose answers count**: only the owner's. A supervisor's answer, a standing authorization's, the delegate's and a
+  default taken at a deadline are decisions of source `agent` and count nothing. `owner_started` is set by the plan's
+  Start route alone; `task_plan` arguments cannot set it.
+- **Never suggested**: `deploy-production`, `send`, `delete` and `spend`; a decision whose `why_owner` is
+  `irreversible` or `visible_to_others`; a question whose text mentions force, production, release, deleting, sending
+  or paying; tool permission cards and plan approvals (their answers are not counted either); the health space.
+- **The scope** of a go-ahead is the directory the task's plan named (the repository, whichever worktree its agent
+  got), else its agent's directory; a directory an existing standing authorization covers, or a kind already in
+  `tasks.trust`, is not suggested.
+- **Always is the owner's own approval**, as Start is: it is an app route for a device with the full-access role, and
+  no MCP tool reaches it, so a model or an Agent cannot make a rule this way. The manager counts again when the tap
+  arrives and makes the rule only if the answers still earn it, so a made-up suggestion id makes nothing. The grant
+  goes through the same checks and revision-checked store as every standing authorization.
+- **Where the rules are listed and removed**: where their kind already is, `GET` / `DELETE /api/v1/task-trust` and
+  `GET` / `DELETE /api/v1/assistant/standing-authorizations/{id}`. After Always the line also stays hidden for 30 days,
+  so removing the rule does not bring it straight back.
+- **Stored**: when each suggestion was last answered, in the setting `assistant.rule_suggestions`; no table of its own.
+  The count is read at most every 30 seconds.
+
+App API (full-access role; 403 otherwise):
+
+| Method | Path | JSON response |
+| --- | --- | --- |
+| POST | `/api/v1/assistant/rule-suggestions/{id}/always` | `{"ok": true, "kind": "standing_authorization", "creates": "standing_authorization", "authorization": {…}, "revision": 2}`; for `plan_start` `{"ok": true, "kind": "plan_start", "creates": "tasks.trust", "key": "…"}`; for `delegate` `{"ok": true, "kind": "delegate", "creates": "", "setting": "agents.delegate"}` |
+| POST | `/api/v1/assistant/rule-suggestions/{id}/not-now` | `{"ok": true}` |
+
+404: the answers do not earn this suggestion (any more), or it was already answered. 409: the standing
+authorizations changed meanwhile; read again and retry. 503: storage unavailable. The `suggestion` object is in
+`docs/protocol/protocol.md`, "Tasks and the chat feed".
 
 #### Asks go to the supervisor first (#3589)
 
