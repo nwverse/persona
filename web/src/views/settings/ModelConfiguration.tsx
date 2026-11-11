@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { extRoot } from "../../lib/extension-api";
 import {
-  chooseProvider, draftFor, providerAgent, providerName, modelConfiguration, modelPurpose, modelSummary, providersFor, runtimeChoices, runtimeLabel, saveModelPurpose, supportsField,
+  agentsOverride, chooseProvider, draftFor, providerAgent, providerName, modelConfiguration, modelPurpose, modelSummary, providersFor, runtimeChoices, runtimeLabel, saveModelPurpose, supportsField,
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
 import { executionForm, purposeGroups, purposeLaunch } from "../../lib/model-config-execution";
@@ -18,7 +18,7 @@ import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { ModelProfiles } from "./ModelProfiles";
 
-function larkAgentStatus(binding: ModelBinding): string {
+function agentsOverrideStatus(binding: ModelBinding): string {
   return binding.provider || binding.model || binding.effort
     ? t("settings-modelconfiguration.separately_configured")
     : t("settings-modelconfiguration.follow_agents");
@@ -91,7 +91,7 @@ function PurposeRow({ purpose: p, providers, sourceName, onOpen }: { purpose: Mo
     document.addEventListener("pointerdown", close);
     return () => document.removeEventListener("pointerdown", close);
   }, [help]);
-  const inheritance = p.id === "lark.agent" ? (p.override.provider || p.override.model || p.override.effort ? larkAgentStatus(p.override) : t("settings-modelconfiguration.lark_headless_inheritance"))
+  const inheritance = agentsOverride(p) ? (p.override.provider || p.override.model || p.override.effort ? agentsOverrideStatus(p.override) : t("settings-modelconfiguration.lark_headless_inheritance"))
     : p.inherited_from ? t("settings-modelconfiguration.follows", { name: sourceName(p.inherited_from) ?? "" })
     : !p.status ? t("settings-modelconfiguration.custom") : "";
   return <div ref={row} data-model-purpose={p.id} onMouseLeave={() => { if (!pinned) setHelp(false); }}
@@ -170,9 +170,9 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   const p = data?.purpose;
   const candidates = p ? providersFor(p, data.providers) : [];
   const chosen = data?.providers.find((v) => v.id === (draft.provider || p?.effective?.provider));
-  const larkAgent = p?.id === "lark.agent";
+  const followsAgents = !!p && agentsOverride(p);
   const writable = p && (["provider", "model", "effort"] as const).some((field) => supportsField(p, field));
-  const effortAllowed = p && supportsField(p, "effort") && (larkAgent || chosen?.kind !== "api" || chosen.api === "responses" || chosen.api === "messages" || !chosen.api);
+  const effortAllowed = p && supportsField(p, "effort") && (followsAgents || chosen?.kind !== "api" || chosen.api === "responses" || chosen.api === "messages" || !chosen.api);
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
   useEffect(() => {
     const refresh = refreshNext.current;
@@ -225,7 +225,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   return (
     <Dialog open={id !== null} onClose={() => { if (!busy) onClose(); }} width={480} title={p?.name ?? t("settings-modelconfiguration.dialog_title")}
       footer={<>
-        <Button tone="quiet" disabled={busy || !writable || conflict} onClick={() => void save(true)}>{larkAgent ? t("settings-modelconfiguration.follow_agents") : t("settings-modelconfiguration.restore")}</Button>
+        <Button tone="quiet" disabled={busy || !writable || conflict} onClick={() => void save(true)}>{followsAgents ? t("settings-modelconfiguration.follow_agents") : t("settings-modelconfiguration.restore")}</Button>
         <span className="flex-1" />
         <Button tone="quiet" disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
         <Button tone="primary" busy={busy} disabled={!writable || conflict} onClick={() => void save()}>{t("common.save")}</Button>
@@ -233,7 +233,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
     >
       {!p && !error && <Loading />}
       {p && <div className="flex flex-col gap-4">
-        {larkAgent && <p className="text-[12px] text-ink-3">{larkAgentStatus(p.override)}</p>}
+        {followsAgents && <p className="text-[12px] text-ink-3">{agentsOverrideStatus(p.override)}</p>}
         <Group title={t("settings-modelconfiguration.effective")} footer={p.inherited_from ? t("settings-modelconfiguration.inherited_from", { name: sourceName(p.inherited_from) ?? "" }) : t("settings-modelconfiguration.effective_footer")}>
           <Row label={t("settings-modelconfiguration.provider")} mono><span className="max-w-[220px] truncate">{providerName(p.effective?.provider, data?.providers) ?? t("settings-modelconfiguration.not_configured")}</span></Row>
           <Row label={t("settings-modelconfiguration.model")} mono><span className="max-w-[220px] truncate">{p.effective?.model || t("settings-modelconfiguration.provider_default")}</span></Row>
@@ -243,7 +243,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
         {supportsField(p, "provider") && <label className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.model_provider")}</span>
           <select className={inputClass} value={draft.provider} disabled={busy} onChange={(e) => setDraft((d) => chooseProvider(d, e.target.value))}>
-            <option value="">{larkAgent ? t("settings-modelconfiguration.follow_agents") : t("settings-modelconfiguration.follow_default")}</option>
+            <option value="">{followsAgents ? t("settings-modelconfiguration.follow_agents") : t("settings-modelconfiguration.follow_default")}</option>
             {draft.provider && !candidates.some((v) => v.id === draft.provider) && <option value={draft.provider}>{draft.provider.startsWith("legacy.") ? t("settings-modelconfiguration.not_configured") : t("settings-modelconfiguration.provider_unavailable", { id: draft.provider })}</option>}
             {candidates.map((v) => <option key={v.id} value={v.id}>{v.hidden ? t("settings-modelconfiguration.provider_hidden", { name: v.name }) : v.name}</option>)}
           </select>

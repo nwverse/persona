@@ -142,6 +142,7 @@ type Node struct {
 	suggests  map[string]*suggestState   // session id -> Claude's suggested next message (suggestion.go)
 	driving   map[string]bool            // session id -> Persona is working its TUI (a picker it opened is not "blocked")
 	dialogs   paneDialogs                // pane -> the dialog its last screen read showed (dialogstatus.go)
+	allowed   allowWatches               // session -> its pane, followed after an allow (allowwatch.go)
 	firstWait sync.WaitGroup             // first messages being checked (firstprompt.go)
 	engLists  sync.WaitGroup             // new engines' session lists being built in the background (useEngine)
 	lostFirst lostPrompts                // session id -> why its first message did not go in (firstprompt.go)
@@ -380,7 +381,19 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
-	go n.reapAssistants(ctx)
+	reaped := make(chan struct{})
+	go func() { defer close(reaped); n.reapAssistants(ctx) }()
+	if n.keeper == nil {
+		// The end of this connection is the end of its conversations (stopAtConnectionEnd): returned only once they
+		// have exited, since the process exits right after (`node --stdio`) and they would go on without it (#4259).
+		defer func() {
+			cancel()
+			select {
+			case <-reaped:
+			case <-time.After(reaperStopWait()):
+			}
+		}()
+	}
 	go n.meterUsage(ctx, n.stateReady)
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
@@ -1144,8 +1157,29 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		return n.gitOp(ctx, dir, p.Op)
 	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
+		var in struct {
+			Composer bool `json:"composer"`
+		}
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, err
+		}
+		if in.Composer {
+			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID)
+		}
 		return n.worktreePrepare(ctx, p.Kind, p.WorkspaceID, p.Cwd)
 	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
+		var in struct {
+			Composer bool `json:"composer"`
+		}
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, err
+		}
+		if in.Composer {
+			return n.worktreeCompose(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+		}
+		if err := rejectComposerFields(ctx, params); err != nil {
+			return nil, err
+		}
 		if p.AutoName {
 			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
 				return nil, errors.New("Choose automatic naming or an explicit branch and path")
@@ -1153,6 +1187,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return n.worktreeCreateAutomatic(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
 		}
 		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
+	case "worktree.source":
+		return n.worktreeSources(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+	case "worktree.preset":
+		return n.worktreeSavePreset(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+	case "worktree.delete":
+		return n.worktreeDelete(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
 	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
 		var a struct {
 			NameHint     string `json:"name_hint"`
@@ -1507,6 +1547,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		return map[string]any{"sent": true}, nil
 	case "session.close":
+		var closeParams struct {
+			Force bool `json:"force"`
+		}
+		_ = json.Unmarshal(params, &closeParams)
+		if closeParams.Force {
+			a, ok := n.agent(p.SessionID)
+			if !ok || a.AgentStatus != proto.StatusBlocked || n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) {
+				return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil)
+			}
+		}
 		if n.runtimeAssistant(p.SessionID) { // the runtime keeps the conversation; a running turn stops, as a process would
 			if s, _, listed := n.runtimes.rowOf(p.SessionID); listed && s.Status == proto.StatusWorking {
 				_ = n.assistantInterruptRuntime(ctx, p.SessionID)

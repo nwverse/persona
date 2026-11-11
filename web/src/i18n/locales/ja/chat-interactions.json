@@ -1,4 +1,8 @@
 {
+  "close_agent": "エージェントを閉じる",
+  "close_agent_confirm": "閉じてアーカイブ",
+  "close_agent_cancel": "キャンセル",
+  "close_agent_hint": "保留中の確認を取り消し、このエージェントを閉じますか？会話は保持されます。",
   "approve_not_allowed": "このセッションでは承認できません",
   "already_answered": "このカードは回答済みです",
   "prompt_changed": "コンピューター上のダイアログが変わったため、新しい画面に合わせて作り直しました",

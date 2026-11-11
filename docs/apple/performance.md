@@ -140,6 +140,13 @@ manager = PHCachingImageManager()`), or own the object one level up (the page's 
 **Check.** Review: open every class used as a `@State` initial value and read its `init`. To measure, log or count the
 `init` in DEBUG (`PerfTrace.event`) and open the page: more than one instance per page open is the bug.
 
+Automated: `scripts/test/test_apple_state_initial_values.py` matches `@State … = T(…)` against classes declared under
+`apple/`. An `init` is trivial only when empty or made of assignments without calls or blocks; an eager stored-property
+initial value is non-trivial if it contains a function/constructor call or a block. This deliberately counts even cheap
+value constructors. Static/lazy properties, stored closure bodies, property observers, computed properties and ordinary
+methods are excluded; comments and literal string contents are ignored (interpolations count as calls). This is a lexical
+check, not overload, inheritance or default-argument analysis; same-named classes are treated together. Review remains required.
+
 ### P4. `body` only arranges views
 
 **Rule.** No sorting, filtering, grouping or counting over collections, no `DateFormatter` / `NumberFormatter` creation,
@@ -356,7 +363,7 @@ Report the device or simulator, OS, build settings, data set, number of runs and
 | `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push, who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
 | `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page | Existing, run by hand |
 | Isolation-aware lint | Flag the patterns above only where the compiler says the call is on the main actor (SwiftSyntax or a SourceKit index over the isolation of the enclosing declaration), so the ratchet can become a hard zero | Proposed, #4262 |
-| Expensive `@State` initial values | Flag `@State … = T()` where `T`'s `init` does more than assign stored properties | Proposed, #4263 |
+| `scripts/test/test_apple_state_initial_values.py` | P3 ratchet over Swift under `apple/`, including tests: class construction in `@State` with non-trivial `init` bodies or eager stored-property initial values. Each file/type count (`scripts/test/apple_state_initial_values_baseline.json`) may only go down; new entries start at zero. `--update` lowers the baseline; `--list` prints every counted site and its reason. Automatically discovered by `scripts/ci/python-tests.py` in the scripts lane. | Implemented, #4263 |
 | DEBUG main-thread watchdog | A background thread pings the main run loop and logs a `PerfTrace.event` plus a main-thread sample when it is blocked over 100 ms, so UI tests and runtime CLI scenarios catch blocks without Instruments | Proposed, #4264 |
 | MetricKit | Subscribe `MXMetricManager` in TestFlight builds; send hang (`MXHangDiagnostic`), launch and memory payloads into Copy Diagnostics | Proposed, #4265 |
 | Launch metric | A UI test with `XCTApplicationLaunchMetric` in `scripts/app/perf-test.sh` | Proposed, #4266 |

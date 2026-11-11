@@ -72,6 +72,16 @@ interface InboxAssistantTransport {
     suspend fun createConversation(main: Boolean, launcher: String): JsonObject =
         throw UnsupportedOperationException("Picking a launcher unavailable")
     /**
+     * The chats of the assistant's [space] (`GET /api/v1/assistant?space=`, docs/assistant/health.md), answering
+     * `{machine_id, conversations}` as [assistant] does. A space is the default manager's: no manager is named.
+     */
+    suspend fun assistantIn(space: String): JsonObject = throw UnsupportedOperationException("Assistant spaces unavailable")
+    /**
+     * A new chat in the assistant's [space] (`POST /api/v1/assistant/conversations` with `space`, never `main`: a space
+     * has no main chat), answering `{session}`.
+     */
+    suspend fun createConversationIn(space: String): JsonObject = throw UnsupportedOperationException("Assistant spaces unavailable")
+    /**
      * [assistant] of one manager (null: the default) whatever the assistant page shows meanwhile (docs/assistant/managers.md
      * step 4): what a message was written for is where it goes.
      */
@@ -166,4 +176,12 @@ interface AssistantConversations : AssistantRepository {
     suspend fun startConversation(): SessionKey
     /** A new conversation that runs on [launcher], for it alone (iOS StarterComposer's model menu): the default stays. */
     suspend fun startConversation(launcher: String): SessionKey = throw UnsupportedOperationException("Picking a launcher unavailable")
+    /**
+     * The chats of the assistant's [space] ([AssistantSpace]), read from the hub each time: they are never in [assistant]'s
+     * list. Each carries [space] even from a hub that leaves it out of this list.
+     */
+    suspend fun spaceConversations(space: String): List<persona.core.contracts.Session> =
+        throw UnsupportedOperationException("Assistant spaces unavailable")
+    /** A new chat in the assistant's [space], never its main one: what the space's new-chat page sends first starts it. */
+    suspend fun startConversationIn(space: String): SessionKey = throw UnsupportedOperationException("Assistant spaces unavailable")
 }
