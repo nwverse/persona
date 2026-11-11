@@ -295,6 +295,9 @@ export interface Session {
   work?: WorkState;
   pending_interactions?: number;
   queued?: string[];
+  /** In a Persona chat, the last this many of `queued` came from other conversations: the assistant delivers them when
+   *  the turn ends, and the strip's actions leave them alone (#4342). */
+  queued_relayed?: number;
   subagents?: Subagent[];
   loop?: LoopInfo;
   /** The goal it works toward until it holds (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md). */
@@ -711,6 +714,8 @@ export interface AssistantInfo {
   /** The side conversations the user made leaders (docs/assistant/unified-entry.md "Leader conversations"): absent
    *  when there are none or from an older hub. The sidebar shows them first among the Persona chats, as pinned. */
   leaders?: string[];
+  /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
+  main_background_folded?: boolean;
   conversations: Session[];
 }
 

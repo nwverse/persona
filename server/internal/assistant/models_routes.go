@@ -20,6 +20,7 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 	if err != nil {
 		return p, err
 	}
+	p.Launch = p.launch()
 	recordID := modelRecordID(p)
 	r, err := s.modelRecord(ctx, recordID)
 	if err != nil {
@@ -50,7 +51,7 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 			if p.Effective.Model == "" {
 				p.Effective.Model = v.Model
 			}
-			if p.Kind == "api" && v.API == "responses" {
+			if p.Kind == "api" && (v.API == "responses" || v.API == "messages" || v.API == "") {
 				p.Fields = append(p.Fields, "effort")
 			}
 		}
@@ -204,7 +205,7 @@ func (s *Service) modelConfigRoutes() {
 			apierr.Write(w, 500, err)
 			return
 		}
-		effective := mergeModel(base, b)
+		effective := effectiveModel(p, base, b)
 		if body, err := s.triageInUse(ctx, id, effective); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
@@ -218,7 +219,7 @@ func (s *Service) modelConfigRoutes() {
 				apierr.Write(w, 400, e)
 				return
 			}
-			if config.API != "responses" {
+			if !messagesAPI(config.API) && config.API != "responses" {
 				apierr.Write(w, 400, i18n.Err("assistant-models.err_api_effort"))
 				return
 			}

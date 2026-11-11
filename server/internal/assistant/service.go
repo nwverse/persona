@@ -70,6 +70,9 @@ type Service struct {
 	// taskRetry is how long a task waits before its one retry after a dropped link (0: taskStartRetryDelay; tests
 	// shorten it).
 	taskRetry time.Duration
+	// leaderResume bounds each attempt to put a supervision message into a closed task leader agent, and is the first
+	// wait of the retries after one failed (0: leaderResumeWait; tests shorten it, task_leader.go leaderResumeTime).
+	leaderResume time.Duration
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
@@ -79,10 +82,12 @@ type Service struct {
 	mux    *http.ServeMux
 	routes []string
 
-	// preparedMD is the CLAUDE.md this hub last wrote on a machine for a directory (key: machine id NUL directory),
-	// by prepareSpaceIf; refreshInstructions writes again what differs.
+	standingMu sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
+
+	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
+	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
 	preparedMu sync.Mutex
-	preparedMD map[string]string
+	prepared   map[string]preparedState
 
 	epoch string
 	pubMu sync.Mutex
@@ -199,6 +204,7 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
+	s.standingAuthorizationRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
 	s.routeRoutes()

@@ -281,7 +281,7 @@
   },
   {
     "name": "schedule_followup",
-    "description": "Wake yourself up later: at the given time Persona sends `prompt` into this conversation (or a new one) as if the user wrote it, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"remind me…\", \"check again in an hour\", meeting prep 10 minutes before a meeting, watching something until it changes. `at` is RFC 3339 (2026-10-27T09:50:00+08:00) or relative (\"30m\", \"2h\", \"1d\"). For something to do again and again (a patrol every 30 minutes) pass `every` (\"30m\", \"2h\", at least 5m) once: Persona repeats it by itself and the user sees, edits and stops it in the app; never schedule the next run from inside a run. An `every` task can take `until`, an instant after which the task stops (RFC 3339 or 30m / 2h / 1d, the same forms as `at`, not a bare clock time and not a condition to watch for): after that instant Persona turns it off and records a skipped run instead of running. A one-off ignores `until`. Omit it to keep an existing task's end time; null clears it. The task runs on Main chat's launcher, model and thinking effort unless you give it its own with `launcher`, `model` and `effort`; the permission mode stays the user's choice in the app. A follow-up that continues this conversation (`new_conversation` false) runs on that conversation's launcher, so giving it its own needs `new_conversation: true`; the call is refused otherwise.",
+    "description": "Wake yourself up later: at the given time Persona sends `prompt` into this conversation (or a new one) as if the user wrote it, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"remind me…\", \"check again in an hour\", meeting prep 10 minutes before a meeting, watching something until it changes. `at` is RFC 3339 (2026-10-27T09:50:00+08:00) or relative (\"30m\", \"2h\", \"1d\"). For something to do again and again (a patrol every 30 minutes) pass `every` (\"30m\", \"2h\", at least 5m) once: Persona repeats it by itself and the user sees, edits and stops it in the app; never schedule the next run from inside a run. For times an interval can't say (every 30 minutes from 9:00 to 18:30 on weekdays, 10:00 on the 1st of each month) pass `cron` instead of `at` / `every`: a standard 5-field cron expression `minute hour day-of-month month day-of-week` read in the user's time zone (`*/30 9-18 * * 1-5`, `0 10 1 * *`, or @hourly / @daily / @weekly / @monthly / @yearly; day of week 0 and 7 are Sunday; when both day fields are restricted, a day matching either runs; runs at least 5 minutes apart). It first runs at its next match and repeats by itself like `every`; a bad expression is refused with what is wrong, and the reply lists the next runs to check. An `every` task can take `until`, an instant after which the task stops (RFC 3339 or 30m / 2h / 1d, the same forms as `at`, not a bare clock time and not a condition to watch for): after that instant Persona turns it off and records a skipped run instead of running. A one-off ignores `until`. Omit it to keep an existing task's end time; null clears it. The task runs on Main chat's launcher, model and thinking effort unless you give it its own with `launcher`, `model` and `effort`; the permission mode stays the user's choice in the app. A follow-up that continues this conversation (`new_conversation` false) runs on that conversation's launcher, so giving it its own needs `new_conversation: true`; the call is refused otherwise.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -295,6 +295,10 @@
         "every": {
           "type": "string",
           "description": "repeat this often, e.g. 30m"
+        },
+        "cron": {
+          "type": "string",
+          "description": "repeat on a cron expression instead of at / every: minute hour day-of-month month day-of-week in the user's time zone, e.g. */30 9-18 * * 1-5"
         },
         "prompt": {
           "type": "string",
@@ -347,7 +351,7 @@
   },
   {
     "name": "schedule_routine",
-    "description": "Set up a recurring routine: every day (or on some weekdays) at a time, Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"每天 9 点给我早报\", \"每周五下午起草周报\". For one-off reminders use schedule_followup. Pass `id` (from list_followups) to change an existing routine: only the fields you give change; `enabled: false` pauses it. A routine can take `until`, an instant after which it stops (RFC 3339 or 30m / 2h / 1d, not a bare clock time): Persona then turns it off and records a skipped run instead of running. Omit `until` to keep an existing routine's end time; null clears it. Times are in the user's time zone. A routine runs on Main chat's launcher, model and thinking effort unless you give it its own: pass `launcher` (a name from machines_list / the launcher list on the computer where its runs start), and `model` / `effort` for that launcher (a model or effort alone pins the launcher it runs on now). An empty `launcher` clears the override and returns the routine to Main chat. Leave these out to keep what the routine has.",
+    "description": "Set up a recurring routine: every day (or on some weekdays) at a time, Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"每天 9 点给我早报\", \"每周五下午起草周报\". For one-off reminders use schedule_followup. For times a time of day and weekdays can't say, pass `cron` instead of `time` / `weekdays`: a standard 5-field cron expression `minute hour day-of-month month day-of-week` read in the user's time zone, such as `*/30 9-18 * * 1-5` (every 30 minutes from 9:00 to 18:30 on weekdays), `0 10 1 * *` (10:00 on the 1st of each month) or `0 9 * * 1,3,5`, or an alias (@hourly, @daily, @weekly, @monthly, @yearly). Day of week 0 and 7 are Sunday; when both day of month and day of week are restricted, a day matching either runs. Runs must be at least 5 minutes apart; seconds, @every and TZ= are refused. A bad expression is refused with what is wrong; the reply lists the next runs, so check them against what the user asked. Pass `id` (from list_followups) to change an existing routine: only the fields you give change; `enabled: false` pauses it. A routine can take `until`, an instant after which it stops (RFC 3339 or 30m / 2h / 1d, not a bare clock time): Persona then turns it off and records a skipped run instead of running. Omit `until` to keep an existing routine's end time; null clears it. Times are in the user's time zone. A routine runs on Main chat's launcher, model and thinking effort unless you give it its own: pass `launcher` (a name from machines_list / the launcher list on the computer where its runs start), and `model` / `effort` for that launcher (a model or effort alone pins the launcher it runs on now). An empty `launcher` clears the override and returns the routine to Main chat. Leave these out to keep what the routine has.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -375,6 +379,10 @@
             "maximum": 7
           },
           "description": "1 = Monday … 7 = Sunday; omit or empty = every day"
+        },
+        "cron": {
+          "type": "string",
+          "description": "instead of time / weekdays: minute hour day-of-month month day-of-week in the user's time zone, e.g. */30 9-18 * * 1-5 or 0 10 1 * *; or @hourly / @daily / @weekly / @monthly / @yearly"
         },
         "enabled": {
           "type": "boolean"
@@ -504,7 +512,7 @@
   },
   {
     "name": "agents_list",
-    "description": "The Claude Code / Codex agents running on the user's computers (herdr), with their state: needs_you (waiting for an answer / approval), working, unread (finished, result not looked at), idle. Each line has machine, session id, project, title, last update and the last thing the agent said. Known Claude Code switch states appear as ultracode=on/off; an omitted state is unknown. ultracode=on means every substantive task runs a multi-agent dynamic workflow, independently of thinking effort. Let it finish and wait for workflow results without nudging it. Much faster and more accurate than ssh + herdr. At the end: the launchers that failed their last health check, by machine (agent_start and task_plan move off them).\n\nA line under an agent is something waiting for the user: a question lists its options and the interaction id to answer it with (interaction_answer), an approval is the user's to give in the app.",
+    "description": "The Claude Code / Codex agents running on the user's computers (herdr), with their state: needs_you (waiting for an answer / approval), working, unread (finished, result not looked at), idle. done lists work finished in the last 24 hours, and muted lists the muted agents that would otherwise appear in the live snapshot; both include the work conclusion when known. Each line has machine, session id, project, title, last update and the last thing the agent said. Known Claude Code switch states appear as ultracode=on/off; an omitted state is unknown. ultracode=on means every substantive task runs a multi-agent dynamic workflow, independently of thinking effort. Let it finish and wait for workflow results without nudging it. Much faster and more accurate than ssh + herdr. At the end: the launchers that failed their last health check, by machine (agent_start and task_plan move off them).\n\nA line under an agent is something waiting for the user: a question lists its options and the interaction id to answer it with (interaction_answer), an approval is the user's to give in the app.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -516,10 +524,12 @@
             "working",
             "unread",
             "idle",
+            "done",
+            "muted",
             "archived",
             "all"
           ],
-          "description": "default active = needs_you + working + unread; archived: only the archived sessions (agent_unarchive restores them); the others leave archived ones out, all lists them marked archived"
+          "description": "default active = needs_you + working + unread; done = finished work in the last 24 hours; muted = muted agents in the live snapshot categories; archived: only the archived sessions (agent_unarchive restores them); the others leave archived ones out, all lists them marked archived"
         },
         "machine": {
           "type": "string"
@@ -556,7 +566,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send a message to an agent as the user would type it (answers its question, tells it to continue, gives new instructions). Queued if the agent is working. Only send what the user asked for. An agent that is not running any more (a finished task's agent is closed after a few idle minutes) is resumed first, in the same session with the same machine, directory and launcher, so you can keep working with it. A text of only /exit or /quit closes a running agent and its terminal tab (the session can still be resumed later) and does nothing to one that is not running; a finished task's agent is closed for you, so there is no need to.\n\nWhen a dialog holds the agent's terminal the send is refused (dialog_open) with the dialog's first line, and whether it is only a notice that Enter closes (\"Enter to continue\", no options). Send again with dismiss_notice true to close such a notice first. Confirmations, permissions and pickers are never closed for you: tell the user, or answer them with interaction_answer.\n\nWhen you hand new work to an agent that runs already (one the user opened, a long-lived one that passes work on), give task from the main conversation: once the text is sent the agent is your supervised task, as agent_supervise makes one (a todo with the text as its notes, the agent on it, done_when, a card in the conversation; 督办 messages, task_review), so the work is tracked instead of only said. Put the criteria in the text too: the agent is told only what the text says. An agent already on one of your tasks takes more of it under the same title (no second task; done_when is updated); a different title is refused, so other work is not filed under that task. An agent on the user's own todo or another conversation's task is refused. Refused means nothing was sent. If the send fails, no task is made. Leave task out, or null, for a reply, a nudge or a decision on work it already has; a task with nothing in it (a blank title, no non-blank done_when, no expect_minutes above 0, no other key) counts as left out too.",
+    "description": "Send a message to an agent as the user would type it (answers its question, tells it to continue, gives new instructions). Queued if the agent is working. Only send what the user asked for. An agent that is not running any more (a finished task's agent is closed after a few idle minutes) is resumed first, in the same session with the same machine, directory and launcher, so you can keep working with it. A text of only /exit or /quit closes a running agent and its terminal tab (the session can still be resumed later) and does nothing to one that is not running; a finished task's agent is closed for you, so there is no need to. An agent on a task another conversation supervises is not yours to close: /exit to it is refused and nothing is sent (the user can close it in the app, or with agent_archive and close once it is idle).\n\nWhen a dialog holds the agent's terminal the send is refused (dialog_open) with the dialog's first line, and whether it is only a notice that Enter closes (\"Enter to continue\", no options). Send again with dismiss_notice true to close such a notice first. Confirmations, permissions and pickers are never closed for you: tell the user, or answer them with interaction_answer.\n\nWhen you hand new work to an agent that runs already (one the user opened, a long-lived one that passes work on), give task from the main conversation: once the text is sent the agent is your supervised task, as agent_supervise makes one (a todo with the text as its notes, the agent on it, done_when, a card in the conversation; 督办 messages, task_review), so the work is tracked instead of only said. Put the criteria in the text too: the agent is told only what the text says. An agent already on one of your tasks takes more of it under the same title (no second task; done_when is updated); a different title is refused, so other work is not filed under that task. An agent on the user's own todo or another conversation's task is refused. Refused means nothing was sent. If the send fails, no task is made. Leave task out, or null, for a reply, a nudge or a decision on work it already has; a task with nothing in it (a blank title, no non-blank done_when, no expect_minutes above 0, no other key) counts as left out too.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -617,7 +627,7 @@
   },
   {
     "name": "agent_interrupt",
-    "description": "Stop what an agent (from agents_list) is doing right now, and optionally redirect it: its current turn is cut off (Esc in its terminal, or its runtime's cancel), the agent and its session stay, and `then` is sent to it at once as the user would type it. Use it when waiting is worse than stopping: it works in the wrong direction, waits in a loop (sleep, polling), repeats a failing step, collides with another agent, or the user said stop. To add a word to an agent that works fine, use agent_send instead (queued behind its turn). What it did already is not undone (files it changed, commands it ran): tell it in `then` what to put back. Not for assistant conversations, and not for agents that can only be read.",
+    "description": "Stop what an agent (from agents_list) is doing right now, and optionally redirect it: its current turn is cut off (Esc in its terminal, or its runtime's cancel), the agent and its session stay, and `then` is sent to it at once as the user would type it. Use it when waiting is worse than stopping: it works in the wrong direction, waits in a loop (sleep, polling), repeats a failing step, collides with another agent, or the user said stop. To add a word to an agent that works fine, use agent_send instead (queued behind its turn). What it did already is not undone (files it changed, commands it ran): tell it in `then` what to put back. Not for assistant conversations, and not for agents that can only be read. A `then` of only /exit or /quit to an agent on a task another conversation supervises is refused, as agent_send refuses it: nothing is stopped or sent.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -642,7 +652,7 @@
   },
   {
     "name": "agent_start",
-    "description": "Start a new Claude Code agent in the terminal engine (herdr or Orca) of one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list for current machine resources and availability before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so.\n\nWhen the work needs a branch and checkout of its own (work in parallel with what is already open in that repository), give `worktree.branch`: Persona makes the worktree through the machine's engine first (herdr's or Orca's own, so it is listed there and in the app, under the workspace `cwd` is in) and starts the agent in it. Do not tell the agent to run `git worktree add` itself: a worktree made that way is invisible to Orca and to the app. An existing local branch is checked out; a new one starts at the HEAD of the workspace `cwd` is in. A branch already checked out elsewhere is refused.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier, so leave it off for small or quick work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, or an older Claude Code, refuses the start. Whether it is really on shows as `ultracode=on` in agents_list once Claude Code confirms it.",
+    "description": "Start a new Claude Code agent in the terminal engine (herdr or Orca) of one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list for current machine resources and availability before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so.\n\nWhen the work needs a branch and checkout of its own (work in parallel with what is already open in that repository), give `worktree.branch`: Persona makes the worktree through the machine's engine first (herdr's or Orca's own, so it is listed there and in the app, under the workspace `cwd` is in) and starts the agent in it. Do not tell the agent to run `git worktree add` itself: a worktree made that way is invisible to Orca and to the app. An existing local branch is checked out; a new one starts at the HEAD of the workspace `cwd` is in. A branch already checked out elsewhere is refused.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier, so leave it off for small or quick work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it, and the answer says so. Whether it is really on shows as `ultracode=on` in agents_list once Claude Code confirms it.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -744,7 +754,7 @@
   },
   {
     "name": "agent_archive",
-    "description": "Archive a coding agent's session (from agents_list) when the user asks to archive or tidy up agents: it leaves the Agents list for Archived in the app, nothing is deleted, and agent_unarchive brings it back (never remove a session any other way). Persona also asks the agent's own tool to archive it where that tool has an archive (Codex); the result says whether it did (native: done / pending / unsupported). Without close the agent itself is not closed: one open on its computer stays open. With close, its agent is also closed on its computer the way a finished task's agent is (its tab and process go, its transcript stays, and the next message to it resumes it): only when the user asks to close it too, and the user confirms on the phone first (declined: nothing changes). A busy agent is refused and nothing changes: working, waiting for an answer or background work, and for close also a /loop, queued messages or a server it runs. When the close does not happen the session stays archived and still open on the computer, and the result says why: tell the user exactly that, not that it was closed. Not for Persona conversations (conversation_archive).",
+    "description": "Archive a coding agent's session (from agents_list) when the user asks to archive or tidy up agents: it leaves the Agents list for Archived in the app, nothing is deleted, and agent_unarchive brings it back (never remove a session any other way). Persona also asks the agent's own tool to archive it where that tool has an archive (Codex); the result says whether it did (native: done / pending / unsupported). Without close the agent itself is not closed: one open on its computer stays open. With close, its agent is also closed on its computer the way a finished task's agent is (its tab and process go, its transcript stays, and the next message to it resumes it): only when the user asks to close it too, and the user confirms on the phone first (declined: nothing changes). A busy agent is refused and nothing changes: working, waiting for an answer or background work, and for close also a /loop, queued messages or a server it runs. When the close does not happen the session stays archived and still open on the computer, and the result says why: tell the user exactly that, not that it was closed. With `force: true`, explicitly cancel and close an Agent stuck waiting for a terminal confirmation, then archive it, as `paseo archive --force` does. Use force only when the user asks to stop or archive that blocked Agent. Pending permissions and plans are rejected or cancelled, never allowed. Working Agents, background work, running subagents/workflows, queued messages, loops and serving ports are still refused. A failed close leaves it visible. Force implies close and does not ask for a second permission card. Not for Persona conversations (conversation_archive).",
     "input_schema": {
       "type": "object",
       "required": [
@@ -759,6 +769,10 @@
         "session_id": {
           "type": "string",
           "description": "the agent's session id, or its first 8 characters"
+        },
+        "force": {
+          "type": "boolean",
+          "description": "cancel and close a confirmation-blocked Agent before archiving; only when the user asks; never approve its pending request"
         },
         "close": {
           "type": "boolean",
@@ -1622,7 +1636,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why. From the main conversation, supervisor hands the whole plan to a leader conversation (one of assistant.leaders): its tasks are that leader's to supervise and review, as if it had handed them out; leave it out to supervise them yourself. Every task gets a brief, kept from the moment it starts and never rewritten: the hub records the owner's message that led to it (their words, from this conversation; work you start on your own after a 督办 message, a notice or a routine is recorded as yours, with started_why), and you supply the goal, done_when, expect_minutes and out_of_bounds. A writable task (readonly false) without done_when (at least one result that can be checked) and expect_minutes is refused, and so is a read-only task without goal and expect_minutes; the refusal says what is missing. The card shows the brief, so the owner's 开始 confirms it. A task that takes over from an earlier one (a retry on another computer, a rework round, a new agent after the first failed, a part split off) gives continues (that task's todo id) and continues_why: it keeps that task's brief (the owner's request, the criteria as they stand, the clock) while its prompt is its own, and the earlier task is linked as superseded; do not restate the request in a new brief. After a task started, done_when changes only with task_scope. A task that changes files (readonly false) must set permission \"bypassPermissions\" explicitly; any other value, or none, is refused before anything is planned. A task that only reads (readonly true) is not affected. role \"leader\" makes the task's agent a task leader, which can hand direct workers to its own task through its own restricted task_plan and task_review and receives their supervision messages; use it only for a task that splits into several agents' work. Depth stops there: the leader's workers cannot hand tasks on.",
+    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why. From the main conversation, supervisor hands the whole plan to a leader conversation (one of assistant.leaders): its tasks are that leader's to supervise and review, as if it had handed them out; leave it out to supervise them yourself. Every task gets a brief, kept from the moment it starts and never rewritten: the hub records the owner's message that led to it (their words, from this conversation; work you start on your own after a 督办 message, a notice or a routine is recorded as yours, with started_why), and you supply the goal, done_when, expect_minutes and out_of_bounds. A writable task (readonly false) without done_when (at least one result that can be checked) and expect_minutes is refused, and so is a read-only task without goal and expect_minutes; the refusal says what is missing. The card shows the brief, so the owner's 开始 confirms it. A task that takes over from an earlier one (a retry on another computer, a rework round, a new agent after the first failed, a part split off) gives continues (that task's todo id) and continues_why: it keeps that task's brief (the owner's request, the criteria as they stand, the clock) while its prompt is its own, and the earlier task is linked as superseded; do not restate the request in a new brief. After a task started, done_when changes only with task_scope. A task that changes files (readonly false) must set permission \"bypassPermissions\" explicitly; any other value, or none, is refused before anything is planned. A task that only reads (readonly true) is not affected. role \"leader\" makes the task's agent a task leader, which can hand direct workers to its own task through its own restricted task_plan and task_review and receives their supervision messages; use it only for a task that splits into several agents' work. Depth stops there: the leader's workers cannot hand tasks on.\n\nWorkspace policy: set workspace=\"new\" for an isolated checkout, {\"new\":{\"branch\":\"task/my-change\"}} for an explicit branch, {\"existing\":\"\u003ccwd or workspace_id\u003e\"} for a named checkout, or \"none\" for no managed workspace. If omitted, readonly defaults to none; writable Git tasks use assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation); an occupied directory defaults to new. Explicit existing is never silently switched and is refused with the occupying task's id/title. The machine's herdr/Orca engine chooses the new path and registers it; never run git worktree add yourself. The plan card previews the resolved path and lets the user change the policy before Start. New branches default to task/\u003ctodo id\u003e. A creation failure starts no agent. Workspaces are silently retained after acceptance.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1673,6 +1687,49 @@
                 "type": "string",
                 "description": "the project directory: absolute path or ~/…"
               },
+              "workspace": {
+                "description": "Task workspace policy. Omit to use the assistant preference and readonly/busy exceptions. new uses the machine engine and default branch task/\u003ctodo id\u003e; existing accepts an absolute/~/ path or a workspace id on that machine; none creates nothing. To choose a branch use {new:{branch:...}}. No custom worktree root.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "new",
+                      "none"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "existing"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "existing": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "new"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "new": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "branch": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
               "launcher": {
                 "type": "string",
                 "description": "launcher name, one that machine has (a name it lacks is refused, listing the ones it has); empty: the default, or one the machine has when it lacks the default (claude first; the why says so)"
@@ -1701,7 +1758,7 @@
               },
               "ultracode": {
                 "type": "boolean",
-                "description": "true for a large task (many files, checks from several angles): Claude Code runs every substantial step as a multi-agent workflow, slower and costlier; false for small or quick work. Claude Code agents only (2.1.284 or later): any other agent, or an older Claude Code, fails to start. Never put the word in the prompt or title instead"
+                "description": "true for a large task (many files, checks from several angles): Claude Code runs every substantial step as a multi-agent workflow, slower and costlier; false for small or quick work. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it. Never put the word in the prompt or title instead"
               },
               "readonly": {
                 "type": "boolean",
@@ -1784,7 +1841,7 @@
   },
   {
     "name": "task_review",
-    "description": "Review a task you handed out from this conversation (its todo id), after you checked its work yourself: each done_when criterion with its evidence (a PR link and that it merged, CI, a screenshot, what the live system answers) or what is missing. accepted closes the task (its agent is closed once it stays still); rework sends what is missing back to the same agent (resumed if it was closed) — at most 2 rounds; a third is refused unless it carries a decision for the user (the needs_user fields below), and otherwise you accept or cancel; needs_user puts a decision to the user, and only a decision they can answer: it is refused unless it has why_owner (why only they can decide), reason (one sentence: what is to be decided), recommend, options (2 to 4, the recommended first, each with what choosing it leads_to) and cost_of_waiting. When nothing needs the user, don't use it: decide it yourself and send the agent on, send the work back, or close the task; a task that only waits for something is no decision either. The hub adds where the task came from and where it stands, and the decision is listed on the to-do with its options (its conclusion card asks them too; without a card, ask them yourself: ask_user, or notify_user if they are away, as the answer says); cancelled ends it (a duplicate, no longer wanted): its agents are closed and archived, and their waiting cards end. A leader conversation's needs_user also goes to the main conversation. From a conversation other than the main one, on a task it does not supervise, only accepted and cancelled apply: send what is missing to its agent with agent_send. The criteria are the task's brief's as they stand after its logged scope changes (the 督办 message lists them), not what a later hand-over prompt says: write one check per criterion in the same words, and the completion report lists each as met, not met or dropped (with the scope change that dropped it), then also_done. Use it on every task a 督办 message says waits for review; don't accept on the agent's word alone. On a supervised task, accepted and needs_user send the user one conclusion card in Lark: the verdict (done, cannot be done, or needs your decision), reason (one sentence), link (one), and for needs_user your recommend, which the user takes by answering \"OK\"; so give outcome, reason and link with accepted, and reason and recommend with needs_user, and don't push the same result again. A deployed task already has a \"Please verify\" card from when its work went live: your accepted passes it for the user (marked verified by you), so they are not asked to press \"Pass\"; set user_check only when the user should still look at the result themselves (a UI change someone has to see), and then that card, or a new one, waits for them. A needs_user decision has a default and a date: unless why_owner is irreversible or visible_to_others, it takes your recommend by default after 24 hours unanswered (recorded on the to-do as taken at the deadline), or at the deadline you give; irreversible and visible_to_others are never taken by default and are raised to the user again once a day. A decision that waited a day comes back to you once to confirm its facts still hold. Besides the options the user can answer \"You decide\", \"This isn't what I asked for\" or \"Tell me the background first\": that comes back to you in a 督办 message, and nothing is taken.",
+    "description": "Review a task you handed out from this conversation (its todo id), after you checked its work yourself: each done_when criterion with its evidence (a PR link and that it merged, CI, a screenshot, what the live system answers) or what is missing. accepted closes the task (its agent is closed once it stays still); rework sends what is missing back to the same agent (resumed if it was closed) — at most 2 rounds; a third is refused unless it carries a decision for the user (the needs_user fields below), and otherwise you accept or cancel; needs_user puts a decision to the user, and only a decision they can answer: it is refused unless it has why_owner (why only they can decide), reason (one sentence: what is to be decided), recommend, options (2 to 4, the recommended first, each with what choosing it leads_to) and cost_of_waiting. When nothing needs the user, don't use it: decide it yourself and send the agent on, send the work back, or close the task; a task that only waits for something is no decision either: park it. parked is for a task that waits on purpose (for the user to say what comes first, for someone else, for something outside to happen, for a date): it is refused unless it has reason (one sentence: what it waits for) and waiting_on, and it takes until (default 24 hours, at most 30 days). A parked task stays open and is not in the user's Needs you: no card, no push, and no stalled, idle, orphaned or overdue signal while it is parked; only waiting_on owner_priority is listed in their daily digest. At until it comes back to you once in a 督办 message (parked_due): decide, park it again with a new reason, or close it. Its agent starting a turn ends the parking, so send it what it needs before you park. A task parked again 3 times in a row with no agent turn in between is refused the next time: close it, or state the real decision. Don't park what you can decide, and don't use needs_user to park. The hub adds where the task came from and where it stands, and the decision is listed on the to-do with its options (its conclusion card asks them too; without a card, ask them yourself: ask_user, or notify_user if they are away, as the answer says); cancelled ends it (a duplicate, no longer wanted): its agents are closed and archived, and their waiting cards end. A leader conversation's needs_user also goes to the main conversation. From a conversation other than the main one, on a task it does not supervise, only accepted and cancelled apply: send what is missing to its agent with agent_send. The criteria are the task's brief's as they stand after its logged scope changes (the 督办 message lists them), not what a later hand-over prompt says: write one check per criterion in the same words, and the completion report lists each as met, not met or dropped (with the scope change that dropped it), then also_done. Use it on every task a 督办 message says waits for review; don't accept on the agent's word alone. On a supervised task, accepted and needs_user send the user one conclusion card in Lark: the verdict (done, cannot be done, or needs your decision), reason (one sentence), link (one), and for needs_user your recommend, which the user takes by answering \"OK\"; so give outcome, reason and link with accepted, and reason and recommend with needs_user, and don't push the same result again. A deployed task already has a \"Please verify\" card from when its work went live: your accepted passes it for the user (marked verified by you), so they are not asked to press \"Pass\"; set user_check only when the user should still look at the result themselves (a UI change someone has to see), and then that card, or a new one, waits for them. A needs_user decision has a default and a date: unless why_owner is irreversible or visible_to_others, it takes your recommend by default after 24 hours unanswered (recorded on the to-do as taken at the deadline), or at the deadline you give; irreversible and visible_to_others are never taken by default and are raised to the user again once a day. A decision that waited a day comes back to you once to confirm its facts still hold. Besides the options the user can answer \"You decide\", \"This isn't what I asked for\" or \"Tell me the background first\": that comes back to you in a 督办 message, and nothing is taken.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1802,6 +1859,7 @@
             "accepted",
             "rework",
             "needs_user",
+            "parked",
             "cancelled"
           ]
         },
@@ -1827,11 +1885,11 @@
               }
             }
           },
-          "description": "each criterion, met or not, with its evidence or gap"
+          "description": "each criterion, met or not, with its evidence or gap; updates that done_when entry's persisted state, evidence, time and supervisor identity. Omitted entries keep their progress"
         },
         "note": {
           "type": "string",
-          "description": "rework: what the agent is to do (Chinese, concrete); needs_user: what the user is to decide; cancelled: why; accepted: the result in a line"
+          "description": "rework: what the agent is to do (Chinese, concrete); needs_user: what the user is to decide; parked: anything more than reason, for your own record; cancelled: why; accepted: the result in a line"
         },
         "outcome": {
           "type": "string",
@@ -1843,7 +1901,21 @@
         },
         "reason": {
           "type": "string",
-          "description": "accepted: the conclusion card's one sentence of why, in the user's language; default the note's first line. needs_user (required): one sentence saying what is to be decided, in the user's language"
+          "description": "accepted: the conclusion card's one sentence of why, in the user's language; default the note's first line. needs_user (required): one sentence saying what is to be decided, in the user's language. parked (required): one sentence saying what the task waits for, in the user's language"
+        },
+        "waiting_on": {
+          "type": "string",
+          "enum": [
+            "owner_priority",
+            "someone_else",
+            "external_event",
+            "date"
+          ],
+          "description": "parked (required): what kind of thing the task waits on. owner_priority: the user has to say whether to do it or what comes first (their daily digest lists it); someone_else: another person has to do or answer something; external_event: something outside has to happen (a release, a result, a fix upstream); date: nothing but the time"
+        },
+        "until": {
+          "type": "string",
+          "description": "parked, optional: until when it is parked, a duration (\"3d\", \"36h\", \"90m\") or an RFC 3339 time, 1 minute to 30 days ahead; default 24h. At that time the task comes back to you"
         },
         "link": {
           "type": "string",
@@ -2309,38 +2381,6 @@
           "description": "evidence links: PRs, deployed pages, documents; the first is shown first"
         }
       }
-    }
-  },
-  {
-    "name": "jarvis_settings",
-    "description": "Read and change Persona's own settings for the user: their inbox sorting rules, how their inbox items link to their tasks, 关于我 (what you know about them), your default launcher (model), their mail accounts, which Claude Code config directories each machine keeps out of Agents, and each extension's settings (extension.\u003cid\u003e: what Settings › Extensions shows, like turning one of its features on). Start with action list (what there is, what each takes); get reads one. set / add / remove put a card on the user's phone that says what changes (before → after) and nothing changes until they approve; what the card needs filled in, like a mail password, the user types there, so never ask for passwords in the conversation. Change only what the user asked for.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "type": "string",
-          "enum": [
-            "list",
-            "get",
-            "set",
-            "add",
-            "remove"
-          ],
-          "description": "default list"
-        },
-        "key": {
-          "type": "string",
-          "description": "the setting, from list (inbox.rules, mail.accounts, extension.\u003cid\u003e…)"
-        },
-        "value": {
-          "description": "set: the new value; add: the item (each setting's list entry says what)"
-        },
-        "id": {
-          "type": "string",
-          "description": "remove: which item (from get)"
-        }
-      },
-      "additionalProperties": false
     }
   }
 ]

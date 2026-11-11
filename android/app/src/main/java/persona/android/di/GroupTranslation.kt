@@ -294,7 +294,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
     val source = this
     return object : AssistantConversations {
         override val assistant = source.assistant.mapIn(scope) { snapshot ->
-            AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId)
+            AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
+                snapshot.leaders, snapshot.directionNames)
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()
@@ -302,6 +303,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
         override suspend fun startConversation(launcher: String) = names.key(source.startConversation(launcher))
         // another manager's main conversation (docs/assistant/managers.md step 4), in this group's merged ids
         override suspend fun mainConversationOf(manager: String) = names.key(source.mainConversationOf(manager))
+        override suspend fun spaceConversations(space: String) = source.spaceConversations(space).map(names::session)
+        override suspend fun startConversationIn(space: String) = names.key(source.startConversationIn(space))
     }
 }
 

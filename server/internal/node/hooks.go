@@ -192,6 +192,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleNotify(ctx, req)
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
+	case "secret.env": // personad launch --ticket (secretenv.go)
+		resp = n.secretEnvFor(req)
 	case "mcp.tools":
 		var res struct {
 			Tools []proto.Tool `json:"tools"`
@@ -412,7 +414,24 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		return elicitationOutput(ix, res), nil
 
+	case in.HookEventName == "PreToolUse" && cuaToolOf(in.ToolName) != "":
+		// An Agent's own Cua Driver: never System Settings or a permission prompt (cua_gate.go, #4349).
+		if why := cuaVerdict(ctx, cuaToolOf(in.ToolName), in.ToolInput); why != "" {
+			n.logf("refused %s for %s: protected app, or the screen not checked", in.ToolName, in.SessionID)
+			return preToolDecision("deny", why), nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "PreToolUse" && in.ToolName == "Bash":
+		var c struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(in.ToolInput, &c) == nil {
+			if why := cuaBashVerdict(ctx, c.Command); why != "" { // its cua-driver calls, the same way (cua_gate.go)
+				n.logf("refused a cua-driver call in Bash for %s: protected app, or not checked", in.SessionID)
+				return preToolDecision("deny", why), nil
+			}
+		}
 		if !n.isAssistantSession(in.SessionID) {
 			return nil, nil
 		}
@@ -445,8 +464,14 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ix.Kind, ix.Plan = proto.IxPlan, p.Plan
 		// The terminal's own dialog may decide the plan while the card still waits (the card is not always
 		// withdrawn then): the footer is watched from now, until the card is answered.
-		stopWatch := n.planThenAfterTerminal(in.SessionID)
-		res, ok, err := n.ask(ctx, ix)
+		decided := &terminalDecided{}
+		askCtx, endAsk := context.WithCancel(context.WithValue(ctx, terminalDecidedKey{}, decided))
+		defer endAsk()
+		stopWatch := n.planAfterTerminal(in.SessionID, func() {
+			decided.Store(true) // the card is withdrawn as decided on the computer, not as a hook that went away
+			endAsk()
+		})
+		res, ok, err := n.ask(askCtx, ix)
 		if err != nil || !ok || res.Approve == nil {
 			return nil, err // the watch goes on: the terminal decides, and with it the mode that follows
 		}
@@ -559,6 +584,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 				"type": "addRules", "rules": []any{rule},
 				"behavior": "allow", "destination": "session",
 			}}
+		}
+		if !assistant { // Claude may not take it: its safety checks keep their dialog (allowwatch.go, #3752)
+			n.watchAllow(in.SessionID, n.allowPane(req, in.SessionID))
 		}
 		return permissionDecision(d), nil
 	}
@@ -754,6 +782,10 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 		}
 		if errors.Is(err, rpc.ErrClosed) {
 			return res, false, errNodeGone
+		}
+		if d, _ := ctx.Value(terminalDecidedKey{}).(*terminalDecided); d != nil && d.Load() {
+			_ = n.peer.Notify("interaction.dismiss", map[string]any{"id": ix.ID}) // answered in the terminal (planthen.go)
+			return res, false, nil
 		}
 		_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
 		return res, false, nil

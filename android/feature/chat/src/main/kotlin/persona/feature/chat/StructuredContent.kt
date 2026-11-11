@@ -35,10 +35,13 @@ import persona.core.designsystem.icons.PhIcons
  * rest in place (R3).
  */
 @Composable
-internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null, boxed: Boolean = false) {
+internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null, boxed: Boolean = false,
+    /** The closeout card above the transcript says this reply's closeout block (#3612): draw the reply without it. */
+    hideCloseout: Boolean = false) {
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
-    val text = whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }
+    val text = (whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it })
+        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
     val model = remember(text, item.from, user) { messageModel(text, item.from, user) }
     val uri = LocalUriHandler.current
     Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText()))) {
@@ -250,7 +253,7 @@ internal fun DiffView(diff: ToolDiff, id: String) {
                             Text("${line.old ?: ""}  ${line.new ?: ""}", Modifier.width(64.dp),
                                 style = style, color = PersonaTheme.palette.ink2, maxLines = 1)
                             // A hunk header or a note of a unified diff ('@') reads quietly, with no sign.
-                            Text(if (line.sign == '@') " " else line.sign.toString(), Modifier.width(Tokens.Space.xl), style = style,
+                            Text(if (line.sign == '@') " " else line.sign.toString(), Modifier.width(ContentTokens.legacyXl), style = style,
                                 color = when (line.sign) { '+' -> palette.diffAdd; '-' -> palette.diffDel; else -> PersonaTheme.palette.ink2 })
                             Box(Modifier.weight(1f).horizontalScroll(horizontal)) {
                                 Text(line.text.replace("\t", "    "), Modifier.width(codeWidth), style = style, softWrap = false,
