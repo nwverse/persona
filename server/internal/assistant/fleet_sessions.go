@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -31,6 +32,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	for _, sess := range list {
 		// Any agent (herdr or headless, started by Persona or not) finishing a turn may notify the phone.
 		was, key := before[sess.SessionID], machine+"/"+sess.SessionID
+		s.availSeen(machine, &sess, was, now) // the owner's wait for a reply (availability.go)
 		prev := was.Status
 		// The turn stopped on background work and its report woke it again within one of the node's list ticks: the
 		// stop never showed, only the woken flag turning on. It is held work all the same (#4187, #4419). By the
@@ -75,12 +77,17 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		if sess.Status != prev && sess.Status != proto.StatusWorking && !(prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle)) {
 			// Stopped with no end seen (a restart, an interrupt, a card): a meeting turn there is over (meeting_turns.go).
 			s.meetingTurnStopped(machine, sess.SessionID, sess, prev == "")
+			if id := sess.SessionID; prev == proto.StatusWorking { // by id: a closure over sess would put every row on the heap
+				s.inOrder(func() { s.availStopped(machine, id, now) }) // its round is over (availability.go)
+			}
 		}
 		if sess.Status == proto.StatusWorking && backgroundRunning(sess) && !s.meetingTurnNow(machine, sess.SessionID) {
 			s.turnsBook().sawBackground(key, now)
 		}
 	}
+	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.fleetKeepPrevious(machine, list)
+	s.roundsSeen(list) // whose round each conversation is on (owner_preempt.go)
 	s.sessionsChanged(machine)
 	// Messages from other conversations, for those no longer running; the todos' links and herdr marks.
 	var connected time.Time
@@ -197,7 +204,10 @@ func (s *Service) publishList(machine string) []proto.Session {
 	}
 	f.shown[machine] = awaitingReply(list)
 	f.shownMu.Unlock()
-	s.hub.Tell(assistantwire.EventFleetSessions, json.RawMessage(b))
+	// As json.Marshal wrote them (rpc.Marshaled): the bus puts them into its line as they are. As json.RawMessage its
+	// encoder checked and copied the whole list twice more to write the same line. Nil (the list does not encode) is
+	// told as null either way.
+	s.hub.Tell(assistantwire.EventFleetSessions, rpc.Marshaled(b))
 	s.liveChanged(false)
 	return list
 }

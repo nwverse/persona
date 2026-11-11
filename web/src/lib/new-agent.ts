@@ -9,6 +9,8 @@ import { currentPlatform, modName, type Platform } from "./shortcuts";
 import { href, navigate } from "./router";
 import { getState, putLaunch, upsertSession } from "./store";
 import { ultracodeErrorText, ultracodeRefused } from "./ultracode";
+import type { DraftImage } from "./drafts";
+import type { ContextRef } from "./links";
 import type { Session } from "./types";
 import type { WorkspaceTarget } from "./workspace-target";
 
@@ -73,9 +75,13 @@ function launchOpIds() {
  *  waits about 10 s each time), or lost to a hub restart (nobody knows how it went). */
 async function launchOp<T>(path: string, opId: string, signal: AbortSignal, json: unknown): Promise<T> {
   for (;;) {
-    const r = await apiOp<T & { state?: string }>(path, { method: "POST", signal, json, opId });
+    const r = await apiOp<T & { state?: string; launcher_note?: string; session?: Session }>(path, { method: "POST", signal, json, opId });
     if (r.state === "unknown") throw new ApiError(202, t("lib-new-agent.outcome_unknown"), { delivered: "unknown" });
-    if (r.state !== "pending") return r;
+    if (r.state === "pending") continue;
+    // a default launcher the computer lacks gave way to another (#4661): said once, as for the main chat; loaded only
+    // then, so New Agent's first screen does not carry it
+    if (r.launcher_note) void import("./assistant-start").then((m) => m.showLauncherNote(`${r.session?.machine_id}/${r.session?.session_id}`, r.launcher_note));
+    return r;
   }
 }
 
@@ -200,6 +206,10 @@ export interface NewAgentPreset {
   prompt?: string;
   machineId?: string;
   cwd?: string;
+  /** A message forwarded to a new Agent (#3899): its card over the first message, which carries it in front; and the
+   *  pictures it had, attached. */
+  forward?: ContextRef;
+  images?: DraftImage[];
   /** An exact workspace destination takes precedence over the legacy machine/folder preset. */
   workspace?: WorkspaceTarget;
 }
