@@ -9,7 +9,7 @@
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18977 npx vite --host 127.0.0.1 --port 5977 --strictPort &)
 //   node web/e2e/image-editor.mjs http://127.0.0.1:5977 --shots <dir> [--before] [--video <dir> --ffmpeg <ffmpeg>] [--channel msedge | --executable <chromium>]
 //
-// Runs en and zh-Hans, light and dark, 1440 × 900 and 390 × 844 (touch). --before takes only what the editor had before
+// Runs en and zh-Hans, light and dark, 1440 × 900 and 390 × 844 (touch), then ja at 320 × 700 with the largest text size. --before takes only what the editor had before
 // #4991 (opened, a box drawn), for the comparison. --video records the whole walk-through once wide in English (dark)
 // and once on a phone in Chinese (light), slowed down, from Chrome's screencast: VP8 WebM through --ffmpeg (any build
 // with libvpx; Playwright's own recorder needs VP9), else the frames as JPEGs. Prints one line per check and a verdict;
@@ -101,22 +101,24 @@ async function picture(page) {
   return Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
 }
 
-async function open(browser, { lang, theme, phone }) {
+async function open(browser, { lang, theme, phone, small }) {
   const ctx = await browser.newContext({
-    viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+    viewport: small ? { width: 320, height: 700 } : phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
     deviceScaleFactor: 2,
     colorScheme: theme,
-    locale: lang === "en" ? "en-US" : "zh-CN",
+    locale: lang === "en" ? "en-US" : lang === "ja" ? "ja-JP" : "zh-CN",
     hasTouch: phone,
     isMobile: phone,
   });
   await ctx.route("**/*", (route) => (new URL(route.request().url()).origin === new URL(base).origin ? route.continue() : route.abort()));
   await ctx.addInitScript(
-    ([lang, theme]) => {
+    ([lang, theme, large]) => {
       localStorage.setItem("persona.language", lang);
       localStorage.setItem("persona.theme", theme);
+      // the largest text size (Settings › Appearance; ui/look.ts TEXT_SIZE_KEY)
+      if (large) localStorage.setItem("persona.text-size", "large");
     },
-    [lang, theme],
+    [lang, theme, Boolean(small)],
   );
   const page = await ctx.newPage();
   page.setDefaultTimeout(15000);
@@ -211,7 +213,7 @@ const pause = (page, ms) => page.waitForTimeout(ms);
 
 async function runBefore(browser, combo) {
   const { lang, theme, phone } = combo;
-  const tag = `${lang}-${theme}-${phone ? "390" : "1440"}`;
+  const tag = `${lang}-${theme}-${combo.small ? "320-large" : phone ? "390" : "1440"}`;
   const w = words(lang);
   const { ctx, page, errors } = await open(browser, combo);
   const dialog = await openEditor(page, w, () => still(page, `before-${tag}-attached`));
@@ -225,7 +227,7 @@ async function runBefore(browser, combo) {
 
 async function runAfter(browser, combo) {
   const { lang, theme, phone, recording } = combo;
-  const tag = `${lang}-${theme}-${phone ? "390" : "1440"}`;
+  const tag = `${lang}-${theme}-${combo.small ? "320-large" : phone ? "390" : "1440"}`;
   const w = words(lang);
   const slow = recording ? 700 : 0;
   const { ctx, page, errors } = await open(browser, combo);
@@ -274,7 +276,7 @@ async function runAfter(browser, combo) {
   await button(dialog, w.rotate).click();
   await pause(page, slow);
   await shot(page, `after-${tag}-turned`);
-  if ((await menuButton(dialog, w.aspect_ratio).textContent()).trim() !== "9:16") fail(`${tag}: a turn did not take 16:9 to 9:16`);
+  if (!(await menuButton(dialog, w.aspect_ratio).getAttribute("aria-label")).endsWith(": 9:16")) fail(`${tag}: a turn did not take 16:9 to 9:16`);
 
   // Undo back over the turn and the shape, Redo once
   await button(dialog, w.undo).click();
@@ -284,7 +286,7 @@ async function runAfter(browser, combo) {
   await button(dialog, w.redo).click();
   await pause(page, slow);
   await shot(page, `after-${tag}-undo-redo`);
-  if ((await menuButton(dialog, w.aspect_ratio).textContent()).trim() !== "16:9") fail(`${tag}: Undo, Undo, Redo did not land on 16:9 unturned`);
+  if (!(await menuButton(dialog, w.aspect_ratio).getAttribute("aria-label")).endsWith(": 16:9")) fail(`${tag}: Undo, Undo, Redo did not land on 16:9 unturned`);
 
   await button(dialog, w.box).click();
   await pause(page, slow);
@@ -326,6 +328,8 @@ try {
         const combo = { lang, theme, phone };
         await (before ? runBefore(browser, combo) : runAfter(browser, combo));
       }
+  // the narrowest phone at the largest text size, in the language with the longest words: the tools keep to one line
+  await (before ? runBefore : runAfter)(browser, { lang: "ja", theme: "dark", phone: true, small: true });
   if (video && !before) {
     await runAfter(browser, { lang: "en", theme: "dark", phone: false, recording: true });
     await runAfter(browser, { lang: "zh-Hans", theme: "light", phone: true, recording: true });
