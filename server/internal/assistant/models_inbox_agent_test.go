@@ -1,0 +1,186 @@
+package assistant
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"net/http"
+	"reflect"
+	"slices"
+	"testing"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// The AI twin's opt-in override (#4232), checked through the twin's own start (startInboxAgent) and the parameters the
+// node is started with, not only through resolution.
+func TestInboxAgentModelOverrideAndReset(t *testing.T) {
+	s, f, st := modelService(t)
+	ctx := context.Background()
+	inherited := ModelBinding{Provider: "launcher.claude", Model: "agents-default", Effort: "medium"}
+	setModel(t, s, "agent.new", inherited)
+	// What the twin had before category-only settings: still there, never read or copied.
+	legacy := modelRecord{Revision: 42, Binding: ModelBinding{Provider: "launcher.retired", Model: "retired", Effort: "low"}}
+	if err := st.PutSetting(ctx, modelKey(purposeAgent), legacy); err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "twin-fast", Model: "provider-default"}})
+	// Lark /agent set apart: the twin neither follows nor changes it.
+	lark := ModelBinding{Provider: "launcher.claude", Model: "lark-selected", Effort: "high"}
+	setModel(t, s, purposeLarkAgent, lark)
+
+	assertState := func(want ModelBinding, revision int64, overridden bool) {
+		t.Helper()
+		p := purposeOf(t, s, purposeAgent)
+		if p.Effective != want || p.Revision != revision || p.CategoryID != "agent.new" || p.Parent != "agent.new" ||
+			!slices.Equal(p.Fields, []string{"provider", "model", "effort"}) {
+			t.Fatalf("purpose: %+v; want binding %+v at revision %d", p, want, revision)
+		}
+		if overridden {
+			if p.Override != want || p.InheritedFrom != "" {
+				t.Fatalf("independent binding not exposed: %+v", p)
+			}
+		} else if p.Override != (ModelBinding{}) || p.InheritedFrom == "" {
+			t.Fatalf("inheritance not exposed: %+v", p)
+		}
+		before := len(f.sends)
+		machine, session, err := s.startInboxAgent(ctx, InboxAgentConfig{Enabled: true}, &InboxItem{ID: "event", Title: "Message"}, "Model configuration test only")
+		if err != nil || machine == "" || session == "" {
+			t.Fatalf("twin start: %s/%s %v", machine, session, err)
+		}
+		f.mu.Lock()
+		if len(f.sends) == before {
+			f.mu.Unlock()
+			t.Fatal("the twin's start reached no node")
+		}
+		send := f.sends[len(f.sends)-1]
+		f.mu.Unlock()
+		if send["launcher"] != want.Provider[len("launcher."):] || send["model"] != want.Model || send["effort"] != want.Effort || send["model_fingerprint"] == "" {
+			t.Fatalf("node startup: %+v; want %+v", send, want)
+		}
+		t.Logf("node startup launcher=%s model=%s effort=%s revision=%d", send["launcher"], send["model"], send["effort"], revision)
+		var untouched modelRecord
+		if _, err := st.Setting(ctx, modelKey(purposeAgent), &untouched); err != nil || !reflect.DeepEqual(untouched, legacy) {
+			t.Fatalf("dormant record changed: %+v %v", untouched, err)
+		}
+		if b, err := s.resolveModel(ctx, purposeLarkAgent); err != nil || b != lark {
+			t.Fatalf("Lark /agent changed: %+v %v", b, err)
+		}
+		if b, err := s.resolveModel(ctx, "agent.new"); err != nil || b != inherited {
+			t.Fatalf("Agents changed: %+v %v", b, err)
+		}
+	}
+
+	t.Run("no override ignores dormant record", func(t *testing.T) { assertState(inherited, 0, false) })
+	custom := ModelBinding{Provider: "launcher.twin-fast", Model: "twin-selected", Effort: "low"}
+	keys := settingsSnapshot(st)
+	w := modelRequest(s, http.MethodPut, purposeAgent, `{"revision":0,"provider":"launcher.twin-fast","model":"twin-selected","effort":"low"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", w.Code, w.Body.String())
+	}
+	// A save writes the twin's own record and nothing else: not Agents, Lark /agent or the Inbox's settings.
+	if changed := changedSettings(keys, settingsSnapshot(st)); !slices.Equal(changed, []string{"model_config.overrides.v1.inbox.agent"}) {
+		t.Fatalf("save wrote %v", changed)
+	}
+	t.Run("explicit override reaches node", func(t *testing.T) { assertState(custom, 1, true) })
+	// A sparse update keeps the provider and model; both verbs share optimistic locking.
+	w = modelRequest(s, http.MethodPatch, purposeAgent, `{"revision":1,"effort":"high"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("sparse update: %d %s", w.Code, w.Body.String())
+	}
+	custom.Effort = "high"
+	assertState(custom, 2, true)
+	// Agents changing underneath leaves a saved override as it is.
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude", Model: "agents-meanwhile"})
+	if p := purposeOf(t, s, purposeAgent); p.Effective != custom {
+		t.Fatalf("Agents' change reached the override: %+v", p)
+	}
+	setModel(t, s, "agent.new", inherited)
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		w = modelRequest(s, method, purposeAgent, `{"revision":0,"model":"stale"}`)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("%s stale write: %d %s", method, w.Code, w.Body.String())
+		}
+	}
+	w = modelRequest(s, http.MethodPut, purposeAgent, `{"revision":2,"provider":null,"model":null,"effort":null}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", w.Code, w.Body.String())
+	}
+	t.Run("reset follows Agents again", func(t *testing.T) { assertState(inherited, 3, false) })
+	inherited.Model = "agents-changed"
+	setModel(t, s, "agent.new", inherited)
+	assertState(inherited, 3, false)
+	// The reset survives a manager restart, without restoring the retired namespace.
+	s2 := newServiceOn(t, f, st)
+	p := purposeOf(t, s2, purposeAgent)
+	if p.Revision != 3 || p.Override != (ModelBinding{}) || p.Effective != inherited {
+		t.Fatalf("restart: %+v", p)
+	}
+}
+
+func TestInboxAgentModelValidationAndProviderUse(t *testing.T) {
+	s, _, _ := modelService(t)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "twin-fast"}})
+	for _, body := range []string{
+		`{"provider":"launcher.twin-fast"}`,
+		`{"revision":0,"runtime":"agentsdk"}`,
+		`{"revision":0,"provider":"launcher.missing"}`,
+		`{"revision":0,"effort":"unsupported"}`,
+		`{"revision":0,"model":"not a model id"}`,
+	} {
+		if w := modelRequest(s, http.MethodPut, purposeAgent, body); w.Code != http.StatusBadRequest {
+			t.Fatalf("invalid %s: %d %s", body, w.Code, w.Body.String())
+		}
+	}
+	// The twin is an Agents run: the same launchers as Agents, so no effort on Codex.
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "twin-fast"}}, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "codex-custom"}})
+	if w := modelRequest(s, http.MethodPut, purposeAgent, `{"revision":0,"provider":"launcher.codex-custom","model":"selected","effort":"high"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("Codex effort accepted: %d %s", w.Code, w.Body.String())
+	}
+	if w := modelRequest(s, http.MethodPut, purposeAgent, `{"revision":0,"provider":"launcher.twin-fast","model":"selected"}`); w.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", w.Code, w.Body.String())
+	}
+	uses, err := s.providerModelUses(context.Background(), "launcher.twin-fast")
+	if err != nil || len(uses) != 1 {
+		t.Fatalf("override provider not protected: %v %v", uses, err)
+	}
+	if w := request(s, http.MethodDelete, "/api/v1/launchers/twin-fast", ""); w.Code == http.StatusOK {
+		t.Fatalf("provider in use deleted: %s", w.Body.String())
+	}
+	// The other uses of Agents' siblings stay read-only.
+	for _, id := range []string{"inbox.judge", "translate", "schedule"} {
+		p := purposeOf(t, s, id)
+		w := modelRequest(s, http.MethodPut, id, fmt.Sprintf(`{"revision":%d,"model":"other"}`, p.Revision))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s became writable: %d %s", id, w.Code, w.Body.String())
+		}
+	}
+}
+
+// settingsSnapshot is a copy of what st holds, key by key.
+func settingsSnapshot(st *downStore) map[string][]byte {
+	st.memStore.mu.Lock()
+	defer st.memStore.mu.Unlock()
+	out := make(map[string][]byte, len(st.memStore.vals))
+	for k, v := range st.memStore.vals {
+		out[k] = bytes.Clone(v)
+	}
+	return out
+}
+
+// changedSettings are the keys added, removed or changed from before to after, sorted.
+func changedSettings(before, after map[string][]byte) []string {
+	changed := []string{}
+	for k, v := range after {
+		if old, ok := before[k]; !ok || !bytes.Equal(old, v) {
+			changed = append(changed, k)
+		}
+	}
+	for k := range before {
+		if _, ok := after[k]; !ok {
+			changed = append(changed, k)
+		}
+	}
+	slices.Sort(changed)
+	return slices.Compact(changed)
+}

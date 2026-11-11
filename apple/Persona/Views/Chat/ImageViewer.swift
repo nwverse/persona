@@ -24,7 +24,7 @@ struct ViewerImage: Identifiable, Hashable {
     }
 }
 
-/// The one full-screen image viewer of the app (docs/apple/ios.md「图片查看器」), as Photos shows a picture: a round back
+/// The one full-screen image viewer of the app (docs/apple/ios.md「Information architecture」), as Photos shows a picture: a round back
 /// button, the title in a capsule and a ⋯ menu on top; a strip of thumbnails when there are several, then Share · the
 /// main actions in a capsule (Save, Markup, Info) · Copy at the bottom. The page's own color behind it; a tap hides the
 /// bars and the backdrop turns black. Pinch / double-tap zoom, swipe between images, pull down to close (the picture

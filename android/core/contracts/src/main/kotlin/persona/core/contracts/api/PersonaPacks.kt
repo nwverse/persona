@@ -9,7 +9,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * The persona packages on the hub (docs/apple/persona.md "Package format"): GET /api/v1/personas lists the ones that check out,
+ * The persona packages on the hub (docs/apple/persona.md "Pack format"): GET /api/v1/personas lists the ones that check out,
  * and each file of a package comes from GET /api/v1/personas/<id>/<file>.
  */
 interface PersonaPacks {
@@ -18,7 +18,7 @@ interface PersonaPacks {
     suspend fun file(id: String, file: String): ByteArray
 
     /**
-     * GET /api/v1/looks (#3200, docs/extensions/extensions.md "Persona looks"): the built-in looks, the hub's packages and the extensions'
+     * GET /api/v1/looks (#3200, docs/extensions/extensions.md "Avatars"): the built-in looks, the hub's packages and the extensions'
      * in one list, and the look the user chose, kept on the hub for every device. Throws [PersonaPacksUnsupported] on
      * a hub without it.
      */
@@ -26,7 +26,27 @@ interface PersonaPacks {
 
     /** PUT /api/v1/looks/current: chooses a look for every device; [ifUnset] only when the hub has none yet (moving this phone's old choice up). */
     suspend fun choose(id: String, ifUnset: Boolean = false): LookCurrent = throw PersonaPacksUnsupported()
+
+    /** The hub makes avatars from images (`look_uploads` in its features, #2404): the apps offer New from Photo only then. */
+    val uploads: Boolean get() = false
+
+    /**
+     * POST /api/v1/looks/uploads (docs/apple/persona.md "Uploading an image"): makes an avatar from [image] (PNG or JPEG
+     * bytes, cropped square and upright), named [name] with an optional [subtitle]; [choose] chooses it for every device.
+     */
+    suspend fun upload(name: String, subtitle: String?, image: ByteArray, choose: Boolean = true): LookUploaded = throw PersonaPacksUnsupported()
+
+    /** DELETE /api/v1/looks/uploads/{id}: deletes an avatar made from an image; the hub's choice after it (the default when it was the chosen one). */
+    suspend fun deleteUpload(id: String): LookCurrent = throw PersonaPacksUnsupported()
 }
+
+/** The answer to an upload: the new look as GET /api/v1/looks lists it, and the choice when it was chosen. */
+@Serializable
+data class LookUploaded(val look: LookView, val current: LookCurrent? = null)
+
+/** The answer to deleting an upload: the hub's choice after it. */
+@Serializable
+data class LookDeleted(val current: LookCurrent = LookCurrent())
 
 /** The body of GET /api/v1/looks. */
 @Serializable
@@ -44,6 +64,8 @@ data class LookView(
     val rev: String? = null,
     val bytes: Long = 0,
     val manifest: PersonaManifest? = null,
+    /** Made from an image in the apps (#2404): the only looks the apps can delete. */
+    val uploaded: Boolean = false,
 ) {
     /** The package to download and show, for the hub's and the extensions' looks. */
     val pack: PersonaInfo? get() = if (source != "builtin" && manifest != null && rev != null) PersonaInfo(id, rev, bytes, manifest) else null
@@ -72,7 +94,7 @@ data class PersonaInfo(val id: String, val rev: String, val bytes: Long = 0, val
 private val PERSONA_REV = Regex("^[0-9a-f]{16}$")
 
 /** persona.json, format 1. [colors] feed the "Follow persona" theme color (docs/apple/persona.md "Color scheme"); an extension's look adds names in
- *  other languages, a dark avatar and where it comes from (docs/extensions/extensions.md "Persona looks"). */
+ *  other languages, a dark avatar and where it comes from (docs/extensions/extensions.md "Avatars"). */
 @Serializable
 data class PersonaManifest(
     val format: Int,
@@ -99,6 +121,9 @@ data class PersonaManifest(
     @Serializable data class Source(val kind: String = "", @SerialName("extension_name") val extensionName: String? = null)
     @Serializable data class Dot(val size: Int? = null, val states: Map<String, DotState>)
     @Serializable data class DotState(val file: String, val fps: Double? = null)
+
+    /** Made from an image in the apps (`source.kind` `upload`, #2404): the only packages the apps can delete. */
+    val uploaded: Boolean get() = source?.kind == "upload"
 
     /** Every file it names: what the phone downloads. */
     val files: List<String> get() = (avatar.sizes.values + avatar.dark?.sizes.orEmpty().values + dot.states.values.map { it.file }).toSortedSet().toList()

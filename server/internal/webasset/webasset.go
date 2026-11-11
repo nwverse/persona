@@ -1,7 +1,8 @@
 // Package webasset is what the hub and the build agree on about the web client's files: which responses gzip makes
-// worth sending compressed (CompressibleType, MinSize), and which of the built files are kept only gzipped in a
-// published personad (Precompressible, Precompress; docs/web/web.md "Precompressed assets"). The hub compresses other
-// responses as it sends them (internal/hub/gzip.go); these it sends as they are stored.
+// worth sending compressed (CompressibleType, MinSize), which of the built files are kept only gzipped in a
+// published personad (Precompressible, Precompress; docs/web/web.md "Precompressed assets"), and the brotli copies
+// the web build writes of the first screen's files (BrotliSuffix). The hub compresses other responses as it sends
+// them (internal/hub/gzip.go); these it sends as they are stored.
 package webasset
 
 import (
@@ -20,6 +21,17 @@ const MinSize = 1024
 
 // Suffix is the name a precompressed file is kept under: its own name and this.
 const Suffix = ".gz"
+
+// BrotliSuffix is the name of the brotli copy the web build writes beside each file of MinSize bytes or more that a
+// cold first screen loads (web/vite.config.ts, startup-preload): its own name and this. Go has no brotli encoder, so
+// Precompress leaves these copies as they are and still gzips the file itself; the hub sends the copy to a client
+// that takes br, and the gzip or plain file to any other.
+const BrotliSuffix = ".br"
+
+// Licenses is the web build's third-party notices beside index.html (THIRD_PARTY_NOTICES.md "Web client"): the one
+// root file big enough to be worth keeping gzipped, and read rarely enough that decompressing it for a client
+// without gzip costs nothing.
+const Licenses = "third-party-licenses.txt"
 
 // CompressibleType: a media type that gzip makes much smaller, and that is not an event stream.
 func CompressibleType(contentType string) bool {
@@ -40,11 +52,16 @@ func CompressibleType(contentType string) bool {
 
 // Precompressible says whether the build keeps the file at name (a slash path below the web root) gzipped, when it
 // has MinSize bytes or more: a file under assets/ (Vite names them by their content hash, so they never change
-// under one name) whose extension is of a CompressibleType. index.html, sw.js, the manifest, the admin page's files
-// and the root's other files stay as they are.
+// under one name) whose extension is of a CompressibleType, and the root's Licenses. A brotli copy (BrotliSuffix) is
+// compressed already and stays as it is; that is said by name, since mime.TypeByExtension also reads the system's
+// mime.types, which may give .br any type. index.html, sw.js, the manifest, the admin page's files and the root's
+// other files stay as they are.
 func Precompressible(name string) bool {
+	if name == Licenses {
+		return true
+	}
 	base := path.Base(name)
-	return strings.HasPrefix(name, "assets/") && !strings.HasPrefix(base, ".") &&
+	return strings.HasPrefix(name, "assets/") && !strings.HasPrefix(base, ".") && !strings.HasSuffix(base, BrotliSuffix) &&
 		CompressibleType(mime.TypeByExtension(path.Ext(base)))
 }
 

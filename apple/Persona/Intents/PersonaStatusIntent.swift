@@ -15,7 +15,7 @@ struct PersonaStatusIntent: AppIntent {
 
     nonisolated func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
         do {
-            // Every group added up (docs/protocol/multi-hub.md「Siri」).
+            // Every group added up (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」).
             async let sessionsRequest = IntentSupport.sessions()
             async let interactionsRequest = IntentSupport.interactions()
             async let mutesRequest = IntentSupport.mutes()

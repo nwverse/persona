@@ -61,6 +61,11 @@ const (
 	// SecretRun: secret.run, commands the user approved on the password card run with the password they typed on
 	// their stdin (docs/assistant/assistant.md "Password card"). A node on Windows announces it and refuses the run.
 	SecretRun = "secret_run"
+	// SecretEnv: secret.stage and session.start's secret_ticket, values the user approved on the hand-off card put
+	// in one Agent start's environment (docs/extensions/secret-providers.md "The hand-off to one Agent run").
+	SecretEnv = "secret_env"
+	// Clipboard: clipboard.get / clipboard.set and node.info's clipboard (docs/operations/clipboard.md).
+	Clipboard = "clipboard"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -85,4 +90,10 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv}
+
+// ShareProjection is the bounded complete-source sharing projection, not light Items.
+const ShareProjection = "share_projection.v1"
+
+// CreationReceipt preserves opaque creation IDs on every ordinary new-start path.
+const CreationReceipt = "creation_receipt.v1"

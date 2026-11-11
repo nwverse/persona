@@ -172,7 +172,7 @@ struct TodoDetailView: View {
                         .onSubmit { commitTitle() }
 
                     HStack(spacing: Theme.Space.sm) {
-                        Chip(text: todo.statusLabel(status), look: .tone(status.todoTone))
+                        Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
                         Text("·")
                             .foregroundStyle(.secondary)
                         Text("\(activeAgents.count) agents")
@@ -188,7 +188,7 @@ struct TodoDetailView: View {
                     }
 
                     if todo.autoDone {
-                        // The hub closed it (docs/assistant/todos.md「自动完成」): say why, and how to undo it.
+                        // The hub closed it (docs/assistant/todos.md「Automatic completion」): say why, and how to undo it.
                         Text(todo.autoDoneReason.map { String(localized: "The agent stopped and the work looked finished, so it was marked done: \($0). If it isn't, tap “Reopen”.") }
                              ?? String(localized: "The agent stopped and the work looked finished, so it was marked done. If it isn't, tap “Reopen”."))
                             .font(Theme.Font.caption)
@@ -279,7 +279,8 @@ struct TodoDetailView: View {
 
             Section {
                 if activeAgents.isEmpty {
-                    Text("No agents are running. Tap “Hand to Agent” below to assign one.")
+                    Text(todo.isDone ? String(localized: "No agents on it now. Reopen it to hand it to an agent.")
+                                     : String(localized: "No agents are running. Tap “Hand to Agent” below to assign one."))
                         .font(Theme.Font.secondary)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, Theme.Space.xs)
@@ -464,18 +465,21 @@ struct TodoDetailView: View {
 
     private func bottomBar(_ todo: TodoItem) -> some View {
         HStack(spacing: Theme.Space.m) {
-            Button {
-                showHandoff = true
-            } label: {
-                HStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(Theme.Icon.handToAI)
-                    Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
+            // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
+            if !todo.isDone {
+                Button {
+                    showHandoff = true
+                } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        ThemedIcon(Theme.Icon.handToAI)
+                        Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .font(Theme.Font.heading)
+                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
                 }
-                .font(Theme.Font.heading)
-                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                .themedButton(prominent: true)
+                .controlSize(.large)
             }
-            .themedButton(prominent: true)
-            .controlSize(.large)
 
             Button {
                 store.toggleDone(todo)

@@ -7,7 +7,7 @@ import persona.core.contracts.api.ExtensionOperation
 import java.time.Instant
 import java.util.Locale
 
-// An extension's install, upgrade or removal in steps (docs/protocol/protocol.md "Extension install, upgrade and removal progress", #3277): the words and
+// An extension's install, upgrade or removal in steps (docs/protocol/protocol.md "Extension install, upgrade and uninstall progress", #3277): the words and
 // rules of its step list. The model is CatalogExtensionModel, the view ExtensionOperationView.kt.
 
 internal object OperationText {
@@ -47,7 +47,7 @@ internal object OperationText {
         // The tools step's bytes are the program downloading: they go on its own line (toolDetail).
         if (s.id == "tools") return ""
         val m = s.machines ?: return ""
-        return if (m.total > 0) res.getString(R.string.settings_ext_op_machines, m.done, m.total) else ""
+        return if (m.total > 0) res.getQuantityString(R.plurals.settings_ext_op_machines, m.total, m.done, m.total) else ""
     }
 
     /** A program of the tools step: the machine's own copy, or the bytes of the one downloading. */

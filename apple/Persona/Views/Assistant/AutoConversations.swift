@@ -1,6 +1,6 @@
 import Foundation
 
-/// What opened an assistant conversation the user did not start (#3264, docs/protocol/protocol.md「助手对话的来源」): the hub's
+/// What opened an assistant conversation the user did not start (#3264, docs/protocol/protocol.md「Origin of assistant chats」): the hub's
 /// `origin`, with its name and symbol for the sidebar's Auto Chats and the list of conversations. Origins this app does
 /// not know share Other.
 nonisolated struct AutoConversationSource: Hashable, Identifiable, Sendable {
@@ -26,7 +26,7 @@ nonisolated struct AutoConversationSource: Hashable, Identifiable, Sendable {
     /// The origins of the user's own conversations: made in the app or the web, or with /new in a channel.
     static let usersOwn: Set<String> = ["", "user", "channel"]
 
-    /// The hub's feature for `origin` (docs/protocol/protocol.md「助手对话的来源」).
+    /// The hub's feature for `origin` (docs/protocol/protocol.md「Origin of assistant chats」).
     static let feature = "conversation_origin"
 }
 

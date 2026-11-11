@@ -26,6 +26,7 @@ type codexRegistry struct {
 	byPane       map[string]string
 	threads      map[string]codexSource
 	remotes      map[string]*codexRemote
+	retries      map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
 	report       func(proto.CodexConfig)
 	kick         chan struct{}
 	scan         func() []codexProcess
@@ -40,15 +41,15 @@ func newCodexRegistry() *codexRegistry {
 	return &codexRegistry{threads: map[string]codexSource{}, remotes: map[string]*codexRemote{}, scan: scanCodexProcesses, checked: scanCodexProcessesChecked, kick: make(chan struct{}, 1)}
 }
 
+// canonicalCodexHome is home absolute, with its links resolved as far as it exists: a home that does not exist yet
+// (Codex not used yet when the node starts) canonicalizes the same as it will once it does, so LegacyHome, fixed on
+// the first configure, still equals that home in Homes later under a linked ancestor (macOS's /var, a linked /home).
 func canonicalCodexHome(home, base string) string {
 	p := proto.ExpandHome(home, base)
 	if !filepath.IsAbs(p) {
 		return ""
 	}
-	if real, err := filepath.EvalSymlinks(p); err == nil {
-		return filepath.Clean(real)
-	}
-	return filepath.Clean(p)
+	return realPath(filepath.Clean(p))
 }
 
 func codexSourceID(home, raw, legacy string) string {
@@ -405,11 +406,12 @@ func heldRecently(m quickMeta, path string, pass *codexListPass) bool {
 	return time.Since(at) < codexHeldIdle
 }
 
-// codexListPass holds what one codexSessions pass looks up once instead of once per thread. The list is rebuilt every
-// second, and with a few hundred rollouts each thread resolved its directory's symlinks (a stat per part of the path,
-// a readlink per link), stat'ed its rollout up to three times, looked for the Codex App's socket and rebuilt the
-// assistant's project name with a regexp: about 19 stat calls per rollout per pass. It lives for one pass of one caller,
-// so nothing in it is shared or needs invalidating. A nil pass looks everything up each time.
+// codexListPass holds what one session-list rebuild (sessionList, codexSessions) looks up once instead of once per row.
+// The list is rebuilt every second, and with a few hundred rollouts each thread resolved its directory's symlinks (a
+// stat per part of the path, a readlink per link), stat'ed its rollout up to three times, looked for the Codex App's
+// socket and rebuilt the assistant's project name with a regexp: about 19 stat calls per rollout per pass. Every Claude
+// row's decoration (ultracodeRow) also resolved the data directory and rebuilt that name. It lives for one pass of one
+// caller, so nothing in it is shared or needs invalidating. A nil pass looks everything up each time.
 type codexListPass struct {
 	real    map[string]string    // directory → realPath
 	stats   map[string]codexStat // rollout path → os.Stat
@@ -485,6 +487,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	cfg := n.codexInventory()
 	for _, home := range cfg.Homes {
 		n.registerRollouts(home)
+		n.registerCodexAppThreads(home, pass) // the App's chats whose rollout is old or gone (codex_appdb.go)
 	}
 	n.codices.mu.Lock()
 	sources := make(map[string]codexSource, len(n.codices.threads))
@@ -528,6 +531,12 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Title = threadTitle(src.home, src.thread)
 				untitled(&s, m)
 			}
+		} else if t, ok := codexAppThreadOf(src); ok {
+			// A Codex App chat whose rollout is gone: its row in the App's database (codex_appdb.go).
+			if !n.sessionScopeAllows(t.Cwd) || identity.IsAssistantDir(t.Cwd) {
+				continue
+			}
+			s.Cwd, s.Title, s.UpdatedAt, s.Rev = t.Cwd, t.Title, t.updated(), t.UpdatedAtMs
 		}
 		s.AgentName = filepath.Base(src.home)
 		if holder := liveRollouts[id]; holder != "" && heldRecently(m, src.path, pass) {
@@ -566,8 +575,15 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.ReadOnlyReason = "此会话尚未生成本地历史，实时接入后可查看新输出"
 			}
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, m) // codex_effort.go
+			n.codexSpeedRow(&s)
 		} else if err != errCodexNoOwner {
 			s.ReadOnlyReason = err.Error()
+		} else if src.path == "" && codexDesktopChatIn(src, pass) {
+			// The App's chat whose rollout is gone: sent to through the App, as one with a rollout.
+			s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
+			s.Capabilities.Send = true
+			s.ReadOnlyReason = ""
+			n.placeCodexDesktop(&s, src, src.thread, false)
 		} else if o := readCodexOrigin(src.path); o.desktop {
 			switch {
 			case o.parent != "":

@@ -6,6 +6,7 @@ import type { PluggableList } from "unified";
 import { clickLink, linkHref, linkRoute, prefetchLink } from "../lib/links";
 import { fileDownloadURL } from "../lib/api";
 import { isMachineRef, resolveRef } from "../lib/files";
+import { useLinkManager } from "../lib/manager-choice";
 import { openPanel } from "../lib/panel";
 import remarkMath from "remark-math";
 import { copyText, toast } from "./atoms";
@@ -28,6 +29,7 @@ import { whenIdle } from "./stream/idle";
 import { createWordFadeState, rememberShown, remainingMs, shownBefore, type WordFadeState } from "./stream/wordFade";
 import { cachedMarkdown, markdownCache, markdownKey } from "./markdown-cache";
 import "./stream/stream.css";
+import { CodeBar, ReplyQuote, ReplyStreaming, copyInlineCode, rehypeLinkedCode } from "./ReplyBlocks";
 
 // A link ends at whitespace or any non-ASCII character (Chinese text, full-width punctuation), without trailing
 // .,;:!? or an unbalanced ) ] (docs/lessons/ios.md: where a link ends). GFM's autolinks only end at whitespace, so
@@ -332,12 +334,13 @@ export function markdownUrl(url: string): string {
   return linkRoute(url).kind === "session" ? url : defaultUrlTransform(url);
 }
 
-// A link opens where it belongs (lib/links.ts): Feishu documents in the side panel, conversations in place, pages in
-// a new tab. ⌘ / Ctrl / middle click is always the browser's new tab.
+// A link opens where it belongs (lib/links.ts): Feishu documents in the side panel (read as the chat's manager),
+// conversations in place, pages in a new tab. ⌘ / Ctrl / middle click is always the browser's new tab.
 // `line`: a path a message names at a line (src/a.ts:12, PathLinks.tsx) opens there.
 function Link({ href, children, mid, cwd, line, title: hover }: { href?: string; children?: React.ReactNode; mid?: string; cwd?: string; line?: number; title?: string }) {
   const title = textOf(children).trim();
   const path = mid && href && isMachineRef(href) ? resolveRef(cwd ?? "", href) : "";
+  const manager = useLinkManager();
   return (
     <a
       href={path && mid ? fileDownloadURL(mid, path, cwd, { inline: true }) : href ? linkHref(href) : undefined}
@@ -348,9 +351,9 @@ function Link({ href, children, mid, cwd, line, title: hover }: { href?: string;
         if (path && mid && !e.defaultPrevented && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
           e.preventDefault();
           openPanel({ kind: "file", mid, path, cwd, line });
-        } else clickLink(e, href, title && title !== href ? title : undefined);
+        } else clickLink(e, href, title && title !== href ? title : undefined, manager);
       }}
-      onPointerEnter={() => prefetchLink(href)}
+      onPointerEnter={() => prefetchLink(href, manager)}
     >
       {children}
     </a>
@@ -371,16 +374,24 @@ export const markdownComponents: Components = {
     if (lang === "mermaid") return <MermaidBlock code={code()} />;
     // the assistant's cards (#1850): drawn with the extensions' components; a block that does not read stays code
     if (CARD_LANGUAGES.includes(lang)) return <AssistantCard lang={lang} code={textOf(children)} fallback={<CodeBlock>{children}</CodeBlock>} />;
-    return <CodeBlock>{children}</CodeBlock>;
+    return <CodeBlock lang={lang}>{children}</CodeBlock>;
   },
-  code: ({ className, children, node: _node, ...rest }) =>
+  code: ({ className, children, node: _node, "data-linked": linked, ...rest }: React.ComponentProps<"code"> & { node?: unknown; "data-linked"?: unknown }) =>
     hasClass(className, "math-inline") ? (
       <span data-math-pending="inline">${children}$</span>
     ) : (
-      <code className={className} {...rest}>
-        {children}
-      </code>
+      // inline code (a block's text ends in a line break) a click copies (#2984); in a link it is the link's
+      linked || textOf(children).includes("\n") ? (
+        <code className={className} {...rest}>
+          {children}
+        </code>
+      ) : (
+        <code className={className} {...rest} role="button" tabIndex={0} title={t("ui-markdown.copy")} onClick={copyInlineCode} onKeyDown={copyInlineCode} data-copy-code>
+          {children}
+        </code>
+      )
     ),
+  blockquote: ({ children }) => <ReplyQuote>{children}</ReplyQuote>,
   table: ({ children, node: _node, ...rest }) => <TableBlock {...rest}>{children}</TableBlock>,
 };
 
@@ -407,27 +418,17 @@ function textOf(node: React.ReactNode): string {
   return "";
 }
 
-// The same element at every render, so a block that colors itself does not draw its icon again.
-const COPY_ICON = <Icon name="copy" size={13} />;
-
 // A fenced block colors itself once the grammars are in and it is near the viewport (stream/highlight.ts, #2465): its
 // <code> takes rehype-highlight's classes and tokens. Copying takes its text, which highlighting does not change.
-function CodeBlock({ children }: { children: React.ReactNode }) {
+function CodeBlock({ children, lang = "" }: { children: React.ReactNode; lang?: string }) {
   const pre = useRef<HTMLPreElement>(null);
   const code = Array.isArray(children) ? (children.length === 1 ? children[0] : null) : children;
   const lit = useBlockHighlight(pre, isValidElement(code) ? codeClass(code) : undefined, textOf(children));
+  // a title bar on top, as Telegram draws it (#2984): the language and Copy (CodeBar)
   return (
-    <div className="group/code relative">
+    <div className="code-block" data-code-block>
+      <CodeBar lang={lang} onCopy={() => copyText(textOf(children).replace(/\n$/, ""))} />
       <pre ref={pre}>{lit && isValidElement(code) ? cloneElement(code as ReactElement<{ className?: string }>, lit) : children}</pre>
-      <button
-        type="button"
-        aria-label={t("ui-markdown.copy_code")}
-        title={t("ui-markdown.copy")}
-        onClick={() => copyText(textOf(children).replace(/\n$/, ""))}
-        className="absolute top-1.5 right-1.5 flex size-6 touch-hit items-center justify-center rounded-[6px] bg-surface text-ink-3 opacity-0 shadow-btn transition-opacity duration-150 group-hover/code:opacity-100 hover:text-ink focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-      >
-        {COPY_ICON}
-      </button>
     </div>
   );
 }
@@ -436,6 +437,9 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
 // keeps its width, scroll and margin (styles.css passes the prose edge rule through). The button is out of the
 // table, so a copy does not pick it up as a cell, and it stays put while a wide table scrolls. It is the control's
 // own 24px, not the 44px touch pad: it sits on a cell, and that pad would take the tap meant for a corner link.
+// The first placement is the ResizeObserver's first report (after layout, before paint), not a read in the effect: that
+// read laid out every table's exchange when a long chat opened, the ones skipped off screen too (#2905). A table in a
+// skipped exchange is placed when the exchange is drawn; the button only shows on hover, so it is there before it is seen.
 function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"table">) {
   const tableRef = useRef<HTMLTableElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -451,8 +455,10 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
       button.style.top = `calc(${table.offsetTop}px + 0.375rem)`;
       button.style.right = `calc(${gap}px + 0.375rem)`;
     };
-    place();
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") {
+      place();
+      return;
+    }
     const obs = new ResizeObserver(place);
     obs.observe(table);
     if (button.parentElement) obs.observe(button.parentElement);
@@ -543,7 +549,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const wantsMath = useMemo(() => hasMath(md), [md]);
   const katex = useMath(wantsMath);
   const rehypePlugins = useMemo<PluggableList>(
-    () => [...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : [])],
+    () => [...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeLinkedCode],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, highlight, katex],
   );
@@ -558,6 +564,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   );
   return (
     <HighlightWanted.Provider value={fenced && inBlock}>
+      <ReplyStreaming.Provider value={Boolean(streaming)}>
       <div className={`prose-j ${small ? "prose-sm" : ""} ${compact ? "prose-compact" : ""}`}>
         {chunks ? (
           chunks.map((c) => (
@@ -571,6 +578,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
           </ReactMarkdown>
         )}
       </div>
+      </ReplyStreaming.Provider>
     </HighlightWanted.Provider>
   );
 });

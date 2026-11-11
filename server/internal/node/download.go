@@ -7,7 +7,12 @@ import (
 	"path/filepath"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+// errFileChanged: the file is not at the revision a download (or a transfer) pinned. The message is what older hubs
+// show; the code lets a transfer say so in its own words (docs/protocol/file-transfer.md).
+var errFileChanged = &rpc.Error{Code: proto.CodeFileChanged, Message: "file changed during download; reopen it to try again"}
 
 func (n *Node) readFileChunk(p proto.FileChunkRequest) (*proto.FileChunk, error) {
 	if p.Offset < 0 || p.Length < 0 || p.Length > proto.FileDownloadChunkBytes {
@@ -20,7 +25,7 @@ func (n *Node) readFileChunk(p proto.FileChunkRequest) (*proto.FileChunk, error)
 	defer f.Close()
 	revision := fileRevision(st)
 	if p.Revision != "" && p.Revision != revision {
-		return nil, fmt.Errorf("file changed during download; reopen it to try again")
+		return nil, errFileChanged
 	}
 	if p.Offset > st.Size() {
 		return nil, fmt.Errorf("offset is outside the file")
@@ -44,7 +49,7 @@ func (n *Node) readFileChunk(p proto.FileChunkRequest) (*proto.FileChunk, error)
 		return nil, err
 	}
 	if after.Size() != st.Size() || !after.ModTime().Equal(st.ModTime()) {
-		return nil, fmt.Errorf("file changed during download; reopen it to try again")
+		return nil, errFileChanged
 	}
 	return out, nil
 }

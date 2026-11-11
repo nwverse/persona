@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -134,7 +136,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}()
 
 	switch req.Kind {
-	case "hook", "ask", "notify": // after what standby took while the manager was away (spool.go)
+	case "hook", "ask", "notify": // after what standby took while the manager was away (spool_replay.go)
 		if n.replayed != nil {
 			// Not for ever: a report-only hook gives up after 3 s (nodeclient.ReportHook), and a replay that takes long
 			// (a manager slow to answer) must not hold the others past what they wait for. Out of order beats lost.
@@ -150,7 +152,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 				return
 			}
 			if req.Kind == "hook" {
-				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool.go)
+				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool_replay.go)
 			}
 		}
 	}
@@ -190,12 +192,17 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleNotify(ctx, req)
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
+	case "secret.env": // personad launch --ticket (secretenv.go)
+		resp = n.secretEnvFor(req)
 	case "mcp.tools":
 		var res struct {
 			Tools []proto.Tool `json:"tools"`
 		}
 		// The assistant's only when the node says so too (clicall.go mcpSession).
 		session, assistant := n.mcpSession(c, req)
+		if session == "" && !assistant {
+			session = n.paneCaller(req.Pane) // an agent's: the hub tells a task leader's tools from any other's by it
+		}
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
 		if err := n.peer.Call(ctx, "mcp.tools", map[string]any{"assistant": assistant, "session_id": session, "guest": guest}, &res); err != nil {
@@ -279,6 +286,40 @@ func interactionID(in hookInput, attempt string) string {
 	return "ix_" + hex.EncodeToString(sum[:])[:16]
 }
 
+// questionInteraction reads the AskUserQuestion call shared by PreToolUse and PermissionRequest.
+func questionInteraction(in hookInput, ix *proto.Interaction) bool {
+	var q struct {
+		Questions []struct {
+			Question    string                 `json:"question"`
+			Header      string                 `json:"header"`
+			MultiSelect bool                   `json:"multiSelect"`
+			Options     []proto.QuestionOption `json:"options"`
+		} `json:"questions"`
+	}
+	if json.Unmarshal(in.ToolInput, &q) != nil || len(q.Questions) == 0 {
+		return false
+	}
+	ix.Kind, ix.CanCancel = proto.IxQuestion, true
+	for _, qq := range q.Questions {
+		ix.Questions = append(ix.Questions, proto.Question{Question: qq.Question, Header: qq.Header, MultiSelect: qq.MultiSelect, Options: qq.Options})
+	}
+	return true
+}
+
+// questionInputWithoutAnswers matches PostToolUse's answered input to PermissionRequest's original input.
+func questionInputWithoutAnswers(raw json.RawMessage) json.RawMessage {
+	var input map[string]any
+	if json.Unmarshal(raw, &input) != nil {
+		return raw
+	}
+	delete(input, "answers")
+	normalized, err := json.Marshal(input)
+	if err != nil {
+		return raw
+	}
+	return normalized
+}
+
 // handleHook returns the JSON Claude Code should read from the hook's stdout, or nil to let the TUI decide;
 // errNodeGone when this node lost the hub before the phone answered.
 func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
@@ -293,6 +334,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	n.ultracodeHook(req, in)
 	if repair := n.assistantViewStop(ctx, req, in); repair != nil {
 		return repair, nil
+	}
+	if hold := n.closeoutStop(ctx, req, in); hold != nil {
+		return hold, nil
 	}
 	stopSig := n.recordHookTurn(req, in, time.Now())
 	if !req.ReportOnly && !req.Resume {
@@ -331,13 +375,21 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	if in.MCPServer != nil {
 		ix.MCPServerName, ix.MCPConfigSource = in.MCPServer.Name, in.MCPServer.Source
 	}
+	// A card of a headless conversation is placed in its directory, where it started, not where the model's last
+	// `cd` left the hook: a health conversation's card in health/reports or /tmp is still the health space's (#2368).
+	n.mu.Lock()
+	proc := n.procs[in.SessionID]
+	n.mu.Unlock()
+	if proc != nil {
+		ix.Cwd = identity.CardCwd(proc.cwd, in.Cwd)
+	}
 	if p := n.transcriptPath(in.SessionID); p != "" {
 		if st, err := os.Stat(p); err == nil {
 			ix.SessionTitle = n.meta(p, st).title
 		}
 	}
 	if ix.SessionTitle == "" {
-		ix.SessionTitle = filepath.Base(in.Cwd)
+		ix.SessionTitle = filepath.Base(ix.Cwd)
 	}
 	if asksPhone(in) {
 		var stopWatch func()
@@ -346,6 +398,13 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	}
 
 	switch {
+	case in.HookEventName == "SessionStart":
+		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
+		if brief := n.closeoutStart(ctx, req, in); brief != nil {
+			return brief, nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "Elicitation":
 		if !elicitationInteraction(in, &ix) {
 			return nil, nil
@@ -362,39 +421,24 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		return n.larkGate(ctx, in, ix)
 
+	case in.HookEventName == "PostToolUse" && in.ToolName == "AskUserQuestion":
+		// A terminal answer includes answers; PermissionRequest's original input did not. Complete only the same
+		// tool_use_id, whether its waiter is already present or its completion arrives first (#2382).
+		in.ToolInput = questionInputWithoutAnswers(in.ToolInput)
+		n.questions.complete(in, time.Now())
+		return nil, nil
+
 	case in.HookEventName == "PreToolUse" && in.ToolName == "AskUserQuestion":
-		var q struct {
-			Questions []struct {
-				Question    string                 `json:"question"`
-				Header      string                 `json:"header"`
-				MultiSelect bool                   `json:"multiSelect"`
-				Options     []proto.QuestionOption `json:"options"`
-			} `json:"questions"`
-		}
-		if json.Unmarshal(in.ToolInput, &q) != nil || len(q.Questions) == 0 {
+		if !questionInteraction(in, &ix) {
 			return nil, nil
-		}
-		ix.Kind, ix.CanCancel = proto.IxQuestion, true
-		for _, qq := range q.Questions {
-			ix.Questions = append(ix.Questions, proto.Question{Question: qq.Question, Header: qq.Header, MultiSelect: qq.MultiSelect, Options: qq.Options})
 		}
 		// Answers are keyed by question text: refuse alike-worded questions instead of silently dropping one answer.
 		if proto.HasDuplicateQuestionText(ix.Questions) {
 			return preToolDecision("deny", duplicateQuestionReason), nil
 		}
-		res, ok, err := n.ask(ctx, ix)
-		if err == nil && ok && res.Cancel {
-			return preToolDecision("deny", prompts.RenderQuestionCancelled()), nil
-		}
-		if err != nil || !ok || len(res.Answers) == 0 {
-			return nil, err
-		}
-		var input map[string]any
-		_ = json.Unmarshal(in.ToolInput, &input)
-		input["answers"] = res.Answers
-		return map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": input,
-		}}, nil
+		// Let Claude draw its own dialog. PermissionRequest below carries the phone card and its answer (#2382).
+		n.questions.before(in, time.Now())
+		return nil, nil
 
 	case in.HookEventName == "PermissionRequest" && in.ToolName == "ExitPlanMode":
 		var p struct {
@@ -402,10 +446,20 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		_ = json.Unmarshal(in.ToolInput, &p)
 		ix.Kind, ix.Plan = proto.IxPlan, p.Plan
-		res, ok, err := n.ask(ctx, ix)
+		// The terminal's own dialog may decide the plan while the card still waits (the card is not always
+		// withdrawn then): the footer is watched from now, until the card is answered.
+		decided := &terminalDecided{}
+		askCtx, endAsk := context.WithCancel(context.WithValue(ctx, terminalDecidedKey{}, decided))
+		defer endAsk()
+		stopWatch := n.planAfterTerminal(in.SessionID, func() {
+			decided.Store(true) // the card is withdrawn as decided on the computer, not as a hook that went away
+			endAsk()
+		})
+		res, ok, err := n.ask(askCtx, ix)
 		if err != nil || !ok || res.Approve == nil {
-			return nil, err
+			return nil, err // the watch goes on: the terminal decides, and with it the mode that follows
 		}
+		stopWatch()
 		if !*res.Approve {
 			msg := "用户在手机上打回了这个计划。"
 			if strings.TrimSpace(res.Feedback) != "" {
@@ -415,7 +469,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		mode := res.Mode
 		if mode == "" {
-			mode = "bypassPermissions"
+			mode = cmp.Or(n.planThen(in.SessionID), "bypassPermissions")
 		}
 		var input map[string]any
 		_ = json.Unmarshal(in.ToolInput, &input)
@@ -426,12 +480,45 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}), nil
 
 	case in.HookEventName == "PermissionRequest" && in.ToolName == "AskUserQuestion":
-		// The question's own PreToolUse (above) gave no answer: the phone handed it back to the terminal, or the wait
-		// ended. Claude Code then asks permission for the same call, but its dialog is already on the terminal and takes
-		// the answer there while this hook waits, the turn goes on, and the hook is never ended (2.1.319, #5945). Its
-		// input has no tool_use_id either, so an "Allow / Deny AskUserQuestion" card could not be withdrawn and stayed
-		// until it timed out. The terminal has the question: nothing is shown.
-		return nil, nil
+		if !questionInteraction(in, &ix) {
+			return nil, nil
+		}
+		if proto.HasDuplicateQuestionText(ix.Questions) {
+			return permissionDecision(map[string]any{"behavior": "deny", "message": duplicateQuestionReason}), nil
+		}
+		if req.Resume && n.restoreQuestionFromTranscript(in, req.Attempt, time.Now()) {
+			// Several identical calls fit no exact PostToolUse. Hand this attempt back to the terminal and withdraw
+			// its restored card instead of waiting for a completion that may never come (#2382).
+			_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+			return nil, nil
+		}
+		ctx, otherAnswered, stopOther := n.decided.watch(ctx, permissionKey(in))
+		defer stopOther()
+		ctx, questionAnswered, stopQuestion, toolUseID := n.questions.watch(ctx, in, req.Attempt, req.Resume)
+		defer stopQuestion()
+		answered := func() bool { return otherAnswered() || questionAnswered() }
+		ix.ToolUseID = toolUseID
+		if n.decided.grace(ctx, answered) {
+			if questionAnswered() {
+				// No new ask means askOnce cannot withdraw the resumable card retained by the hub (#2382).
+				_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+			}
+			return nil, nil
+		}
+		res, ok, err := n.ask(ctx, ix)
+		if answered() {
+			return nil, nil
+		}
+		if err == nil && ok && res.Cancel {
+			return permissionDecision(map[string]any{"behavior": "deny", "message": prompts.RenderQuestionCancelled()}), nil
+		}
+		if err != nil || !ok || len(res.Answers) == 0 {
+			return nil, err
+		}
+		var input map[string]any
+		_ = json.Unmarshal(in.ToolInput, &input)
+		input["answers"] = res.Answers
+		return permissionDecision(map[string]any{"behavior": "allow", "updatedInput": input}), nil
 
 	case in.HookEventName == "PermissionRequest":
 		ix.Kind, ix.Summary = proto.IxPermission, toolSummary(in.ToolName, in.ToolInput)
@@ -482,6 +569,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 				"behavior": "allow", "destination": "session",
 			}}
 		}
+		if !assistant { // Claude may not take it: its safety checks keep their dialog (allowwatch.go, #3752)
+			n.watchAllow(in.SessionID, n.allowPane(req, in.SessionID))
+		}
 		return permissionDecision(d), nil
 	}
 	return nil, nil
@@ -521,9 +611,16 @@ func (n *Node) notifyHookEvent(in hookInput, stopSig string, reportOnly bool) {
 	_ = n.peer.Notify("hook.event", hookEventParams(in, stopSig, reportOnly))
 }
 
-// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca pane only where the set enables Orca).
+// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca or Tern pane only where the set enables
+// that host: both name the pane in every terminal of theirs, driven or not).
 func paneKindOK(n *Node, pane string) bool {
-	return host.ParsePane(pane).Kind != host.Orca || n.hostEnabled(proto.EngineOrca)
+	switch host.ParsePane(pane).Kind {
+	case host.Orca:
+		return n.hostEnabled(proto.EngineOrca)
+	case host.Tern:
+		return n.hostEnabled(proto.EngineTern)
+	}
+	return true
 }
 
 // hookEventParams is hook.event's params for what a hook saw.
@@ -536,7 +633,23 @@ func hookEventParams(in hookInput, stopSig string, reportOnly bool) map[string]a
 	if reportOnly {
 		p["report_only"] = true
 	}
+	if in.HookEventName == "UserPromptSubmit" {
+		p["prompt_source"] = promptSource(in.Prompt) // never the prompt itself: the apps see the event too
+	}
 	return p
+}
+
+// promptSource says who a UserPromptSubmit's prompt is from, for the manager (a meeting's batch is not the user's own
+// message: docs/assistant/meeting-minutes.md "Feeding the attending session"): the kind of message source it carries
+// (meeting, conversation, task…), "notification" for a background task reporting back, else "user".
+func promptSource(prompt string) string {
+	if src := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: prompt}); src != nil && src.Kind != "" {
+		return src.Kind
+	}
+	if strings.Contains(prompt, "<task-notification>") {
+		return "notification"
+	}
+	return "user"
 }
 
 // reportedEvent: what a global report-only hook (globalhooks.go) may tell the hub; the tools are the cards.
@@ -582,9 +695,9 @@ func asksPhone(in hookInput) bool {
 	case "Elicitation":
 		return true
 	case "PermissionRequest":
-		return in.ToolName != "AskUserQuestion" // the terminal has the question once its PreToolUse let go (#5945)
+		return true
 	case "PreToolUse":
-		return in.ToolName == "AskUserQuestion" || in.ToolName == "Bash"
+		return in.ToolName == "Bash"
 	}
 	return false
 }
@@ -653,6 +766,10 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 		}
 		if errors.Is(err, rpc.ErrClosed) {
 			return res, false, errNodeGone
+		}
+		if d, _ := ctx.Value(terminalDecidedKey{}).(*terminalDecided); d != nil && d.Load() {
+			_ = n.peer.Notify("interaction.dismiss", map[string]any{"id": ix.ID}) // answered in the terminal (planthen.go)
+			return res, false, nil
 		}
 		_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
 		return res, false, nil
@@ -729,8 +846,9 @@ func toolSummary(name string, input json.RawMessage) string {
 
 // callerTools are the agents' own tools that act for the agent calling them (assistant/agent_control.go
 // agentToolNames): reporting to its supervisor, reading and noting the decisions of the todo it works on, binding
-// that todo to a chat thread.
-var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread"}
+// that todo to a chat thread, handing a subtask to another computer and reading it back (assistant/dispatch.go), and a
+// task leader's task_plan and task_review (assistant/task_leader.go).
+var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read", "task_plan", "task_review"}
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

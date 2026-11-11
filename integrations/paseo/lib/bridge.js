@@ -10,10 +10,11 @@ import { realpathSync, statSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { createRuntime, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
-  EFFORTS, MODES, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, claudeId, defaultProvider, interactionOf,
-  launchersOf, linkedWorktree, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf, spaceIdOf, strayRecord,
-  timelineItems, transcriptOf,
+  EFFORTS, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, claudeId, defaultProvider, interactionOf,
+  launchersOf, linkedWorktree, paseoMode, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf, spaceIdOf,
+  strayRecord, timelineItems, transcriptOf,
 } from './map.js'
+import { personaMcpServers } from './mcp.js'
 import { PaseoClient } from './paseo.js'
 
 export const BRIDGE_VERSION = '0.1.0'
@@ -23,13 +24,18 @@ const LIST_MAX = 300 // sessions listed at most (those running or waiting always
 const REFRESH_DELAY = 120 // ms: a watched agent's timeline is read again this long after it moved
 const LAST_TEXT_DELAY = 3000 // ms: an agent's last words are read again this long after it changed
 const PAGES_MAX = 10 // directory pages read at connect (200 agents each)
+// Whole timelines kept at most (the most recently read; a watched agent's stays whatever the count): each is an
+// agent's whole conversation, and the directory holds up to PAGES_MAX x 200 agents.
+export const TIMELINES_MAX = 16
 const EVENTS = ['agent_permission_request', 'agent_permission_resolved', 'providers_snapshot_update', 'status.daemon_config_changed']
 const TIMEOUT = Symbol('timeout')
+// What Paseo 0.13 says when an agent config has MCP servers and its provider takes none (agent-manager requireExternalMcpSupport).
+const MCP_UNSUPPORTED = /does not support MCP servers/i
 
 /**
  * @param {{ paseo?: object, log?: (msg: string) => void, connect?: (path: string) => import('node:net').Socket }} [deps]
  *   paseo: a PaseoClient (default: one for options.home).
- * @param {{ home?: string, socketPath?: string, retryMs?: number, pushDelayMs?: number, refreshMs?: number,
+ * @param {{ home?: string, socketPath?: string, mcpConfig?: string, retryMs?: number, pushDelayMs?: number, refreshMs?: number,
  *   awayGrace?: number, callWait?: number }} [options]
  */
 export function createPaseoBridge(deps = {}, options = {}) {
@@ -51,7 +57,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   const echoes = new Map() // Paseo message id → the client_msg_id the phone sent it with
   const lastTexts = new Map() // agent id → its last words (agents whose content is not a transcript)
   const lastTextTimers = new Map()
-  const timelines = new Map() // agent id → { key, at, tl, history } (the last whole read)
+  const timelines = new Map() // agent id → { key, at, tl, history } (the last whole read), the least recently read first
   const canonical = new Map() // path → the path with symbolic links resolved (canon)
   let runtimeOn = false
   let awayTimer
@@ -65,6 +71,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     version: '',
     launchers: [],
     resume: true,
+    // start() runs permission_mode plan in Paseo's plan mode or refuses it (holdsPlan).
+    readonly: true,
     socketPath: options.socketPath,
     connect: deps.connect,
     log,
@@ -304,7 +312,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
       if (asks.get(request.id) !== entry) return
       asks.delete(request.id)
       const agent = agents.get(agentId)?.agent
-      const out = responseOf(request, res, agentRoot(agent, roots))
+      const root = agentRoot(agent, roots)
+      const out = responseOf(request, res, root)
       if (!out) {
         // Handed back (or no hub to ask: asked again when it is back): Paseo's app answers it meanwhile.
         if (rt.hubConnected) handedBack.add(request.id)
@@ -313,9 +322,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
       try {
         await paseo.request('agent_permission_response', { agentId, response: out.response },
           { requestId: request.id, expect: 'agent_permission_resolved', timeoutMs: 30_000 })
-        if (out.setMode) {
-          const r = await paseo.request('set_agent_mode_request', { agentId, modeId: out.setMode })
-          if (r?.accepted === false) log(`paseo: mode ${out.setMode} for ${agentId}: ${r.error ?? 'refused'}`)
+        const modeId = paseoMode(root, out.setMode)
+        if (modeId) {
+          const r = await paseo.request('set_agent_mode_request', { agentId, modeId })
+          if (r?.accepted === false) log(`paseo: mode ${modeId} for ${agentId}: ${r.error ?? 'refused'}`)
         }
       } catch (err) {
         log(`paseo: answer ${request.id} of ${agentId}: ${err.message}`)
@@ -387,13 +397,31 @@ export function createPaseoBridge(deps = {}, options = {}) {
   async function timeline(agent) {
     const key = `${agent.updatedAt}|${agent.status}`
     const c = timelines.get(agent.id)
-    if (c && c.key === key && (agent.status !== 'running' || Date.now() - c.at < 500)) return c
+    if (c && c.key === key && (agent.status !== 'running' || Date.now() - c.at < 500)) {
+      keepTimeline(agent.id, c)
+      return c
+    }
     const res = await fetchTimeline(agent.id)
     const tl = timelineItems(res.entries, { maxSeq: res.window?.maxSeq, running: isRunning(res.agent ?? agent), echoes })
     const out = { key, at: Date.now(), tl, history: history(agent.id, res.epoch), epoch: res.epoch }
-    timelines.set(agent.id, out)
+    keepTimeline(agent.id, out)
     if (tl.lastText) lastTexts.set(agent.id, tl.lastText)
     return out
+  }
+
+  /**
+   * An agent's timeline as the most recently read; beyond TIMELINES_MAX, the least recently read go, except those of
+   * the agents the phone watches (read again and again while it does).
+   */
+  function keepTimeline(agentId, t) {
+    timelines.delete(agentId)
+    timelines.set(agentId, t)
+    if (timelines.size <= TIMELINES_MAX) return
+    const watched = new Set([...watches.values()].map((w) => w.agentId))
+    for (const id of timelines.keys()) {
+      if (timelines.size <= TIMELINES_MAX) break
+      if (!watched.has(id)) timelines.delete(id)
+    }
   }
 
   const isRunning = (a) => a?.status === 'running' || a?.status === 'initializing' || Boolean(a?.activeTurn)
@@ -483,7 +511,11 @@ export function createPaseoBridge(deps = {}, options = {}) {
   /** Closing a session is archiving its agent: it stops, and leaves Paseo's list (and this one). */
   async function close(params) {
     const agent = agentFor(params.session_id)
-    await paseo.request('archive_agent_request', { agentId: agent.id })
+    if (params.force && !(agent.pendingPermissions?.length > 0)) throw new RpcError('The Agent is no longer waiting for confirmation', 'agent_busy')
+    // The CLI's archive --force sends this same request; the daemon closes the provider runtime.
+    const res = await paseo.request('archive_agent_request', { agentId: agent.id })
+    if (res?.error) throw new RpcError(`Paseo: ${res.error}`, 'paseo')
+    if (!res?.archivedAt) throw new RpcError('Paseo did not confirm the archive', 'paseo')
     remove(agent.id)
   }
 
@@ -498,13 +530,12 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const agent = agentFor(params.session_id)
     const mode = params.permission_mode
     if (mode) {
-      if (agentRoot(agent, roots) !== 'claude' || !MODES.includes(mode)) {
-        throw new RpcError('这个 Agent 没有 Claude Code 的权限模式', 'unsupported')
-      }
-      if ((agent.availableModes ?? []).length && !agent.availableModes.some((m) => m?.id === mode)) {
+      const modeId = paseoMode(agentRoot(agent, roots), mode)
+      if (!modeId) throw new RpcError('这个 Agent 没有这个权限模式', 'unsupported')
+      if ((agent.availableModes ?? []).length && !agent.availableModes.some((m) => m?.id === modeId)) {
         throw new RpcError(`Paseo 里这个 Agent 没有「${mode}」模式`, 'bad_request')
       }
-      const res = await paseo.request('set_agent_mode_request', { agentId: agent.id, modeId: mode })
+      const res = await paseo.request('set_agent_mode_request', { agentId: agent.id, modeId })
       if (res?.accepted === false) throw new RpcError(`Paseo 没有换模式：${res.error ?? '原因不明'}`, 'rejected')
     }
     const effort = params.effort
@@ -602,31 +633,60 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!paseo.connected) throw new RpcError('Paseo 现在没有连上（没在运行，或正在重启），这次没有新建。', 'unavailable')
     const cwd = typeof params.cwd === 'string' ? params.cwd : ''
     if (!cwd || !isDir(cwd)) throw new RpcError(`没有这个目录：${cwd || '（空）'}`, 'bad_request')
+    // Read-only (plan): only a provider holding plan mode starts it, and nothing falls back to a writable one (#3238).
+    const readonly = params.permission_mode === 'plan'
     let provider = launchers.some((l) => l.name === params.launcher) ? params.launcher : undefined
+    if (readonly && provider && !holdsPlan(provider)) {
+      throw new RpcError(`Paseo 的 ${provider} 没有只读（plan）模式，这次没有新建。选一个 Claude Code 的启动器再试。`, 'readonly_unsupported')
+    }
     if (!provider) {
-      provider = defaultProvider(entries, roots)
+      provider = defaultProvider(readonly ? entries.filter((e) => holdsPlan(e?.provider)) : entries, roots)
+      if (!provider && readonly) {
+        throw new RpcError('Paseo 里没有能以只读（plan）模式启动的 provider（要 Claude Code 的），这次没有新建。', 'readonly_unsupported')
+      }
       if (!provider) throw new RpcError('Paseo 里没有能用的 provider：在 Paseo 的设置里打开一个再试', 'unavailable')
       if (params.launcher) log(`paseo: Paseo has no provider ${params.launcher}; starting with ${provider}`)
     }
     const root = roots[provider] ?? provider
     const config = { provider, cwd }
     if (typeof params.model === 'string' && params.model) config.model = params.model
-    if (root === 'claude' && MODES.includes(params.permission_mode)) config.modeId = params.permission_mode
+    const modeId = paseoMode(root, params.permission_mode)
+    if (modeId) config.modeId = modeId
     if (EFFORTS.includes(params.effort)) {
       const opts = thinkingOptions({ provider, model: config.model })
       if (!opts.length || opts.includes(params.effort)) config.thinkingOptionId = params.effort
     }
-    const agentId = randomUUID()
-    const sessionId = `${RUNTIME}-${agentId}`
-    const req = { agentId, config, labels: { [SESSION_LABEL]: sessionId } }
     const prompt = typeof params.prompt === 'string' ? params.prompt : ''
-    if (prompt.trim()) req.initialPrompt = prompt
     const workspaceId = workspaceFor(params.workspace_id, cwd)
-    if (workspaceId) req.workspaceId = workspaceId
-    const created = paseo.request('agent.create.request', req, { timeoutMs: 0 })
+    // The Persona session is fixed for this start: the row handed to the node while Paseo is still creating, the label,
+    // the tools' PERSONA_SESSION_ID and the listed session are all it, whichever Paseo agent ends up holding it.
+    let agentId = randomUUID()
+    const sessionId = `${RUNTIME}-${agentId}`
+    // One creation request, under a Paseo agent id of its own (the retry's is new; the Persona session stays).
+    const attempt = (withTools) => {
+      const mcpServers = withTools ? personaMcpServers(options.mcpConfig, sessionId, log) : undefined
+      const req = { agentId, config: mcpServers ? { ...config, mcpServers } : config, labels: { [SESSION_LABEL]: sessionId } }
+      if (prompt.trim()) req.initialPrompt = prompt
+      if (workspaceId) req.workspaceId = workspaceId
+      return paseo.request('agent.create.request', req, { timeoutMs: 0 }).then((res) => ({ res, withTools: Boolean(mcpServers) }))
+    }
+    // A provider that takes no MCP servers fails the creation outright (Paseo closes that session before it has an
+    // agent): it gets the agent as it did before the Persona tools, in one more request, and for that error only.
+    const created = attempt(true).then(({ res, withTools }) => {
+      if (!withTools || res?.agent || !MCP_UNSUPPORTED.test(res?.error ?? '')) return res
+      log(`paseo: provider ${provider} takes no MCP servers; creating the agent again without the Persona tools`)
+      agentId = randomUUID()
+      return attempt(false).then((again) => again.res)
+    })
     created.then((res) => res?.agent && upsert(res.agent), () => {})
     const res = await within(created, callWait, `start ${agentId}`)
     if (res !== TIMEOUT && !res?.agent) throw new RpcError(`Paseo 没能新建：${res?.error ?? '原因不明'}`, 'start_failed')
+    if (readonly && res !== TIMEOUT && res.agent.currentModeId && res.agent.currentModeId !== modeId) {
+      // Paseo started it in another mode after all: it does not run on as a writable agent.
+      await paseo.request('archive_agent_request', { agentId }).catch(() => {})
+      remove(agentId)
+      throw new RpcError(`Paseo 没有以只读（plan）模式启动（实际：${res.agent.currentModeId}），已经归档。`, 'readonly_unsupported')
+    }
     if (res !== TIMEOUT) {
       upsert(res.agent)
       const row = rowOf(res.agent)
@@ -643,6 +703,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
   }
 
+  /** Whether provider starts in plan mode: one running Claude Code whose Paseo modes (when listed) include plan. */
+  function holdsPlan(provider) {
+    if (!provider || (roots[provider] ?? provider) !== 'claude') return false
+    const e = entries.find((x) => x?.provider === provider)
+    return !Array.isArray(e?.modes) || !e.modes.length || e.modes.some((m) => m?.id === 'plan')
+  }
+
   /**
    * Take a Claude session over (the machine's engine continuing a session not running anywhere): the Paseo agent
    * that has it already, else Paseo imports it — its conversation goes on in Paseo under the same id. Refused when
@@ -654,6 +721,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
     let mine
     for (const { agent } of agents.values()) {
       if (claudeId(agent) === id && agentRoot(agent, roots) === 'claude' && (!mine || mine.status === 'closed')) mine = agent
+    }
+    if (params.permission_mode === 'plan' && mine?.currentModeId !== 'plan') {
+      // A takeover keeps the session's own mode (an import sets none): it cannot promise read-only (caps.readonly).
+      throw new RpcError('Paseo 接着已有的会话时不能保证只读（plan）模式，这次没有发送。', 'readonly_unsupported')
     }
     if (mine) {
       const row = rowOf(mine)
@@ -874,7 +945,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     runtime: rt,
     paseo,
     /** Tests: the bridge's view. */
-    state: { agents, bySession, watches, asks, handedBack, echoes, get launchers() { return launchers } },
+    state: { agents, bySession, watches, asks, handedBack, echoes, timelines, get launchers() { return launchers } },
   }
 }
 

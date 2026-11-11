@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The window's sidebar: the iPhone's four tabs plus 「知识库」, 「机器」 and 「待办」 (docs/apple/mac.md「主窗口」). The sidebar and the
+/// The window's sidebar: the iPhone's four tabs plus 「知识库」, 「机器」 and 「待办」 (docs/apple/mac.md「Main window」). The sidebar and the
 /// ⌘ order are two orders: ⌘1…⌘6 keep their sections, 「待办」 is ⌘7.
 @MainActor
 struct MacSectionTests {

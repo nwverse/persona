@@ -111,6 +111,8 @@ func TestLarkAgentModelValidationAndProviderUse(t *testing.T) {
 		`{"revision":0,"runtime":"agentsdk"}`,
 		`{"revision":0,"provider":"launcher.missing"}`,
 		`{"revision":0,"effort":"unsupported"}`,
+		`{"revision":0,"effort":"off"}`,
+		`{"revision":0,"effort":"none"}`,
 	} {
 		if w := modelRequest(s, http.MethodPut, purposeLarkAgent, body); w.Code != http.StatusBadRequest {
 			t.Fatalf("invalid %s: %d %s", body, w.Code, w.Body.String())
@@ -130,7 +132,7 @@ func TestLarkAgentModelValidationAndProviderUse(t *testing.T) {
 	if w := request(s, http.MethodDelete, "/api/v1/launchers/lark-custom", ""); w.Code == http.StatusOK {
 		t.Fatalf("provider in use deleted: %s", w.Body.String())
 	}
-	for _, id := range []string{"inbox.agent", "translate", "schedule"} {
+	for _, id := range []string{"inbox.judge", "translate", "schedule"} {
 		p := purposeOf(t, s, id)
 		w := modelRequest(s, http.MethodPut, id, fmt.Sprintf(`{"revision":%d,"model":"other"}`, p.Revision))
 		if w.Code != http.StatusBadRequest {

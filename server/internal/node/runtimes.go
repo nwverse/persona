@@ -73,6 +73,11 @@ type runtimeHello struct {
 		Assistant bool `json:"assistant"`
 		// Modes: the phone's permission mode and effort for its sessions go to it (session.modes).
 		Modes bool `json:"modes"`
+		// Model permits session.modes model changes. Models provides live launchers.models discovery.
+		Model  bool `json:"model"`
+		Models bool `json:"models"`
+		// Check performs the launcher availability probe in the runtime's authenticated context.
+		Check bool `json:"check"`
 		// Resume: session.start with resume takes a Claude session it does not have over, under that id (the machine's
 		// engine continuing a session not running anywhere, runtimecontrol.go).
 		Resume bool `json:"resume"`
@@ -83,6 +88,9 @@ type runtimeHello struct {
 		// Archive: session.archive / session.unarchive go to it, for its own reversible archive (archive.go): a
 		// session the user archives in Persona is archived there too, and restored with it.
 		Archive bool `json:"archive"`
+		// Readonly: a session.start with permission_mode "plan" either starts in a read-only mode before its first
+		// prompt runs or is refused with readonly_unsupported; it never falls back to a writable provider (#3238).
+		Readonly bool `json:"readonly"`
 	} `json:"caps"`
 }
 
@@ -234,6 +242,13 @@ func (h *runtimeConn) row(id string) (proto.Session, bool) {
 		}
 	}
 	return proto.Session{}, false
+}
+
+// listLen is how many rows its last runtime.sessions kept.
+func (h *runtimeConn) listLen() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.sessions)
 }
 
 func (h *runtimeConn) sessionsCopy() []proto.Session {

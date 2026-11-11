@@ -2,4 +2,19 @@
 <!-- An assistant's cards in a conversation (#2022). -->
 <resources>
     <string name="chat_from_card">カードから</string>
+    <string name="chat_assistant_background_records">バックグラウンドの記録</string>
+    <plurals name="chat_assistant_checked">
+        <item quantity="other">%1$d か所を確認</item>
+    </plurals>
+    <plurals name="chat_assistant_dispatched">
+        <item quantity="other">%1$d 件を依頼</item>
+    </plurals>
+    <string name="chat_assistant_dispatched_one">依頼しました：%1$s</string>
+    <string name="chat_assistant_dispatch_open">開く</string>
+    <string name="chat_assistant_dispatch_open_line">· %1$s</string>
+    <!-- #4314: a background round of the main conversation folded into one line. -->
+    <string name="chat_background_round">%1$s · バックグラウンドのラウンド</string>
+    <string name="chat_background_round_live">%1$s · バックグラウンドで実行中</string>
+    <!-- Needs you grouped by supervising conversation: a conversation without a title. -->
+    <string name="chat_tray_other_conversation">別の会話</string>
 </resources>

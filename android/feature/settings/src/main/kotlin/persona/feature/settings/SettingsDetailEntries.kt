@@ -3,6 +3,8 @@ package persona.feature.settings
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import persona.core.designsystem.currentAssistant
+import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import androidx.navigation3.runtime.EntryProviderScope
@@ -37,15 +39,21 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
     }
     entry<ExtensionRoute> { route ->
         val manager = remember(route) { ExtensionOwners.of(route.manager) }
+        val subscriptionsTitle = stringResource(R.string.settings_subscriptions_title)
         ExtensionPage(services.extensions.takeUnless { demo }, route.extensionId, onBack = navigator::back, startSignIn = route.signIn,
             manager = manager,
             onPage = { page -> navigator.navigate(ExtensionUiRoute(page.extension.ifBlank { route.extensionId }, page.id, page.title.ifBlank { page.id }, manager = manager)) },
             onChannel = { navigator.navigate(ChannelRoute(it)) }, machines = services.sessions.machines,
+            launchers = services.providers.takeUnless { demo }?.let { p -> { p.launchers() } },
             onUpgrade = { market, id -> navigator.navigate(ExtensionCatalogRoute(market, id, manager = manager)) },
-            connectors = services.connectors.takeUnless { demo }, onConnector = { navigator.navigate(ConnectorRoute(it, manager)) })
+            connectors = services.connectors.takeUnless { demo }, onConnector = { navigator.navigate(ConnectorRoute(it, manager)) },
+            onSubscriptions = { navigator.navigate(subscriptionsRoute(subscriptionsTitle, extension = route.extensionId)) })
     }
     entry<ConnectorRoute> { route ->
-        HubConnectorPage(services.connectors.takeUnless { demo }, route.connectorId, onBack = navigator::back, manager = route.manager)
+        val subscriptionsTitle = stringResource(R.string.settings_subscriptions_title)
+        HubConnectorPage(services.connectors.takeUnless { demo }, route.connectorId, onBack = navigator::back, manager = route.manager,
+            extensions = services.extensions.takeUnless { demo },
+            onSubscriptions = { navigator.navigate(subscriptionsRoute(subscriptionsTitle, connector = route.connectorId)) })
     }
     entry<ExtensionUiRoute> { route ->
         ExtensionUiPage(services.extensions.takeUnless { demo }, route.extensionId, route.uiId, route.title, onBack = navigator::back,
@@ -53,9 +61,12 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             shown = LocalExtensionPageVisible.current && (persona.core.navigation.LocalDetailKey.current == null || persona.core.navigation.LocalDetailKey.current == route),
             onPush = { navigator.navigate(it.copy(manager = it.manager ?: route.manager)) }, manager = route.manager)
     }
+    // The market of the current assistant's Extensions (docs/assistant/managers.md "Clients"): what it installs is that one's.
     entry<ExtensionMarketRoute> {
-        ExtensionMarketPage(services.extensions.takeUnless { demo }, onBack = navigator::back,
-            onExtension = { navigator.navigate(ExtensionCatalogRoute(it.market, it.id)) }, onMarkets = { navigator.navigate(ExtensionMarketsRoute) })
+        val mine = services.forCurrentAssistant()
+        val owner = currentAssistant().id
+        ExtensionMarketPage(mine.extensions.takeUnless { demo }, onBack = navigator::back,
+            onExtension = { navigator.navigate(ExtensionCatalogRoute(it.market, it.id, manager = owner)) }, onMarkets = { navigator.navigate(ExtensionMarketsRoute) })
     }
     entry<ExtensionCatalogRoute> { route ->
         val manager = remember(route) { ExtensionOwners.of(route.manager) }
@@ -64,18 +75,19 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             onInstalled = { navigator.navigate(ExtensionRoute(it, manager = manager)) },
             onSignIn = { navigator.navigate(ExtensionRoute(it, signIn = true, manager = manager)) })
     }
-    entry<ExtensionMarketsRoute> { ExtensionMarketsPage(services.extensions.takeUnless { demo }, onBack = navigator::back) }
+    entry<ExtensionMarketsRoute> { ExtensionMarketsPage(services.forCurrentAssistant().extensions.takeUnless { demo }, onBack = navigator::back) }
     entry<persona.core.navigation.ManagerRoute> { route ->
         val machines by services.sessions.machines.collectAsState()
         ManagerPage(services.managers.takeUnless { demo }, route.managerId, onBack = navigator::back,
             devices = services.bound().deviceSettings.takeUnless { demo }, machines = machines)
     }
+    // One of the current assistant's channels and model providers (its Settings, docs/assistant/managers.md "Clients").
     entry<ChannelRoute> { route ->
-        ChannelPage(services.channels.takeUnless { demo }, route.channelId, onBack = navigator::back, onOpen = navigator::navigate)
+        ChannelPage(services.forCurrentAssistant().channels.takeUnless { demo }, route.channelId, onBack = navigator::back, onOpen = navigator::navigate)
     }
     entry<persona.core.navigation.ModelProviderRoute> { route ->
         val machines by services.sessions.machines.collectAsState()
-        ProviderDetailPage(services.providers.takeUnless { demo }, route.name, machines, onBack = navigator::back)
+        ProviderDetailPage(services.forCurrentAssistant().providers.takeUnless { demo }, route.name, machines, onBack = navigator::back)
     }
     entry<LauncherRoute> { route ->
         // Only the machines' names (for "Quota"'s footer): their live metrics change all the time and would redraw the page.

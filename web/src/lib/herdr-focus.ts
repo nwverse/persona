@@ -1,5 +1,5 @@
 import { focusSource } from "./compatibility";
-// Focus sync between herdr's own client (the full surface) and the page (docs/integrations/terminal.md "Focus sync"). herdr's focus is
+// Focus sync between herdr's own client (the full surface) and the page (docs/integrations/terminal.md "Focus synchronization"). herdr's focus is
 // one state shared by all its clients, and it does not say who moved it, so the node attributes each change and the hub
 // tells every view whether the change is its own (server/internal/hub/herdrclient.go). Pure logic here, tested without
 // a DOM: what to do with a change (follow it, ignore its echo, only note it) and the guard that keeps the two
@@ -129,12 +129,4 @@ export function followRoute(mid: string, e: Pick<HerdrFocus, "pane_id" | "sessio
     if (s && canShowTerminal(s)) return terminalTarget(mid, e.session_id, sessions);
   }
   return { name: "terminal", mid, id: `pane:${e.pane_id}` };
-}
-
-/** The address a route shows a terminal for (the session page's agent, the "Terminal" page's terminal); undefined for other pages. */
-export function routeAddress(r: Route, sidOfTab?: string): { mid: string; address: string } | undefined {
-  if (r.name === "session") return { mid: r.mid, address: r.sid };
-  if (r.name === "tab" && (sidOfTab || r.sid)) return { mid: r.mid, address: sidOfTab || r.sid! };
-  if (r.name === "terminal" && r.mid && r.id) return { mid: r.mid, address: r.id };
-  return undefined;
 }

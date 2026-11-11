@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	// The same on every start of the thread, apart from the memory index: the live snapshot goes with each message.
 	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir))
 	var res struct {
-		Thread struct {
+		Model       string          `json:"model"`
+		ServiceTier json.RawMessage `json:"serviceTier"`
+		Thread      struct {
 			ID   string `json:"id"`
 			Path string `json:"path"`
 		} `json:"thread"`
@@ -62,6 +65,8 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	}
 	c.mu.Lock()
 	c.threadID = res.Thread.ID
+	c.speedModel = res.Model
+	c.serviceTier = codexServiceTier(res.ServiceTier)
 	c.mu.Unlock()
 	n.mu.Lock()
 	c.p.id = res.Thread.ID
@@ -73,6 +78,7 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 		n.pathsAt[res.Thread.ID] = time.Now()
 	}
 	n.mu.Unlock()
+	c.loadSpeedModels(ctx)
 	if c.nameGates != nil { // larkCheck records what it confirmed under this id (p.id): the addresses stand for it from now on
 		c.nameGates(res.Thread.ID)
 	}
@@ -244,19 +250,25 @@ func (c *codexConn) syncTasks() {
 	thread := c.threadID
 	c.mu.Unlock()
 	var res struct {
-		Data []struct {
+		Data *[]struct {
 			Command string `json:"command"`
 		} `json:"data"`
 	}
 	if err := c.call(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": thread}, &res); err != nil {
+		c.p.invalidateUpdateTasks()
+		return
+	}
+	if res.Data == nil {
+		c.p.invalidateUpdateTasks() // an absent or null list is unknown, never proof that a restart kills no work
 		return
 	}
 	tasks := []string{}
-	for _, t := range res.Data {
+	for _, t := range *res.Data {
 		tasks = append(tasks, "后台命令："+unwrapShell(t.Command))
 	}
 	c.p.mu.Lock()
-	c.p.tasks = tasks
+	c.p.tasks, c.p.tasksObserved = tasks, true
+	c.p.tasksRevision++
 	c.p.mu.Unlock()
 	c.p.ownerOr(c.n).rememberTasks(c.p.id, tasks)
 }

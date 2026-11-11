@@ -53,9 +53,10 @@ type Preview struct {
 	previous              *Manifest // immutable consent baseline captured when the preview was staged
 	source                Source
 	marketSpec, marketKey string
-	verifiedMarketKey     string // verified entry and package, separate from the mutable market's pin
-	fingerprint           string // all staged package bytes/modes as approved at preview
-	root                  string // the staged package
+	verifiedMarketKey     string       // verified entry and package, separate from the mutable market's pin
+	fingerprint           string       // all staged package bytes/modes as approved at preview
+	root                  string       // the staged package
+	l10n                  Translations // its translations, for the name and description shown (In)
 	staging               string
 }
 
@@ -282,6 +283,11 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 	}
 	pv.Manifest, pv.Digest, pv.Permissions = m, Digest(m), Explain(m)
 	pv.Warnings = m.Lint()
+	if pv.root != "" {
+		var warnings []string
+		pv.l10n, warnings = ReadTranslations(pv.root)
+		pv.Warnings = append(pv.Warnings, warnings...)
+	}
 	pv.Depends = r.DependenciesContext(ctx, m)
 	fail := func(err error) (*Preview, error) {
 		if pv.staging != "" {
@@ -470,6 +476,14 @@ func (r *Registry) conflictsCandidates(m *Manifest, candidates []*Manifest) erro
 				if otherID != m.ID && slices.Contains(other.Items(point), id) {
 					errs = append(errs, fmt.Errorf("%s 里的 %q 已经是扩展 %s 的", point, id, otherID))
 				}
+			}
+		}
+	}
+	// A reference names one provider by its scheme, so two installed extensions cannot both claim one.
+	for _, scheme := range m.Schemes() {
+		for otherID, other := range owners {
+			if otherID != m.ID && slices.Contains(other.Schemes(), scheme) {
+				errs = append(errs, fmt.Errorf("secret_providers: the scheme %q is already extension %s's", scheme, otherID))
 			}
 		}
 	}

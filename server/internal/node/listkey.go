@@ -43,6 +43,9 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.SpaceID, '/')
 		w.quote(s.SpaceKind, '\n')
 		writeUltracodeKey(&w, s)
+		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
+			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)
+		}
 		// A completed background scan can discover a fallback without a new transcript revision or status.
 		if s.ModelFallback != nil || s.TurnErrorCode != "" {
 			fmt.Fprintf(&w.b, "model-fallback:%+v/%q\n", s.ModelFallback, s.TurnErrorCode)
@@ -54,6 +57,13 @@ func listKeySized(list []proto.Session, size int) string {
 			w.b.WriteString("activity:")
 			w.str(s.Activity, '/')
 			w.int(unixOf(s.ActivityAt), '\n')
+		}
+		// Restored runtime metadata changes assistant classification without a new runtime event.
+		if s.SourceKind == "runtime" {
+			w.b.WriteString("runtime-state:")
+			w.quote(s.Cwd, '/')
+			w.quote(s.Launcher, '/')
+			w.str(strconv.FormatBool(s.StartedByPersona), '\n')
 		}
 		// A new reason or link alone is a change.
 		w.b.WriteString("attention:")
@@ -91,11 +101,7 @@ func listKeySized(list []proto.Session, size int) string {
 		w.str(s.SourceThreadID, '/')
 		w.str(s.SourceInstanceID, '/')
 		w.str(s.ReadOnlyReason, '/')
-		if s.Capabilities != nil {
-			fmt.Fprint(&w.b, s.Capabilities)
-		} else {
-			w.b.WriteString("<nil>")
-		}
+		w.caps(s.Capabilities)
 		w.b.WriteByte('/')
 		w.str(strconv.FormatBool(s.Attached), '/')
 		w.str(s.CodexRoute, '/')
@@ -193,6 +199,29 @@ func (w *keyWriter) quote(s string, sep byte) {
 	w.tmp = strconv.AppendQuote(w.tmp[:0], s)
 	w.b.Write(w.tmp)
 	w.b.WriteByte(sep)
+}
+
+// caps writes a session's capabilities by value, as %v would print them with Modes dereferenced ("<nil>" when absent).
+// Never through fmt: Modes is a pointer, and a fresh one each poll would print a new address and change the key every
+// second.
+func (w *keyWriter) caps(c *proto.SessionCapabilities) {
+	if c == nil {
+		w.b.WriteString("<nil>")
+		return
+	}
+	w.b.WriteString("&{")
+	for _, v := range [...]bool{c.Read, c.Send, c.Interrupt, c.Approve, c.Terminal, c.Attach} {
+		w.str(strconv.FormatBool(v), ' ')
+	}
+	if c.Modes == nil {
+		w.b.WriteString("<nil>")
+	} else {
+		w.b.WriteString(strconv.FormatBool(*c.Modes))
+	}
+	if c.Model != nil {
+		w.b.WriteString(" model=" + strconv.FormatBool(*c.Model))
+	}
+	w.b.WriteByte('}')
 }
 
 // quotes writes a list of strings as %q would ([] when empty, the rare others through fmt).

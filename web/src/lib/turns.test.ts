@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatLines, freshWords, isLoopTick, mergeItems, parseUserText, segments, openRecap, personaToolVerb, toolChip, toolDisplayName, toolLabel, wakeDrawer, workSegment, formatDuration } from "./turns";
+import { chatLines, freshWords, humanizeTool, isLoopTick, mcpServerName, mergeItems, parseUserText, pickSubject, segments, openRecap, personaToolVerb, toolChip, toolDisplayName, toolLabel, formatDuration } from "./turns";
 import type { Item } from "./types";
 
 const u = (seq: number, text: string, extra: Partial<Item> = {}): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text, ...extra });
@@ -211,10 +211,10 @@ describe("chatLines", () => {
     expect(openRecap(mid, mid[1].kind === "recaps" ? mid[1].items[0] : undefined)).toBeUndefined();
   });
 
-  // #3783: after background tasks woke the agent, the newest words are the answer, at the bottom; the runs since the
-  // first wake are behind the chip above them (the longest run's words used to be the answer, the rest only in there)
+  // #3783: after background tasks woke the agent, the newest words are the answer, at the bottom (the longest run's
+  // words used to be the answer)
   const wakesOf = (l: ReturnType<typeof chatLines>[number] | undefined) => (l?.kind === "segment" ? l.wakes : undefined);
-  it("answers a woken exchange with its newest words, the earlier runs behind the chip", () => {
+  it("answers a woken exchange with its newest words", () => {
     const items = [
       u(1, "run the tests in the background"),
       a(2, "started, I will tell you when it ends — this is the long one"),
@@ -229,18 +229,6 @@ describe("chatLines", () => {
     expect(seg?.answer?.text).toBe("all green");
     const w = wakesOf(ls[0]);
     expect(w?.wakes).toHaveLength(1);
-    const d = wakeDrawer(w!);
-    // the answer is in the chat, not again in the drawer
-    expect(d.groups.map((g) => g.answer?.text)).toEqual([undefined]);
-    expect(d.groups[0].notices.map((n) => n.id)).toEqual(["n3#0"]);
-    expect(d.process.map((p) => p.kind)).toEqual(["tool_use", "tool_result"]);
-  });
-
-  it("puts the latest earlier wake first in the drawer", () => {
-    const items = [u(1, "go"), a(2, "ok"), wake(3, "a"), a(4, "a done"), wake(5, "b"), a(6, "b done"), wake(7, "c"), a(8, "c done")];
-    const ls = chatLines(items);
-    expect(ls[0].kind === "segment" && ls[0].seg.answer?.text).toBe("c done");
-    expect(wakeDrawer(wakesOf(ls[0])!).groups.map((g) => g.answer?.text)).toEqual([undefined, "b done", "a done"]);
   });
 
   it("keeps a long-running agent's newest words at the bottom of a long history", () => {
@@ -264,11 +252,10 @@ describe("chatLines", () => {
     const live = chatLines(before, { live: true });
     const working = live[live.length - 1];
     expect(working.kind === "segment" && working.live).toBe(true);
-    // it lands: the short words are the answer on screen, not only in the drawer
+    // it lands: the short words are the answer on screen
     const done = chatLines([...before, a(6, "deployed")]);
     const last = done[done.length - 1];
     expect(last.kind === "segment" && last.seg.answer?.text).toBe("deployed");
-    expect(wakeDrawer(wakesOf(last)!).groups.every((g) => g.answer?.text !== "deployed")).toBe(true);
   });
 
   it("reopens the exchange a recap closed when a background task reports back", () => {
@@ -323,15 +310,6 @@ describe("chatLines", () => {
   });
 });
 
-describe("workSegment", () => {
-  it("keeps every step, words included, without an answer", () => {
-    const s = workSegment("w", [tool(1, "x"), res(2, "x"), a(3, "between"), tool(4, "y"), a(5, "end")]);
-    expect(s.answer).toBeUndefined();
-    expect(s.steps.map((x) => x.kind)).toEqual(["tool", "text", "tool", "text"]);
-    expect(s.replies).toBe(2);
-  });
-});
-
 it("toolLabel names an MCP tool by its own name, whatever the server is called", () => {
   expect(toolLabel("mcp__github__create_issue")).toBe("create issue");
   expect(toolLabel("mcp__plugin_lark_docs__fetch_doc")).toBe("fetch doc");
@@ -339,15 +317,69 @@ it("toolLabel names an MCP tool by its own name, whatever the server is called",
   expect(toolLabel("Bash")).toBe("运行");
 });
 
-it("toolDisplayName shows Persona's own MCP server (still id `persona`) as Persona", () => {
+it("toolDisplayName shows Persona's own MCP server (still id `persona`) as Persona, other servers' tools in words", () => {
   expect(toolDisplayName("mcp__persona__agent_read")).toBe("Persona · agent read");
   expect(toolDisplayName("mcp__plugin_persona__agent_send")).toBe("Persona · agent send");
   expect(toolDisplayName("mcp__persona")).toBe("Persona");
-  expect(toolDisplayName("mcp__github__create_issue")).toBe("github · create issue");
-  expect(toolDisplayName("mcp__plugin_lark_docs__fetch_doc")).toBe("lark_docs · fetch doc");
-  expect(toolDisplayName("mcp__persona_extra__x")).toBe("persona_extra · x");
+  expect(toolDisplayName("mcp__github__create_issue")).toBe("GitHub · Create issue");
+  expect(toolDisplayName("mcp__plugin_lark_docs__fetch_doc")).toBe("Lark Docs · Fetch doc");
+  expect(toolDisplayName("mcp__persona_extra__x")).toBe("Persona Extra · X");
   expect(toolDisplayName("Bash")).toBe("Bash");
   expect(toolDisplayName(undefined)).toBe("工具");
+});
+
+it("names read as words, servers as names (iOS ToolNaming, #2986)", () => {
+  expect(["create_issue", "createIssue", "list-pull-requests", "getPRComments", "HTTPServerStart", "search_github_repos", "ios_build", "x", ""].map(humanizeTool)).toEqual([
+    "Create issue",
+    "Create issue",
+    "List pull requests",
+    "Get PR comments",
+    "HTTP server start",
+    "Search GitHub repos",
+    "iOS build",
+    "X",
+    "",
+  ]);
+  expect(["github", "chrome-devtools", "google_drive", "plugin_context7_context7", "claude_ai_Gmail", "ide"].map(mcpServerName)).toEqual([
+    "GitHub",
+    "Chrome DevTools",
+    "Google Drive",
+    "Context7",
+    "Gmail",
+    "IDE",
+  ]);
+});
+
+it("an unknown tool's subject is its most telling field", () => {
+  expect(pickSubject({ title: "T", description: "D" })).toBe("D");
+  expect(pickSubject({ path: "/a/b/Store.swift", query: "q" })).toBe("Store.swift");
+  expect(pickSubject({ zeta: "z", alpha: " a ", n: 3 })).toBe("a");
+  expect(pickSubject({ n: 3 })).toBe("");
+});
+
+it("toolChip says what Claude Code's newer tools were about", () => {
+  const call = (name: string, input: Record<string, unknown>): Item => ({ id: "c#0", seq: 1, role: "assistant", kind: "tool_use", tool_name: name, tool_input: input });
+  expect(toolChip(call("TaskCreate", { subject: "Write tests", description: "…" }))).toBe("Write tests");
+  expect(toolChip(call("TaskUpdate", { taskId: "3", status: "completed" }))).toBe("#3");
+  expect(toolChip(call("TaskList", {}))).toBe("");
+  expect(toolChip(call("SendMessage", { to: "researcher", summary: "assign task 1", message: "start" }))).toBe("researcher · assign task 1");
+  expect(toolChip(call("ToolSearch", { query: "select:WebFetch,Monitor" }))).toBe("WebFetch, Monitor");
+  expect(toolChip(call("LSP", { operation: "findReferences", filePath: "/a/ToolViews.swift", line: 120 }))).toBe("ToolViews.swift:120");
+  expect(toolChip(call("Monitor", { ws: { url: "wss://events.example.com" } }))).toBe("wss://events.example.com");
+  expect(toolChip(call("ReportFindings", { findings: [{ file: "a", summary: "x" }, { file: "b", summary: "y" }] }))).toBe("2 条发现");
+  expect(toolChip(call("mcp__github__create_issue", { owner: "o", title: "Crash on launch" }))).toBe("Crash on launch");
+});
+
+it("names that match Object's own methods stay words (no table lookup reaches the prototype)", () => {
+  const call = (name: string, input: Record<string, unknown>): Item => ({ id: "c#0", seq: 1, role: "assistant", kind: "tool_use", tool_name: name, tool_input: input });
+  expect(["constructor_args", "encode_constructor", "toString", "__proto__"].map(humanizeTool)).toEqual(["Constructor args", "Encode constructor", "To string", "Proto"]);
+  expect(mcpServerName("constructor")).toBe("Constructor");
+  expect(toolDisplayName("mcp__constructor__x")).toBe("Constructor · X");
+  expect(toolDisplayName("mcp__foundry__constructor_args")).toBe("Foundry · Constructor args");
+  expect(toolLabel("constructor")).toBe("constructor");
+  expect(toolChip(call("constructor", { title: "T" }))).toBe("T");
+  expect(toolChip(call("valueOf", {}))).toBe("");
+  expect(personaToolVerb("mcp__persona__constructor")).toBeNull();
 });
 
 describe("persona-file tags", () => {

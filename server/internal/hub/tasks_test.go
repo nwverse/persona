@@ -151,10 +151,16 @@ func taskLine(h *Hub, todo Todo) string {
 }
 
 func planArgs(readonly bool) json.RawMessage {
-	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
+	task := map[string]any{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "acceptEdits",
-	}}})
+		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "bypassPermissions",
+		// What task_plan requires of a brief (#3822): a read-only task's goal and how long it should take.
+		"goal": "登录页横屏不再崩溃", "expect_minutes": 10,
+	}
+	if !readonly { // a writable task also says what done means
+		task["done_when"] = []string{"修好并补了测试"}
+	}
+	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{task}})
 	return raw
 }
 
@@ -638,7 +644,7 @@ func TestTaskAnsweredAndRouted(t *testing.T) {
 	}
 }
 
-// todoState is a task's state as far as its todo tells it (docs/assistant/todos.md "How state is computed"): failed, done, not started.
+// todoState is a task's state as far as its todo tells it (docs/assistant/todos.md "State calculation rules"): failed, done, not started.
 func todoState(t Todo) string {
 	switch {
 	case t.DoneAt != nil && t.StartError != "":

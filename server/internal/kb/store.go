@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -95,7 +97,8 @@ type Person struct {
 	SourceID  string    `json:"source_id"`
 	Connector string    `json:"connector,omitempty"`
 	Name      string    `json:"name"`
-	Note      string    `json:"note,omitempty"` // who they are to the owner, one line (AI)
+	Note      string    `json:"note,omitempty"`   // who they are to the owner, one line (AI)
+	Status    string    `json:"status,omitempty"` // empty or active | ignored | self
 	Chats     []string  `json:"chats,omitempty"`
 	Projects  []string  `json:"projects,omitempty"`
 	LastSeen  time.Time `json:"last_seen,omitempty"`
@@ -196,16 +199,25 @@ type Store struct {
 
 	recMu             sync.Mutex                 // a recording's read-compare-write (recordings.go)
 	recFilesMu        sync.RWMutex               // acquire before metaMu for recording snapshots and recovery
+	liveMu            sync.Mutex                 // a live log's read-modify-write (live.go); after recMu, before recFilesMu
 	recordingWrite    func(string, []byte) error // per-store candidate fault injection
 	recordingReadWait func()                     // per-store read-entry observation for concurrency tests
 	recordingRemove   func(string) error         // per-store commit fault injection
 
 	dedupeMu sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
+	// topicMu: a topic's points.json read-modify-write (the distill and merge steps, forgetting a source) and the
+	// sources' distill marks (topic_distill.go). Acquire before metaMu.
+	topicMu  sync.Mutex
 	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
-	// reads the chat again under it and changes only the fields it owns. (A person's edits, edit.go, are not under it.)
-	chatMu    sync.Mutex
+	// reads the chat again under it and changes only the fields it owns. Hand edits (Apply, unlink) take it through
+	// editChat (edit.go).
+	chatMu sync.Mutex
+	// personMu: a person's read-modify-write of meta.json and handles.json (updatePerson), by archiving and history
+	// imports (notePerson), compression, edits and forgetting alike. Lock order: chatMu, then personMu, then metaMu;
+	// nothing holding metaMu takes personMu.
+	personMu  sync.Mutex
 	observeMu sync.RWMutex
 	changed   func(Change)
 	zone      *time.Location // the user's zone, the archive's days and times are written in (zone.go); nil: time.Local
@@ -216,7 +228,7 @@ type Store struct {
 }
 
 func NewStore(dir string) (*Store, error) {
-	for _, k := range []string{KindChat, KindPerson, KindProject, KindDoc, KindMeeting, KindEvent, KindRecording} {
+	for _, k := range []string{KindChat, KindPerson, KindProject, KindDoc, KindMeeting, KindEvent, KindRecording, KindTopic} {
 		if err := os.MkdirAll(filepath.Join(dir, k), 0o700); err != nil {
 			return nil, err
 		}
@@ -272,15 +284,44 @@ func writeJSON(p string, v any) error {
 	return writeFile(p, append(raw, '\n'))
 }
 
+// writeFile replaces p with data through a temporary file of its own in the same directory, so two writers of one
+// path cannot truncate each other's copy (a shared p+".tmp" made one rename fail or put an emptied file in place),
+// and a failed write leaves no temporary file behind. The name (p + ".tmp-" + a random part) never ends in .md or
+// .json, so listings and search skip it. It does not fsync: it backs frequent small writes (metadata, judged files,
+// handles). Rewrites of archive text that holds live lines go through archiveWrite, which does.
 func writeFile(p string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(dir, filepath.Base(p)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	tmp := f.Name()
+	if err := writeTemp(f, data); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// writeTemp makes f private (CreateTemp already does on Unix; the explicit mode keeps the other platforms the same),
+// writes data and closes f.
+func writeTemp(f *os.File, data []byte) error {
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // writeIfMissing writes what content returns to p unless p exists. content runs only then: the README renders a prompt
@@ -435,34 +476,79 @@ func (s *Store) AppendLog(slug string, at time.Time, source, line string) (err e
 		fmt.Sprintf("- %s · %s · %s\n", at.In(zone).Format("2006-01-02 15:04"), source, oneLine(line)))
 }
 
-// Log returns the last n lines of a project's timeline.
+// Log returns the last n lines of a project's timeline, oldest first: nil when it has none; empty when n <= 0 and it
+// has one.
 func (s *Store) Log(slug string, n int) []string {
+	var lines []string
+	s.scanLog(slug, func(l []byte) bool {
+		if n <= 0 {
+			lines = []string{}
+			return false
+		}
+		lines = append(lines, string(l))
+		return len(lines) < n
+	})
+	slices.Reverse(lines)
+	return lines
+}
+
+// logChunk is how much of a timeline its readers take from the end at a time.
+const logChunk = 64 << 10
+
+// scanLog moves a project's timeline into the archive's zone if it must (settleLogLocked), then hands f its "- " lines,
+// newest first, until f returns false. Only as much of the file is read as those lines take; a line f is handed is
+// valid only until f returns. A missing or unreadable timeline has no lines.
+func (s *Store) scanLog(slug string, f func(line []byte) bool) {
 	s.mu.Lock()
 	_, _ = s.settleLogLocked(slug)
 	s.mu.Unlock()
-	raw, _ := os.ReadFile(s.path(KindProject, slug, "log.md"))
-	return lastLogLines(raw, n)
+	file, err := os.Open(s.path(KindProject, slug, "log.md"))
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return
+	}
+	_ = linesBack(file, info.Size(), logChunk, func(l []byte) bool {
+		return !bytes.HasPrefix(l, []byte("- ")) || f(l)
+	})
 }
 
-// lastLogLines are the last n "- " lines of a timeline, oldest first, taken from its end so that the lines before them
-// are never collected. nil when it has none; empty when n <= 0 and it has one.
-func lastLogLines(raw []byte, n int) []string {
-	var lines []string
-	for end := len(raw); end >= 0; {
-		start := bytes.LastIndexByte(raw[:end], '\n') + 1
-		if l := raw[start:end]; bytes.HasPrefix(l, []byte("- ")) {
-			if n <= 0 {
-				return []string{}
+// linesBack hands f the lines of the first size bytes of r from the last one back, chunk bytes read at a time, until f
+// returns false: the same lines as splitting it all on '\n' (a trailing newline ends with an empty line), in reverse.
+// Splitting on the byte is safe in UTF-8, which never has it inside a character. It holds a chunk, or the longest line.
+func linesBack(r io.ReaderAt, size int64, chunk int, f func(line []byte) bool) error {
+	// buf is the file from pos up to the lines already handed to f and the newline before them: it ends with the next
+	// line to hand, whose start may lie before pos.
+	var buf []byte
+	for pos := size; ; {
+		for i := bytes.LastIndexByte(buf, '\n'); i >= 0; i = bytes.LastIndexByte(buf, '\n') {
+			if !f(buf[i+1:]) {
+				return nil
 			}
-			lines = append(lines, string(l))
-			if len(lines) == n {
-				break
-			}
+			buf = buf[:i]
 		}
-		end = start - 1
+		if pos == 0 {
+			f(buf)
+			return nil
+		}
+		k := int(min(pos, int64(chunk)))
+		pos -= int64(k)
+		if need := k + len(buf); need > cap(buf) {
+			// With room for the part of a line a chunk leaves over (most lines are short), the next chunks fit in it too.
+			grown := make([]byte, need, max(need+chunk/16, 2*cap(buf)))
+			copy(grown[k:], buf)
+			buf = grown
+		} else {
+			buf = buf[:need]
+			copy(buf[k:], buf[:need-k])
+		}
+		if _, err := r.ReadAt(buf[:k], pos); err != nil {
+			return err
+		}
 	}
-	slices.Reverse(lines)
-	return lines
 }
 
 func appendFile(p, header, text string) error {
@@ -540,50 +626,96 @@ func (s *Store) Days(chatID string) []string {
 	return out
 }
 
-// Since returns the message lines written at or after t (minute precision, as stored), at most max characters,
-// the newest kept when it has to cut.
+// Since returns the message lines written at or after t (minute precision, as stored), at most max bytes after a
+// leading "…\n" when it has to cut, the newest kept. It reads the days newest first and stops once it has more than
+// max, so a long backlog costs the days it keeps, not all of them; the cut lands on a message or line start, inside a
+// long line on a whole character (cutTail).
 func (s *Store) Since(chatID string, t time.Time, max int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, _ = s.settleChatLocked(chatID)
 	zone := s.chatReadZoneLocked(chatID)
 	from := t.In(zone).Format("2006-01-02")
-	var b strings.Builder
-	for _, d := range s.Days(chatID) {
-		if d < from {
-			continue
+	days := s.Days(chatID)
+	var blocks []string // newest first
+	n := 0
+	for i := len(days) - 1; i >= 0 && days[i] >= from && n <= max; i-- {
+		raw, _ := os.ReadFile(s.path(KindChat, chatID, "messages", days[i]+".md"))
+		if b := sinceDay(string(raw), days[i], zone, t); b != "" {
+			blocks = append(blocks, b)
+			n += len(b)
 		}
-		raw, _ := os.ReadFile(s.path(KindChat, chatID, "messages", d+".md"))
-		// The kept messages' lines, joined once below: appending each continuation line to its message would copy
-		// the whole message again per line, quadratic in a long paste.
-		var keep []string
-		open := false // the last "- " line was kept, so the indented lines that continue it are too
-		for _, l := range strings.Split(string(raw), "\n") {
-			switch {
-			case strings.HasPrefix(l, "- "):
-				open = false
-				if len(l) >= 7 {
-					if at, err := time.ParseInLocation("2006-01-02 15:04", d+" "+l[2:7], zone); err == nil && at.Before(t.Truncate(time.Minute)) {
-						continue
-					}
+	}
+	slices.Reverse(blocks)
+	return cutTail(strings.Join(blocks, ""), max)
+}
+
+// sinceDay is the "## day" block of the messages in one day file written at or after t, "" when there are none.
+func sinceDay(raw, day string, zone *time.Location, t time.Time) string {
+	// The kept messages' lines, joined once below: appending each continuation line to its message would copy the
+	// whole message again per line, quadratic in a long paste.
+	var keep []string
+	open := false // the last "- " line was kept, so the indented lines that continue it are too
+	for _, l := range strings.Split(raw, "\n") {
+		switch {
+		case strings.HasPrefix(l, "- "):
+			open = false
+			if len(l) >= 7 {
+				if at, err := time.ParseInLocation("2006-01-02 15:04", day+" "+l[2:7], zone); err == nil && at.Before(t.Truncate(time.Minute)) {
+					continue
 				}
-				keep = append(keep, l)
-				open = true
-			case strings.HasPrefix(l, "  ") && open:
-				keep = append(keep, l)
-			default:
-				open = false
+			}
+			keep = append(keep, l)
+			open = true
+		case strings.HasPrefix(l, "  ") && open:
+			keep = append(keep, l)
+		default:
+			open = false
+		}
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	return "## " + day + "\n" + strings.Join(keep, "\n") + "\n"
+}
+
+// cutTail keeps at most the last limit bytes of s, after "…\n" when it cuts. The kept part starts where a message
+// ("- ") or a day ("## ") starts, so a reader gets whole messages; when that would drop more than half of what fits
+// (a long message), at the next line start; when that would too (a long line), at the next character, never inside one.
+func cutTail(s string, limit int) string {
+	limit = max(limit, 0)
+	if len(s) <= limit {
+		return s
+	}
+	at := len(s) - limit // >= 1: s[at-1] is the byte before the kept part
+	line, msg := -1, -1
+	for i := at; i < len(s); {
+		if s[i-1] == '\n' {
+			if line < 0 {
+				line = i
+			}
+			if strings.HasPrefix(s[i:], "- ") || strings.HasPrefix(s[i:], "## ") {
+				msg = i
+				break
 			}
 		}
-		if len(keep) > 0 {
-			fmt.Fprintf(&b, "## %s\n%s\n", d, strings.Join(keep, "\n"))
+		j := strings.IndexByte(s[i:], '\n')
+		if j < 0 {
+			break
+		}
+		i += j + 1
+	}
+	switch {
+	case msg >= 0 && msg-at <= limit/2:
+		at = msg
+	case line >= 0 && line-at <= limit/2:
+		at = line
+	default:
+		for at < len(s) && !utf8.RuneStart(s[at]) {
+			at++
 		}
 	}
-	out := b.String()
-	if len(out) > max {
-		out = "…\n" + out[len(out)-max:]
-	}
-	return out
+	return "…\n" + s[at:]
 }
 
 // Prune deletes message days older than textDays and attachment days older than attachmentDays.
@@ -631,13 +763,7 @@ func (s *Store) PruneBySource(now time.Time, textDays int, attachmentDays func(s
 	return removed
 }
 
-func oneLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > 200 {
-		s = string(r[:200]) + "…"
-	}
-	return s
-}
+func oneLine(s string) string { return clip(strings.Join(strings.Fields(s), " "), 200) }
 
 // addUnique appends v to list unless it is there already.
 func addUnique(list []string, v ...string) []string {

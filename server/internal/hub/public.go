@@ -69,6 +69,9 @@ func (h *Hub) startPublic(ctx context.Context) error {
 	if err := h.initHubID(ctx); err != nil {
 		return err
 	}
+	if err := h.cfg.checkPlaintextLoopbackOnly(); err != nil {
+		return err
+	}
 	proxy, err := h.cfg.Security.ProxyProtocol.policy()
 	if err != nil {
 		return err
@@ -94,6 +97,9 @@ func (h *Hub) startPublic(ctx context.Context) error {
 			h.logf("hub TLS: %s is not an address of this machine now (has the LAN address changed?): TLS is off; "+
 				"set public.tls_listen to this machine's LAN address, or \":%s\" (every address), and restart",
 				h.cfg.Public.TLSListen, portOf(h.cfg.Public.TLSListen))
+			if h.cfg.Security.PlaintextLoopbackOnly {
+				h.logf("hub TLS: security.plaintext_loopback_only is on, so until then only this machine reaches the hub")
+			}
 			ln, err = nil, nil
 		}
 		if err != nil {
@@ -200,6 +206,8 @@ func (h *Hub) publicLoop(ctx context.Context) {
 	}
 }
 
+// newHubHTTPServer: no ReadTimeout or WriteTimeout, which would cut WebSockets and long uploads; idleBodies bounds the
+// waits for a request body instead (bodyidle.go).
 func newHubHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr: addr, Handler: handler,
@@ -261,7 +269,7 @@ func (h *Hub) serveHTTP(ctx context.Context) error {
 		stopTests = func() {}
 		return err
 	}
-	handler := h.routes()
+	handler := idleBodies(h.routes()) // a body that stops coming is answered and let go (bodyidle.go)
 	plain := newHubHTTPServer(h.cfg.Listen, handler)
 	plain.BaseContext = func(net.Listener) context.Context { return requestCtx }
 	errs := make(chan error, 2)

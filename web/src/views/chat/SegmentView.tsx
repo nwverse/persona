@@ -1,12 +1,13 @@
-import { Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
+import { stripCloseout } from "../../lib/closeout";
 import { getSession, getState } from "../../lib/store";
 import { agentStatus, subagentFor } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
 import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Segment, type UserMessage } from "../../lib/turns";
 import type { Item } from "../../lib/types";
-import { thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
+import { thinkingDurations, workBlocks, type ToolStep, type WorkNode } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { channelOf, useChannels } from "../../lib/channels";
 import { splitQuotes } from "../../lib/drafts";
@@ -21,12 +22,14 @@ import { ContextGroup } from "./ContextGroup";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { useFullText } from "./FullText";
 import { FileCards, ReplyFiles } from "./FileCards";
+import { ReplyPorts } from "./PortChips";
 import { MessageActions } from "./MessageActions";
 import { QuoteStack } from "./Quote";
 import { PathText } from "../../ui/PathLinks";
 import { Thumb } from "./Steps";
 import { useFoldScroll } from "./fold-scroll";
-import { FreshWords, useChatContext } from "./chat-context";
+import { useChatContext } from "./chat-context";
+import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
 import { useCallSeeker } from "./jump";
@@ -38,10 +41,25 @@ export const BUBBLE_MAX_LINES = 14;
 const CHARS_PER_LINE = 30;
 /** A folded message: ten lines high, scrolling inside (the chat scrolls on at its top and end). */
 const FOLDED = "max-h-[10lh] overflow-y-auto";
+/** Characters to a line of a bubble narrower than any drawn (a phone's holds about 17 wide ones): a message within
+ *  BUBBLE_MAX_LINES even there is short in any bubble, and is not measured. */
+const NARROWEST_CHARS = 10;
 
 /** How many lines a message takes in its bubble, by its text (the bubble measures itself once drawn). */
 export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
   return text.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / perLine)), 0);
+}
+
+/** A finished exchange's height in px before it is first drawn (content-visibility, docs/web/web.md "Long chats"), by
+ *  its text the way bubbleLines counts it: its bubble (folded past BUBBLE_MAX_LINES), its words at 2.5 times the
+ *  bubble's characters to a line (the column is wider, and Markdown's short and blank lines take less than a line), a
+ *  row for each other block. Once drawn it keeps its own height. */
+export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[]): number {
+  const line = 24, gap = 12, row = 28;
+  const lines = user ? bubbleLines(user.text) : 0;
+  let h = user ? (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0) : 0;
+  for (const n of nodes) h += n.kind === "step" && n.step.kind === "text" ? bubbleLines(n.step.item.text ?? "", CHARS_PER_LINE * 2.5) * line : row;
+  return Math.round(h + gap * Math.max(0, nodes.length + (user ? 1 : 0) - 1));
 }
 
 /** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
@@ -94,6 +112,11 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || open) return;
+    // short however narrow: no layout read (opening a long chat read every bubble's, each a forced layout)
+    if (bubbleLines(text, NARROWEST_CHARS) <= BUBBLE_MAX_LINES) {
+      setLong(false);
+      return;
+    }
     // its full height in lines (a fold's scrollHeight is all of it)
     const line = parseFloat(getComputedStyle(el).lineHeight) || 24;
     setLong(el.scrollHeight / line > BUBBLE_MAX_LINES + 0.5);
@@ -158,10 +181,10 @@ const ANSWER = "[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leadin
  *  words fade in once. Still streaming, it has the same menu (copy what is there so far, quote it).
  *  Memo'd: the chat context changes with every streamed item, so each SegmentView re-renders; a finished answer's
  *  props stay the same and it is skipped (#3024). */
-export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: { item?: Item; streaming?: string; mid?: string; sid?: string; fade?: boolean }) {
+export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, noCloseout }: { item?: Item; streaming?: string; mid?: string; sid?: string; fade?: boolean; /** The card above the transcript shows its closeout (#3612): drawn without the raw block. */ noCloseout?: boolean }) {
   // a long answer the hub cut for the page: its start, and "View full text" under it
   const full = useFullText(streaming === undefined ? item : undefined, mid, sid);
-  const text = streaming ?? full.text;
+  const text = streaming ?? (noCloseout ? stripCloseout(full.text) : full.text);
   if (!text) return null;
   const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
   if (streaming !== undefined) {
@@ -183,14 +206,17 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: 
       </div>
       {full.more}
       {mid && sid && <ReplyFiles text={text} mid={mid} cwd={cwd} />}
+      {mid && sid && <ReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
     </MessageActions>
   );
 });
 
-/** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary. */
-const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid }: { item?: Item; streaming?: string; mid: string; sid: string }) {
-  const fresh = useContext(FreshWords);
-  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={streaming === undefined && item ? fresh?.has(item.id) : undefined} />;
+/** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
+ *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. */
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean }) {
+  const persisted = streaming === undefined ? item?.id : undefined;
+  const fresh = useFreshWords(mid, sid, persisted);
+  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} noCloseout={noCloseout} />;
 });
 
 export const SegmentView = memo(function SegmentView({
@@ -203,6 +229,7 @@ export const SegmentView = memo(function SegmentView({
   expandFold,
   beforeWords,
   trace,
+  offscreen,
 }: {
   seg: Segment;
   live: boolean;
@@ -218,15 +245,18 @@ export const SegmentView = memo(function SegmentView({
   beforeWords?: ReactNode;
   /** An opened supervision round shows its original input instead of the injected hint. */
   trace?: boolean;
+  /** A finished exchange before the last two: off screen it is not drawn (the `seg-cv` class), and the chat watches its
+   *  height through this (ChatView `watchSegment`, returning the unwatch) to keep the view still when it changes. */
+  offscreen?: (section: HTMLElement) => () => void;
 }) {
-  const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle } = useChatContext();
+  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment } = useChatContext();
   const steps = useMemo(() => exchangeSteps(seg), [seg]);
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {
-    const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live);
+    const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live, s.use.tool_use_id ? tasks.notes.get(s.use.tool_use_id) : undefined);
     return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live };
-  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
+  }, [mid, sid, scope, expandFold, subagents, tasks, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
   const identity = segmentIdentity(seg);
   const nodes = useMemo(
     () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
@@ -241,12 +271,22 @@ export const SegmentView = memo(function SegmentView({
   if (tail?.kind === "step" && tail.step.kind === "text") cut--;
   const latest = nodes.at(-1);
   const latestItem = latest?.kind === "step" && latest.step.kind === "text" ? latest.step.item : undefined;
+  // The card above the transcript shows this exchange's closeout (#3612): its last words are drawn without the raw
+  // block, and not at all when the block was all they said.
+  const noCloseout = closeoutSegment === seg.id && streaming === undefined;
+  const onlyCloseout = noCloseout && Boolean(latestItem?.text?.trim()) && !latestItem?.full_size && stripCloseout(latestItem?.text ?? "") === "";
   const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
   const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
+  const box = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    return offscreen && el ? offscreen(el) : undefined;
+  }, [offscreen]);
+  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes]);
   return (
-    <section className="flex flex-col gap-3" data-segment>
-      {trace && seg.user?.rawInput ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
+    <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3" : "flex flex-col gap-3"} style={guess} data-segment>
+      {trace && seg.user?.rawInput && !seg.user.promptHidden && !seg.user.sourceInTrace ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
       {/* Work stays collapsed above the single latest-text slot. */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
@@ -256,7 +296,7 @@ export const SegmentView = memo(function SegmentView({
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {streaming !== undefined && liveRow}
-      {(latestItem || streaming !== undefined) && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} /></div>}
+      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} /></div>}
     </section>
   );
 });

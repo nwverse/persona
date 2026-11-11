@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,6 +12,41 @@ import (
 	"testing"
 	"time"
 )
+
+// Names lists every template, parsing all of them.
+func Names() []string {
+	if err := templates.parseAll(); err != nil {
+		panic(fmt.Sprintf("prompts: %v", err))
+	}
+	var out []string
+	for _, t := range templates.root.Templates() {
+		if t.Name() != "" {
+			out = append(out, t.Name())
+		}
+	}
+	return out
+}
+
+// parseAll adds every template file to the set.
+func (s *templateSet) parseAll() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") || strings.HasPrefix(path, "mcp/") {
+			return err // mcp/ holds tool definitions, not templates (mcp.go)
+		}
+		return s.parse(strings.TrimSuffix(path, ".md"))
+	})
+}
+
+// ToolNames lists every MCP tool defined here.
+func ToolNames() []string {
+	out := make([]string, 0, len(mcpTools()))
+	for n := range mcpTools() {
+		out = append(out, n)
+	}
+	return out
+}
 
 // Each prompt's output is pinned by the golden tests of the package that uses it (hub, kb, node: *_golden_test.go);
 // these check the package's own rules.
@@ -146,6 +182,7 @@ func TestMissingFieldPanics(t *testing.T) {
 
 func TestSmallPrompts(t *testing.T) {
 	for got, want := range map[string]string{
+		RenderReadonlyTaskPlanExit():       "This task is read-only. Stay in plan mode; do not request implementation approval. Return your findings and report completion to your supervisor with report_to_supervisor.",
 		RenderQuestionCancelled():          "The user closed this question without answering. Continue without an answer; do not repeat this question.",
 		RenderQuestionUserSpoke():          "The user did not pick an option: they wrote a new message in this conversation instead. It is delivered when you end this turn, so end the turn now and do not call ask_user again in it. Read their message then: it may be the answer; if you still need one, ask again after reading it.",
 		RenderRefused("他说不行"):              "（没有执行）他说不行",
@@ -153,6 +190,7 @@ func TestSmallPrompts(t *testing.T) {
 		RenderJSONOnly("system"):           "system\n\nReply with a single JSON object only, no prose, no code fences.",
 		RenderTranslateMailInput("S", "T"): "主题：S\n\nT",
 		RenderCodexInstructions("mem"):     "mem",
+		SnapshotCut():                      "- 快照到此截断；其余用 agents_list、todo_list、inbox 查",
 	} {
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
@@ -285,5 +323,35 @@ func TestSnapshotCalendarSaysFinishedMeetingsAreNotListed(t *testing.T) {
 		{Start: now.Add(90 * time.Minute), End: now.Add(120 * time.Minute), Title: "夜间发布会"}}}})
 	if !strings.Contains(got, "夜间发布会") {
 		t.Errorf("a meeting still to come is left out:\n%s", got)
+	}
+}
+
+// The triage's one-line work status is shown to the user as is: in their language when it isn't Chinese, and without
+// the internal ids an Agent's last words carry (#2363).
+func TestAgentTriageLineLanguageAndIDs(t *testing.T) {
+	zh := RenderAgentTriage(AgentTriage{})
+	en := RenderAgentTriage(AgentTriage{Language: "English"})
+	if strings.Contains(zh, "用English写") || !strings.Contains(en, "，用English写。") {
+		t.Fatalf("line language: zh has it %v, en has it %v", strings.Contains(zh, "用English写"), strings.Contains(en, "，用English写。"))
+	}
+	for _, s := range []string{zh, en} {
+		if !strings.Contains(s, "pane id、session id、批次号") {
+			t.Fatal("the line rule must keep internal ids out")
+		}
+	}
+}
+
+// The Progress row's paraphrase of a report follows the work line's rule (#3181): the user's language, a length,
+// no subject and no internal ids.
+func TestAgentReportLineLanguageAndIDs(t *testing.T) {
+	zh := RenderAgentReportLine(AgentReportLine{Max: 30})
+	en := RenderAgentReportLine(AgentReportLine{Language: "English", Max: 60})
+	if strings.Contains(zh, "用English写") || !strings.Contains(zh, "不超过 30 个字，") || !strings.Contains(en, "用English写，不超过 60 个字符，") {
+		t.Fatalf("line language and length:\n%s\n---\n%s", zh, en)
+	}
+	for _, s := range []string{zh, en} {
+		if !strings.Contains(s, "不要写「Agent」「它」这类主语") || !strings.Contains(s, "pane id、session id、批次号") {
+			t.Fatal("the line rule must keep the subject and internal ids out")
+		}
 	}
 }

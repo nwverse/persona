@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The Agents list's node menu (`NodeMenu`, docs/integrations/terminal.md「节点菜单」): what it offers and what it sends.
+/// The Agents list's node menu (`NodeMenu`, docs/integrations/terminal.md「Node menus」): what it offers and what it sends.
 @MainActor struct NodeMenuTests {
     private func session(_ id: String, pane: String? = "w1:p1", state: String = "working", workspace: String? = "w1",
                          space: String = "w1", kind: String? = "herdr", extra: String = "") -> Session {
@@ -26,6 +26,7 @@ import Testing
         #expect(!NodeMenu.offersPaneActions(session("a", pane: nil)), "no pane: nothing to split")
         #expect(!NodeMenu.offersPaneActions(session("a", pane: "orca:x")), "Orca does not split or close")
         #expect(!NodeMenu.offersPaneActions(session("a", pane: "botmux:x")))
+        #expect(!NodeMenu.offersPaneActions(session("a", pane: "tern:5", kind: "tern")), "Tern is not asked to split, run git or close")
         #expect(!NodeMenu.offersPaneActions(session("a", state: "offline")))
         #expect(!NodeMenu.offersPaneActions(session("a", extra: #","source_kind":"runtime""#)), "a runtime's session has no terminal")
     }
@@ -34,6 +35,8 @@ import Testing
         #expect(NodeMenu.offersSpaceActions(group([session("a")])))
         #expect(!NodeMenu.offersSpaceActions(group([session("a", workspace: nil, space: "-")], space: "-")))
         #expect(!NodeMenu.offersSpaceActions(group([session("a", pane: "orca:x")])))
+        #expect(!NodeMenu.offersSpaceActions(group([session("a", pane: "tern:5", kind: "tern")])))
+        #expect(NodeMenu.kind(group([session("a", pane: "tern:5", kind: "tern")])) == "tern")
         #expect(NodeMenu.workspaceID(group([session("a", workspace: nil)])) == "w1", "falls back to the space id")
     }
 
@@ -41,8 +44,13 @@ import Testing
         #expect(NodeMenu.gitBody(.pull, pane: "w1:p1") == ["op": "pull", "pane": "w1:p1"])
         #expect(NodeMenu.gitBody(.push, workspaceID: "w1", kind: "herdr") == ["op": "push", "workspace_id": "w1", "kind": "herdr"])
         #expect(NodeMenu.gitBody(.fetch, workspaceID: "w1", kind: nil) == ["op": "fetch", "workspace_id": "w1"])
-        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "拉取：已经是最新")
+        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "取回：已经是最新")
         #expect(NodeMenu.GitOp.fetch.done(nil) == "获取：完成")
+        // what came of it in the app's language (#1888); an older node's own words when there is no outcome
+        #expect(NodeMenu.GitOp.push.done(NodeMenu.GitOp.outcome("pushed")) == "推送：已推送")
+        #expect(NodeMenu.GitOp.pull.done(NodeMenu.GitOp.outcome("up_to_date")) == "取回：已经是最新代码")
+        #expect(NodeMenu.GitOp.outcome("something_new") == nil)
+        #expect(NodeMenu.GitOp.outcome(nil) == nil)
         #expect(NodeMenu.GitOp.allCases.map(\.rawValue) == ["pull", "push", "fetch"])
     }
 
@@ -58,6 +66,22 @@ import Testing
         actions.askCloseTab(session("a", extra: #","slot_name":"2""#))
         #expect(actions.closingTab?.tabID == "w1:t1")
         #expect(actions.closingTab?.name == "#2", "a numbered tab reads as in the chat's header")
+    }
+
+    /// Push sends the branch off the computer: it waits for a yes, naming where it runs (#1883). Pull and Fetch don't ask.
+    @Test func pushAsksFirst() {
+        let actions = NodeActions()
+        actions.git(.push, session: session("a"))
+        #expect(actions.askingPush?.body == ["op": "push", "pane": "w1:p1"])
+        #expect(actions.askingPush?.place == "p", "the pane's folder")
+        actions.askingPush = nil
+        actions.git(.push, space: group([session("a")]))
+        #expect(actions.askingPush?.body == ["op": "push", "workspace_id": "w1", "kind": "herdr"])
+        #expect(actions.askingPush?.place == "app")
+        actions.askingPush = nil
+        actions.git(.pull, session: session("a"))
+        actions.git(.fetch, space: group([session("a")]))
+        #expect(actions.askingPush == nil)
     }
 
     @Test func shellsAreTheWorkspacesPanesWithoutAnAgent() throws {
@@ -89,6 +113,18 @@ import Testing
         #expect(NodeMenu.launchableHere(Launcher(name: "claude")))
         #expect(NodeMenu.launchableHere(Launcher(name: "c2", agent: "claude")))
         #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex")))
+    }
+
+    /// Run Agent Here opens the agent it started (#3287): the session `panes/agent` names, on the space's computer and
+    /// hub group; an answer that names none leaves the list in front.
+    @Test func runHereOpensTheSessionTheAnswerNames() {
+        let started = NodeMenu.startedChat(Data(#"{"session_id":"s9"}"#.utf8), on: MachineRef(group: "", id: "m"))
+        #expect(started == SessionKey(machineID: "m", sessionID: "s9"))
+        let elsewhere = NodeMenu.startedChat(Data(#"{"session_id":" s9 "}"#.utf8), on: MachineRef(group: "work", id: "m"))
+        #expect(elsewhere == SessionKey(group: "work", machineID: "m", sessionID: "s9"), "another group's computer keeps its group")
+        #expect(NodeMenu.startedChat(Data("{}".utf8), on: MachineRef(group: "", id: "m")) == nil)
+        #expect(NodeMenu.startedChat(Data(#"{"session_id":""}"#.utf8), on: MachineRef(group: "", id: "m")) == nil)
+        #expect(NodeMenu.startedChat(Data(), on: MachineRef(group: "", id: "m")) == nil, "an empty answer")
     }
 
     @Test func rowMenuIsNotEqualWhenItsPaneItemsChange() {

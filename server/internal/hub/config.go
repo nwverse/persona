@@ -82,6 +82,10 @@ type MachineConfig struct {
 	// computer whose claude is logged in under a profile directory rather than ~/.claude (#1459); "~/" is the remote
 	// home. Unset, claude uses its default. Launchers (a ~/.zshrc alias, a managed one) keep their own.
 	ClaudeStartDir string `json:"claude_start_dir,omitempty"`
+	// InboxDir is where files sent to this machine to keep land (dest=inbox, phone to computer and computer to
+	// computer, docs/protocol/file-transfer.md): "~/" is the remote home, or an absolute folder in it. Unset,
+	// proto.DefaultInboxDir. The node refuses a folder the phone may not write to.
+	InboxDir string `json:"inbox_dir,omitempty"`
 }
 
 // NodePackagesConfig is where the manager fetches the node builds for the computers that the hub has none of its own
@@ -139,16 +143,21 @@ func (p AssistantProfile) ServiceBound() bool {
 // HTMLViewsOn is assistant.html_views with its default (on); it means nothing while PersonaView is off.
 func (p AssistantProfile) HTMLViewsOn() bool { return p.HTMLViews == nil || *p.HTMLViews }
 
+type SharingConfig struct {
+	PublicOrigin string `json:"public_origin,omitempty"`
+}
+
 type Config struct {
 	// AutoUpdateNodes explicitly opts into fleet upgrades after Hub updates and node reconnects.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Name is what people see this hub as (hubName); empty: its machine's host name.
 	Name string `json:"name,omitempty"`
 	// ShutdownTimeoutSeconds bounds the entire shutdown, including pool closure (default 8; policy, not a latency measurement).
-	ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds,omitempty"`
-	Listen                 string `json:"listen"`
-	Token                  string `json:"token"`
-	PublicURL              string `json:"public_url"`
+	ShutdownTimeoutSeconds int            `json:"shutdown_timeout_seconds,omitempty"`
+	Listen                 string         `json:"listen"`
+	Token                  string         `json:"token"`
+	PublicURL              string         `json:"public_url"`
+	Sharing                *SharingConfig `json:"sharing,omitempty"`
 	// DatabaseURL points at the Postgres container (scripts/deploy/deploy.sh creates it and fills this in).
 	DatabaseURL string `json:"database_url"`
 	// The manager's own sections (managerconf.Moved: the connectors, extensions, bots, mail sign-ins, Lark, usage

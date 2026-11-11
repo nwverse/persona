@@ -1,5 +1,5 @@
 import { CONTEXT_RE, FILE_RE, PERSONA_SERVERS, canonicalTool } from "./compatibility";
-// Items → what the chat shows (docs/apple/ios.md "Display logic"): every user message opens a segment; the segment shows
+// Items → what the chat shows (docs/apple/ios.md "Information architecture"): every user message opens a segment; the segment shows
 // the message, one work row folding the tools / thoughts / notices / intermediate replies, and the agent's last
 // words before the next message as the answer.
 
@@ -8,6 +8,7 @@ import { errorSignature, isRetryText, parseAPIError, type APIErrorInfo } from ".
 import { foldCompactions, isCompaction } from "./compaction";
 import { injectedOf } from "./injected";
 import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
+import { attachedAgentNotices } from "./task-association";
 import type { Injected, Item, MessageSource } from "./types";
 
 export type Step =
@@ -42,6 +43,11 @@ export interface UserMessage {
   continuedSource?: boolean;
   /** Original injected input blocks, before display parsing or shortening. */
   rawInput?: Item[];
+  /** A scheduled task's or follow-up's input while background rounds fold (docs/assistant/assistant.md "Background
+   *  rounds"): only its one line is shown, never the prompt (`injected.detail`, `rawInput`). */
+  promptHidden?: boolean;
+  /** Inside an opened background round: drawn as its source block, not as the raw model input supervision shows. */
+  sourceInTrace?: boolean;
 }
 
 /** A <persona-file kind="video" path="…" name="…" size="…" duration="…"/> in a message (docs/protocol/protocol.md "Sending video"). */
@@ -123,6 +129,13 @@ function unescapeAttr(s: string) {
   return s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
 
+/** A tag's `name="value"` attributes, unescaped. */
+export function tagAttrs(attrs: string): Record<string, string> {
+  const a: Record<string, string> = {};
+  for (const m of attrs.matchAll(ATTR_RE)) a[m[1]] = unescapeAttr(m[2]);
+  return a;
+}
+
 
 
 const VIDEO = ["mp4", "m4v", "mov", "webm", "mkv"];
@@ -158,19 +171,31 @@ export function formatDuration(seconds: number): string {
   return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
 }
 
+// The node's <persona-view-errors> feedback after the assistant's snapshot (its last rich views failed their check):
+// for the model, never the user's words. A hub before #4315 gave it as a user item of its own, or before the message.
+const VIEW_ERRORS_RE = /<persona-view-errors\b[^>]*>[\s\S]*?<\/persona-view-errors>\s*/g;
+
+/** What a user line says without the view feedback the node put before it (#4315). */
+export function withoutViewErrors(raw: string): string {
+  return raw.includes("<persona-view-errors") ? raw.replace(VIEW_ERRORS_RE, "") : raw;
+}
+
+/** An older hub's user item holding nothing but that feedback: no message of the user's. */
+export function viewFeedbackOnly(it: Item): boolean {
+  return it.role === "user" && it.kind === "text" && !!it.text?.includes("<persona-view-errors") && !withoutViewErrors(it.text).trim();
+}
+
 export function parseUserText(raw: string): { text: string; contexts: Context[]; files: AttachedFile[]; photos: string[] } {
   const contexts: Context[] = [];
   const files: AttachedFile[] = [];
   const photos: string[] = [];
-  let text = raw.replace(CONTEXT_RE, (_, attrs: string, body: string) => {
-    const a: Record<string, string> = {};
-    for (const m of attrs.matchAll(ATTR_RE)) a[m[1]] = unescapeAttr(m[2]);
+  let text = withoutViewErrors(raw).replace(CONTEXT_RE, (_, attrs: string, body: string) => {
+    const a = tagAttrs(attrs);
     contexts.push({ kind: a.kind ?? "context", title: a.title, url: a.url, text: body.trim() });
     return "";
   });
   text = text.replace(FILE_RE, (_, attrs: string) => {
-    const a: Record<string, string> = {};
-    for (const m of attrs.matchAll(ATTR_RE)) a[m[1]] = unescapeAttr(m[2]);
+    const a = tagAttrs(attrs);
     if (!a.path) return "";
     const num = (v: string | undefined) => (v !== undefined && Number.isFinite(Number(v)) ? Number(v) : undefined);
     files.push({ kind: a.kind || "file", path: a.path, name: a.name || a.path.split("/").pop() || a.path, size: num(a.size), duration: num(a.duration) });
@@ -198,6 +223,7 @@ function isUserMessage(i: Item) {
 }
 
 export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Segment[] {
+  const attached = attachedAgentNotices(items);
   const out: Segment[] = [];
   let cur: Segment | null = null;
   let lastUserEntry = "";
@@ -210,7 +236,9 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
   };
 
   for (const it of items) {
+    if (attached.has(it.id)) continue;
     const entry = it.id.split("#")[0];
+    if (viewFeedbackOnly(it)) continue;
     if (isUserMessage(it)) {
       if (cur?.user?.injected && entry === lastUserEntry && !cur.steps.length && !cur.answer && !cur.user.rawInput!.some((i) => i.id === it.id)) {
         cur.user.rawInput!.push(it);
@@ -259,7 +287,7 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       }
       case "tool_result": {
         const st = it.tool_use_id ? tools.get(it.tool_use_id) : undefined;
-        if (st) st.result = it;
+        if (st && !results?.has(it.tool_use_id!)) st.result = it;
         break; // a result without its call (the call is on an earlier page) has nothing to show
       }
       case "image": {
@@ -356,17 +384,122 @@ export function toolChip(use: Item): string {
     return "";
   };
   const name = use.tool_name ?? "";
+  const tool = name.startsWith("mcp__") && !isPersonaTool(name) ? "" : name;
+  const newer = ownEntry(CLAUDE_TOOL_CHIP, tool);
   let v = "";
-  if (name === "Bash" || name === "exec_command" || name === "shell") v = pick("description", "command", "cmd");
-  else if (/^(Read|Edit|Write|MultiEdit|NotebookEdit)$/.test(name)) v = shortFile(pick("file_path", "notebook_path"));
-  else if (name === "Grep" || name === "Glob") v = pick("pattern");
-  else if (name === "WebFetch") v = pick("url");
-  else if (name === "WebSearch") v = pick("query");
-  else if (name === "Task" || name === "Agent") v = pick("description", "prompt");
-  else if (name === "TodoWrite") v = t("lib-turns.update_todos");
-  else v = pick("description", "command", "file_path", "path", "query", "url", "prompt", "pattern", "name");
+  if (tool === "Bash" || tool === "exec_command" || tool === "shell" || tool === "PowerShell") v = pick("description", "command", "cmd");
+  else if (/^(Read|Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) v = shortFile(pick("file_path", "notebook_path"));
+  else if (tool === "Grep" || tool === "Glob") v = pick("pattern");
+  else if (tool === "WebFetch") v = pick("url");
+  else if (tool === "WebSearch") v = pick("query");
+  else if (tool === "Task" || tool === "Agent") v = pick("description", "prompt");
+  else if (tool === "TodoWrite") v = t("lib-turns.update_todos");
+  else if (newer) v = newer(inp, pick);
+  else v = pickSubject(inp);
   if (!v && Array.isArray(inp.command)) v = (inp.command as unknown[]).join(" ");
-  return v.split("\n")[0].slice(0, 200);
+  return v.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
+}
+
+/** The fields that say what an unknown tool's call is about, the most telling first (iOS ToolNaming.subjectKeys). */
+export const SUBJECT_KEYS = ["description", "title", "subject", "name", "file_path", "filePath", "notebook_path", "path", "url", "uri", "query", "pattern", "command", "prompt"];
+const PATH_KEYS = new Set(["file_path", "filePath", "notebook_path", "path"]);
+
+/** An unknown tool's subject: the first of SUBJECT_KEYS it has (a path by its file's name), else its first string by field name. */
+export function pickSubject(inp: Record<string, unknown>): string {
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  for (const k of SUBJECT_KEYS) if (str(inp[k])) return PATH_KEYS.has(k) ? baseFileName(str(inp[k])) : str(inp[k]);
+  for (const k of Object.keys(inp).sort()) if (str(inp[k])) return str(inp[k]);
+  return "";
+}
+
+const baseFileName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
+
+type Pick = (...keys: string[]) => string;
+/** What Claude Code's newer tools are about (iOS ToolPresentation.subject). */
+const CLAUDE_TOOL_CHIP: Record<string, (inp: Record<string, unknown>, pick: Pick) => string> = {
+  TaskCreate: (_, pick) => pick("subject", "description"),
+  TaskUpdate: (inp, pick) => pick("subject", "activeForm") || (inp.taskId != null ? `#${String(inp.taskId)}` : ""),
+  TaskGet: (inp) => (inp.taskId != null ? `#${String(inp.taskId)}` : ""),
+  TaskList: () => "",
+  ListAgents: () => "",
+  CronList: () => "",
+  ExitWorktree: () => "",
+  TaskStop: (_, pick) => pick("task_id", "shell_id"),
+  KillShell: (_, pick) => pick("shell_id", "task_id"),
+  KillBash: (_, pick) => pick("shell_id", "task_id"),
+  TaskOutput: (_, pick) => pick("task_id"),
+  BashOutput: (_, pick) => pick("bash_id", "task_id"),
+  SendMessage: (_, pick) => [pick("to", "recipient"), pick("summary") || pick("message", "content").split("\n")[0]].filter(Boolean).join(" · "),
+  Monitor: (inp, pick) => pick("description", "command") || String((inp.ws as Record<string, unknown> | undefined)?.url ?? ""),
+  ScheduleWakeup: (_, pick) => pick("reason"),
+  CronCreate: (_, pick) => [pick("cron"), pick("prompt").split("\n")[0]].filter(Boolean).join(" · "),
+  CronDelete: (_, pick) => pick("id"),
+  RemoteTrigger: (_, pick) => [humanizeTool(pick("action")), pick("trigger_id")].filter(Boolean).join(" · "),
+  LSP: (inp, pick) =>
+    inp.operation === "workspaceSymbol" && pick("query") ? pick("query") : [baseFileName(pick("filePath")), inp.line != null ? String(inp.line) : ""].filter(Boolean).join(":"),
+  EnterWorktree: (_, pick) => pick("name") || baseFileName(pick("path")),
+  SendUserFile: (inp, pick) => {
+    const list = [inp.files, inp.file_paths, inp.paths].find(Array.isArray) as unknown[] | undefined;
+    const paths = (list ?? []).map((f) => (typeof f === "string" ? f : String((f as Record<string, unknown>)?.path ?? (f as Record<string, unknown>)?.file_path ?? ""))).filter(Boolean);
+    if (pick("file_path", "path")) paths.push(pick("file_path", "path"));
+    return paths.length ? paths.map(baseFileName).join(", ") : pick("caption");
+  },
+  Artifact: (_, pick) => pick("title") || baseFileName(pick("file_path")) || pick("url"),
+  PushNotification: (_, pick) => pick("message"),
+  ReportFindings: (inp) => {
+    const findings = Array.isArray(inp.findings) ? (inp.findings as Record<string, unknown>[]) : [];
+    if (findings.length === 1) return String(findings[0]?.short_summary ?? findings[0]?.summary ?? "");
+    return findings.length ? t("lib-turns.findings", { count: findings.length }) : "";
+  },
+  ToolSearch: (_, pick) => (pick("query").startsWith("select:") ? pick("query").slice(7).split(",").join(", ") : pick("query")),
+  WaitForMcpServers: (inp, pick) => (Array.isArray(inp.servers) ? (inp.servers as unknown[]).map(String).join(", ") : pick("server")),
+  ListMcpResourcesTool: (_, pick) => pick("server"),
+  ReadMcpResourceTool: (_, pick) => pick("uri", "server"),
+  Skill: (_, pick) => pick("skill", "command"),
+};
+
+/** A table's entry for a key that comes from data (a tool's name, a word of it): its own entries only, so a tool or a
+ *  word called "constructor" or "toString" is not mistaken for one of Object's methods. */
+export function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+/** Words spelled their own way wherever they show up in a name (iOS ToolNaming.spelled). */
+// i18n-ignore-start: product names and acronyms, the same in every language
+const SPELLED: Record<string, string> = {
+  api: "API", ai: "AI", aws: "AWS", ci: "CI", cli: "CLI", csv: "CSV", devtools: "DevTools", dns: "DNS", gcp: "GCP", github: "GitHub",
+  gitlab: "GitLab", graphql: "GraphQL", html: "HTML", http: "HTTP", https: "HTTPS", id: "ID", ids: "IDs", ide: "IDE", ios: "iOS",
+  json: "JSON", llm: "LLM", lsp: "LSP", macos: "macOS", mcp: "MCP", oauth: "OAuth", openai: "OpenAI", pdf: "PDF", pr: "PR", prs: "PRs",
+  sdk: "SDK", sql: "SQL", ssh: "SSH", ui: "UI", uri: "URI", url: "URL", urls: "URLs", youtube: "YouTube",
+};
+// i18n-ignore-end
+const SPELLED_VALUES = new Set(Object.values(SPELLED));
+
+/** An identifier cut into words at _ - . / : and spaces, and where camel case turns ("getPRComments": get, PR, Comments). */
+export function nameWords(id: string): string[] {
+  return id
+    .split(/[_\-./: ]+/)
+    .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/))
+    .filter(Boolean);
+}
+
+/** An identifier in words, the first capitalized: "create_issue" is "Create issue", "getPRComments" "Get PR comments" (iOS ToolNaming.humanize). */
+export function humanizeTool(id: string): string {
+  const words = nameWords(id).map((w) => ownEntry(SPELLED, w.toLowerCase()) ?? (w.length > 1 && /^[A-Z0-9]+$/.test(w) ? w : w.toLowerCase()));
+  if (!words.length) return "";
+  const [first, ...rest] = words;
+  return [SPELLED_VALUES.has(first) ? first : first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(" ");
+}
+
+/** An MCP server's name as a name: "github" is "GitHub", "chrome-devtools" "Chrome DevTools"; a plugin's server and a
+ *  claude.ai connector read as their own name, once (iOS ToolNaming.serverName). */
+export function mcpServerName(server: string): string {
+  let s = server;
+  for (const prefix of ["plugin_", "claude_ai_"]) if (s.startsWith(prefix) && s.length > prefix.length) s = s.slice(prefix.length);
+  let words = nameWords(s);
+  const half = words.length / 2;
+  if (half >= 1 && Number.isInteger(half) && words.slice(0, half).join(" ").toLowerCase() === words.slice(half).join(" ").toLowerCase()) words = words.slice(0, half);
+  return words.map((w) => ownEntry(SPELLED, w.toLowerCase()) ?? w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 export function shortFile(p: string) {
@@ -398,7 +531,8 @@ export const TOOL_LABEL: Record<string, string> = {
 
 export function toolLabel(name?: string): string {
   if (!name) return t("lib-turns.tool");
-  if (TOOL_LABEL[name]) return TOOL_LABEL[name];
+  const label = ownEntry(TOOL_LABEL, name);
+  if (label) return label;
   // mcp__<server>__<tool>, and the server may have underscores itself (mcp__plugin_x_y__tool), like the apps
   if (name.startsWith("mcp__")) return name.slice(name.lastIndexOf("__") + 2).replace(/_/g, " ");
   return name;
@@ -418,12 +552,20 @@ export function mcpServer(name?: string): string | null {
   return i > 0 ? rest.slice(0, i) : rest || null;
 }
 
-/** A tool's name for a sentence (a permission card): an MCP tool as "Persona · mail send", others as written. */
+/** A tool's name for a sentence (a permission card): Persona's own MCP tool as "Persona · mail send", another server's
+ *  in words ("GitHub · Create issue", #2986), others as written. */
 export function toolDisplayName(name?: string): string {
   const server = mcpServer(name);
   if (server === null) return name || toolLabel();
-  const tool = name!.slice(5 + server.length + 2).replace(/_/g, " ");
-  return tool ? `${mcpServerLabel(server)} · ${tool}` : mcpServerLabel(server);
+  const raw = name!.slice(5 + server.length + 2);
+  if (PERSONA_SERVERS.has(server.replace(/^plugin_/, ""))) return raw ? `Persona · ${raw.replace(/_/g, " ")}` : "Persona";
+  const tool = humanizeTool(raw);
+  return tool ? `${mcpServerName(server)} · ${tool}` : mcpServerName(server);
+}
+
+/** The tool a card asks about, for its title: the manager's name for its own tools when it gave one (tool_title). */
+export function cardToolName(ix: { tool_name?: string; tool_title?: string }): string {
+  return ix.tool_title || toolDisplayName(ix.tool_name);
 }
 
 /** The MCP server ids that are Persona itself (`persona` today, `persona` if it is ever renamed; plugin_ dropped). */
@@ -490,7 +632,7 @@ const PERSONA_VERB_KEY: Record<string, string> = {
 export function personaToolVerb(name?: string): { verb: string; what?: string } | null {
   if (!isPersonaTool(name)) return null;
   const base = name!.slice(name!.lastIndexOf("__") + 2);
-  const key = PERSONA_VERB_KEY[canonicalTool(base)];
+  const key = ownEntry(PERSONA_VERB_KEY, canonicalTool(base));
   if (key) return { verb: t(`lib-turns.${key}`) };
   const family = /^(phone|mail)_(.+)$/.exec(base);
   if (family) return { verb: t(family[1] === "phone" ? "lib-turns.persona_phone" : "lib-turns.persona_mail"), what: family[2].replace(/_/g, " ") };
@@ -513,8 +655,6 @@ export interface Turn {
   trailing: Item[];
   /** Background tasks that woke the agent during this exchange (their notices). */
   wakes: Item[];
-  /** Everything from the first wake on, for the "Background task done" drawer. */
-  afterWake: Item[];
   /** Messages and steps in arrival order (how the exchange is drawn). */
   ordered: Item[];
 }
@@ -533,20 +673,11 @@ function isAnswerText(i: Item): boolean {
 const isWake = (i: Item) => i.kind === "notice" && i.wake === true;
 
 function newTurn(id: string): Turn {
-  return { id, users: [], process: [], trailing: [], wakes: [], afterWake: [], ordered: [] };
+  return { id, users: [], process: [], trailing: [], wakes: [], ordered: [] };
 }
 
 function cloneTurn(t: Turn): Turn {
-  return { ...t, users: [...t.users], process: [...t.process], trailing: [...t.trailing], wakes: [...t.wakes], afterWake: [...t.afterWake], ordered: [...t.ordered] };
-}
-
-/** Background tasks split an exchange into runs (before the first wake, after each one), each ending in the agent's
- *  words. The answer is the latest words, like any exchange's (#3783: the longest run's used to be, and everything
- *  after it went behind the chip, so a long-running agent's newest words were out of sight for hours); the drawer
- *  holds the runs since the first wake. */
-function collectWakeRuns(t: Turn) {
-  const first = t.ordered.findIndex(isWake);
-  if (first >= 0) t.afterWake = t.ordered.slice(first).filter((x) => !isUserInput(x));
+  return { ...t, users: [...t.users], process: [...t.process], trailing: [...t.trailing], wakes: [...t.wakes], ordered: [...t.ordered] };
 }
 
 /** Only Persona's visibility tools, not similarly named tools on unrelated MCP servers. */
@@ -584,7 +715,24 @@ export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string,
   return false;
 }
 
-export function buildBlocks(items: Item[]): Block[] {
+/** Message sources whose rounds fold in the main conversation while `assistant.main_background_folded` is on
+ *  (docs/assistant/assistant.md "Background rounds"): another conversation's message, a scheduled task, a follow-up. */
+const BACKGROUND_SOURCES: ReadonlySet<string> = new Set(["conversation", "followup", "patrol"]);
+
+/** The input's source when it starts a background round. A `followup` is one only as a scheduled follow-up (the hub
+ *  titles those): Persona continuing the user's own work after a usage limit reset (`limit_continue`) or waking the chat
+ *  for what it said it waits on (`wake`) carries the same source, and folding it would hide the answer to the user. */
+export function backgroundSource(it: Item): MessageSource | undefined {
+  if (!isUserInput(it) || it.kind !== "text") return undefined;
+  const injected = injectedOf(it);
+  const source = sourceOf(it, injected);
+  if (!source || !BACKGROUND_SOURCES.has(source.kind)) return undefined;
+  if (source.kind === "followup" && (injected?.state === "limit_continue" || injected?.state === "wake" || !source.title?.trim())) return undefined;
+  return source;
+}
+
+/** `background`: background rounds are separate rounds like supervision ones (a queued real message never joins them). */
+export function buildBlocks(items: Item[], background = false): Block[] {
   const blocks: Block[] = [];
   let cur: Turn | null = null;
   // the last exchange as it was before closing, and where it sits: a background task that reports back after a recap
@@ -598,7 +746,9 @@ export function buildBlocks(items: Item[]): Block[] {
     if (!cur) return;
     const t: Turn = cur;
     last.raw = cloneTurn(t);
-    if (t.wakes.length) collectWakeRuns(t);
+    // Background tasks split an exchange into runs (before the first wake, after each one), each ending in the agent's
+    // words. The answer is the latest words, like any exchange's (#3783: the longest run's used to be, so a
+    // long-running agent's newest words were out of sight for hours).
     t.answer = [...t.process].reverse().find(isAnswerText);
     if (last.reopenedAt !== null) {
       blocks.splice(last.reopenedAt, 0, { kind: "turn", turn: t }); // back in its place, the recap still after it
@@ -616,12 +766,13 @@ export function buildBlocks(items: Item[]): Block[] {
   };
 
   for (const [i, it] of items.entries()) {
+    if (viewFeedbackOnly(it)) continue;
     if (isUserInput(it)) {
       const entry = it.id.split("#")[0];
       const prev: Item | undefined = cur ? cur.ordered[cur.ordered.length - 1] : undefined;
       // Supervision is a separate round even when queued. A later real message must never join its fold.
       const sameMessage = prev && isUserInput(prev) && entry === lastUserEntry;
-      const supervision = injectedOf(it)?.state === "supervise";
+      const supervision = injectedOf(it)?.state === "supervise" || (background && !!backgroundSource(it));
       const supervising = supervisionRound;
       if (cur && (sameMessage || (it.queued && !supervision && !supervising))) {
         cur.users.push(it);
@@ -691,8 +842,9 @@ export function buildBlocks(items: Item[]): Block[] {
 }
 
 export type ChatLine =
-  /** A quiet supervision round, including all its segments and notices, never the next real input. */
-  | { kind: "supervision"; id: string; lines: ChatLine[]; live: boolean }
+  /** A quiet supervision round, including all its segments and notices, never the next real input. `source`: a
+   *  background round's (another conversation, a scheduled task, a follow-up); absent for supervision. */
+  | { kind: "supervision"; id: string; lines: ChatLine[]; live: boolean; source?: MessageSource }
   /** A message (or none), one work row for what the agent did after it, the agent's last words. */
   | { kind: "segment"; id: string; seg: Segment; live: boolean; wakes?: Turn }
   /** A notice of its own line: a wake that opens new work, "Interrupted" after an exchange. */
@@ -707,23 +859,10 @@ export type ChatLine =
 export interface ChatLinesOptions {
   /** The agent is at work: the last exchange is the live one. */
   live?: boolean;
-}
-
-/** The work of these items as one segment without a message: every step, the agent's words included (no answer). */
-export function workSegment(id: string, items: Item[]): Segment {
-  const segs = segments(items.filter((i) => !isUserInput(i)));
-  const out: Segment = { id, steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] };
-  for (const s of segs) {
-    out.steps.push(...s.steps);
-    if (s.answer) out.steps.push({ kind: "text", id: s.answer.id, item: s.answer });
-    out.tools += s.tools;
-    out.thoughts += s.thoughts;
-    out.folds.push(...s.folds);
-    out.start ??= s.start;
-    out.end = s.end ?? out.end;
-  }
-  out.replies = out.steps.filter((x) => x.kind === "text").length;
-  return out;
+  /** Fold background rounds (the main conversation while `assistant.main_background_folded` is on): rounds another
+   *  conversation, a scheduled task or a follow-up started fold like quiet supervision rounds, and a scheduled task's
+   *  prompt is not shown (docs/assistant/assistant.md "Background rounds"). */
+  background?: boolean;
 }
 
 function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>): ChatLine[] {
@@ -740,7 +879,7 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
   segs.forEach((seg, k) => {
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
-    // woken by background tasks: the chip with the runs since the first wake sits above the newest words (#3783)
+    // woken by background tasks: the last segment carries the exchange and its wakes (#3783)
     out.push({ kind: "segment", id: segmentIdentity(seg), seg, live: live && last, ...(last && t.wakes.length ? { wakes: t } : {}) });
   });
   for (const n of t.trailing) out.push({ kind: "notice", id: n.id, item: n });
@@ -749,8 +888,11 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
 
 /** The chat as lines (iOS ChatLines.lines): exchanges, their wakes and notices, recaps, API errors as cards. */
 export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[] {
-  const blocks = buildBlocks(foldCompactions(items));
-  const source = items.at(-1);
+  const attached = attachedAgentNotices(items);
+  const feed = items.filter((i) => !attached.has(i.id));
+  const background = opts.background === true;
+  const blocks = buildBlocks(foldCompactions(feed), background);
+  const source = feed.at(-1);
   // A wake can reopen a turn before a recap. Select the owner of the latest source item, not the last drawn block.
   const active = opts.live && source ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id))) : undefined;
   const liveId = active && active.kind === "turn" ? active.turn.id : undefined;
@@ -759,16 +901,19 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   const results = new Map(items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => [i.tool_use_id!, i]));
   // A recap or compaction can split one round into several blocks. Supervision lasts until the next actual input,
   // not merely until one Turn closes; orphan continuation segments and live prose still belong to that round.
-  let round: { lines: ChatLine[]; ordered: Item[]; live: boolean } | undefined;
+  let round: { lines: ChatLine[]; ordered: Item[]; live: boolean; source?: MessageSource } | undefined;
   const flush = () => {
     if (!round) return;
     if (supervisionVisible(round.ordered, results, round.live)) out.push(...round.lines);
-    else out.push({ kind: "supervision", id: round.lines[0].id, lines: round.lines, live: round.live });
+    else out.push({ kind: "supervision", id: round.lines[0].id, lines: round.lines, live: round.live, ...(round.source ? { source: round.source } : {}) });
     round = undefined;
   };
   const append = (lines: ChatLine[], ordered: Item[], live: boolean) => {
     if (!round) { out.push(...lines); return; }
-    for (const line of lines) if (line.kind === "segment") line.seg.supervision = true;
+    for (const line of lines) if (line.kind === "segment") {
+      line.seg.supervision = true;
+      if (round.source && line.seg.user) line.seg.user.sourceInTrace = true;
+    }
     round.lines.push(...lines);
     round.ordered.push(...ordered);
     round.live ||= live;
@@ -776,7 +921,9 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   for (const b of blocks) {
     if (b.kind === "turn" && b.turn.users.length) {
       flush();
+      const source = background && b.turn.users[0] ? backgroundSource(b.turn.users[0]) : undefined;
       if (b.turn.users.some((i) => injectedOf(i)?.state === "supervise")) round = { lines: [], ordered: [], live: false };
+      else if (source) round = { lines: [], ordered: [], live: false, source };
     }
     if (b.kind === "row") {
       append([isCompaction(b.item) ? { kind: "compact", id: b.item.id, item: b.item } : { kind: "recaps", id: b.item.id, items: [b.item] }], [b.item], false);
@@ -789,6 +936,7 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   if (opts.live && !liveId) append([{ kind: "segment", id: "live", seg: { id: "live", steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] }, live: true }], [], true);
   flush();
   const lines = foldRecaps(foldAPIErrors(out));
+  if (background) hideScheduledPrompts(lines);
   let previous: string | undefined;
   for (const line of lines) {
     if (line.kind === "supervision") {
@@ -800,6 +948,15 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
     previous = line.seg.steps.length || line.seg.answer ? undefined : key;
   }
   return lines;
+}
+
+/** A scheduled task's or follow-up's input shows its one line, never its prompt, folded or not. */
+function hideScheduledPrompts(lines: ChatLine[]) {
+  for (const line of lines) {
+    if (line.kind === "supervision") hideScheduledPrompts(line.lines);
+    const user = line.kind === "segment" ? line.seg.user : undefined;
+    if (user && (user.source?.kind === "patrol" || user.source?.kind === "followup")) user.promptHidden = true;
+  }
 }
 
 /** The API error a line ends in: an answer, or a notice of its own line. `rest`: the line without it (null: nothing). */
@@ -865,35 +1022,6 @@ export function openRecap(lines: ChatLine[], pending?: Item): OpenRecap | undefi
   const last = lines[lines.length - 1];
   if (!pending || last?.kind !== "recaps" || last.items[last.items.length - 1]?.id !== pending.id) return undefined;
   return { line: last.id, earlier: last.items.slice(0, -1), newest: pending };
-}
-
-/** The drawer behind the wakes chip: each wake (its task reports, then what the agent answered to them), newest wake
- *  first, but the exchange's answer, which the chat shows below the chip; the steps in between fold into one work row
- *  at the end. */
-export function wakeDrawer(t: Turn): { groups: { id: string; notices: Item[]; answer?: Item }[]; process: Item[] } {
-  const groups: { id: string; notices: Item[]; answer?: Item }[] = [];
-  const process: Item[] = [];
-  let chunk: Item[] = [];
-  const flush = () => {
-    let answer = -1;
-    for (let i = chunk.length - 1; i >= 0; i--) if (isAnswerText(chunk[i])) { answer = i; break; }
-    const notices: Item[] = [];
-    chunk.forEach((r, i) => {
-      if (i === answer) return;
-      if (r.kind === "notice" && (r.task || r.wake)) notices.push(r);
-      else process.push(r);
-    });
-    if (notices.length || answer >= 0) groups.push({ id: (notices[0] ?? chunk[answer]).id, notices, answer: answer >= 0 ? chunk[answer] : undefined });
-    chunk = [];
-  };
-  for (const r of t.afterWake) {
-    if (isWake(r)) flush(); // each wake starts its own answer
-    chunk.push(r);
-  }
-  flush();
-  // the exchange's answer (the newest words) is in the chat below the chip, not again in here
-  for (const g of groups) if (g.answer && g.answer.id === t.answer?.id) g.answer = undefined;
-  return { groups: groups.filter((g) => g.notices.length || g.answer).reverse(), process };
 }
 
 /** Sent by another Persona conversation (conversation_new / conversation_send), not typed by you. */

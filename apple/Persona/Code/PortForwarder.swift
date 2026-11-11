@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-/// A machine's port on the phone's loopback (docs/operations/ports.md「转发」), the way Moshi forwards a dev server: the app
+/// A machine's port on the phone's loopback (docs/operations/ports.md「Forwarding」), the way Moshi forwards a dev server: the app
 /// listens on 127.0.0.1 and ::1 at the same port number when it is free (another one when not), and each connection
 /// the in-app browser makes there becomes one WebSocket to the hub (…/ports/{port}/connect, the device token), which
 /// carries its bytes to the port on the machine. The page loads from http://localhost:<port>/ exactly as on the
@@ -54,7 +54,7 @@ final class PortForwarder {
         comps.percentEncodedPath = base + "/api/v1/machines/\(key.machine)/ports/\(key.port)/connect"
         comps.scheme = config.url.scheme == "https" ? "wss" : "ws"
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url), timeoutInterval: 15)
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         return req
     }
@@ -120,6 +120,7 @@ nonisolated final class PortForward: @unchecked Sendable {
 
     private func accept(_ conn: NWConnection) {
         let ws = session.webSocketTask(with: request)
+        ws.delegate = HubRedirects.shared
         ws.maximumMessageSize = 1 << 20
         Pump(conn: conn, ws: ws, queue: queue).start()
     }

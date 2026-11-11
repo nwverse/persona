@@ -271,6 +271,7 @@ func echoLines(items []proto.Item) []echoLine {
 
 var echoDropped = []*lazyre.Regexp{
 	transcript.ContextRe,
+	transcript.ViewErrorsRe, // the assistant's view feedback before the message
 	lazyre.New(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
 	lazyre.New(`(?s)<attached_images>.*?</attached_images>`),
 	lazyre.New(`<[\\/]*pasted_content[^>]*>`),
@@ -305,6 +306,13 @@ func echoWords(s string) []rune {
 // pictures fits a line with none; a bare command fits the command with the arguments picked for it; /compact fits the
 // notice it became.
 func echoFits(r *echoRecord, line []proto.Item) bool {
+	if inert := inertControls(r.Text); inert != r.Text { // a terminal is pasted the inert text (hostPrompt), a runtime the text
+		e := *r
+		e.Text = inert
+		if echoFits(&e, line) {
+			return true
+		}
+	}
 	var words []rune
 	user, notice := false, false
 	first := "" // the line's first word

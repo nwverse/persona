@@ -9,17 +9,17 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extwire"
-	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The hub's own settings persona_settings offers (docs/assistant/assistant.md "Operating Persona itself", 2026-11-01): the tool is the
-// assistant's (its own settings are its own: "About me", its launcher, …), which lists these (app.call settings.list) and
-// hands the actions on them to the hub (app.tool persona_settings). One registry: each setting says what it is, how to
-// read it and how a change is made. Reads are free; every change is a card on the phone that says what changes (before
-// → after) and is applied only when approved. What the card needs filled in (a password) is typed on the phone and
-// never passes through the model. Some things are never here: the hub's and devices' tokens, pairing, which machines
-// the hub reaches, permission modes.
+// The hub's own settings persona_settings offers (docs/assistant/assistant.md "Current structure", the "Control Persona
+// itself" row): the tool is the assistant's (its own settings are its own: "About me", its launcher, …), which lists
+// these (app.call settings.list) and hands the actions on them to the hub (app.tool persona_settings). One registry:
+// each setting says what it is, how to read it and how a change is made. Reads are free; every change is a card on the
+// phone that says what changes (before → after) and is applied only when approved. What the card needs filled in (a
+// password) is typed on the phone and never passes through the model. Some things are never here: the hub's and
+// devices' tokens, pairing, which machines the hub reaches, permission modes.
 
 // selfSetting is one thing Persona may change. A value setting has set; a list has add / remove.
 type selfSetting struct {
@@ -123,8 +123,11 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	if err != nil {
 		return "", err
 	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
+	if !r.UserAllowed() { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
+		if r.UserDenied() {
+			return "The user declined the change: nothing changed.", nil
+		}
+		return prompts.RenderSettingUnanswered(), nil
 	}
 	for _, f := range change.fields {
 		if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
@@ -139,24 +142,6 @@ func orNone(s string) string {
 		return "（无）"
 	}
 	return s
-}
-
-// ss is a hub-self_settings text in l.
-func ss(l i18n.Lang, name string, args ...i18n.Args) string {
-	return i18n.T(l, "hub-self_settings."+name, args...)
-}
-
-// clipped is a value as the card shows it, in l.
-func clipped(l i18n.Lang, s string) string {
-	if strings.TrimSpace(s) == "" {
-		return ss(l, "none")
-	}
-	return clip(oneLine(s), 120)
-}
-
-// changeSummary is the card's "change title: before → after".
-func changeSummary(l i18n.Lang, title, before, after string) string {
-	return ss(l, "change", i18n.Args{"title": title, "before": clipped(l, before), "after": clipped(l, after)})
 }
 
 // managerSettings are the manager's persona_settings entries (none while it is away).

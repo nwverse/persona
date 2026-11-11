@@ -28,12 +28,13 @@ import (
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
-	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
-	"kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
+	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
+	"inbox_folders", "inbox_move", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review",
-	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete"}
+	"conversation_new", "conversation_send", "task_plan", "task_review", "task_scope", "task_start_screen", "task_start_keys", "task_retry",
+	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
+	"direction_name", "leader_progress"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -41,15 +42,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.hello(ctx).PersonaView {
 		names = append(names, "view_show", "view_update", "view_get")
 	}
-	tools := toolsNamed(names)
-	for _, tool := range tools {
-		if tool.Name == "persona_settings" {
-			alias := tool
-			alias.Name = compat.SettingsTool
-			tools = append(tools, alias)
-		}
-	}
-	return tools
+	return toolsNamed(names)
 }
 
 // toolsNamed are the MCP tools of these names, as prompts/mcp has them.
@@ -69,11 +62,21 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
+	if res, refused := s.meetingRefuses(ctx, call.MachineID, call.SessionID, call.Name, true); refused {
+		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
+	}
 	switch call.Name {
 	case "persona_settings":
 		return s.toolPersonaSettings(ctx, call, args) // settings_tool.go
+	case "task_plan", "agent_start":
+		// A task's agent does the work itself (supervise_leader.go); the hub's own starts (an inbox hand-off) are not
+		// a model's call and come through runTool.
+		if err := s.workerRefusal(ctx, call.MachineID, call.SessionID); err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
 	}
-	res, err := s.runTool(ctx, call.MachineID, call.SessionID, call.Name, args)
+	// A model's call says which conversation asked (task_brief.go callerOrigin); the hub's own runTool calls do not.
+	res, err := s.runTool(withToolCaller(ctx, call.MachineID, call.SessionID), call.MachineID, call.SessionID, call.Name, args)
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
@@ -91,7 +94,7 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	// Health stays in the health space (docs/assistant/health.md "Isolation"): it writes nothing to the knowledge base,
+	// Health stays in the health space (docs/assistant/health.md "How directories and memory are isolated"): it writes nothing to the knowledge base,
 	// nor changes or starts what is imported into it (kb_history_status only reads).
 	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
 		if space, _ := s.selfSpace(ctx, self); space == SpaceHealth {
@@ -109,6 +112,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTaskPlanFrom(ctx, machine, self, args)
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
+	case "task_start_screen": // a failed start's kept tab (start_remedy.go)
+		return s.toolTaskStartScreen(ctx, self, args)
+	case "task_start_keys":
+		return s.toolTaskStartKeys(ctx, self, args)
+	case "task_retry":
+		return s.toolTaskRetry(ctx, self, args)
+	case "task_scope":
+		return s.toolTaskScope(ctx, self, args) // task_brief_scope.go
 	case "task_review":
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
@@ -122,12 +133,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return res, err
 	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
 		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
+	case "direction_name":
+		return s.toolDirectionName(ctx, self, args) // direction_progress.go
+	case "leader_progress":
+		return s.toolLeaderProgress(ctx, self, args)
+	case "concern_report":
+		return s.toolConcernReport(ctx, machine, self, args) // concerns.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
 		return s.toolKBHistory(ctx, name, args) // kb_history_tools.go
 	case "interaction_answer":
 		return s.toolInteractionAnswer(ctx, self, args)
+	case "ask_escalate":
+		return s.toolAskEscalate(ctx, self, args) // ask_route.go
 	case "secret_run":
 		return s.toolSecretRun(ctx, machine, self, args) // secret_run.go
 	case "list_places":
@@ -138,6 +157,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolInboxDraft(ctx, self, args)
 	case "inbox_suggest":
 		return s.toolInboxSuggest(ctx, self, args)
+	case "inbox_folders":
+		return s.toolInboxFolders(ctx, args) // inbox_folders.go
+	case "inbox_move":
+		return s.toolInboxMove(ctx, args)
 	case "notify_user":
 		var a struct{ Title, Body string }
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
@@ -148,7 +171,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body, Asked: true})
-		s.channelsPushed(machine, self, a.Title, a.Body) // the Feishu bot and the channels with pushes on (channels.go)
+		// The Feishu bot and the channels with pushes on (channels_handler.go).
+		s.channelsPushed(machine, self, a.Title, a.Body)
 		s.promoteSupervision(self)
 		return "Notification sent.", nil
 	case "conversations_list":
@@ -210,12 +234,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// DismissNotice: close a notice that Enter only closes (no options) before sending; any other dialog
 			// still refuses the send.
 			DismissNotice bool `json:"dismiss_notice"`
-			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go).
-			Task *sendTask `json:"task"`
+			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go),
+			// read from RawTask by givenTask (nil: a reply).
+			Task    *sendTask       `json:"-"`
+			RawTask json.RawMessage `json:"task"`
 			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
 			Attachments []string `json:"attachments"`
 		}
 		_ = json.Unmarshal(args, &a)
+		a.Task = givenTask(a.RawTask)
 		am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 		if err != nil {
 			return "", err
@@ -391,7 +418,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
-		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, a.Prompt)
+		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, s.withCloseoutBrief(sctx, a.Prompt, false))
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -437,7 +464,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		lctx, lcancel := context.WithTimeout(sctx, agentStartListTimeout)
 		knownIDs := s.knownSessionIDs(lctx, am.ID)
 		lcancel()
-		if err := s.call(sctx, am.ID, DeviceSessionStart, params, &res); err != nil {
+		s.setPlanThen(ctx, am.ID, params)
+		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
+			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
+			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
+			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+		}
+		if err != nil {
 			s.recordStartFailure(ctx, am.ID, launcher, err)
 			if startResultUnknown(err) {
 				// The node may already have the session and a running agent although the answer never came back:
@@ -448,9 +482,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
-		if s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID) {
+		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
-				"you are told here when it is done or waits for the user, nothing else notifies the user).%s", am.Name, a.Cwd, res.Session.SessionID, note), nil
+				"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note), nil
 		}
 		return fmt.Sprintf("Started on %s in %s: session %s. It shows up in the app's Agents tab.%s", am.Name, a.Cwd, res.Session.SessionID, note), nil
 	}
@@ -488,11 +522,11 @@ func startResultUnknown(err error) bool {
 // list failed) the model gets neutral text: check the Agents list first and never start a second copy.
 func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, cwd, prompt string, tab any, note string, knownIDs map[string]bool) string {
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, knownIDs); ok {
-		if s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID) {
+		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 				"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
-				"you are told here when it is done or waits for the user, nothing else notifies the user).%s",
-				m.Name, cwd, sess.SessionID, note)
+				"%s).%s",
+				m.Name, cwd, sess.SessionID, told, note)
 		}
 		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 			"confirmed from the machine's own list). It shows up in the app's Agents tab.%s", m.Name, cwd, sess.SessionID, note)
@@ -596,9 +630,34 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if err := json.Unmarshal(args, &a); err != nil || len(a.Questions) == 0 {
 		return "", fmt.Errorf("questions are required")
 	}
+	var da askDeadlineArgs
+	if err := json.Unmarshal(args, &da); err != nil {
+		return "", fmt.Errorf("arguments: %v", err) // a deadline or reversible of the wrong type is no deadline to ignore
+	}
+	now := time.Now()
+	deadline, err := readAskDeadline(da, now)
+	if err != nil {
+		return "", err
+	}
+	expires := now.Add(askUserWait)
+	if !deadline.At.IsZero() {
+		// The deadline is kept as a time in the question's arguments (askDeadlineOf reads it back when it expires), and
+		// the card waits no longer than it.
+		var m map[string]any
+		if err := json.Unmarshal(args, &m); err != nil {
+			return "", fmt.Errorf("arguments: %v", err)
+		}
+		m["deadline"] = deadline.At.Format(time.RFC3339Nano)
+		if args, err = json.Marshal(m); err != nil {
+			return "", err
+		}
+		if deadline.At.Before(expires) {
+			expires = deadline.At
+		}
+	}
 	ix := proto.Interaction{
 		ID: "ix_" + randomHex(6), MachineID: machine, SessionID: sessionID, SessionTitle: "Persona", Kind: proto.IxQuestion, CanCancel: true,
-		ToolName: "ask_user", ToolInput: args, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(askUserWait).UTC(),
+		ToolName: "ask_user", ToolInput: args, CreatedAt: now.UTC(), ExpiresAt: expires.UTC(),
 	}
 	if c, ok := s.session(ctx, machine, sessionID); ok {
 		ix.Cwd = c.Cwd
@@ -609,6 +668,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	for _, q := range a.Questions {
 		ix.Questions = append(ix.Questions, proto.Question{Question: q.Question, Header: q.Header, MultiSelect: q.MultiSelect, Options: q.Options})
 	}
+	markRecommended(s.lang(ctx), s.location(ctx), ix.Questions, deadline)
 	// Answers come back keyed by question text: two questions with the same text would lose one answer.
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
@@ -627,7 +687,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
 		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
 		if err == nil {
-			return prompts.RenderQuestionMovedToTodo(prompts.QuestionMovedToTodo{TodoID: t.ID, Title: t.Title}), nil
+			return s.askExpiredResult(context.WithoutCancel(ctx), ix, t, deadline), nil
 		}
 		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}
@@ -647,6 +707,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 // ask puts ix on the phone (the snapshot's interactions: the hub shows it like any agent's card, pushes it and
 // expires it) and waits for the answer (Action); when ctx ends first the question is withdrawn.
 func (s *Service) ask(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	ix = s.ownCard(ctx, ix)
 	q := &question{ix: ix, answer: make(chan proto.Resolution, 1)}
 	s.questions.mu.Lock()
 	if s.questions.m == nil {
@@ -745,6 +806,7 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 	if r.Cancel && (q.ix.Kind != proto.IxQuestion || !q.ix.CanCancel || !r.IsQuestionCancel()) {
 		return ActionResult{}, errInvalidQuestionCancel
 	}
+	r = honest(q.ix, r)
 	select {
 	case q.answer <- r:
 	default: // answered already
@@ -813,6 +875,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	if state == "" {
 		state = "active"
 	}
+	now := time.Now()
 	var res struct {
 		Interactions []proto.Interaction `json:"interactions"`
 	}
@@ -850,7 +913,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		if !m.Online {
 			offline = append(offline, m.Name)
 		}
-		list, _ := s.sessions(ctx, m.ID)
+		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
 			if c.Assistant {
 				continue
@@ -865,6 +928,14 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			case "active":
 				if c.State != proto.StateNeedsYou && c.State != proto.StateWorking && c.State != proto.StateUnread && !c.AwaitsReply {
 					continue // a seen one still asking the user is active too (#5096)
+				}
+			case "done":
+				if snapshotAgentGroup(c, now) != snapshotAgentDone || muted[c.SessionID] {
+					continue
+				}
+			case "muted":
+				if snapshotAgentGroup(c, now) == snapshotAgentOutside || !muted[c.SessionID] {
+					continue
 				}
 			default:
 				if c.State != state {
@@ -922,8 +993,17 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		if n := len(c.Background); n > 0 {
 			fmt.Fprintf(&b, " · 后台任务 %d", n)
 		}
+		if state == "done" {
+			b.WriteString(" · work=done")
+		}
+		if state == "muted" {
+			b.WriteString(" · muted")
+		}
 		b.WriteString("\n")
-		for _, w := range runningWorkflows(c, time.Now()) { // its turn ended to wait for them: not done (#2935)
+		if (state == "done" || state == "muted") && c.Work != nil && c.Work.Phase != proto.WorkWorking && c.Work.Line != "" {
+			fmt.Fprintf(&b, "    结论：%s\n", clip(oneLine(c.Work.Line), 200)) // i18n-ignore: agents_list output for the model, as the lines around it
+		}
+		for _, w := range runningWorkflows(c, now) { // its turn ended to wait for them: not done (#2935)
 			fmt.Fprintf(&b, "    后台 workflow 在跑（在等它的结果，没做完）：%s\n", prompts.RenderSnapshotWorkflow(w))
 		}
 		for _, p := range pending[[2]string{r.m.ID, c.SessionID}] {

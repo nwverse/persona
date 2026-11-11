@@ -145,7 +145,7 @@ func TestEngineUseSwitches(t *testing.T) {
 	if live(m, sidA) || m[sidB].PaneID != "herdr-core:t1" || m[sidB].Status != proto.StatusWorking {
 		t.Errorf("after the switch: %v", m)
 	}
-	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.HerdrCore {
+	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.HerdrCore+","+host.Tmux {
 		t.Errorf("hosts %v", kinds)
 	}
 	select {
@@ -165,7 +165,7 @@ func TestEngineUseSwitches(t *testing.T) {
 	if live(m, sidB) {
 		t.Errorf("herdr-core's session still live: %+v", m[sidB])
 	}
-	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr {
+	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr+","+host.Tmux {
 		t.Errorf("hosts %v", kinds)
 	}
 
@@ -201,7 +201,7 @@ func TestEngineBothListsBothHosts(t *testing.T) {
 	if a.PaneID != "w1:p1" || b.PaneID != "herdr-core:t1" || b.Status != proto.StatusWorking {
 		t.Fatalf("combined sessions: %+v / %+v", a, b)
 	}
-	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr+","+host.HerdrCore {
+	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr+","+host.HerdrCore+","+host.Tmux {
 		t.Errorf("hosts %v", kinds)
 	}
 	if n.defaultHost().Kind() != host.Herdr {
@@ -253,11 +253,13 @@ func TestEngineDetection(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	n.hosts.Set(engineHosts(proto.EngineHerdrCore, nil)...) // herdr not the engine: its CLI says the version
 	got := n.engines(context.Background(), "")
-	if len(got) != 5 || got[0] != (proto.Engine{ID: "herdr", Name: "herdr", Available: true, Version: "0.9.3"}) ||
+	if len(got) != 7 || got[0] != (proto.Engine{ID: "herdr", Name: "herdr", Available: true, Version: "0.9.3"}) ||
 		got[1] != (proto.Engine{ID: "herdr-core", Name: "Herdr App", Available: true, Version: "0.1.16"}) ||
 		got[2] != (proto.Engine{ID: "herdr-both", Name: "herdr + Herdr App", Available: true}) ||
 		got[3] != (proto.Engine{ID: "orca", Name: "Orca"}) || // no Orca here (TestMain): listed, not available
-		got[4] != (proto.Engine{ID: "paseo", Name: "Paseo"}) { // nor Paseo
+		got[4] != (proto.Engine{ID: "tern", Name: "Tern"}) || // nor Tern
+		got[5] != (proto.Engine{ID: "paseo", Name: "Paseo"}) || // nor Paseo
+		got[6] != (proto.Engine{ID: "cindy", Name: "Cindy"}) { // nor Cindy
 		t.Errorf("engines %+v", got)
 	}
 	if tr := f.trace(); len(tr) != 0 {

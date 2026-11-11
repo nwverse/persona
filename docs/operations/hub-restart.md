@@ -159,7 +159,7 @@ Previously clients received a string of "machine offline" and "interaction ended
 
 ### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_reports.go`)
 
-Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
+Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects to computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
 It first hands the `NodeInfo` and session lists of the machines online at this moment to its next process (its own settings `hub.warm_machines`, plus each machine's engines `engines`), then disconnects them (without reporting them offline).
 When the hub shuts down it waits for the manager to exit (as it used to wait for node connections, within the shutdown budget).
 
@@ -196,6 +196,10 @@ The assistant's claude no longer belongs to a single hub connection:
   stops idle chat processes, and `exec`s the new binary (same PID, invisible to systemd / launchd). Idle chats `--resume` on their next message. Old resident nodes do not understand SIGHUP; they simply exit and are restarted, like the old `restart`.
 
 Machines without a resident node (where the hub starts `node --stdio` directly over ssh and it handles everything itself) behave as before: a hub restart still interrupts chats, and background tasks still get "just restarted".
+  The node stops them itself: when its connection ends, `Serve` returns only once every assistant process (and the warm spare) has exited, those ignoring SIGTERM killed after 5 s (`stopAtConnectionEnd`, `stopAndWait`).
+  On the hub machine the manager ends that node by closing its stdin, not with a kill, and kills it only after 10 s (`localNodeStopGrace` in `server/internal/devices/machine.go`).
+  Before #4259 a blue-green switch SIGKILLed it: its Claude processes, each leading its own process group, went on beside the ones the next node resumed for the same conversations,
+  and that node refused them the assistant's tools. `scripts/deploy/hub-systemd.sh` says so after a switch on a machine with no resident node (no `node-attach.sock`).
 
 ### Clients tolerate short disconnects
 
@@ -215,6 +219,7 @@ The shared client approach (done on web and Android; for iOS / Mac see the issue
 - node: between the local resident node and the hub there is only a relay; after a hub restart it reconnects within 0.2 s and takes over the chats; ssh computers still reconnect in 2–8 s, hidden from clients by the warm start.
 - A node that disconnects and comes right back (a resident node `exec`ing a new binary while idle takes about 2 s, the relay process is replaced): the running hub keeps showing that machine unchanged for **5 s**
   (`reconnectGrace`, `detach` in the manager's `devices/conn.go`); if it comes back nothing is reported, and only if it is still gone after 5 s is it shown offline as before. persona-link computers are the exception: a dropped link means the computer left, so they go offline at once.
+  Those 2 s assume the kept chats end on SIGTERM. One that ignores it delays the exec by up to 7 s: the node gives them 5 s, kills the process groups still running and waits up to 2 s more (`stopAll` in `node/assistant_keep.go`). That is longer than `reconnectGrace`, so the machine may show offline for a moment, and close to the relay's 8 s below.
 - While a resident node is `exec`ing, its socket file still exists but nobody listens: `Relay` in `node --stdio` waits up to 8 s on "connection refused" (`dialResident`)
   instead of taking the connection itself, which would land the assistant's chats in the hub's cgroup again. Without a socket file (no resident node installed) it handles things itself immediately, as before.
   Node-side state (session state, background tasks) is in Postgres and loaded with `state.load` after connecting; the hub re-subscribes the subscribed sessions with `session.watch` (`since_seq`).

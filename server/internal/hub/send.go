@@ -106,6 +106,12 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	text, isText := p["text"].(string)
+	if isText {
+		r = h.captureHumanSubmission(r, text)
+	}
+	for _, reserved := range []string{"creation_id", "incarnation", "caller", "submission", "share_authority"} {
+		delete(p, reserved)
+	}
 	var start freshStart
 	fresh := false
 	if isText && strings.TrimSpace(text) != "" && !answerOnly(r) {
@@ -186,7 +192,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	defer cancel()
 	id, _ := p["client_msg_id"].(string)
 	if ch := channel.FromClientMsgID(id, []string{"voice"}); ch != "" {
-		h.channelNoted(ch, m.cfg.ID, sid) // a voice conversation's errand (docs/extensions/channels.md "Source marks")
+		h.channelNoted(ch, m.cfg.ID, sid) // a voice conversation's errand (docs/extensions/channels.md "Source markers")
 	}
 	l := h.requestLang(r)
 	external := false

@@ -29,13 +29,9 @@ struct ChatLines {
         }
     }
 
-    /// Work lines the user flipped from how they start (folded, or open while running with `opensLive`); `openAll`
-    /// flips them all (DEBUG `-openAllWork`).
+    /// Work lines the user opened; `openAll` flips them all (DEBUG `-openAllWork`).
     var openWork: Set<String>
     var openAll = false
-    /// The running work line starts open, so its tool calls list one by one as they come; once the turn ends it is
-    /// folded again (the chat forgets the user's flip of it then) and opens to all of them (#1614, the assistant).
-    var opensLive = false
     /// Runs of tool calls the user opened; `openAllRuns` flips them all (DEBUG `-showRunsOpen`).
     var openRuns: Set<String> = []
     var openAllRuns = false
@@ -43,8 +39,6 @@ struct ChatLines {
     var chipRuns = false
     /// Whether a call can join a run: a call that went to the background stays on its own line.
     var foldsIntoRun: (ToolCall) -> Bool = { _ in true }
-    /// Whether a call stays in view while its work line is folded (a running subagent's card); `live`: the line runs.
-    var showsFolded: (ToolCall, _ live: Bool) -> Bool = { _, _ in false }
 
     /// The lines of these blocks with the open work lines unfolded.
     func build(_ blocks: [ChatBlock], live: String?, streaming: Bool = false) -> [ChatLine] {
@@ -57,9 +51,40 @@ struct ChatLines {
     /// away: every sentence of a running turn moved the chat up two lines and down three (2026-11-04).
     /// Supervision folding is independent of the optional conversation layout, and only enabled for Persona chats.
     var foldSupervision = false
+    /// Background rounds fold too (docs/apple/ios.md "Background rounds"): only the main conversation, with the hub's
+    /// `main_background_folded` on. Needs `foldSupervision`.
+    var foldBackground = false
     var openSupervision: Set<String> = []
     var openAllSupervision = false
     var active = false
+
+    /// Whether a chat folds background rounds: an assistant chat that is the main conversation, with the switch on.
+    static func foldsBackground(assistant: Bool, conversation: String, main: String?, on: Bool) -> Bool {
+        guard assistant, on, let main, !main.isEmpty else { return false }
+        return conversation == main
+    }
+
+    /// The sources whose rounds are background rounds: a supervising conversation's message, a follow-up, a scheduled run.
+    static let backgroundKinds: Set<String> = ["conversation", "followup", "patrol"]
+
+    /// The input's source when it starts a background round. A `followup` is one only as a scheduled follow-up (the hub
+    /// titles those): Persona continuing the user's own work after a usage limit reset (`limit_continue`) or waking the
+    /// chat for what it waits on (`wake`) carries the same source, and folding it would hide the answer to the user.
+    static func backgroundSource(_ item: Item) -> MessageSource? {
+        guard let source = MessageSource.of(item), backgroundKinds.contains(source.kind) else { return nil }
+        if source.kind == "followup" {
+            let state = Injected.of(item)?.state
+            if state == "limit_continue" || state == "wake" { return nil }
+            if (source.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        }
+        return source
+    }
+
+    /// A scheduled task's or a follow-up's input: its prompt is never shown while background rounds fold, only its line.
+    static func hidesPrompt(_ item: Item) -> Bool {
+        guard let kind = backgroundSource(item)?.kind else { return false }
+        return kind == "followup" || kind == "patrol"
+    }
 
     static func hidesLiveSupervision(_ lines: [ChatLine], open: Set<String>, openAll: Bool = false) -> Bool {
         // A cleared stream can remain pending until its transcript item arrives, even after the turn stops.
@@ -67,7 +92,7 @@ struct ChatLines {
         for line in lines.reversed() {
             switch line.content {
             case .feed, .quick, .day: continue
-            case .supervision(let id, _, _): return open.contains(id) == openAll
+            case .supervision(let id, _, _, _): return open.contains(id) == openAll
             default: return false
             }
         }
@@ -85,34 +110,102 @@ struct ChatLines {
         var round: [ChatLine]? = nil
         var evidence: [Item] = []
         var running = false
+        // A background round's source and its input's transcript entry; nil for a supervision round.
+        var source: MessageSource? = nil
+        var entry: String? = nil
         func flush() {
+            defer {
+                round = nil
+                evidence = []
+                running = false
+                source = nil
+                entry = nil
+            }
             guard let trace = round, let first = trace.first else { return }
             if Supervision.visible(evidence, results: results, live: running) {
-                out += Self.visibilityTools(trace)
+                out += trace
             } else {
-                out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running))
+                out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running, source: source))
             }
-            round = nil
-            evidence = []
-            running = false
         }
         for block in blocks {
             let items = Self.transcriptItems(block)
+            var lines = flatLines([block], live: liveID, streaming: streaming)
+            if foldBackground { lines = lines.map(Self.hidingPrompt) }
+            var isLive = false
+            if case .turn(let turn) = block { isLive = turn.id == liveID }
             if case .turn(let turn) = block, turn.ordered.contains(where: \.isUserInput) {
                 flush()
-                if items.contains(where: { Injected.of($0)?.isSupervision == true }) { round = [] }
+                if items.contains(where: { Injected.of($0)?.isSupervision == true }) {
+                    round = []
+                } else if foldBackground {
+                    // A turn can hold several inputs (a message queued while it ran joins it): each input decides
+                    // where its own lines go, so a queued message of the user's never joins a background round.
+                    for line in lines {
+                        if let input = Self.inputStart(line) {
+                            if source != nil, input.entry != entry { flush() }
+                            if round == nil, let item = input.item, let s = Self.backgroundSource(item) {
+                                round = []
+                                source = s
+                                entry = item.entry
+                            }
+                        }
+                        if round != nil {
+                            round!.append(line)
+                            evidence += Self.lineItems(line)
+                        } else {
+                            out.append(line)
+                        }
+                    }
+                    if round != nil, isLive { running = true }
+                    continue
+                }
             }
-            let lines = flatLines([block], live: liveID, streaming: streaming)
             if round != nil {
                 round! += lines
                 evidence += items
-                if case .turn(let turn) = block, turn.id == liveID { running = true }
+                if isLive { running = true }
             } else { out += lines }
         }
         // The run can resume after a recap before its first transcript item arrives.
         if round != nil, active { running = true }
         flush()
         return Self.foldRecaps(Self.foldAPIErrors(out))
+    }
+
+    /// Where a line starts an input: its transcript entry, and the input itself when the line is its text. A message's
+    /// photos come before its text; only the text tells a background input.
+    static func inputStart(_ line: ChatLine) -> (entry: String?, item: Item?)? {
+        switch line.content {
+        case .row(.user(let item)): return (item.entry, item)
+        case .userImages(_, let items): return (items.first?.entry, nil)
+        default: return nil
+        }
+    }
+
+    /// The transcript items a line was built from (what decides whether its round is shown).
+    static func lineItems(_ line: ChatLine) -> [Item] {
+        switch line.content {
+        case .row(let row): return transcriptItems(row)
+        case .userImages(_, let items), .recaps(_, let items): return items
+        case .apiError(let item, _, _): return [item]
+        case .work(_, let items, _, _, _):
+            return items.flatMap { work -> [Item] in
+                switch work {
+                case .step(let step): return transcriptItems(ChatRow.tools([step]))
+                case .text(let item): return [item]
+                }
+            }
+        default: return []
+        }
+    }
+
+    /// The line with its scheduled prompt hidden (`hidesPrompt`).
+    static func hidingPrompt(_ line: ChatLine) -> ChatLine {
+        guard case .row(.user(let item)) = line.content, hidesPrompt(item) else { return line }
+        var out = line
+        out.hidesPrompt = true
+        return out
     }
 
     static func transcriptItems(_ block: ChatBlock) -> [Item] {
@@ -134,49 +227,41 @@ struct ChatLines {
         }
     }
 
-    /// A successful visibility action must not disappear inside an ordinary closed work line.
-    static func visibilityTools(_ lines: [ChatLine]) -> [ChatLine] {
-        lines.flatMap { line -> [ChatLine] in
-            guard case .work(let id, let items, let live, let start, let end) = line.content else { return [line] }
-            let kept = items.filter { item in
-                if case .step(.call(let call)) = item { return Supervision.tool(call.use.toolName) != nil }
-                return false
-            }
-            guard !kept.isEmpty else { return [line] }
-            let rest = items.filter { item in !kept.contains(where: { $0.id == item.id }) }
-            return (rest.isEmpty && !live ? [] : [.work(id: id, items: rest, live: live, start: start, end: end)])
-                + kept.map { .workStep(group: id, item: $0, first: true) }
-        }
-    }
-
     private func flatLines(_ blocks: [ChatBlock], live liveID: String?, streaming: Bool = false) -> [ChatLine] {
         var out: [ChatLine] = []
         for block in blocks {
             switch block {
             case .row(let r):
-                out.append(.row(r))
+                if !SubagentDelivery.isWake(r) { out.append(.row(r)) }
             case .turn(var t):
                 // Work a background task woke the agent for opens with that notice, where a message would be.
                 var wokeAt: Date?
                 if let first = t.ordered.first, case .notice(let n) = first, n.wake == true {
-                    out.append(.row(first))
+                    if !SubagentDelivery.isWake(first) { out.append(.row(first)) }
                     t.ordered.removeFirst()
                     wokeAt = n.ts
                 }
                 let segments = Self.segments(t.ordered)
                 for (k, seg) in segments.enumerated() {
-                    // Once the answer is in and a background task woke the agent, the new work runs behind the chip.
-                    let live = t.id == liveID && k == segments.count - 1 && t.tail.isEmpty
+                    // Once the answer is in, its wake continues in the same summary while new words stream.
+                    let afterWake = k > 0 && t.id == liveID && t.hasPendingWake
+                    let live = t.id == liveID && k == segments.count - 1 && (t.tail.isEmpty || afterWake)
                     // Photos sent with the message (Claude inlines a pasted image path as an image block) sit above
                     // its text, as they did while it was being sent — not in the agent's work.
                     let photos = Self.photos(seg.rows)
                     if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
                     if let u = seg.user { out.append(.row(u)) }
                     let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
-                    // A compaction after the answer (Claude Code compacted once the turn was over: idle, /compact on
-                    // its own) is a divider after it, not a step hidden in the turn's work line.
+                    // Only an idle compaction with no later work belongs after the answer. A running turn's
+                    // latest narration is not its final answer, and tools can follow it before compaction.
+                    let idleCompaction = !live && last.map { index in
+                        seg.rows.dropFirst(index + 1).allSatisfy { row in
+                            if case .notice(let item) = row { return item.compact != nil }
+                            return false
+                        }
+                    } == true
                     let after = Set(seg.rows.indices.filter { n in
-                        guard let l = last, n > l, case .notice(let i) = seg.rows[n] else { return false }
+                        guard idleCompaction, let l = last, n > l, case .notice(let i) = seg.rows[n] else { return false }
                         return i.compact != nil
                     })
                     let work = seg.rows.enumerated().filter { $0.offset != last && !after.contains($0.offset) }.map(\.element)
@@ -196,8 +281,6 @@ struct ChatLines {
                     if let last { out.append(.row(seg.rows[last])) }
                     out += after.sorted().map { .row(seg.rows[$0]) }
                 }
-                // After the answer: one small line for the background tasks; what they led to opens in a drawer.
-                if !t.wakes.isEmpty { out.append(.wakes(t, live: t.id == liveID && !t.tail.isEmpty)) }
                 out += t.trailing.map { .row($0) }
             }
         }
@@ -282,10 +365,11 @@ struct ChatLines {
         out.reserveCapacity(lines.count)
         for line in lines {
             out.append(line)
-            if case .supervision(let id, let trace, _) = line.content {
+            if case .supervision(let id, let trace, _, let source) = line.content {
                 if openSupervision.contains(id) != openAllSupervision {
-                    let raw = Self.visibilityTools(trace).map { child -> ChatLine in
-                        if case .row(.user(let item)) = child.content {
+                    // A supervision round shows its raw input; a background round its source block (`hidesPrompt`).
+                    let raw = trace.map { child -> ChatLine in
+                        if source == nil, case .row(.user(let item)) = child.content {
                             return .supervisionInput(item)
                         }
                         return child
@@ -293,26 +377,6 @@ struct ChatLines {
                     out += unfold(raw)
                 }
                 continue
-            }
-            if case .work(let id, let items, let live, _, _) = line.content, !isOpen(id, live: live) {
-                // Subagents launched one after another stay out together; any other call that stays out (a listed
-                // workflow run's) on its own.
-                var run: [ToolCall] = []
-                func flush() {
-                    let shown = run.filter { showsFolded($0, live) }
-                    if shown.count > 1 {
-                        out.append(.agents(group: id, calls: shown, first: true, alone: true))
-                    } else if let c = shown.first {
-                        out.append(.agentOut(group: id, call: c))
-                    }
-                    run = []
-                }
-                for item in items {
-                    if case .step(.call(let c)) = item, SubagentCard.isAgent(c) { run.append(c); continue }
-                    flush()
-                    if case .step(.call(let c)) = item, showsFolded(c, live) { out.append(.agentOut(group: id, call: c)) }
-                }
-                flush()
             }
             if case .work(let id, let items, let live, _, _) = line.content, isOpen(id, live: live), !items.isEmpty {
                 // The BeautifulUI style folds runs of tool calls into a line of chips; the others list every step.
@@ -326,13 +390,10 @@ struct ChatLines {
         return out
     }
 
-    /// Whether a work line is open; `live`: it is the running one. The wake drawer's work line ("dw-…") keeps folding
-    /// while it runs, as it always has: only the chat's own running line opens by itself.
+    /// Running and completed work lines both stay folded until the user opens them.
     func isOpen(_ work: String, live: Bool) -> Bool {
-        openWork.contains(work) != (openAll || (opensLive && live && !work.hasPrefix(Self.drawerWork)))
+        openWork.contains(work) != openAll
     }
-    /// The id prefix of the wake drawer's work line (`ChatView.wakeLines`).
-    static let drawerWork = "dw-"
 
     /// The subagents a work line launched one after another (in parallel), each run in the order they were launched.
     static func agentRuns(_ items: [WorkItem]) -> [[ToolCall]] {
@@ -494,7 +555,8 @@ struct ChatLines {
             case .thinking(let i):
                 if !(i.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { items.append(.step(.thought(i))) }
             case .tools(let steps): items += steps.map { .step($0) }
-            case .notice(let i): items.append(.step(.thought(i)))
+            case .notice(let i):
+                if !SubagentDelivery.isWake(r) { items.append(.step(.thought(i))) }
             case .assistant(let i): items.append(.text(i))
             default: break
             }
@@ -532,6 +594,12 @@ nonisolated struct ChangedFile: Hashable, Sendable {
 
 extension ChatLines {
     // MARK: The assistant's feed
+
+    /// What of the feed the cached lines depend on: each item's id, and a receipt's body too, which the hub sends again
+    /// changed (an interrupted receipt resolved or batched, #3834).
+    static func feedKey(_ feed: [FeedItem]) -> [String] {
+        feed.map { $0.kind == .receipt ? "\($0.id)#\($0.body.hashValue)" : $0.id }
+    }
 
     /// The lines with what the hub added to an assistant conversation (docs/assistant/unified-entry.md) among them: an item
     /// goes at the end of the exchange it happened in — before the first message sent after it — so a plan card or a

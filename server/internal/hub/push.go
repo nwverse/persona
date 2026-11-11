@@ -71,7 +71,7 @@ type Pusher struct {
 	acceptedDirty map[string]bool
 	// withdrawals: where each card's push went, to take it back when the card is over (push_withdraw.go).
 	withdrawals withdrawals
-	saveMu      sync.Mutex // one device row write at a time, always the latest state (save, setPrefs)
+	saveMu      sync.Mutex // one device row write at a time, always the latest state (register, setPrefsBy, renewal, forget, maintenance)
 	// storeTimeout bounds each device row write, which never runs under mu; tests shorten it.
 	storeTimeout time.Duration
 	// prefsEdit holds one change of a device's settings from its read to its write (editPrefs); taken before saveMu
@@ -195,30 +195,6 @@ func (p *Pusher) register(d Device) error {
 	return nil
 }
 
-// save writes a device's current row (whatever the latest register / renewal left), one write at a time.
-func (p *Pusher) save(id string) error {
-	if p.store == nil {
-		return nil
-	}
-	p.saveMu.Lock()
-	defer p.saveMu.Unlock()
-	return p.saveLocked(id)
-}
-
-// saveLocked requires saveMu; renewal and maintenance already hold it.
-func (p *Pusher) saveLocked(id string) error {
-	if p.store == nil {
-		return nil
-	}
-	p.mu.Lock()
-	d, ok := p.devices[id]
-	p.mu.Unlock()
-	if !ok {
-		return nil
-	}
-	return p.writeDevice(d)
-}
-
 // writeDevice requires saveMu and never publishes a failed write.
 func (p *Pusher) writeDevice(d Device) error {
 	return p.writeDeviceIn(context.Background(), d)
@@ -248,6 +224,22 @@ func (p *Pusher) reachable(d Device) bool {
 		return d.APNSToken != ""
 	}
 	return p.relayed(d)
+}
+
+// routed: a push to the device with this credential (or push registration id) can go somewhere. APNs keeps its alerts
+// while it is away, so the hub keeps none of its WebSocket's for it (notifyring.go).
+func (p *Pusher) routed(id string) bool {
+	if p == nil || id == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, d := range p.devices {
+		if (d.DeviceID == id || d.CredentialID == id) && p.reachable(d) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Pusher) currentPushTarget(d Device) bool {
@@ -376,11 +368,9 @@ func (p *Pusher) prefs(id string) NotifyPrefs {
 	return devicePrefs(p.devices[id].Prefs)
 }
 
-// setPrefs stores a device's notification settings (also for a device that has not registered a token yet).
-func (p *Pusher) setPrefs(id string, prefs NotifyPrefs) error { return p.setPrefsBy(id, "", prefs) }
-
-// setPrefsBy is setPrefs written with a device token (`credential`): a device that has none recorded takes it, so
-// revoking the token forgets a device only its prefs made (a browser's Settings › Notifications, which never registers a push token).
+// setPrefsBy stores a device's notification settings (also for a device that has not registered a token yet),
+// written with a device token (`credential`): a device that has none recorded takes it, so revoking the token
+// forgets a device only its prefs made (a browser's Settings › Notifications, which never registers a push token).
 // The row is written under saveMu, not mu: a slow database holds this one save (up to storeTimeout), not every
 // other device's settings and every push. The settings take effect once the row is written.
 func (p *Pusher) setPrefsBy(id, credential string, prefs NotifyPrefs) error {

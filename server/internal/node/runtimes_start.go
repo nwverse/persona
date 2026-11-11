@@ -8,19 +8,49 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// runtimeOf is the runtime that runs launcher name: the one offering it, unless the login shell or a launcher kept in
+// Persona has that name. Those run instead, as the pickers list them under the name: a managed launcher made from a
+// Paseo provider of the same name is started with personad launch, not through Paseo. nil when no runtime runs it.
+// Engine runtimes this machine does not enable never offer launchers (runtimeRegistry.hostOff), so they cannot take a
+// name from an enabled runtime.
+func (n *Node) runtimeOf(name string) *runtimeConn {
+	if shellLauncherNames()[name] {
+		return nil
+	}
+	if _, managed := n.managedLauncher(name); managed {
+		return nil
+	}
+	return n.runtimes.launcherRuntime(name)
+}
+
+// engineHostOff: runtime is an engine host (Paseo, Cindy) this machine does not enable. Its providers start nothing
+// here and are not listed (launchers.list), even while its runtime is connected.
+func (n *Node) engineHostOff(runtime string) bool {
+	_, engine := engineRuntimes[runtime]
+	return engine && !n.hostEnabled(runtime)
+}
+
+// startRuntime is the runtime a start with launcher name goes to, and the model it starts with when the form chose
+// none: runtimeOf, or the runtime's own agy launcher for a managed Antigravity launcher, whatever its name. Every
+// check that must agree with the start (ultracode, models) asks here. nil when the start is not a runtime's.
+func (n *Node) startRuntime(name string) (h *runtimeConn, model string) {
+	if h = n.runtimeOf(name); h != nil {
+		return h, ""
+	}
+	if m, ok := n.managedLauncher(name); ok && m.AgentType() == "agy" && !shellLauncherNames()[name] {
+		return n.runtimes.launcherRuntime("agy"), m.Model
+	}
+	return nil, ""
+}
+
 // runtimeStart starts a session in the runtime offering the launcher; nil when no runtime does.
 func (n *Node) runtimeStart(ctx context.Context, p runtimeStartParams) (*proto.Session, error, bool) {
-	h := n.runtimes.launcherRuntime(p.Launcher)
-	if h == nil {
-		if m, ok := n.managedLauncher(p.Launcher); ok && m.AgentType() == "agy" {
-			h = n.runtimes.launcherRuntime("agy")
-			if p.Model == "" {
-				p.Model = m.Model
-			}
-		}
-	}
+	h, model := n.startRuntime(p.Launcher)
 	if h == nil || shellLauncherNames()[p.Launcher] { // the login shell's launcher of that name runs, as the form lists
 		return nil, nil, false
+	}
+	if p.Model == "" {
+		p.Model = model
 	}
 	s, err := n.runtimeStartOn(ctx, h, p)
 	return s, err, true
@@ -31,9 +61,14 @@ func (n *Node) runtimeStart(ctx context.Context, p runtimeStartParams) (*proto.S
 // set: a runtime that knows none of them still starts its own way.
 func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStartParams) (*proto.Session, error) {
 	if p.PermissionMode == "plan" {
-		// Runtime starts have no contract to enforce this mode before the first prompt.
-		// Even a listed Claude provider may disappear and fall back to a writable provider.
-		return nil, readonlyStartUnsupported()
+		// Only a runtime that promises read-only starts (caps.readonly) gets one: without that promise its provider
+		// may ignore the mode, or fall back to a writable one.
+		h.mu.Lock()
+		readonly := h.hello.Caps.Readonly
+		h.mu.Unlock()
+		if !readonly {
+			return nil, readonlyStartUnsupported()
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()

@@ -74,8 +74,14 @@ function codexOptions(prefix: string, options: string[]): Record<string, string>
 // An option value's name: effort levels as the session menu calls them, the update channels and Codex's
 // config.toml values (#3855) by name.
 const OPTION_KEYS: Record<string, Record<string, string>> = {
+  service_tier: { default: "chat-sessiondialogs.speed_standard", fast: "chat-sessiondialogs.speed_fast", priority: "chat-sessiondialogs.speed_fast" },
   effortLevel: { low: "lib-session-actions.effort_low", medium: "lib-session-actions.effort_medium", high: "lib-session-actions.effort_high", xhigh: "lib-session-actions.effort_xhigh", max: "lib-session-actions.effort_max" },
   autoUpdatesChannel: { latest: "lib-agent-settings.channel_latest", stable: "lib-agent-settings.channel_stable" },
+  // Claude Code's default mode (#3026), named as the session menu names the modes.
+  "permissions.defaultMode": {
+    default: "lib-session-actions.mode_default", acceptEdits: "lib-session-actions.mode_accept_edits", plan: "lib-session-actions.mode_plan",
+    auto: "lib-session-actions.mode_auto", bypassPermissions: "lib-session-actions.mode_bypass_permissions",
+  },
   model_reasoning_effort: Object.fromEntries(
     ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map((o) => [o, `lib-session-actions.codex_effort_${o}`]),
   ),
@@ -139,7 +145,7 @@ export function valueText(v: SettingValue, key?: string): string {
   return key ? optionText(key, v) : v;
 }
 
-// ── Claude Code › blocked config directories (GET /machines/{mid}/claude-dirs, docs/integrations/claude-integration.md "Blocking config directories") ──
+// ── Claude Code › blocked config directories (GET /machines/{mid}/claude-dirs, docs/integrations/claude-integration.md "Blocking configuration directories") ──
 
 /** One config directory of a computer (CLAUDE_CONFIG_DIR), as the hub lists it. */
 export interface ClaudeDir {

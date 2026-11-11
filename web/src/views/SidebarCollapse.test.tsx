@@ -171,6 +171,24 @@ describe("folding a block of the sidebar", () => {
     expect(host.querySelector('a[title="Persona 的主对话"]')).not.toBeNull();
   });
 
+  it("gives a section and its chevron the same fold tokens in both directions", async () => {
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+    const title = button("页面")!;
+    const section = title.closest(".mt-1, .mt-3")!;
+    const fold = [...section.children].find((el) => el.classList.contains("grid")) as HTMLElement;
+    const chevron = title.querySelector("svg")!;
+    const motion = (el: HTMLElement | SVGElement) => ({ duration: el.style.transitionDuration, curve: el.style.transitionTimingFunction });
+    expect(motion(fold)).toEqual({ duration: "var(--sidebar-fold-open)", curve: "var(--sidebar-fold-open-ease)" });
+    expect(motion(chevron)).toEqual(motion(fold));
+    expect(fold.style.opacity).toBe("1");
+
+    act(() => title.click());
+    expect(motion(fold)).toEqual({ duration: "var(--sidebar-fold-close)", curve: "var(--sidebar-fold-close-ease)" });
+    expect(motion(chevron)).toEqual(motion(fold));
+    expect(fold.style.opacity).toBe("1");
+  });
+
   it("folds the whole Agents block,「+」 staying on its title", async () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
@@ -283,18 +301,38 @@ describe("the main conversation: the column's first row, Persona with the app's 
     await flush();
   };
 
-  it("offers a labeled New chat at the top and an icon in the rail, only with an assistant", async () => {
-    const newChat = () => host.querySelector<HTMLAnchorElement>('a[href="/persona/new"]');
+  it("offers New chat in「Persona 对话」, not above the main chat, and an icon in the rail, only with an assistant (#3231)", async () => {
+    const newChats = () => [...host.querySelectorAll<HTMLAnchorElement>('a[href="/persona/new"]')];
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    expect(newChat()).toBeNull();
+    expect(newChats()).toEqual([]);
     await load();
-    expect(newChat()!.textContent).toBe("新对话");
-    expect(newChat()!.closest("[data-sidebar-rows]")).toBeNull();
+    // one entry: the compose icon at the end of the Persona chats title, as on the phone's sidebar, folded or not; not a row
+    expect(newChats()).toHaveLength(1);
+    const icon = newChats()[0];
+    expect(icon.textContent).toBe("");
+    expect(icon.getAttribute("aria-label")).toBe("新对话");
+    expect(icon.getAttribute("title")).toBe("新对话");
+    expect(icon.closest(".group\\/sec")).not.toBeNull();
+    expect(block("Persona 对话").contains(icon)).toBe(true);
+    const chatRows = [...block("Persona 对话").querySelectorAll("a")];
+    expect(chatRows.some((a) => a.textContent?.includes("整理周报"))).toBe(true);
+    const all = [...host.querySelectorAll("a")];
+    expect(all.indexOf(icon)).toBeGreaterThan(all.indexOf(mainRow()));
+    expect(host.querySelector("[data-sidebar-sticky]")!.contains(icon)).toBe(false);
+    act(() => button("Persona 对话")!.click());
+    await flush();
+    expect(newChats().filter((a) => !a.closest("[inert]"))).toHaveLength(1);
+    act(() => button("Persona 对话")!.click());
+    await flush();
+    // the open new chat page lights the icon
+    act(() => root.render(<Sidebar route={{ name: "persona-new" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+    expect(newChats()[0].getAttribute("aria-current")).toBe("page");
     act(() => root.render(<SidebarRail route={{ name: "persona-new" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    expect(newChat()!.getAttribute("aria-label")).toBe("新对话");
-    expect(newChat()!.getAttribute("aria-current")).toBe("page");
+    expect(newChats()[0].getAttribute("aria-label")).toBe("新对话");
+    expect(newChats()[0].getAttribute("aria-current")).toBe("page");
   });
 
   it("is the first row, above the pages, with the app's mark, a 主对话 mark, a line under it, and nowhere else", async () => {

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Settings › Extensions (docs/extensions/extensions.md「hub 的接口」): the hub's plugins, each one's switch, its configuration as a form drawn
+// Settings › Extensions (docs/extensions/extensions.md「The hub's API」): the hub's plugins, each one's switch, its configuration as a form drawn
 // from its schema (`form.fields`), its secrets, write-only, and the pages it draws (`ui`, ExtensionUIModel). Installing,
 // upgrading and removing are done on the hub's machine (`personad plugin`), or from a plugin market the hub has
 // (ExtensionMarketModel: only what a market lists).
@@ -26,11 +26,13 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var needsSetup: [String]?
     var warnings: [String]?
     /// A plugin from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
-    /// happened last with an upgrade (docs/extensions/extensions.md「自动升级」).
+    /// happened last with an upgrade (docs/extensions/extensions.md「Auto-upgrade」).
     var autoUpgrade: Bool?
-    /// Why its own switch does not apply now: "disabled" while the extension is switched off (the hub keeps the switch
-    /// for when it is on again). Nil from a hub from before it.
+    /// Why its own switch does not apply now: "market_removed" once its market is gone, or "disabled" while it is off.
     var autoUpgradePaused: String?
+    var marketWasRemoved: Bool { autoUpgradePaused == "market_removed" }
+    /// The market it upgrades from, retained after that market is removed (nil: a hub from before this field).
+    var market: String?
     var upgrade: ExtensionUpgrade?
     var upgradeNote: ExtensionUpgradeNote?
     /// An extension with a program on computers: how that program is on each machine it is switched on for.
@@ -46,7 +48,7 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var sandbox: ExtensionSandbox?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, upgrade, nodes, auth, tools, manager, attached, sandbox
+        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, market, upgrade, nodes, auth, tools, manager, attached, sandbox
         case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 
@@ -74,7 +76,7 @@ nonisolated struct ExtensionSandbox: Codable, Hashable, Sendable {
     var egress: [String: JSONValue]
 }
 
-/// An extension's program on one machine (docs/extensions/extensions.md「在电脑上运行的程序」).
+/// An extension's program on one machine (docs/extensions/extensions.md「Programs running on computers」).
 nonisolated struct ExtensionNodeState: Codable, Hashable, Sendable {
     var machineID: String
     var version: String?
@@ -123,11 +125,14 @@ nonisolated struct ExtensionUpgrade: Codable, Hashable, Sendable, Identifiable {
     var detail: String?
     /// "user" when a skipped version is one the user rolled back from (nil: it didn't start).
     var skippedBy: String?
+    /// The new version's ID when it changes the extension's ID (`id` stays the installed one).
+    var renameTo: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, market, from, to, state, detail
         case addedPermissions = "added_permissions"
         case skippedBy = "skipped_by"
+        case renameTo = "rename_to"
     }
 }
 
@@ -452,7 +457,13 @@ enum ExtensionText {
     static func upgradeDetail(_ u: ExtensionUpgrade) -> String {
         let why = u.detail.flatMap { $0.isEmpty ? nil : $0 }
         switch u.state {
-        case "needs_permission": return morePermissions(u.addedPermissions ?? [])
+        case "needs_permission":
+            // A rename is confirmed for the ID change, not for permissions: the hub's words, or ours for a version
+            // Check for Updates found (#2511).
+            if let renameTo = u.renameTo {
+                return why ?? String(localized: "Changes the extension ID from \(u.id) to \(renameTo). Needs your confirmation; its settings and data stay.")
+            }
+            return morePermissions(u.addedPermissions ?? [])
         case "waiting_idle": return String(localized: "Updates automatically when the extension is idle")
         case "available": return String(localized: "Updates automatically later")
         case "off": return String(localized: "Auto-update is off")

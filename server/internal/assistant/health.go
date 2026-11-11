@@ -68,7 +68,7 @@ func spaceOf(c proto.Session) string {
 // validSpace: "" (the assistant's own) or "health".
 func validSpace(space string) bool { return space == "" || space == SpaceHealth }
 
-// What leaves the health space (docs/assistant/health.md "Sharing out", #3194): the user may share their health with anyone they
+// What leaves the health space (docs/assistant/health.md "Outbound", #3194): the user may share their health with anyone they
 // like (a doctor, a coach, family), so nothing is refused for being health. What must not happen is it leaving without
 // them knowing: a push or a channel says only that there is news, and a hand-off to somewhere outside the space is
 // confirmed on the phone each time. The space is the conversation's (the trusted session), never a guess at the text.
@@ -79,10 +79,12 @@ func (s *Service) inHealth(ctx context.Context, self string) bool {
 	return space == SpaceHealth
 }
 
-// ixInHealth: interaction ix belongs to a health conversation (its directory, else its conversation's space).
+// ixInHealth: interaction ix belongs to a health conversation (its directory, else its conversation's space). A
+// directory inside the space counts (identity.InHealthSpace): this only hides, so a `cd` that left the hook in a
+// subfolder must not show the card (#2368). spaceOf, which classifies, stays exact.
 func (s *Service) ixInHealth(ctx context.Context, ix proto.Interaction) bool {
 	if ix.Cwd != "" {
-		return identity.SpaceOf(ix.Cwd) == SpaceHealth
+		return identity.InHealthSpace(ix.Cwd)
 	}
 	return ix.SessionID != "" && ix.MachineID == s.settings(ctx).MachineID && s.inHealth(ctx, ix.SessionID)
 }

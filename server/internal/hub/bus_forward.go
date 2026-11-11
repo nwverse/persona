@@ -25,8 +25,8 @@ import (
 //
 // header maps a name to its values; body is base64 (JSON []byte); status 0 is 200, and one outside 200-599 reaches the
 // app as a 502. X-Persona-Role carries the role of the device that asked, as the hub's auth found it (any the app sent
-// is replaced). forwardHTTP is the codec of the assistant's Handler.ServeHTTP over the bus, relayBroadcast the hub's
-// side of its Broadcast.
+// is replaced). forwardHTTP is the codec of the assistant's Handler.ServeHTTP over the bus, relayBroadcastFrom the
+// hub's side of its Broadcast.
 
 func init() { handleBusEvent(assistantwire.EventBroadcast, (*Hub).busBroadcast) }
 
@@ -90,8 +90,18 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 	}
+	// What may change the manager's inbox: a merged list fetched while it is under way is not kept, and one kept from
+	// before it answered is not given again (inbox_answers.go).
+	changes := r.Method != http.MethodGet && r.Method != http.MethodHead
+	if changes {
+		h.inboxAnswers.changed(id)
+	}
 	var res assistantwire.HTTPResponse
-	if err := h.callBus(ctx, id, assistantwire.MethodHTTP, req, &res); err != nil {
+	err = h.callBus(ctx, id, assistantwire.MethodHTTP, req, &res)
+	if changes {
+		h.inboxAnswers.changed(id)
+	}
+	if err != nil {
 		var coded *rpc.Error
 		switch {
 		case send && (errors.Is(err, errBusDropped) || errors.Is(err, context.DeadlineExceeded)):
@@ -127,8 +137,9 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 		res.Body = localizedDeploymentError(h.requestLang(r), res.Body)
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/inbox") || strings.HasPrefix(r.URL.Path, "/api/v1/translate") {
-		localized := i18n.InboxJSON(h.requestLang(r), res.Body)
-		if !bytes.Equal(localized, res.Body) {
+		if raw := inboxListRawOf(r); raw != nil && res.Status < http.StatusMultipleChoices {
+			raw.kept = true // an inbox list: localized item by item as it is merged (inbox_forms.go)
+		} else if localized := i18n.InboxJSON(h.requestLang(r), res.Body); !bytes.Equal(localized, res.Body) {
 			res.Body = localized
 			w.Header().Del("Content-Length")
 		}
@@ -185,4 +196,16 @@ func localizedOnce(forms map[i18n.Lang][]byte, l i18n.Lang, b []byte, localize f
 	form := localize(l, b)
 	forms[l] = form
 	return form
+}
+
+// toFullWanting is toWanting for the full devices only: a computer to computer transfer's progress (file_transfer,
+// docs/protocol/file-transfer.md) names files, which an answer-only device (the watch) has no business with.
+func (h *Hub) toFullWanting(feature string, b []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.role == roleFull && c.wants(feature) {
+			c.queue(b)
+		}
+	}
 }

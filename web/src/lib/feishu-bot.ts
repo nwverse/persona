@@ -17,6 +17,8 @@ export interface BotFeatures {
   workbench?: boolean;
   /** Only tasks' conclusions are pushed; a finished turn, waiting and interrupted stay in the to-do list and the briefing (#1226); a hub from before leaves it out. */
   only_conclusions?: boolean;
+  /** The task report also pushes execution steps (each finished turn, interruptions, closings), the card as before #3218; off: only goal-level changes. A hub from before leaves it out (and pushes them). */
+  report_steps?: boolean;
 }
 
 export interface FeishuBotStatus {
@@ -39,6 +41,23 @@ export interface FeishuBotStatus {
   agents?: { title: string; machine_id: string; session_id: string }[] | null;
   /** Minutes an unanswered card waits before the one nudge under it, 0 off (#6084); a hub from before leaves it out (60). */
   nudge_after?: number;
+  larkcli?: LarkCLIStatus;
+}
+
+export interface LarkCLIProfile {
+  name: string;
+  app_id?: string;
+  user?: string;
+  token_status?: string;
+}
+
+export interface LarkCLIStatus {
+  profile: string;
+  app_id?: string;
+  same_app: boolean;
+  mode: "config" | "chosen" | "bot" | "default";
+  choice: string;
+  profiles: LarkCLIProfile[];
 }
 
 /** The edit sent to PUT: only what is set changes. */
@@ -50,9 +69,10 @@ export interface FeishuBotUpdate {
   /** The switches to change: the hub merges them over its own (a hub before 0.1.12 replaces them all, see `featureEdit`). */
   features?: Partial<BotFeatures>;
   nudge_after?: number;
+  larkcli_profile?: string;
 }
 
-export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false, only_conclusions: false, workbench: false };
+export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false, only_conclusions: false, workbench: false, report_steps: false };
 
 /** What a hub from before the setting does: nudge after an hour. */
 export const DEFAULT_NUDGE_AFTER = 60;

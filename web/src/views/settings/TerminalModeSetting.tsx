@@ -1,4 +1,4 @@
-// Settings › Terminal view (docs/integrations/terminal.md "The full herdr UI"): which surface a terminal opens in. Shown only where the hub can run
+// Settings › Terminal view (docs/integrations/terminal.md "Full herdr UI"): which surface a terminal opens in. Shown only where the hub can run
 // herdr's own client; "Full view" is the default, and nothing is written until another is chosen.
 import { useState } from "react";
 import { t } from "../../i18n";

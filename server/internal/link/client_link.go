@@ -29,6 +29,10 @@ type link struct {
 	token   string
 	// named: the hub said what it calls this computer (endpoints), so it renames computers (rename.go).
 	named atomic.Bool
+	// gen counts this run's links, this one included (Status.Conn): the app's confirmations say which link's they are.
+	gen uint64
+	// again: link.json turned out to hold another pairing while writing to it (errPairedAgain); serve ends the link.
+	again chan struct{}
 }
 
 func dial(ctx context.Context, c *Config) (*link, error) {
@@ -57,6 +61,7 @@ var streamID = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 
 // serve runs the link until it ends and says why.
 func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) error {
+	l.again = make(chan struct{}, 1)
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	defer l.conn.CloseNow()
@@ -67,14 +72,21 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 	}
 	since := time.Now()
 	rep.set(func(s *Status) {
-		*s = Status{State: "connected", Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Address: l.ep.URL,
+		*s = Status{State: "connected", Conn: l.gen, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Address: l.ep.URL,
 			Kind: l.ep.Kind, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
 	})
 	go l.renames(ctx, o, rep)
+	go l.presence(ctx, o)
+	go l.confirms(ctx, o)
 	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind)
 	drop := func(err error) {
 		cancel(err)
 		l.conn.CloseNow()
+	}
+	// reconnect ends the link the way the hub expects for one that comes straight back (runActive dials at once).
+	reconnect := func(err error) {
+		cancel(err)
+		_ = l.conn.Close(websocket.StatusNormalClosure, "reconnect")
 	}
 	// The heartbeat is o's until the hub says another (endpoints); beat hands the pinger the latest, the link stays.
 	beat := make(chan heartbeat, 1)
@@ -82,6 +94,11 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 		hb := heartbeat{every: o.PingEvery, timeout: o.PingTimeout}
 		t := time.NewTicker(hb.every)
 		defer t.Stop()
+		// A new pairing (persona-link pair, the tray's or the App's) is followed while the link is up, not only after
+		// it drops. The zero stamp makes the first look compare: a pairing written while this link was dialing counts.
+		pairT := time.NewTicker(pairCheck)
+		defer pairT.Stop()
+		var seen time.Time
 		// A ping waits for its pong on its own, so a reconnect or a network change is not held up behind one that is
 		// out (with a slow link's heartbeat, for up to the hub's timeout). One of each kind at a time; the first that
 		// fails drops the link.
@@ -139,8 +156,19 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 					ping(true, hb.check())
 				}
 			case <-o.Redial:
-				cancel(errRedial)
-				_ = l.conn.Close(websocket.StatusNormalClosure, "reconnect")
+				reconnect(errRedial)
+				return
+			case <-pairT.C:
+				// Only the mtime says when to look: endpoints and renames rewrite link.json with the same pairing.
+				if now := stampOf(o.Path); !now.Equal(seen) {
+					seen = now
+					if repaired(o.Path, c) {
+						reconnect(errRepaired)
+						return
+					}
+				}
+			case <-l.again:
+				reconnect(errRepaired)
 				return
 			}
 		}
@@ -184,6 +212,9 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 			}
 			go func(id string) {
 				if err := l.forward(ctx, id, o.Target); err != nil {
+					if ctx.Err() != nil { // called off because the link ended: that says nothing about the node
+						return
+					}
 					o.Logf("link: stream %s: %v", id, err)
 					_ = l.send(ctx, Message{Type: "open_failed", ID: id, Error: err.Error()})
 					rep.set(func(s *Status) { s.Node, s.NodeError = "offline", err.Error() })
@@ -231,6 +262,9 @@ func (l *link) endpoints(m Message, c *Config, o Options, rep *reporter) {
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errPairedAgain) {
+				l.pairedAgain()
+			}
 			return
 		}
 		c.Endpoints = eps
@@ -250,6 +284,24 @@ func (l *link) endpoints(m Message, c *Config, o Options, rep *reporter) {
 		}
 		s.Pending = m.Pending
 	})
+}
+
+// pairedAgain tells serve that link.json holds another pairing than this link's: the link moves to it.
+func (l *link) pairedAgain() {
+	select {
+	case l.again <- struct{}{}:
+	default:
+	}
+}
+
+// repaired: link.json now holds another credential, computer or hub than c (a new pairing). A file that cannot be read
+// right now changes nothing: the link stays as it is.
+func repaired(path string, c *Config) bool {
+	f, err := Read(path)
+	if err != nil {
+		return false
+	}
+	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).
@@ -289,6 +341,49 @@ func clipName(s string) string {
 		s = string(r[:80])
 	}
 	return s
+}
+
+// presence tells the hub the app's presence (presence.go): the latest as the link comes up, then again for every line
+// the app writes. It never repeats one by itself: the app's own repeats keep it alive, so an app that went quiet lapses.
+func (l *link) presence(ctx context.Context, o Options) {
+	if o.Presence == nil {
+		return
+	}
+	for {
+		if p, ok := o.Presence.Latest(time.Now()); ok {
+			m := Message{Type: "presence", Active: p.Active, Notifies: p.Notifies, TTLMS: p.TTLMS}
+			if err := l.send(ctx, m); err != nil && ctx.Err() == nil {
+				o.Logf("link: presence: %v", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-o.Presence.Poked():
+		}
+	}
+}
+
+// confirms passes on the app's confirmations for this link (presence.go). Another link's go: an earlier one's still in
+// the pipe; a later one's cannot come before this link is gone (the app learns its number from the status of a link
+// that replaced this one).
+func (l *link) confirms(ctx context.Context, o Options) {
+	if o.Confirms == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case c := <-o.Confirms.C():
+			if c.Conn != l.gen {
+				continue
+			}
+			if err := l.send(ctx, Message{Type: "rang", InteractionID: c.Card}); err != nil && ctx.Err() == nil {
+				o.Logf("link: rang: %v", err)
+			}
+		}
+	}
 }
 
 func (l *link) send(ctx context.Context, m Message) error {
@@ -332,7 +427,7 @@ func (l *link) forward(ctx context.Context, id, target string) error {
 	dctx, dcancel := context.WithTimeout(ctx, dialTimeout) // the handshake only: the stream lives as long as the link
 	defer dcancel()
 	ws, resp, err := websocket.Dial(dctx, wsURL(l.ep.URL, StreamPath+"?id="+id), &websocket.DialOptions{
-		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: websocket.CompressionContextTakeover})
+		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression})
 	if err != nil {
 		return fmt.Errorf("开不了流：%w", handshakeError(resp, err))
 	}

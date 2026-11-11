@@ -4,28 +4,36 @@ import java.time.Instant
 
 /** Pure transcript folding, in reading order. Live state is supplied by the session owner. */
 fun chatLines(items: List<LineItem>, options: LineOptions = LineOptions()): ChatSnapshot {
+    val source = lineSource(items, options)
+    val blocks = lineBlocks(source)
+    val live = liveTurnId(blocks, options)
+    val builder = LineBuilder(live, options)
+    return chatSnapshot(source, blocks, blocks.flatMap(builder::lines), live, options)
+}
+
+/** The items [chatLines] draws, in reading order; a frozen window's up to the item it froze at. */
+internal fun lineSource(items: List<LineItem>, options: LineOptions): List<LineItem> {
     val frozen = options.frozen
-    val source = items.sortedWith(itemOrder).let { ordered ->
+    return withoutViewFeedback(items).sortedWith(itemOrder).let { ordered ->
         if (frozen == null) ordered else ordered.takeWhile {
             positionCompare(it.seq, it.part, frozen.seq, frozen.part) <= 0
         }
     }
-    val blocks = lineBlocks(source)
-    val live = liveTurnId(blocks, options)
-    val builder = LineBuilder(live, options)
-    val lines = blocks.flatMap {
-        when (it) {
-            is Block.Row -> listOf(ChatLine.Row(it.row))
-            is Block.Turn -> builder.turnLines(it.turn)
-        }
-    }.let {
-        // Working with nothing of this turn yet (the last block is a recap): the work line still shows, as on the web.
-        if (live == null && options.live && frozen == null && options.liveTurnId == null)
-            it + ChatLine.Work(LiveWorkId, emptyList(), true, null, null, workOpen(LiveWorkId, options))
-        else it
-    }
+}
+
+/**
+ * What spans the whole chat, from its blocks and their lines: [chatLines]' and [ChatLinesMemo]'s, which keeps the lines
+ * of unchanged turns.
+ */
+internal fun chatSnapshot(
+    source: List<LineItem>, blocks: List<Block>, blockLines: List<ChatLine>, live: String?, options: LineOptions,
+): ChatSnapshot {
+    // Working with nothing of this turn yet (the last block is a recap): the work line still shows, as on the web.
+    val lines = if (live == null && options.live && options.frozen == null && options.liveTurnId == null)
+        blockLines + ChatLine.Work(LiveWorkId, emptyList(), true, null, null, workOpen(LiveWorkId, options))
+    else blockLines
     // As iOS does: API errors become cards and recaps in a row one line, before open work lines unfold.
-    return ChatSnapshot(builder.unfold(foldRecaps(foldApiErrors(lines))), blocks.turns(),
+    return ChatSnapshot(LineBuilder(live, options).unfold(foldRecaps(foldApiErrors(lines))), blocks.turns(),
         TaskIndex.build(source), options.pendingInteractionIds?.let(::ChatFooter), live)
 }
 
@@ -33,11 +41,29 @@ fun chatLines(items: List<LineItem>, options: LineOptions = LineOptions()): Chat
  * [chatLines]' turns alone, built by the same code: for callers that need where turns begin (the items cache keeps the
  * last two) and not the lines drawn from them, the task index or the folds.
  */
-fun chatTurns(items: List<LineItem>): List<ChatTurn> = lineBlocks(items.sortedWith(itemOrder)).turns()
+fun chatTurns(items: List<LineItem>): List<ChatTurn> = lineBlocks(withoutViewFeedback(items).sortedWith(itemOrder)).turns()
+
+private val viewFeedbackRe = Regex("""<persona-view-errors\b[^>]*>[\s\S]*?</persona-view-errors>\s*""")
+
+/**
+ * The node's `<persona-view-errors>` feedback after the assistant's snapshot (its last rich views failed their check) is
+ * for the model, not the user's words: an older hub (#4315) gave it as a user item of its own, the line's block before
+ * the message, or at the start of the message, and the bubble showed its raw tags. Taken out of user text; an item
+ * left with nothing goes.
+ */
+fun withoutViewFeedback(items: List<LineItem>): List<LineItem> {
+    fun carries(it: LineItem) = it.item.role == "user" && it.kind == "text" && it.item.text?.contains("<persona-view-errors") == true
+    if (items.none(::carries)) return items
+    return items.mapNotNull { line ->
+        if (!carries(line)) return@mapNotNull line
+        val left = viewFeedbackRe.replace(line.item.text.orEmpty(), "")
+        if (left.isBlank()) null else line.copy(item = line.item.copy(text = left))
+    }
+}
 
 private fun lineBlocks(source: List<LineItem>): List<Block> = buildBlocks(buildLineRows(foldCompactions(source)))
 
-private fun List<Block>.turns(): List<ChatTurn> = filterIsInstance<Block.Turn>().map { it.turn }
+internal fun List<Block>.turns(): List<ChatTurn> = filterIsInstance<Block.Turn>().map { it.turn }
 
 /** Running and historical work lines start collapsed; their owner supplies explicit persisted choices. */
 fun workOpen(id: String, options: LineOptions): Boolean = id in options.openWork
@@ -54,7 +80,7 @@ const val LiveWorkId = "w-live"
  * user message misses a turn that took a queued message in (its id is its first message's), one a notice opened, and
  * a recap at the end.
  */
-private fun liveTurnId(blocks: List<Block>, options: LineOptions): String? = when {
+internal fun liveTurnId(blocks: List<Block>, options: LineOptions): String? = when {
     options.frozen != null -> options.frozen.liveTurnId
     options.liveTurnId != null -> options.liveTurnId
     options.live -> {
@@ -80,7 +106,14 @@ private fun ChatRow.positionItem(): LineItem? = item ?: when (val step = steps.l
 }
 
 internal fun buildLineRows(items: List<LineItem>): List<ChatRow> {
-    val results = items.filter { it.kind == "tool_result" && it.item.toolUseId != null }.associateBy { it.item.toolUseId }
+    val taskCalls = TaskIndex.build(items).calls
+    fun resultCall(item: LineItem): String? = when {
+        item.kind == "tool_result" -> item.item.toolUseId ?: taskCalls[item.id]
+        item.kind == "notice" && item.task?.kind == "agent" -> taskCalls[item.id]
+        else -> null
+    }
+    val results = items.mapNotNull { item -> resultCall(item)?.let { it to item } }
+        .groupBy({ it.first }, { it.second })
     val images = items.filter { it.kind == "image" && it.item.toolUseId != null && it.item.image != null }
         .groupBy { it.item.toolUseId }
     val rows = mutableListOf<ChatRow>()
@@ -100,7 +133,8 @@ internal fun buildLineRows(items: List<LineItem>): List<ChatRow> {
             "tool_use" -> {
                 flushThoughts(run.isEmpty())
                 val callId = it.item.toolUseId
-                run += WorkItem.Tool(ToolCall(it, results[callId], images[callId].orEmpty()))
+                val reports = results[callId].orEmpty()
+                run += WorkItem.Tool(ToolCall(it, reports.lastOrNull(), images[callId].orEmpty(), reports))
             }
             "thinking" -> thoughts += it
             "fold" -> {
@@ -109,7 +143,7 @@ internal fun buildLineRows(items: List<LineItem>): List<ChatRow> {
             }
             "tool_result" -> Unit
             else -> {
-                if (it.kind == "image" && it.item.toolUseId != null) continue
+                if (resultCall(it) != null || (it.kind == "image" && it.item.toolUseId != null)) continue
                 flushThoughts(run.isEmpty())
                 flushRun()
                 val type = when (it.kind) {
@@ -126,7 +160,7 @@ internal fun buildLineRows(items: List<LineItem>): List<ChatRow> {
     return rows
 }
 
-private sealed interface Block {
+internal sealed interface Block {
     data class Row(val row: ChatRow) : Block
     data class Turn(val turn: ChatTurn) : Block
 }
@@ -160,7 +194,7 @@ private class RawTurn(val id: String) {
     }
 }
 
-private fun buildBlocks(rows: List<ChatRow>): List<Block> {
+internal fun buildBlocks(rows: List<ChatRow>): List<Block> {
     val blocks = mutableListOf<Block>()
     var current: RawTurn? = null
     var lastRaw: RawTurn? = null
@@ -257,7 +291,7 @@ private fun workItems(rows: List<ChatRow>): List<WorkItem> = rows.flatMap {
     }
 }
 
-private class LineBuilder(val liveId: String?, val options: LineOptions) {
+internal class LineBuilder(val liveId: String?, val options: LineOptions) {
     fun unfold(lines: List<ChatLine>): List<ChatLine> = lines.flatMap { line ->
         if (line is ChatLine.Work && line.open && line.steps.isNotEmpty()) {
             listOf(line) + line.steps.mapIndexed { i, step -> ChatLine.Step(line.id, step, i == 0) } +
@@ -265,6 +299,11 @@ private class LineBuilder(val liveId: String?, val options: LineOptions) {
                     if (it is WorkItem.Folded) it.item.fold?.let { f -> f.tools + f.thoughts } ?: 1 else 1
                 })
         } else listOf(line)
+    }
+
+    fun lines(block: Block): List<ChatLine> = when (block) {
+        is Block.Row -> listOf(ChatLine.Row(block.row))
+        is Block.Turn -> turnLines(block.turn)
     }
 
     private fun work(id: String, steps: List<WorkItem>, live: Boolean, start: Instant?, end: Instant?) =

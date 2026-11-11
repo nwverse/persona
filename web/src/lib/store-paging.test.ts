@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCompleteSessions, connect, getSession, getState, rememberSessionRow, reset, upsertSession } from "./store";
+import { archiveAgent, appArchiveDeps } from "./agent-archives";
 import { runtimeSessions } from "./runtime-list";
 import { isWaiting } from "./agent-groups";
-import { backgroundCount, backgroundRunning, workflowShortLine } from "./workflows";
+import { backgroundCount, workflowShortLine } from "./workflows";
 import { t } from "../i18n";
 import type { Session } from "./types";
 
@@ -108,7 +109,7 @@ describe("negotiated bounded runtime lists", () => {
     upsertSession({ ...getState().sessionSummaries[0], title: "Optimistic title" });
     upsertSession(session("s0", { waiting: undefined, background: [{ id: "bg", kind: "shell" }] }));
     expect(getSession("demo", "s0")?.waiting).toBeUndefined();
-    expect(backgroundRunning(getSession("demo", "s0"))).toBe(true);
+    expect(backgroundCount(getSession("demo", "s0"))).toBe(1);
   });
 
   it("recovers a resumed socket's expired revision with a bounded baseline", async () => {
@@ -169,7 +170,49 @@ describe("summary-aware background state", () => {
     const s = session("s", { waiting: true, background_count: 2, running_workflows: 1, running_subagents: 1 });
     expect(backgroundCount(s)).toBe(2);
     expect(workflowShortLine(s)).toBe(t("lib-workflows.running_in_background"));
-    expect(backgroundRunning(s)).toBe(true);
-    expect(backgroundRunning(session("s", { waiting: true, running_subagents: 1 }))).toBe(true);
   });
+});
+
+describe("archive failure rollback with negotiated lists", () => {
+ it.each([
+  ["delta", ["sessions_delta"], "legacy"],
+  ["paged", ["sessions_list", "sessions_delta", "sessions_lookup"], "s0"],
+ ] as const)("restores the removed detail immediately with a %s hub and real refresh", async (_, features, id) => {
+  hello([...features]);
+  await settle();
+  const snapshot = session(id, { title:"Waiting for confirmation", status:"blocked", state:"needs_you", waiting:undefined });
+  upsertSession(snapshot);
+  const summaries = getState().sessionSummaries;
+  let reject!: (error: Error) => void;
+  const operation = archiveAgent(snapshot,true,{
+   ...appArchiveDeps,
+   archive:() => new Promise((_,fail) => { reject=fail; }),
+   notify:() => {},
+  });
+  expect(getState().sessions.demo).toEqual([]);
+  reject(new Error("close refused"));
+  await settle();
+  expect(await operation).toEqual({ok:false});
+  expect(getState().sessions.demo).toEqual([snapshot]);
+  expect(getSession("demo",id)?.title).toBe("Waiting for confirmation");
+  if (features.some(feature => feature === "sessions_list")) {
+   expect(getState().sessionSummaries).toEqual(summaries);
+   expect(requests.some(r => r.pathname === "/api/v1/sessions" && !r.search)).toBe(false);
+  }
+ });
+
+ it("does not replace a newer pushed detail when a failed archive rolls back", async () => {
+  hello(["sessions_list", "sessions_lookup"]);
+  await settle();
+  const snapshot = session("s0",{title:"Before close",waiting:undefined});
+  upsertSession(snapshot);
+  let reject!: (error:Error) => void;
+  const operation = archiveAgent(snapshot,true,{...appArchiveDeps,archive:() => new Promise((_,fail) => {reject=fail;}),notify:() => {}});
+  const newer: Session = {...snapshot,title:"New work",status:"working",state:"working"};
+  upsertSession(newer);
+  reject(new Error("close refused"));
+  await settle();
+  expect(await operation).toEqual({ok:false});
+  expect(getState().sessions.demo).toEqual([newer]);
+ });
 });

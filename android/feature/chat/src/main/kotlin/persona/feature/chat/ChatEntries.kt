@@ -36,6 +36,7 @@ interface ChatServices {
     fun interactions(): InteractionCenter
     fun sessions(): SessionsRepository
     fun chatWiring(): ChatWiringSource
+    fun inboxTrays(): AssistantInboxTrays
 }
 
 /** Every service in a binding belongs to the same pairing generation. */
@@ -56,6 +57,7 @@ data class ChatAppBindings(
     val ports: persona.core.contracts.api.PortOpener? = null,
     /** Tasks from the assistant's conversations (docs/assistant/unified-entry.md); null where the hub group has none. */
     val tasks: persona.core.domain.tasks.TasksStore? = null,
+    val agentShares: AgentSharesProvider? = null,
 )
 
 interface ChatWiringSource {
@@ -154,8 +156,17 @@ fun ChatDestination(
     val wiring by remember(services, session) { services.chatWiring().bindingsFor(session) }.collectAsStateWithLifecycle()
     if (wiring == null) { androidx.compose.material3.CircularProgressIndicator(); return }
     val metadata by services.sessions().sessions.collectAsStateWithLifecycle()
+    val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
+    val managerId = metadata.firstOrNull { it.key == session }?.manager ?: managerChoice.shown
+    val assistantManagement = remember(wiring?.assistantManagement, managerId) {
+        wiring?.assistantManagement?.forManager(managerId)
+    }
     val style = renderStyle ?: if (route.kind == persona.core.navigation.ConversationKind.Assistant ||
         metadata.any { it.key == session && it.assistant }) ChatRenderStyle.Assistant else ChatRenderStyle.Agent
+    val sharingManager = metadata.firstOrNull { it.key == session }?.manager?.takeIf { it.isNotBlank() }
+    val sharing = remember(wiring?.agentShares, sharingManager, session) {
+        wiring?.agentShares?.let { provider -> sharingManager?.let { owner -> { provider.forSession(session, owner) } } }
+    }?.takeIf { style == ChatRenderStyle.Agent }
     val editor = rememberChatDraftEditor(if (historyReadOnly) null else wiring, session)
     val handToPersona = rememberHandToPersona(wiring?.mainSender?.takeIf { style != ChatRenderStyle.Assistant }, navigator)
     val composer by (editor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
@@ -169,7 +180,10 @@ fun ChatDestination(
             onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },
             onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
             files = wiring?.files, ports = wiring?.ports, onHandToPersona = handToPersona,
-            tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly }),
+            tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly },
+            assistantManagement = assistantManagement,
+            agentShares = sharing,
+            inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path),
         renderStyle = style,
         embedded = embedded, showTopBar = showTopBar,
         historyReadOnly = historyReadOnly, historyFooter = historyFooter, historySession = historySession,

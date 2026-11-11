@@ -1,5 +1,5 @@
 // One folded execution summary while running or completed; manual expansion reveals its complete trace (#2602).
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useSessionLive } from "../../lib/live";
 import { useStore } from "../../lib/store";
 import { subagentFor } from "../../lib/tasks";
@@ -10,17 +10,20 @@ import type { Step } from "../../lib/turns";
 import { Collapse, cx, Spinner, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ActionRow } from "./ActionRow";
-import { FreshWords, LiveClockContext, useChatContext } from "./chat-context";
+import { LiveClockContext, useChatContext } from "./chat-context";
+import { useFreshWords } from "./fresh-words";
 import { inOpenedFold, openFoldRange, useExpanded, useLiveOverride } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { nodeItemIds } from "../../lib/chat-search";
 import { PlanCard } from "./PlanCard";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
-import { SubagentCard } from "./SubagentCard";
 import { WorkflowCallCard } from "./WorkflowCard";
 import { ThinkingCard } from "./ThinkingCard";
 import { t } from "../../i18n";
+
+// This card is only mounted inside manually opened work; keep its report reader off the first screen.
+const SubagentCard = lazy(() => import("./SubagentCard").then((m) => ({ default: m.SubagentCard })));
 
 export interface WorkProps {
   mid: string;
@@ -153,7 +156,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
 });
 
 /** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments. `fade`: the
- *  agent's words among them that just came in fade in (FreshWords); not inside a group. */
+ *  agent's words among them that just came in fade in (fresh-words.ts); not inside a group. */
 export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean }) {
   const runs: (WorkNode | ToolStep[] | AgentRun)[] = [];
   for (const n of nodes) {
@@ -214,18 +217,18 @@ function AgentGrid({ agents, p }: { agents: ToolStep[]; p: WorkProps }) {
       </div>
       <div className="grid min-w-0 grid-cols-1 gap-2 @[560px]:grid-cols-2">
         {agents.map((a, i) => (
-          <SubagentCard key={a.id} step={a} status={statuses[i]} mid={p.mid} scope={p.scope} />
+          <SubagentCard key={a.id} step={a} status={statuses[i]} mid={p.mid} sid={p.sid} scope={p.scope} />
         ))}
       </div>
     </div>
   );
 }
 
-/** Words that fade in if they just came in: the only reader of FreshWords, so a new reply renders these, not the chat.
- *  Memo: a streamed delta re-renders the segment, not these; FreshWords still reaches them through the context. */
+/** Words that fade in if they just came in: each reads its own id in fresh-words.ts, so a new reply renders its own
+ *  words, not the chat's. Memo: a streamed delta re-renders the segment, not these. */
 const FreshAnswer = memo(function FreshAnswer({ item, mid, sid }: { item: Item; mid: string; sid: string }) {
-  const fresh = useContext(FreshWords);
-  return <Answer item={item} mid={mid} sid={sid} fade={fresh?.has(item.id)} />;
+  const fade = useFreshWords(mid, sid, item.id);
+  return <Answer item={item} mid={mid} sid={sid} fade={fade} />;
 });
 
 /** A step on its own: in the open, or inside an open group. Memo: its props stay the same objects while the reply
@@ -234,7 +237,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
   switch (step.kind) {
     case "tool":
       if (p.trace) return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} trace />;
-      if (isAgentStep(step)) return <SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} scope={p.scope} />;
+      if (isAgentStep(step)) return <Suspense fallback={null}><SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} /></Suspense>;
       if (isPlanStep(step)) return <PlanCard id={step.id} todos={planTodos(step)} live={live} mid={p.mid} sid={p.sid} />;
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;

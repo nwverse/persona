@@ -2,6 +2,8 @@ package persona.android.capsule
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.ensureActive
@@ -126,6 +128,7 @@ internal class CapsuleSessions(
     private val openConversation: (SessionKey?, Boolean) -> Unit,
     /** A request outside any session (#5308): there is no conversation to open, only its card (#4808). */
     private val openCard: (RequestRef) -> Unit,
+    private val computationContext: CoroutineContext = EmptyCoroutineContext,
 ) : CapsuleContentSource {
     private val selectedSection = MutableStateFlow<String?>(null)
     private val selected = MutableStateFlow<Session?>(null)
@@ -167,7 +170,7 @@ internal class CapsuleSessions(
                     } ?: !data.preferences.mutes.mutes(target.key.path, null)
                 }
             })
-    }.stateIn(scope, SharingStarted.Eagerly, CapsuleCatalog())
+    }.flowOn(computationContext).stateIn(scope, SharingStarted.Eagerly, CapsuleCatalog())
     private val selection = combine(catalog, selectedSection, selected) { data, section, chosen ->
         val entrance = section ?: if (data.unread.isNotEmpty()) UnreadSection else MainSection
         when (entrance) {
@@ -202,7 +205,8 @@ internal class CapsuleSessions(
                 DeliveryState.WaitingForNetwork -> "\n" + AppText.get(R.string.app_capsule_waiting_network)
                 DeliveryState.Queued -> "\n" + AppText.get(R.string.app_capsule_queued)
                 DeliveryState.Unknown, DeliveryState.NeedsConfirmation, DeliveryState.Verifying -> "\n" + AppText.get(R.string.app_capsule_unconfirmed)
-                DeliveryState.Refused, DeliveryState.Rejected -> "\n" + (it.error ?: AppText.get(R.string.app_capsule_not_sent))
+                // The hub's code is not words: the chat says why and offers Retry (#2821).
+                DeliveryState.Refused, DeliveryState.Rejected -> "\n" + AppText.get(R.string.app_capsule_not_sent)
                 else -> "\n" + AppText.get(R.string.app_capsule_sending)
             }, true) }
         CapsuleContent(entries = target.entries, selectedId = target.id, messages = history + pending,

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -22,6 +23,9 @@ func writeGitFile(t *testing.T, path, body string) {
 // them in their own folders), a submodule and a detached HEAD.
 func TestReadGitPlace(t *testing.T) {
 	home := t.TempDir()
+	// readGitPlace walks the filesystem itself, so GIT_CEILING_DIRECTORIES does not apply. An empty .git file
+	// stops discovery at the fixture boundary even when the temporary directory's parent is a repository.
+	writeGitFile(t, filepath.Join(home, ".git"), "")
 	repo := filepath.Join(home, "Code", "app")
 	writeGitFile(t, filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
 	if err := os.MkdirAll(filepath.Join(repo, "web", "src"), 0o755); err != nil {
@@ -95,6 +99,7 @@ func TestReadGitPlace(t *testing.T) {
 func TestFillGitPlaceKeepsHostRoot(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "app")
 	writeGitFile(t, filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
+	awaitGitPlace(t, gitPlaces, repo)
 
 	s := proto.Session{Cwd: repo}
 	fillGitPlace(&s)
@@ -115,4 +120,23 @@ func TestFillGitPlaceKeepsHostRoot(t *testing.T) {
 	if chat.RepoRoot != "" || chat.Worktree != "" || chat.Branch != "" {
 		t.Fatalf("assistant got %q %q %q", chat.RepoRoot, chat.Worktree, chat.Branch)
 	}
+}
+
+func awaitGitPlace(t *testing.T, cache *gitPlaceCache, cwd string) gitPlace {
+	t.Helper()
+	cache.lookup(cwd)
+	cache.mu.Lock()
+	var pending <-chan struct{}
+	if e := cache.entries[cwd]; e != nil {
+		pending = e.pending
+	}
+	cache.mu.Unlock()
+	if pending != nil {
+		select {
+		case <-pending:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Git decoration did not complete")
+		}
+	}
+	return cache.lookup(cwd)
 }

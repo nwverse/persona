@@ -35,16 +35,22 @@ import persona.core.designsystem.icons.PhIcons
  * rest in place (R3).
  */
 @Composable
-internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null) {
+internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null, boxed: Boolean = false,
+    /** The closeout card above the transcript says this reply's closeout block (#3612): draw the reply without it. */
+    hideCloseout: Boolean = false) {
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
-    val text = whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }
+    val text = (whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it })
+        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
     val model = remember(text, item.from, user) { messageModel(text, item.from, user) }
     val uri = LocalUriHandler.current
     Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText()))) {
         MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
-        MessageParts(model.parts, user, item.id)
+        // a reply still being written: its quotes do not fold yet (#2984)
+        CompositionLocalProvider(LocalReplyStreaming provides (update?.streaming == true)) {
+            MessageParts(model.parts, user, item.id, boxed = boxed, streaming = update?.streaming == true)
+        }
         if (cut) FullTextButton(item) { whole = it } else ReaderEntry(text)
         if (update?.streaming == true) StreamingCursor()
         // An answer's documents as cards with their first page (iOS #1543), the rest as chips.
@@ -66,7 +72,8 @@ private fun StreamingCursor() {
 }
 
 @Composable
-private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null) {
+private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null, boxed: Boolean = false,
+    streaming: Boolean? = null) {
     // Bubble padding below the last text line, so the reported extent reaches the bottom of the row.
     val bottomPadding = with(LocalDensity.current) { Tokens.Space.m.roundToPx() }
     // A reply's ```persona-view blocks are numbered across the whole text item: `<item id>/<n>`, the hub's key.
@@ -86,8 +93,10 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
                     if (index == parts.lastIndex && layout.lineCount > 0)
                         onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
                 })
-                else ChatMarkdown(part.text, "$id/$index", selectable = false,
-                    viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) })
+                else AssistantAnswerFrame(boxed) {
+                    ChatMarkdown(part.text, "$id/$index", selectable = false,
+                        viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) }, streaming = streaming)
+                }
             is MessagePart.Source -> JGroupItem(GroupPosition.Single) {
                 Column(Modifier.fillMaxWidth().padding(10.dp)) {
                     Text(stringResource(R.string.chat_content_from, part.name.ifBlank { stringResource(R.string.chat_content_other_session) }), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
@@ -263,7 +272,7 @@ internal fun DiffView(diff: ToolDiff, id: String) {
 @Composable
 internal fun TodoList(todos: List<TodoEntry>, failed: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        val progress = stringResource(R.string.chat_todos_progress, todos.count { it.status == "completed" }, todos.size)
+        val progress = pluralStringResource(R.plurals.chat_todos_progress, todos.size, todos.count { it.status == "completed" }, todos.size)
         Text(if (failed) stringResource(R.string.chat_todos_progress_failed, progress) else progress,
             style = PersonaTheme.type.caption, color = if (failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink2)
         todos.forEach { todo ->

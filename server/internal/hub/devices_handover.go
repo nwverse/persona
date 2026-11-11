@@ -15,13 +15,28 @@ import (
 
 // ---- the handover ----
 
-// devicesConfig is what the hub hands the manager now.
-func (h *Hub) devicesConfig() devicewire.Config { return h.devicesConfigFor(devicesOwner) }
-
 // devicesConfigFor is what the hub hands manager id: the machines it carries (ownership.go); the mesh's members
 // only to the carrier.
 func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	out := devicewire.Config{Machines: []json.RawMessage{}, HubID: h.hubID(), HubName: h.hubName(), HubVersion: h.version}
+	if h.cfg != nil && h.publicShareBuildExists() {
+		out.SharePublicOrigin = h.sharingOrigin()
+	}
+	out.ShareAuthorities = map[string]devicewire.ShareAuthority{}
+	for _, mc := range h.cfgEntries() {
+		if h.entryOwner(mc.ID) != id {
+			continue
+		}
+		if store := h.shareRoutingStore(); store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			route, err := store.ShareRouting(ctx, h.hubID(), mc.ID, id)
+			cancel()
+			if err == nil {
+				out.ShareRoutingHandle = route.Handle
+				out.ShareAuthorities[mc.ID] = route.Authority
+			}
+		}
+	}
 	out.AutoUpdateNodes = h.upd.nodesEnabled()
 	for _, mc := range h.cfgEntries() {
 		if h.entryOwner(mc.ID) != id {
@@ -251,6 +266,9 @@ func (h *Hub) addMachineLive(mc MachineConfig) {
 // removeMachineLive takes a hub.json entry out of what the manager connects: it lets the computer go now. A hub that
 // is not running (tests) does not read it again.
 func (h *Hub) removeMachineLive(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = h.retireShareMachine(ctx, id)
+	cancel()
 	d := &h.devices
 	d.mu.Lock()
 	if !d.started {
@@ -309,7 +327,7 @@ func (c MachineConfig) forMesh() MachineConfig {
 
 // linkPingTimes are the heartbeats of the Persona Links the hub relays: hub.json's link section (config_link.go), else
 // link.PingEvery and PingTimeout; tests set their own (h.linkPing). set: not the defaults, the manager is told them
-// (devicesConfig) and tells Persona Link.
+// (devicesConfigFor) and tells Persona Link.
 func (h *Hub) linkPingTimes() (every, timeout time.Duration, set bool) {
 	if h.linkPing[0] > 0 {
 		return h.linkPing[0], h.linkPing[1], true

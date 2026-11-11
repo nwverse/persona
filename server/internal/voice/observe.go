@@ -17,7 +17,7 @@ import (
 )
 
 // What the bound conversation does that the call did not hand over, and how a turn that is not over yet is told
-// (docs/assistant/voice.md "Following a turn", "Announcements", #3503).
+// (docs/assistant/voice.md "Per-round tracking", "Announcements", #3503).
 //
 // Observed runs (protocol 2): the call watches the conversation it is bound to from ready on. When it works and no run
 // of the call's is on it (none being sent, none held), the turn it works on is followed as a run of its own: the user
@@ -42,7 +42,7 @@ import (
 
 var (
 	// heartbeatAfter is how long a call is quiet while what was handed over is worked on before the user hears that it
-	// still is (docs/lessons/voice.md "Suggested constant values": a say, which the model always speaks; not more often, or it chats).
+	// still is (docs/lessons/voice.md "Recommended constants": a say, which the model always speaks; not more often, or it chats).
 	heartbeatAfter = 2 * time.Minute
 	// triageWait is how long a stopped turn of an agent waits for the hub's triage of it: the manager triages a turn that
 	// stayed stopped triage_settle_seconds (15 s by default), with a model call.
@@ -276,7 +276,7 @@ func opener(items []proto.Item) *proto.Item {
 }
 
 // sourceOf says whether a message of the bound conversation came from elsewhere than the app or voice
-// (docs/extensions/channels.md "Source marks"), and the channel's name when it came by one: one Persona wrote (a scheduled task, a
+// (docs/extensions/channels.md "Source markers"), and the channel's name when it came by one: one Persona wrote (a scheduled task, a
 // task reporting back, a wake-up) or another session sent is from elsewhere, not a channel. Bound to an agent nothing
 // is (what is typed at its terminal is the user's).
 func (t *tracker) sourceOf(ctx context.Context, it proto.Item) (foreign bool, from string) {
@@ -381,14 +381,14 @@ func activityIn(l i18n.Lang, activity string) string {
 // away: nothing triages then).
 func (t *tracker) triage(ctx context.Context) triageSwitches {
 	if t.c.target == nil || t.c.target.Kind != "agent" {
-		return triageSwitches{}
+		return triageOff()
 	}
 	if now := time.Now(); !now.Before(t.tri.at) {
 		sw, err := t.c.pl.hub.triage(ctx)
 		t.tri.sw, t.tri.at = sw, now.Add(triageEvery)
 		if err != nil {
 			t.c.logf("the hub's triage switches: %s (taken as off)", hubOutcome(err))
-			t.tri.sw, t.tri.at = triageSwitches{}, now.Add(triageRetry)
+			t.tri.sw, t.tri.at = triageOff(), now.Add(triageRetry)
 		}
 	}
 	return t.tri.sw
@@ -420,7 +420,7 @@ func outside(w *proto.WorkState) bool {
 	return w != nil && w.Phase == proto.WorkBlocked && (w.On == proto.WaitExternal || w.On == proto.WaitAgent)
 }
 
-// untilTriaged: r's turn stopped, not on the user, and is not over yet (docs/assistant/voice.md "Following a turn" Look). The hub's triage
+// untilTriaged: r's turn stopped, not on the user, and is not over yet (docs/assistant/voice.md "Per-round tracking" Look). The hub's triage
 // of it says a "Continue" is due after a transient model error, or that it waits on something outside (told once, the run
 // blocked); or that triage is not in yet and may say either: a model error the manager would go on from
 // (auto_continue: Claude Code's say nothing of their kind, the triage tells), or a turn woken from a wait, which often
@@ -440,13 +440,17 @@ func (t *tracker) untilTriaged(ctx context.Context, r *voiceRun, s *proto.Sessio
 	if s.TurnErrorKind == proto.TurnErrorTransient && r.Seen { // not an earlier turn's
 		r.transient = true
 	}
+	failed := strings.TrimSpace(s.TurnError) != "" && s.TurnErrorKind != proto.TurnErrorUser
 	switch {
-	case !tri.Enabled || now.Sub(r.stopAt) >= triageWait:
+	case now.Sub(r.stopAt) >= triageWait:
 		return false
+	case !tri.Enabled:
+		// Only a transient error is followed with the triage off (transient_retry, #3208).
+		return tri.transientOn() && failed && s.TurnErrorKind != proto.TurnErrorUsageLimit
 	case r.waitOn != "":
 		return true // woken from a wait
 	}
-	return tri.AutoContinue && strings.TrimSpace(s.TurnError) != "" && s.TurnErrorKind != proto.TurnErrorUser
+	return failed && (tri.AutoContinue || tri.transientOn() && s.TurnErrorKind != proto.TurnErrorUsageLimit)
 }
 
 // keepTold: r's answer was just said (state, res); it is kept until the hub's triage of that turn is in, which may

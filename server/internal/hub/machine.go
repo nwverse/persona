@@ -66,6 +66,7 @@ type Machine struct {
 	// rows are the sessions' rows as last pushed, by id (encodeKept), under rowsMu; never changed in place.
 	rowsMu   sync.Mutex
 	rows     map[string]keptRow
+	rowLen   atomic.Int64   // the average length of the rows encodeKept gave last (rowsSize)
 	watchers map[string]int // session id -> subscribed clients
 	// What the node was told about each session's watch (syncWatch): watchMu orders the session.watch /
 	// session.unwatch calls per session (a 1-slot channel, so a wait for it can end with the caller's ctx), nodeWatch
@@ -150,8 +151,7 @@ func (m *Machine) setName(name string) {
 }
 
 func (m *Machine) snapshot() proto.Machine {
-	computer := m.hub.computerOf(m) // before m.mu: it takes it
-	browser := m.hub.browserOf(m)
+	computer, browser, iphone := m.hub.extrasOf(m) // before m.mu: it takes it
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	warm := m.warmLocked(time.Now())
@@ -193,7 +193,7 @@ func (m *Machine) snapshot() proto.Machine {
 		c := proto.EngineHostsOf(cmp.Or(s.Engine, proto.EngineHerdr))
 		s.EngineHosts, s.EngineDefault = c.Hosts, c.Default
 	}
-	s.Computer, s.Browser = computer, browser // the system is in the manager's report (its monitoring)
+	s.Computer, s.Browser, s.IPhone = computer, browser, iphone // the system is in the manager's report (its monitoring)
 	return s
 }
 

@@ -6,8 +6,10 @@ import "strings"
 // hub an extension's token may call names one (extmgr/extension_scopes.go); a route naming none is for full tokens
 // only.
 const (
-	ScopeKBRead        = "kb.read"
-	ScopeKBWrite       = "kb.write"
+	ScopeKBRead  = "kb.read"
+	ScopeKBWrite = "kb.write"
+	// ScopeSentRead reveals which archived messages Persona sent as the user (kb.day).
+	ScopeSentRead      = "sent.read"
 	ScopeInboxRead     = "inbox.read"
 	ScopeInboxWrite    = "inbox.write"
 	ScopeAgentsRead    = "agents.read"
@@ -17,6 +19,9 @@ const (
 	ScopeAssistantAsk  = "assistant.ask"
 	ScopeTodosRead     = "todos.read"
 	ScopeTodosWrite    = "todos.write"
+	// ScopeLeadersRead: being told of the leader conversations (leader.changed) and what they report (leader.report),
+	// and listing them (GET /api/v1/assistant/leaders); #3484.
+	ScopeLeadersRead = "leaders.read"
 	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
 	// other (the hub checks who opened it: hub/extension_modes.go).
 	ScopeAgentsPermissionMode = "agents.permission_mode"

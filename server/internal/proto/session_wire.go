@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x30707d04a95173cb
+const sessionWireLayout = 0xfb8975c35078aedc
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout
 
@@ -76,13 +76,16 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"parent_thread_id":`, s.ParentThreadID, true)
 	w.str(`"parent_session_id":`, s.ParentSessionID, true)
 	w.str(`"root_session_id":`, s.RootSessionID, true)
-	w.boolean(`"is_subagent":`, s.IsSubagent, true)
 	w.str(`"read_only_reason":`, s.ReadOnlyReason, true)
 	if s.Capabilities != nil {
 		w.value(`"capabilities":`, s.Capabilities)
 	}
+	w.boolean(`"is_subagent":`, s.IsSubagent, true)
 	w.boolean(`"attached":`, s.Attached, true)
 	w.boolean(`"can_fork":`, s.CanFork, true)
+	w.boolean(`"started_by_persona":`, s.StartedByPersona, false)
+	w.boolean(`"assistant":`, s.Assistant, false)
+	w.boolean(`"archived":`, s.Archived, true)
 	w.str(`"title":`, s.Title, false)
 	w.str(`"cwd":`, s.Cwd, false)
 	w.str(`"workspace_cwd":`, s.WorkspaceCwd, true)
@@ -103,20 +106,22 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"model":`, s.Model, true)
 	w.str(`"permission_mode":`, s.PermissionMode, true)
 	w.str(`"effort":`, s.Effort, true)
+	w.boolean(`"bypass_available":`, s.BypassAvailable, true)
+	w.boolean(`"ultracode_pending":`, s.UltracodePending, true)
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
 	}
 	w.str(`"ultracode_note":`, s.UltracodeNote, true)
-	w.boolean(`"ultracode_pending":`, s.UltracodePending, true)
 	if s.UltracodeLostAt != nil {
 		w.time(`"ultracode_lost_at":`, *s.UltracodeLostAt)
 	}
 	w.integer(`"context_tokens":`, int64(s.ContextTokens), true)
 	w.integer(`"context_window":`, int64(s.ContextWindow), true)
 	w.strs(`"efforts":`, s.Efforts)
-	w.boolean(`"started_by_persona":`, s.StartedByPersona, false)
-	w.boolean(`"assistant":`, s.Assistant, false)
-	w.boolean(`"archived":`, s.Archived, true)
+	w.str(`"service_tier":`, s.ServiceTier, true)
+	if len(s.ServiceTiers) > 0 {
+		w.value(`"service_tiers":`, s.ServiceTiers)
+	}
 	w.str(`"space":`, s.Space, true)
 	if !s.ArchiveChangedAt.IsZero() {
 		w.time(`"archive_changed_at":`, s.ArchiveChangedAt)
@@ -184,13 +189,13 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"asks":`, s.Asks, true)
 	w.boolean(`"asks_read":`, s.AsksRead, true)
 	w.boolean(`"awaits_reply":`, s.AwaitsReply, true)
+	w.boolean(`"turn_error_resumes":`, s.TurnErrorResumes, true)
+	w.boolean(`"turn_error_after_work":`, s.TurnErrorAfterWork, true)
 	w.str(`"turn_error":`, s.TurnError, true)
 	w.str(`"turn_error_kind":`, s.TurnErrorKind, true)
 	if s.TurnErrorResetsAt != nil {
 		w.time(`"turn_error_resets_at":`, *s.TurnErrorResetsAt)
 	}
-	w.boolean(`"turn_error_resumes":`, s.TurnErrorResumes, true)
-	w.boolean(`"turn_error_after_work":`, s.TurnErrorAfterWork, true)
 	w.str(`"turn_error_code":`, s.TurnErrorCode, true)
 	if s.ModelFallback != nil {
 		w.value(`"model_fallback":`, s.ModelFallback)
@@ -208,6 +213,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.integer(`"rev":`, s.Rev, true)
 	w.boolean(`"woke_by_task":`, s.WokeByTask, true)
 	w.boolean(`"starting":`, s.Starting, true)
+	w.boolean(`"quiet":`, s.Quiet, true)
 	w.integer(`"pending_interactions":`, int64(s.PendingInteractions), false)
 	w.str(`"suggestion":`, s.Suggestion, true)
 	w.str(`"start_error":`, s.StartError, true)
@@ -218,7 +224,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	if s.Todo != nil {
 		w.value(`"todo":`, s.Todo)
 	}
-	w.boolean(`"quiet":`, s.Quiet, true)
 	w.str(`"spawn_from":`, s.SpawnFrom, true)
 	w.str(`"attention_reason":`, s.AttentionReason, true)
 	w.str(`"failure_reason":`, s.FailureReason, true)

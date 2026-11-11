@@ -36,6 +36,12 @@ func (rec agentArchive) activeAfter() time.Time {
 	return rec.Session.UpdatedAt
 }
 
+// A just-closed confirmation can remain in a node's cached list until its next push.
+// New work or a newer transcript still restores it; the old blocked snapshot cannot undo the close.
+func (rec agentArchive) active(s proto.Session) bool {
+	return s.UpdatedAt.After(rec.activeAfter()) || agentArchiveBusy(s) && (rec.ClosedAt.IsZero() || s.Status != proto.StatusBlocked)
+}
+
 type agentArchiveBook struct {
 	once     sync.Once
 	gate     chan struct{}
@@ -163,7 +169,7 @@ func (svc *Service) archivedSessions(ctx context.Context, machine string, list [
 		if !ok || !rec.Archived {
 			continue
 		}
-		if agentArchiveBusy(s) || s.UpdatedAt.After(rec.activeAfter()) {
+		if rec.active(s) {
 			b.pending[key] = true
 		}
 		if b.pending[key] {
@@ -198,7 +204,7 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 		if rec, ok := records[key]; ok && !list[i].Assistant {
 			// A storage timeout must neither reveal unrelated archived rows nor hide
 			// new work. The durable restore remains pending until its write succeeds.
-			active := agentArchiveBusy(list[i]) || list[i].UpdatedAt.After(rec.activeAfter())
+			active := rec.active(list[i])
 			list[i].Archived = rec.Archived && !pending[key] && !active
 			list[i].ArchiveChangedAt = rec.ChangedAt
 		}
@@ -218,22 +224,6 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 		list = append(list, s)
 	}
 	return list
-}
-
-// A later archive/restore supersedes an older delete tombstone. A subsequent
-// explicit delete still works, without a non-atomic write to two settings keys.
-func (svc *Service) agentArchiveChanges(machine string) map[string]time.Time {
-	out := map[string]time.Time{}
-	records := svc.agentArchives.snapshot.Load()
-	if records == nil {
-		return out
-	}
-	for _, rec := range *records {
-		if rec.Session.MachineID == machine {
-			out[rec.Session.SessionID] = rec.ChangedAt
-		}
-	}
-	return out
 }
 
 func (svc *Service) archiveStore() Store {
@@ -372,6 +362,14 @@ func (svc *Service) setAgentArchive(ctx context.Context, mid, sid string, archiv
 func (svc *Service) setAgentSessionArchive(w http.ResponseWriter, r *http.Request, mid string, archived bool) {
 	if !fullRole(r) {
 		apierr.Write(w, http.StatusForbidden, i18n.Err("hub-agent_archives.forbidden"))
+		return
+	}
+	if archived && r.URL.Query().Get("force") == "1" {
+		if err := svc.forceArchiveConfirmation(r.Context(), mid, r.PathValue("sid")); err != nil {
+			svc.writeAgentArchiveError(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"ok": true, "archived": true, "close": map[string]any{"closed": true, "outcome": archiveCloseClosed}})
 		return
 	}
 	if archived && r.URL.Query().Get("close") == "1" {

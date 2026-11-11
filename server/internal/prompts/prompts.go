@@ -14,7 +14,6 @@ package prompts
 import (
 	"embed"
 	"fmt"
-	"io/fs"
 	"reflect"
 	"strings"
 	"sync"
@@ -22,13 +21,13 @@ import (
 	"text/template/parse"
 )
 
-//go:embed agents assistant bot channel inbox kb tools shared mcp voice todo
+//go:embed agents assistant bot channel inbox kb tools shared mcp voice todo meeting subscriptions
 var files embed.FS
 
 // templates is every template parsed so far, in one text/template set so {{template}} finds the ones it includes.
 // Each is parsed the first time it is rendered, with the templates it includes (#2475): a process renders a few of
 // them, and all of them parsed hold about 1.5 MB, the voice ones alone nearly half. A short-lived process that writes
-// no prompt (a hook, #1308) parses none. Names parses them all, so a broken file still fails the tests.
+// no prompt (a hook, #1308) parses none. The tests parse them all (Names), so a broken file still fails there.
 var templates = newTemplateSet()
 
 type templateSet struct {
@@ -73,18 +72,6 @@ func (s *templateSet) parse(name string) error {
 	return nil
 }
 
-// parseAll adds every template file to the set.
-func (s *templateSet) parseAll() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") || strings.HasPrefix(path, "mcp/") {
-			return err // mcp/ holds tool definitions, not templates (mcp.go)
-		}
-		return s.parse(strings.TrimSuffix(path, ".md"))
-	})
-}
-
 // includes appends to out the names of the templates n includes ({{template "name"}}; a name is always a constant).
 func includes(n parse.Node, out []string) []string {
 	switch n := n.(type) {
@@ -122,20 +109,6 @@ func (s *templateSet) render(name string, data any) string {
 		panic(fmt.Sprintf("prompts: %s: %v", name, err))
 	}
 	return b.String()
-}
-
-// Names lists every template (for tests), parsing all of them.
-func Names() []string {
-	if err := templates.parseAll(); err != nil {
-		panic(fmt.Sprintf("prompts: %v", err))
-	}
-	var out []string
-	for _, t := range templates.root.Templates() {
-		if t.Name() != "" {
-			out = append(out, t.Name())
-		}
-	}
-	return out
 }
 
 var funcs = template.FuncMap{

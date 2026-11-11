@@ -22,6 +22,9 @@ export interface ChatContextValue {
   workflowCalls?: WorkflowCalls;
   /** Conversation identity; both styles share the collapsed work-line default (#2602). */
   lineStyle?: WorkLineStyle;
+  /** The exchange whose last words carried the closeout the card above the transcript shows (#3612): they are drawn
+   *  without the raw block. Unset while no card is shown. */
+  closeoutSegment?: string;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });
@@ -34,7 +37,3 @@ export function useChatContext() {
   return useContext(ChatContext);
 }
 
-/** Items pushed over the WebSocket after the chat subscribed (not the first page, older pages or an unfolded range):
- *  their words fade in once (Markdown's `fade`). A context of its own, read only by the words that may fade: it
- *  changes with each new reply, and in ChatContext it would render every exchange again. */
-export const FreshWords = createContext<ReadonlySet<string> | undefined>(undefined);

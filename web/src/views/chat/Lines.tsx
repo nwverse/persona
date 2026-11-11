@@ -10,6 +10,7 @@ import { refusalFacts } from "../../lib/model-fallback";
 import { runAction, turnErrorFix } from "../../lib/readiness";
 import { wakeSummary } from "../../lib/tasks";
 import { type ChatLine, type OpenRecap } from "../../lib/turns";
+import { sourceLabel } from "../../lib/message-source";
 import type { Item } from "../../lib/types";
 import { Button, Collapse, copyText, cx, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -27,6 +28,7 @@ export interface LineProps {
   expandFold: (f: Item) => Promise<void>;
   /** "Retry" on an API error card (only on the last line, while the agent is not working). */
   onRetry?: () => void;
+  onEditLastMessage?: () => void;
   /** The hub's word on what to fix for this line's model error (the session's turn_error_code, last line only). */
   fix?: { title: string; detail: string; action: string } | null;
   /** A Persona conversation: a model error's text may name a fix in Persona's settings. Agent sessions keep "Retry". */
@@ -35,6 +37,8 @@ export interface LineProps {
   limit?: string;
   /** Inside an opened supervision trace, show complete injected inputs. */
   trace?: boolean;
+  /** A finished exchange before the last two may skip drawing off screen (SegmentView `offscreen`). */
+  offscreen?: (section: HTMLElement) => () => void;
 }
 
 export const ChatLineView = memo(function ChatLineView(props: LineProps) {
@@ -46,7 +50,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assistant, limit, trace }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, onRetry, onEditLastMessage, fix, assistant, limit, trace, offscreen }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} />;
@@ -61,6 +65,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assista
           streaming={line.live ? streaming : undefined}
           batchedWords={!assistant}
           expandFold={expandFold}
+          offscreen={offscreen}
         />
       );
     case "notice":
@@ -73,7 +78,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assista
       if (limit) return <UsageLimitLine text={limit} />;
       // the text-derived fix points at Persona's model settings: only for Persona's own conversations
       const f = assistant ? (fix ?? turnErrorFix(line.info.code)) : null;
-      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={f} onRetry={onRetry && retryable(line.info) && !f ? onRetry : undefined} />;
+      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={f} onRetry={onRetry && retryable(line.info) && !f ? onRetry : undefined} onEditLastMessage={!assistant && line.info.code === "safeguards" ? onEditLastMessage : undefined} />;
     }
   }
 }
@@ -89,10 +94,10 @@ function SupervisionLine({ line, ...props }: LineProps & { line: Extract<ChatLin
     return () => setOpen(false);
   });
   return (
-    <section className="flex min-w-0 flex-col gap-3" data-supervision={line.live ? "running" : "done"}>
+    <section className="flex min-w-0 flex-col gap-3" data-supervision={line.live ? "running" : "done"} data-background-round={line.source?.kind}>
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="touch-hit flex w-full min-w-0 items-center gap-1.5 rounded-control py-1 text-left text-[length:var(--chat-secondary)] whitespace-nowrap text-ink-3 hover:text-ink-2">
-        <span className="shrink-0 text-accent-ink">@{t("chat-messages.source_supervision")} · </span>
-        <span className="min-w-0 truncate">{t(line.live ? "chat-lines.supervision_running" : "chat-lines.supervision_done")}</span>
+        <span className={cx("text-accent-ink", line.source ? "max-w-[60%] min-w-0 shrink-0 truncate" : "shrink-0")}>@{line.source ? sourceLabel(line.source) : t("chat-messages.source_supervision")} · </span>
+        <span className="min-w-0 truncate">{t(line.source ? (line.live ? "chat-lines.background_running" : "chat-lines.background_done") : line.live ? "chat-lines.supervision_running" : "chat-lines.supervision_done")}</span>
         <Icon name="chevronRight" size={14} className="shrink-0" style={{ transform: open ? "rotate(90deg)" : undefined }} />
       </button>
       {open && <div className="flex min-w-0 flex-col gap-3 border-l-2 border-tool-rail pl-3" data-supervision-trace>
@@ -196,7 +201,7 @@ function RecapChip({ items }: { items: Item[] }) {
 function RecapDrawer({ items, open, onClose }: { items: Item[]; open: boolean; onClose: () => void }) {
   return (
     <Dialog open={open} onClose={onClose} title={items.length > 1 ? t("chat-lines.recap_title_many", { count: items.length }) : t("chat-lines.recap")} width={600}>
-      <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1">
+      <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1" data-scroll-box>
         {[...items].reverse().map((it, n) => (
           <section key={it.id} className={cx("flex flex-col gap-2", n > 0 && "border-t border-line pt-4")}>
             {it.ts && (
@@ -284,7 +289,7 @@ function UsageLimitLine({ text }: { text: string }) {
 
 /** A model API error: why, whether it passes by itself, the original under the fold, "Retry". One the user must fix (not
  *  signed in, a wrong key, a model that is not there) says so instead, with "Fix it" (docs/assistant/onboarding.md 4.4). */
-function APIErrorCard({ info, count, at, onRetry, fix }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; fix?: { title: string; detail: string; action: string } | null }) {
+function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; onEditLastMessage?: () => void; fix?: { title: string; detail: string; action: string } | null }) {
   const [open, setOpen] = useState(false);
   const sub = fix ? fix.detail : info.transient === true ? t("chat-lines.api_transient") : info.transient === false ? t("chat-lines.api_permanent") : "";
   const reason = fix ? fix.title : info.reason;
@@ -328,6 +333,7 @@ function APIErrorCard({ info, count, at, onRetry, fix }: { info: APIErrorInfo; c
           </Button>
         </div>
       )}
+      {onEditLastMessage && <div><Button icon="pencil" onClick={onEditLastMessage}>{t("rewind.edit_last")}</Button></div>}
     </div>
   );
 }

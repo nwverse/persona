@@ -218,7 +218,7 @@ export function installMock(scenario: string) {
   };
   let pending: ExtensionPreview | null = null;
 
-  // Markets (docs/extensions/extensions.md "Extension markets"): a public site and a private GitHub repository (token set, one warning); the
+  // Markets (docs/extensions/extensions.md "Extension marketplace"): a public site and a private GitHub repository (token set, one warning); the
   // catalog has an extension to install, two installed ones with an upgrade, a built-in one, and one this hub cannot install.
   // A spec containing "fail" is not read; "private" without a token asks for one.
   const MA = "3f2a9c1d0b";
@@ -539,7 +539,7 @@ export function installMock(scenario: string) {
       markets = markets.map((x) => (x.id === m.id ? read : x));
       return json(read);
     }
-    // How they run (docs/extensions/extensions.md "Activity").
+    // How they run (docs/extensions/extensions.md "Runtime status").
     const query = new URLSearchParams(path.split("?")[1] ?? "");
     const win = (query.get("window") || "24h") as MetricsWindow;
     if (key === "GET /extensions/-/metrics") return json(mockOverview(extensions.map((x) => x.id), win));

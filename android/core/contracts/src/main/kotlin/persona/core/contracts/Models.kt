@@ -230,6 +230,8 @@ data class SessionCapabilities(
     val approve: Boolean = false,
     val terminal: Boolean = false,
     val attach: Boolean = false,
+    /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
+    val modes: Boolean? = null,
 )
 
 /**
@@ -249,7 +251,40 @@ data class WorkState(
     val max: Int? = null,
     @SerialName("interaction_id") val interactionId: String? = null,
     val agent: WorkAgent? = null,
+    /** What the turn produced (a pull request, a commit, a document), as the hub read it from the final reply. */
+    val artifacts: List<WorkArtifact>? = null,
+    /** What the agent said of its own work as the turn ended (#3612); null without one and from an older hub. */
+    val closeout: Closeout? = null,
 )
+
+/** One thing a turn produced: [kind] pr, commit, branch, doc, build or url (kept as sent), [ref] its link or name. */
+@Serializable
+data class WorkArtifact(val kind: String = "", val ref: String = "")
+
+/**
+ * An agent's closeout (docs/assistant/agent-work.md "Closeout", #3612): the record it ends a turn with. It is the agent's
+ * own claim: [status] done, not_done or blocked (anything else is no closeout: [known]), [merged] and [deployed] "yes" or
+ * "no" (null when unsaid or not applicable), and [checked], what the hub found when it looked itself. Session lists
+ * leave out [did] and [verified].
+ */
+@Serializable
+data class Closeout(
+    val status: String = "",
+    val waiting: String? = null,
+    val did: List<String>? = null,
+    val merged: String? = null,
+    val deployed: String? = null,
+    val verified: String? = null,
+    val missing: String? = null,
+    val checked: CloseoutChecked? = null,
+) {
+    /** A status this app knows; a closeout with any other is not shown. */
+    val known: Boolean get() = status == "done" || status == "not_done" || status == "blocked"
+}
+
+/** What the hub found of a closeout's merged and deployed claims: "yes", "no", or null when it could not tell. */
+@Serializable
+data class CloseoutChecked(val merged: String? = null, val deployed: String? = null)
 
 @KeepGeneratedSerializer
 @Serializable(with = WorkAgentSerializer::class)
@@ -317,13 +352,18 @@ data class Session(
     @SerialName("launcher") val launcher: String? = null,
     @SerialName("model") val model: String? = null,
     @SerialName("permission_mode") val permissionMode: String? = null,
+    /**
+     * The agent's process can take Allow Everything while it runs (its start flags put the mode in its cycle, read off the
+     * process by the node; #1379, #3957). False while unknown and from older hubs: then Allow Everything is a start's choice.
+     */
+    @SerialName("bypass_available") val bypassAvailable: Boolean = false,
     @SerialName("assistant") val assistant: Boolean = false,
     /** An assistant conversation put away (POST /api/v1/assistant/conversations/{id}/archive): kept, not listed. */
     @SerialName("archived") val archived: Boolean = false,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
     /**
-     * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant conversations", #3264): user, channel, inbox, task, spawned,
+     * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant chats", #3264): user, channel, inbox, task, spawned,
      * lark_agent, extension, or one this app doesn't know yet; null is the user's (older hubs never say).
      */
     @SerialName("origin") val origin: String? = null,
@@ -352,13 +392,15 @@ data class Session(
     @SerialName("queued") val queued: List<String>? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
     /**
-     * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflow, Monitor"): a running one is
+     * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
      */
     val workflows: List<Workflow>? = null,
     @SerialName("loop") val loop: LoopInfo? = null,
     /** The goal it works toward, when one is set (docs/integrations/agent-goal.md); older hubs never send it. */
     val goal: GoalInfo? = null,
+    /** The agent's counted task list, as reported by the node. */
+    val plan: PlanInfo? = null,
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("last_text") val lastText: String? = null,
     /** What its last reply asks the user, when its closing words put a question or a decision to them (#5096). */
@@ -414,11 +456,24 @@ data class Session(
      * app-server, where only the effort changes (node/codex_effort.go). Empty for every other session.
      */
     val efforts: List<String> = emptyList(),
+    /**
+     * Claude Code's ultracode as the node last saw it (docs/protocol/protocol.md "Claude Code ultracode"): null is unknown
+     * (no evidence yet, an older node or hub, another agent), not off.
+     */
+    val ultracode: Boolean? = null,
+    /** The node's reason the switch can't be used, was refused or still waits; null when there is none. */
+    @SerialName("ultracode_note") val ultracodeNote: String? = null,
+    /** A change of it waits for the agent's turn to end (or a draft / dialog in the terminal): a queue flag, not the value. */
+    @SerialName("ultracode_pending") val ultracodePending: Boolean = false,
     /** Present on bounded summary rows; absent on legacy complete rows. */
     val waiting: Boolean? = null,
     @SerialName("background_count") val backgroundCountHint: Int? = null,
     @SerialName("running_subagents") val runningSubagents: Int? = null,
     @SerialName("running_workflows") val runningWorkflowsCount: Int? = null,
+    /** Independent shell/Monitor count, excluding workflows and subagents. */
+    @SerialName("background_tasks_count") val backgroundTasksCount: Int? = null,
+    /** Newest running workflow; bounded list metadata without its agent or phase arrays. */
+    @SerialName("workflow_progress") val workflowProgress: Workflow? = null,
     @SerialName("background_working") val backgroundWorking: Boolean? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
@@ -535,7 +590,7 @@ data class Item(
     /** On a notice: the context was compacted here (Claude Code's compact_boundary); the chat draws it as a divider. */
     val compact: CompactBoundary? = null,
     /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by the user; the hub marks it
-     *  (docs/protocol/protocol.md "Messages Persona injects"), older hubs do not (core/domain `injectedOf`). */
+     *  (docs/protocol/protocol.md "Messages injected by Persona"), older hubs do not (core/domain `injectedOf`). */
     val injected: Injected? = null,
     /** Optional provenance for model input that was not typed by the user. Older hubs omit it. */
     val source: MessageSource? = null,
@@ -607,9 +662,13 @@ data class Question(
 
 @KeepGeneratedSerializer
 @Serializable(with = DialogOptionSerializer::class)
-data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null)
+data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null,
+    /** Ticked at the computer (a multi-select box) when the dialog was read. */
+    @SerialName("checked") val checked: Boolean = false)
 
-/** A terminal dialog the hub parsed (server/internal/screen); answer with Resolution.option. */
+/** A terminal dialog the hub parsed (server/internal/screen). One answer shape for both: a single-choice dialog
+ *  answers with [Resolution.option]; a multi-select one ([multi]) ticks options and sends them all in
+ *  [Resolution.options], its free text in [Resolution.text]. */
 @KeepGeneratedSerializer
 @Serializable(with = ScreenDialogSerializer::class)
 data class ScreenDialog(
@@ -618,6 +677,10 @@ data class ScreenDialog(
     @SerialName("detail") val detail: String? = null,
     @SerialName("options") val options: List<DialogOption> = emptyList(),
     @SerialName("rev") val rev: String = "",
+    /** Options are checkboxes, sent together by the submit row, instead of one answer on tap. */
+    @SerialName("multi") val multi: Boolean = false,
+    /** The submit row's own label ("Submit", or "Next" when another question follows). */
+    @SerialName("submit") val submit: String? = null,
 )
 
 /** Something a permission card asks to fill in before approving (`proto.Field`, a password); see [Interaction.fields]. */
@@ -670,6 +733,12 @@ data class Interaction(
     @SerialName("always_label") val alwaysLabel: String? = null,
     /** The persisted scope granted by this card; absent on older hubs and terminal-only sessions. */
     @SerialName("always_keys") val alwaysKeys: List<String>? = null,
+    /**
+     * Whether the manager keeps an "always allow" for this card (#3590): false on its own cards, which keep nothing, so
+     * they offer only Allow and Deny; true where it does, another agent's card included. Absent (an older hub, an
+     * Agents session's card): the card's own rule (`offersAlways` in core:domain).
+     */
+    @SerialName("always_honored") val alwaysHonored: Boolean? = null,
     /** Why the agent asks for this permission, in its own words (Codex). */
     val reason: String? = null,
     /** Filled in before approving (adding a mail account's password); the hub refuses allow without the required ones. */

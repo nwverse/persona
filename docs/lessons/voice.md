@@ -316,7 +316,7 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   leaving the gate closed and preventing every result, rejection, and `say` from being sent (script: protocol 1, typed question followed by 8 seconds of amplitude-400 frames; the result never sent). Subtract sustained noise based on the recent noise floor,
   and cap the user-speech hold from queue time, then send anyway (`noiseFloor`, `answerHoldMost` / `sayHoldMost` in `gate.go`; `docs/assistant/voice.md` 4.5, rule 3). Real-device values still need testing.
 - `draft` and `clearable` in a 409 `input_draft` may differ: with an IDE selection marker, `draft` is the whole line (`[⧉ Selected 3 lines from foo.go] fix it`), while `clearable` is only `fix it`.
-  The node compares `clear_draft` to `clearable` exactly; returning `draft` clears nothing and produces another 409. Always resend with `clearable` (`docs/protocol/protocol.md`, "`clear_draft`").
+  The node compares `clear_draft` to `clearable` exactly; returning `draft` clears nothing and produces another 409. Always resend with `clearable` (`docs/protocol/protocol.md`, "Sending messages").
 - `response.incomplete` counts as an interruption and sends `clear` only if that same response **has not yet `completed`**; ignore `incomplete` arriving for an already completed response.
   Identify the response by `delegation_id` in `response.event` (each response's own `responses` delegation). #3503 does this in protocol 2; since #4719, protocol 1 does the same.
 - After an energy-rule interruption, do not wait for "1.5 s of upstream silence" before allowing audio: the first chunk of the model's reply to an interruption arrives 1.2–1.3 s after the user finishes ("Timeline" above). With a short interruption (0.64 s), less than 1.5 s has passed since cutting off playback,
@@ -376,6 +376,26 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   holds" as the measured footer minus the cards' measured height; the two update in different frames, and the cap flipped by a point around half the
   page (a plan card in BeautifulUI at the standard size): another loop. Now it uses only values the cards do not move: the page height, the open
   header, the bar's own measured height (`VoiceBarRoom`) and the count's. The rule: what sizes an area must not take inputs the area itself moves.
+
+## The call's audio route (#3015, 2026-11-10)
+
+- **"Always on the loudspeaker" with a headset connected**: the session was `.playAndRecord` / `.voiceChat` / `[.defaultToSpeaker]` and nothing else.
+  `.voiceChat` implies Bluetooth hands-free (the SDK header says so), but not A2DP, so a Bluetooth device the system does not bring up as hands-free is
+  not a route at all, and `.defaultToSpeaker` then plays on the loudspeaker. The call also never chose a route itself: a connected headset the system left
+  out stayed out, and mid-call it only watched `AVAudioEngineConfigurationChange`. Code reading found no `overrideOutputAudioPort` anywhere, and the other
+  session users (recording, dictation) cannot overlap a call and clear their preferred input.
+- **`AVAudioEngineConfigurationChange` is not a route change**: it fires when the I/O unit's format changes and says nothing about why. Deciding where the
+  voice goes needs `AVAudioSession.routeChangeNotification` and its reason.
+- **Don't decide again on every route change**: the call's own `setPreferredInput` and `overrideOutputAudioPort`, and the user's pick in Control Center, post
+  route changes too. Act on `newDeviceAvailable` / `oldDeviceUnavailable` (and, for 2 s after the session goes active, on anything: a hands-free microphone
+  appears late, the same reason `RecordingCapture` polls for it), and never ask twice for a microphone the route did not take, or the call loops.
+- **Asking for a microphone moves the output**: preferring a Bluetooth hands-free or wired headset input brings the voice to that device; preferring the
+  built-in microphone while AirPods are on hands-free takes the voice off them. So the policy only asks for an external device's own microphone, never
+  another headset's, and never for the built-in one.
+- **What lasts**: `overrideOutputAudioPort(.speaker)` lasts until the next route change; a preferred input lasts for the app's shared session. Clear both
+  when the call ends, or the next recording or dictation starts on the call's choice.
+- **Only a device tells**: the simulator has no Bluetooth or wired routes. On a phone, read `voice: route after …` in Console (subsystem `persona`,
+  category `voice`): it lists port kinds only, never device names, which can carry a person's name.
 
 ## Choosing the voice (#2411, 2026-11-09)
 
@@ -471,3 +491,28 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   Providers with `ssh` still dial through that machine.
 - **Checking it**: `server/internal/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
   TLS server, for both `GET /models` and the session dial.
+
+- **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
+  After HTTP Hijack, detach already-buffered bytes from the returned reader before applying probe deadlines: that reader still uses `net/http`'s connection reader, which cancels the request on a read timeout even after hijacking. Probe the raw connection and preserve the detached bytes instead; otherwise a banner or an idle client closes the entire tunnel. Real CONNECT banner tests catch this even when direct connection-helper tests pass.
+
+## The realtime dialect against a Realtime endpoint (#4011, 2026-11-10)
+
+Measured against a gateway's `/v1/realtime` (`gpt-realtime-1.5`, the GA Realtime wire):
+
+- `session.update` needs `session.type: "realtime"`. Formats go under `audio.input.format` / `audio.output.format`, and the
+  voice only under `audio.output.voice`: `session.audio.format` and `session.voice` are refused as unknown parameters.
+  A refused `session.update` leaves the session on its defaults (no instructions, no tools, `transcription: null`), so
+  the model still talks but the user's lines never come and nothing is handed over. Input transcription has to be asked
+  for (`audio.input.transcription.model`).
+- A response's id is in `response.id` of `response.created` / `response.done`; `response_id` is only on the events
+  inside it.
+- A function call shows up twice, as `response.output_item.done` and as `response.function_call_arguments.done`: take
+  one.
+- `response.create` while a response is in progress (the server VAD starts one on its own) is refused with
+  `conversation_already_has_active_response`: hold it until `response.done`.
+- With server VAD, `input_audio_buffer.speech_started` cancels the response under way (`response.done` status
+  `cancelled`, reason `turn_detected`). The service streams audio faster than it plays, so the app still has some
+  buffered when the user cuts in: clear it then.
+- A gateway that falls back from a Codex `/v1/live` session onto the Realtime wire and forwards the `codex` dialect's
+  `session.update` as it is gets `Missing required parameter: 'session.type'` (and then `Unknown parameter:
+  'session.delegation'`). Point such an upstream at the gateway's `/v1/realtime` with the `realtime` dialect instead.

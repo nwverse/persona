@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Declarative contributions (docs/extensions/extensions.md "Declarative-only contributions", #1854): an extension made of a manifest and a few files,
+// Declarative contributions (docs/extensions/extensions.md "Purely declarative contributions", #1854): an extension made of a manifest and a few files,
 // running no program, can give the assistant skills and instructions, the apps quick prompts and a theme, and the
 // inbox's triage settings templates.
 

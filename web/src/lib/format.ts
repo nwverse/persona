@@ -2,11 +2,13 @@ import type { AgentState, Interaction, Session, SessionCapabilities } from "./ty
 import { formatDate, formatRelative, t } from "../i18n";
 import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
+import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
 
 // Missing session metadata is not permission to write; legacy sources retain their existing behavior.
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
   if (!s) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
+  if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
   return !s.source_kind || s.capabilities?.[operation] === true;
 }
 
@@ -49,7 +51,8 @@ export function sessionMenuActions(s: Session): string[] {
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
     ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
-    ...(sessionCan(s, "terminal") ? ["resume", ...(!s.assistant && stateOf(s) !== "offline" ? ["close"] : [])] : []),
+    ...(sessionCan(s, "terminal") ? ["resume"] : []),
+    ...(!s.assistant && stateOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
 }
 
@@ -114,10 +117,21 @@ export function attentionReason(s: Session): string | undefined {
 }
 
 /** The line a list row shows for it: why it waits for you when its host says so, else why its host stopped it on an
- *  error, else where its work stands when the hub triaged its turn (docs/assistant/agent-work.md), else its last words (iOS
- *  listPreview). */
+ *  error, else where its work stands when the hub triaged its turn (docs/assistant/agent-work.md), with where its closeout
+ *  stands on merged and deployed after it, else its last words (iOS listPreview). */
 export function sessionPreview(s: Session): string {
-  return attentionReason(s) ?? failureReason(s) ?? usageLimitLabel(s) ?? workLine(s) ?? s.last_text ?? "";
+  return attentionReason(s) ?? failureReason(s) ?? usageLimitLabel(s) ?? closeoutPreview(s) ?? workLine(s) ?? s.last_text ?? "";
+}
+
+/** A stopped session's line when its agent ended the turn with a closeout (lib/closeout.ts): the hub's line as before
+ *  (the closeout's own words when the hub gave none: the last words would be the raw block), then "merged · not
+ *  deployed" where the agent said or the hub found it. One string: the row truncates it like any other line. */
+function closeoutPreview(s: Session): string | undefined {
+  const c = shownCloseout(s);
+  if (!c) return undefined;
+  const line = workLine(s) ?? closeoutLine(c);
+  const suffix = closeoutSuffix(c);
+  return line && suffix ? t("lib-work.closeout_line", { line, suffix }) : line || suffix || undefined;
 }
 
 /** A failure notice without the warning sign botmux starts it with: the page draws its own (iOS Session.failureText). */

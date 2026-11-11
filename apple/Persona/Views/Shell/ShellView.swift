@@ -2,7 +2,7 @@ import BeautifulUI
 import SwiftUI
 
 #if os(iOS) || os(visionOS)
-/// The iPhone's ChatGPT-style shell (docs/apple/ios.md「新外壳」): no tab bar. Assistant (the Persona assistant) and Agents (the Agents
+/// The iPhone's ChatGPT-style shell (docs/apple/ios.md「New shell」): no tab bar. Assistant (the Persona assistant) and Agents (the Agents
 /// list) are two pages under the top switch, both kept alive like tabs (switching keeps each one's place); the drawer
 /// slides both aside; Inbox / Scheduled Tasks / Knowledge / Machines push onto Assistant; Settings is a sheet.
 ///
@@ -59,7 +59,7 @@ struct ShellView: View {
             }
             .onDisappear { shell.detach(from: model) }
             // Waiting for Network / Connecting… / Updating… and the toasts float in a window of their own above the shell's, moving nothing
-            // (docs/apple/shell.md「连接状态和 toast」).
+            // (docs/apple/shell.md「Connection status and toasts」).
             .background { ShellWindowHooks(notices: shell.notices, pager: shell.pager) }
     }
 
@@ -111,7 +111,22 @@ struct ShellView: View {
                          openTodos: { go(.todos) },
                          onMachines: { go(.machines) },
                          onOpenExtension: { go(.extensionPage($0)) },
-                         openHealth: { go(.health) })
+                         openHealth: { go(.health) },
+                         startMeeting: startMeeting)
+    }
+
+    /// The drawer's Meeting Recording: records the meeting and opens Recordings (`MeetingRecorder`), or opens the
+    /// recording already running.
+    private var startMeeting: (() -> Void)? {
+        #if os(iOS)
+        return {
+            shell.drawer.close()
+            if RecordingCapture.shared.state != .idle { go(.recordings) }
+            else { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } }
+        }
+        #else
+        return nil
+        #endif
     }
 
     private func go(_ page: ShellPage) {
@@ -122,7 +137,7 @@ struct ShellView: View {
 }
 
 #if DEBUG
-/// What the strip shows, for UI tests (`probe.shell`, docs/apple/ios-state.md「探针」; read by `ShellPageProbe.swift`): the page
+/// What the strip shows, for UI tests (`probe.shell`, docs/apple/ios-state.md「Probes and assertions」; read by `ShellPageProbe.swift`): the page
 /// the strip rests on (`assistant` / `agents` / `feishu`, `moving` while it slides), the page in front (`ShellState.page`, what the
 /// switch shows), the app's tab, the drawer and the pages' roots, the status row, and the latest `ShellTrace`. Pixels
 /// told which page was drawn before; both pages stay built, so `exists` cannot.
@@ -211,7 +226,7 @@ private struct ShellMovingBar: View {
             .padding(.top, Theme.Space.xxs)
             .shellTopBarScaled()
             .background(alignment: .top) {
-                BarFog(solid: AssistantTopBar.height - Theme.Space.sm, fade: AssistantTopBar.fade)
+                BarFog(solid: AssistantTopBar.fogSolid, fade: AssistantTopBar.fade)
                     .opacity(max(0, 1 - p))
                     .allowsHitTesting(false)
             }
