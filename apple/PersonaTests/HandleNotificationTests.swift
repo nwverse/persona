@@ -4,6 +4,7 @@ import Testing
 
 /// The Handle Notification shortcut (#3848): what an item is, how it is deduped, what waits on the phone and every
 /// outcome as one sentence.
+@MainActor
 struct HandleNotificationTests {
     private let at = Date(timeIntervalSince1970: 1_800_000_000)
     private let path = "/api/v1/subscriptions/-/push"
