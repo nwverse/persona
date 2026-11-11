@@ -154,7 +154,13 @@ final class AgentsGroupingTests: XCTestCase {
             if g != "repo" { choose(g) }
             closeSearchIfNeeded()
             let row = app.buttons.matching(NSPredicate(format: "identifier == 'agents.row' AND label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
-            for _ in 0..<24 where !comfortablyVisible(row) { scrollContent() }
+            // Slow drags without momentum (a flick skipped past the row, By App's first row): back up when it went by.
+            for _ in 0..<40 where !comfortablyVisible(row) {
+                let past = row.exists && row.frame.maxY < app.frame.height * 0.2
+                let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: past ? 0.4 : 0.7))
+                let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: past ? 0.7 : 0.4))
+                from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+            }
             XCTAssertTrue(row.exists, "\(g): no row for the widget agent")
             XCTAssertTrue(row.label.contains("小组件的时间线"), "\(g): the row does not say the agent's latest words: \(row.label)")
             heights[g] = row.frame.height
