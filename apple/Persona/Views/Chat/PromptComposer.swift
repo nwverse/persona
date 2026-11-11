@@ -212,31 +212,54 @@ enum PromptItems {
     /// The model menu's last row (#1644): opens the field for a model ID typed by hand (`SessionTypedModelSheet`).
     static let otherModel = PromptModel(id: "persona.typed-model", name: String(localized: "Other Model…"), tag: String(localized: "Type a model ID"))
 
-    /// What a session runs, as its model menu's selection: the alias its model reads as ("claude-opus-…" → opus),
-    /// "default" while nothing is known; any other model (one typed by hand, #1644) is its own ID, so no alias is
-    /// ticked for it and picking Default switches back.
-    static func runningModelID(_ model: String?) -> String {
+    /// What a session runs, as its model menu's selection. With the launcher's list (`RunningModelLists`, #3754): the row
+    /// with that ID, else the alias that stands for it (opus → claude-opus-…; Default last, as nothing was picked then).
+    /// Without it, the fixed aliases: the one its model reads as ("claude-opus-…" → opus). "default" while nothing is
+    /// known; any other model (one typed by hand, #1644) is its own ID, so no row is ticked for it and Default switches back.
+    static func runningModelID(_ model: String?, list: [AgentModel]? = nil) -> String {
         let m = (model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         // Not a model ID (Claude's `<synthetic>`): nothing known.
         guard ModelID.isValid(m) else { return "default" }
-        return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+        guard let list, !list.isEmpty else {
+            return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+        }
+        if let row = list.first(where: { $0.id.caseInsensitiveCompare(m) == .orderedSame }) { return row.id }
+        if let alias = list.first(where: { !$0.isDefault && $0.resolved == m }) ?? list.first(where: { $0.resolved == m }) {
+            return alias.id
+        }
+        return m
     }
 
-    /// The model a session runs when the aliases don't name it (a typed ID); nil: one of them does, or nothing is known.
-    static func unlistedModel(_ model: String?) -> String? {
-        let id = runningModelID(model)
+    /// The model a session runs when its menu doesn't name it (a typed ID); nil: a row does, or nothing is known.
+    static func unlistedModel(_ model: String?, list: [AgentModel]? = nil) -> String? {
+        let id = runningModelID(model, list: list)
+        if let list, !list.isEmpty { return list.contains { $0.id == id } || id == "default" ? nil : id }
         return claudeModels.contains { $0.id == id } ? nil : id
     }
 
-    /// A running session's model menu: the aliases, then the model it runs when they don't name it, by its ID (the one
-    /// ticked; a menu row has no room for a second line saying it).
-    static func runningModels(_ model: String?) -> [PromptModel] {
-        claudeModels + (unlistedModel(model).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    /// A running session's model menu: the launcher's list when it has been read (New Agent's rows for that launcher:
+    /// Default, the agent's models with their versions, the IDs typed before, #3754), else the fixed aliases; then the
+    /// model it runs when the menu doesn't name it, by its ID (the one ticked; a menu row has no room for a second line
+    /// saying it).
+    static func runningModels(_ model: String?, list: [AgentModel]? = nil) -> [PromptModel] {
+        let rows = list.flatMap { $0.isEmpty ? nil : $0.map { PromptModel(id: $0.id, name: menuName($0), tag: $0.detail ?? "") } }
+        return (rows ?? claudeModels)
+            + (unlistedModel(model, list: list).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    }
+
+    /// A list row's name in a running session's menu: an alias says the version it stands for ("Opus" → "Opus 5.5",
+    /// from its `resolved`), so it reads apart from the versions beside it; Default, typed IDs and models that name
+    /// their version keep their name. A menu row has room for one line only.
+    static func menuName(_ m: AgentModel) -> String {
+        guard !m.isDefault, !m.custom, let resolved = m.resolved, resolved != m.id,
+              let version = SessionModes.modelName(resolved), version != resolved,
+              !m.displayName.localizedCaseInsensitiveContains(version) else { return m.displayName }
+        return version
     }
 
     /// BeautifulUI's model menu for a running session: `runningModels` (the button names the ticked one), then "Other Model…".
-    static func composerModels(running model: String?) -> [PromptModel] {
-        runningModels(model) + [otherModel]
+    static func composerModels(running model: String?, list: [AgentModel]? = nil) -> [PromptModel] {
+        runningModels(model, list: list) + [otherModel]
     }
 
     /// What picking a row of a running Claude Code session's model menu does where the pick is typed as `/model`
@@ -248,9 +271,9 @@ enum PromptItems {
         case send(String)
     }
 
-    static func modelPick(_ picked: String, running model: String?) -> ModelPick {
+    static func modelPick(_ picked: String, running model: String?, list: [AgentModel]? = nil) -> ModelPick {
         if picked == otherModel.id { return .typeID }
-        if picked == runningModelID(model) { return .keep }
+        if picked == runningModelID(model, list: list) { return .keep }
         return .send("/model \(picked)")
     }
 

@@ -805,6 +805,16 @@ struct ChatView: View {
             guard entered, takeMessageJump() else { return }
             landEntry(currentLines())
         }
+        // The launcher's list behind this session's model menus (#3754): read once it can switch, kept for a while.
+        .task(id: "\(SessionModes.switchesModel(session))|\(SessionModes.launcher(session))") {
+            await RunningModelLists.shared.load(key, session)
+        }
+        // A refused send's Open Terminal: a dialog holds this session's terminal (#3752).
+        .onChange(of: model.terminalAsk) { _, ask in
+            guard let ask, ask == key else { return }
+            model.terminalAsk = nil
+            if session?.canTerminal == true { openTerminal() }
+        }
         // Going to the background is the last chance before iOS may end the app: a cold relaunch (the dev chat is
         // restored, AppModel.rememberChat) then opens at the same line, not only after leaving the chat.
         .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
@@ -4252,6 +4262,9 @@ struct Composer: View, Equatable {
     }
 
     /// Claude in a herdr pane takes `/model`; Codex and TRAEX pick theirs in a full-screen menu the phone cannot drive.
+    /// The launcher's list behind this session's model menus once read (#3754); nil: the fixed aliases.
+    private var runningModels: [AgentModel]? { RunningModelLists.shared.models(key, model.session(key)) }
+
     private var canPickModel: Bool {
         guard let s = model.session(key) else { return false }
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
@@ -4537,10 +4550,10 @@ struct Composer: View, Equatable {
                                    + (VoicePlatform.current == .phone ? [PromptItems.voice] : []),
                                mentions: mentions,
                                commands: promptCommands,
-                               models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model) : [],
-                               modelID: PromptItems.runningModelID(model.session(key)?.model),
+                               models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model, list: runningModels) : [],
+                               modelID: PromptItems.runningModelID(model.session(key)?.model, list: runningModels),
                                pickModel: { id in
-                                   switch PromptItems.modelPick(id, running: model.session(key)?.model) {
+                                   switch PromptItems.modelPick(id, running: model.session(key)?.model, list: runningModels) {
                                    case .typeID: typingModel = true // #1644: through …/modes
                                    case .keep: break
                                    case .send(let text): model.sendNow(key, text: text, images: []) // photos and quotes stay for the message

@@ -166,20 +166,12 @@ func launchTarget(s map[string]json.RawMessage) (opened string, ok bool) {
 }
 
 // appsOn is what m's Cua Driver knows of the apps named: bundle id and name, by the name given (case aside); a name
-// it does not know stands for itself.
-func (h *Manager) appsOn(ctx context.Context, m *Machine, names []string) []approvedApp {
-	var known struct {
-		Apps []struct {
-			Name     string `json:"name"`
-			BundleID string `json:"bundle_id"`
-		} `json:"apps"`
-	}
+// it does not know stands for itself. known is its list when the caller has it already (nil: asked here if needed).
+func (h *Manager) appsOn(ctx context.Context, m *Machine, names []string, known []knownApp) []approvedApp {
 	// LCU's own elicitation names the app. Probing list_apps first would start the runtime, and might ask, before
 	// this card exists.
-	if h.callBackend(m) != "lcu" && slices.ContainsFunc(names, func(n string) bool { return n != wholeScreen }) {
-		if res, err := h.computerCall(ctx, m, "persona-apps", "", "list_apps", map[string]any{}); err == nil {
-			_ = json.Unmarshal(res.Output, &known)
-		}
+	if known == nil && h.callBackend(m) != "lcu" && slices.ContainsFunc(names, func(n string) bool { return n != wholeScreen }) {
+		known = h.knownApps(ctx, m)
 	}
 	out := make([]approvedApp, 0, len(names))
 	for _, n := range names {
@@ -187,7 +179,7 @@ func (h *Manager) appsOn(ctx context.Context, m *Machine, names []string) []appr
 		if n == wholeScreen {
 			a.BundleID = "screen"
 		}
-		for _, k := range known.Apps {
+		for _, k := range known {
 			if k.BundleID != "" && (strings.EqualFold(k.Name, n) || strings.EqualFold(k.BundleID, n)) {
 				a = approvedApp{BundleID: k.BundleID, Name: k.Name}
 				break
@@ -253,12 +245,12 @@ func (h *Manager) rememberApps(ctx context.Context, m *Machine, apps []approvedA
 }
 
 // approveApps asks on the phone about the apps this call names that m has not always allowed (or every time: those
-// never remembered, a call whose apps are not all known). asked: a card was shown; ok: go ahead.
-func (h *Manager) approveApps(ctx context.Context, m *Machine, by asker, tool string, names []string, whole bool, args json.RawMessage) (asked, ok bool) {
+// never remembered, a call whose apps are not all known). asked: a card was shown; ok: go ahead. known: as appsOn.
+func (h *Manager) approveApps(ctx context.Context, m *Machine, by asker, tool string, names []string, whole bool, args json.RawMessage, known []knownApp) (asked, ok bool) {
 	if !h.cua().approval() {
 		return false, true
 	}
-	apps := h.appsOn(ctx, m, names)
+	apps := h.appsOn(ctx, m, names, known)
 	all, err := h.approvedApps(ctx)
 	if err != nil {
 		h.logf("[%s] reading the apps always allowed: %v", m.cfg.ID, err) // asked, as if none were
