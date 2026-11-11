@@ -1390,7 +1390,7 @@ struct AssistantSidebar: View {
                     ConversationMark(id: s.sessionID)
                 }
                 titleText(title, named: !isMain)
-                ConversationChannelMark(ids: s.channels) // the channel its latest message came in from
+                ConversationSourceMark(origin: s.origin, channels: s.channels) // the extension that opened it, or its latest message's channel
                 Spacer(minLength: Theme.Space.xs)
                 // A direction's work at this moment ("N working · N need you"), never a zero part (#4331).
                 if let counts {
@@ -1412,7 +1412,7 @@ struct AssistantSidebar: View {
         .buttonStyle(.plain)
         .tag(s.key)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([title, counts, isMain && s.title != title ? s.title : nil, stateWord(s), preview.isEmpty ? nil : preview]
+        .accessibilityLabel([title, counts, isMain && s.title != title ? s.title : nil, AutoConversationSource.external(s.origin)?.from, stateWord(s), preview.isEmpty ? nil : preview]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(isMain ? "sidebar-main" : "sidebar-conversation")

@@ -4,10 +4,10 @@ import { LinkManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
-import { ago, attentionReason, backgroundWaiting, externalLink, failureReason, resumeCommand, sessionCan, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
+import { ago, attentionReason, backgroundWaiting, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, withWorkView, type SessionView } from "../../lib/router";
-import { canShowTerminal, otherView, useSessionView } from "../../lib/session-view";
+import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
 import { openLink } from "../../lib/links";
 import { openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { machineWithHub } from "../../lib/mesh";
@@ -40,6 +40,7 @@ import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toa
 import { awaitsReply } from "../../lib/agent-groups";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
+import { StoppedAgentLine } from "./StoppedAgentLine";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
@@ -97,6 +98,7 @@ import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
 import { conversationTitle } from "../assistant/conversations";
+import { externalOpening } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
@@ -360,6 +362,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   items.current = tr.items;
   const draftKey = `${mid}/${sid}`;
   const canCompose = !readOnly && sessionCan(session, "send");
+  // a stopped Agent (#4754): a read-only line with Terminal and Resume where the composer goes
+  const stoppedLine = composerSlot(session, { readOnly, assistant: Boolean(assistant), offline: Boolean(offlineLine) }) === "stopped";
+  const openTerminal = () => (switchable ? setView("term") : navigate({ name: "session", mid, sid, view: "term" }));
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
@@ -818,7 +823,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       }
       const row = getSession(mid, sid);
       if (row && !unknownGate.current.gone ? !sessionCan(row, "send") : !unknownGate.current.isMain) {
-        toast(sourceSubtitle(session) || t("chat-chatview.session_unavailable"), "error");
+        toast(isStoppedAgent(row) ? t("chat-chatview.stopped_line") : sourceSubtitle(session) || t("chat-chatview.session_unavailable"), "error");
         return false;
       }
       // a sending bubble shows picked contexts as quote cards, like the transcript will (not the raw tags)
@@ -1134,6 +1139,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wfCalls = useMemo(() => workflowCalls(runs), [wfKey]);
   // Preserve conversation identity; execution summaries have the same collapsed default everywhere (#2602).
   const lineStyle = workLineStyle(assistant, (session ?? archivedHere)?.assistant);
+  // an extension opened this conversation (#3758): "From Lark /agent" under its first message, once the page reaches it
+  const openedWith = useMemo(() => (assistant ? externalOpening(session, tr.items, tr.hasMore) : undefined), [assistant, session, tr.items, tr.hasMore]);
+  const openingId = openedWith?.id;
+  const openingOrigin = openedWith?.origin;
   // A stopped agent's closeout is a card above the transcript (#3612, CloseoutCard): while it is there, the reply that
   // carried the raw block, the last exchange's, shows without it.
   const closeoutShown = !assistant && Boolean(shownCloseout(session));
@@ -1143,8 +1152,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     return last?.kind === "segment" ? last.seg.id : undefined;
   }, [closeoutShown, lines]);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, closeoutSegment }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, closeoutSegment],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, openingId, openingOrigin, closeoutSegment],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──
@@ -1607,9 +1616,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         )}
         {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
         <div ref={composerBox} className="shrink-0" hidden={voiceState === "live"}>
+        {stoppedLine ? (
+          <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
+        ) : (
         <Composer
           draftKey={draftKey}
-          placeholder={offlineLine ? offlineLine : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : !sessionCan(session, "send") && session?.source_kind ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
+          placeholder={offlineLine ? offlineLine : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working" || awaiting}
@@ -1631,6 +1643,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           footer={footer}
           voice={voiceEntry.offer}
         />
+        )}
         </div>
       </div>
       )}
