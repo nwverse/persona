@@ -55,7 +55,7 @@
 
 The hub sends its feature list in `devices.connected`, matching the capabilities advertised in `hello.features`.
 The devices manager forwards it as `node.configure.hub_features`; the node snapshots that list when starting an
-assistant process. A new Claude assistant, Agent SDK assistant or guest conversation registers the built-in MCP
+assistant process. A new Claude, Codex app-server, Agent SDK or guest assistant registers the built-in MCP
 handler only as `persona` when the hub announces
 `persona_contracts_v1`. Its automatic tool permissions use the same namespace selection, so each built-in tool is
 offered once and only one built-in MCP process is needed. An old hub, an absent feature list or a connection that has
@@ -80,7 +80,7 @@ and normalized to `persona_settings`, so an old direct call still runs without p
 The shared `mcp.json` generated at node startup and checked or repaired by doctor also retains both namespaces.
 It is created before the hub handshake, and ordinary Agent launches and resumes reuse it without a per-session
 namespace decision. Doctor cannot safely narrow that file from the connected hub's capabilities alone. This
-optimization therefore applies to the per-process assistant, Agent SDK assistant and guest configurations.
+optimization therefore applies to the per-process Claude, Codex app-server, Agent SDK and guest assistant configurations.
 
 Registration and historical recognition are separate: transcript readers, task completion and supervision folding
 continue accepting `mcp__persona__*` and `mcp__jarvis__*` forever. Extension namespaces and their permission rules are

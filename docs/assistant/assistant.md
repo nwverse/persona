@@ -315,7 +315,7 @@ The assistant and the L2 read-only connector are available; Inbox, knowledge bas
 
 ## Built-in MCP namespaces
 
-For a new or resumed Claude, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
+For a new or resumed Claude, Codex app-server, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
 `persona` MCP namespace and matching automatic tool permissions. This avoids sending duplicate tool definitions and
 starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. A real Claude Code
 2.1.322 resume verified that a transcript containing `mcp__jarvis__*` tool calls can continue with only `persona` offered;
@@ -327,7 +327,7 @@ See [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility
 negotiation boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates remain in force.
 
 Ordinary Claude starts also pass a built-in allow-list (`--tools`; `tools` in the Agent SDK bridge): Bash, Read, Write,
-Edit, Monitor, Skill, Agent, ListAgents, SendMessage, TaskStop and WebFetch. MCP tools are unaffected. This removes the
+Edit, Monitor, Skill, Agent, ListAgents, SendMessage, TaskStop, WebFetch and WebSearch. MCP tools are unaffected. This removes the
 Claude-specific cron, worktree, notebook, LSP, design, workflow, code-review and resource-tool surfaces; Persona's own
 scheduling and question tools remain. The merged start settings disable bundled skills and the development-only
 feature-dev, frontend-design, mattpocock, gopls, context7 and HUD plugins, with overrides for the remaining development

@@ -210,29 +210,41 @@ func (s *Service) ProfileChanged(context.Context) {
 	s.prefs.mu.Unlock()
 }
 
+type snapshotAgentGroupKind string
+
+const (
+	snapshotAgentOutside  snapshotAgentGroupKind = ""
+	snapshotAgentNeedsYou snapshotAgentGroupKind = "needs_you"
+	snapshotAgentWorking  snapshotAgentGroupKind = "working"
+	snapshotAgentAwaiting snapshotAgentGroupKind = "awaiting"
+	snapshotAgentWaiting  snapshotAgentGroupKind = "waiting"
+	snapshotAgentDone     snapshotAgentGroupKind = "done"
+	snapshotAgentUnread   snapshotAgentGroupKind = "unread"
+)
+
 // snapshotAgentGroup is the live snapshot category a session belongs in before muted sessions are separated. The
-// empty string means it is not in the snapshot; done and the time-limited categories use UpdatedAt, as the snapshot
+// empty value means it is not in the snapshot; done and the time-limited categories use UpdatedAt, as the snapshot
 // always has (not Work.TurnAt).
-func snapshotAgentGroup(c proto.Session, now time.Time) string {
+func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
 	recent := now.Sub(c.UpdatedAt) < 24*time.Hour
 	w := c.Work
 	switch {
 	case c.State == proto.StateNeedsYou:
-		return "needs_you"
+		return snapshotAgentNeedsYou
 	case c.State == proto.StateWorking:
-		return "working"
+		return snapshotAgentWorking
 	case c.AwaitsReply && c.State == proto.StateIdle && recent:
-		return "awaiting" // seen, its question unanswered (#5096)
+		return snapshotAgentAwaiting // seen, its question unanswered (#5096)
 	// A decision with no card up (cards off, muted, "Not now") is not "Needs you": the lists, the badges and the Live
 	// Activity go by the state (docs/protocol/agent-states.md), so it stays "Unread" with what it waits for, or is seen.
 	case w != nil && w.Phase == proto.WorkBlocked && w.On != proto.WaitUser && c.State != proto.StateUnread && recent:
-		return "waiting" // the hub waits it out (an unread one is left for the user)
+		return snapshotAgentWaiting // the hub waits it out (an unread one is left for the user)
 	case w != nil && w.Phase == proto.WorkDone && recent:
-		return "done"
+		return snapshotAgentDone
 	case c.State == proto.StateUnread && recent:
-		return "unread"
+		return snapshotAgentUnread
 	default:
-		return ""
+		return snapshotAgentOutside
 	}
 }
 
@@ -264,7 +276,7 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			a.Line = clip(oneLine(a.Line), 160)
 			group := snapshotAgentGroup(c, now)
-			if group == "" {
+			if group == snapshotAgentOutside {
 				continue
 			}
 			if off[c.SessionID] {
@@ -272,17 +284,17 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 				continue
 			}
 			switch group {
-			case "needs_you":
+			case snapshotAgentNeedsYou:
 				needs = append(needs, a)
-			case "working":
+			case snapshotAgentWorking:
 				working = append(working, a)
-			case "awaiting":
+			case snapshotAgentAwaiting:
 				awaiting = append(awaiting, a)
-			case "waiting":
+			case snapshotAgentWaiting:
 				waiting = append(waiting, a)
-			case "done":
+			case snapshotAgentDone:
 				done = append(done, a)
-			case "unread":
+			case snapshotAgentUnread:
 				unread = append(unread, a)
 			}
 		}

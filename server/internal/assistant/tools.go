@@ -930,11 +930,11 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					continue // a seen one still asking the user is active too (#5096)
 				}
 			case "done":
-				if snapshotAgentGroup(c, now) != "done" || muted[c.SessionID] {
+				if snapshotAgentGroup(c, now) != snapshotAgentDone || muted[c.SessionID] {
 					continue
 				}
 			case "muted":
-				if snapshotAgentGroup(c, now) == "" || !muted[c.SessionID] {
+				if snapshotAgentGroup(c, now) == snapshotAgentOutside || !muted[c.SessionID] {
 					continue
 				}
 			default:

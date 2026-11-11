@@ -130,9 +130,32 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 				} else if !slices.Contains(allowed, "mcp__persona") || slices.Contains(allowed, "mcp__"+compat.MCPServer) != legacy || !slices.Contains(allowed, officeRule(n.assistantOfficeScript())) {
 					t.Fatalf("allowed = %v, legacy = %v", allowed, legacy)
 				}
-				wantBuiltin := []string{"Bash", "Read", "Write", "Edit", "Monitor", "Skill", "Agent", "ListAgents", "SendMessage", "TaskStop", "WebFetch"}
+				wantBuiltin := []string{"Bash", "Read", "Write", "Edit", "Monitor", "Skill", "Agent", "ListAgents", "SendMessage", "TaskStop", "WebFetch", "WebSearch"}
 				if engine != "guest" && !slices.Equal(builtin, wantBuiltin) {
 					t.Fatalf("built-in tools = %v, want %v", builtin, wantBuiltin)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexAssistantMCPRegistrationAtStart(t *testing.T) {
+	n, _ := testNode(t)
+	for _, tc := range []struct {
+		name    string
+		persona bool
+	}{
+		{name: "unknown-or-old-hub"},
+		{name: "negotiated", persona: true},
+	} {
+		for _, start := range []string{"new", "resume"} {
+			t.Run(tc.name+"/"+start, func(t *testing.T) {
+				n.hubPersonaContracts.Store(tc.persona)
+				args := strings.Join(n.codexAssistantArgs("proc-test", n.dir), " ")
+				persona := strings.Contains(args, "mcp_servers.persona.command")
+				jarvis := strings.Contains(args, "mcp_servers."+compat.MCPServer+".command")
+				if !persona || jarvis != !tc.persona {
+					t.Fatalf("persona=%v jarvis=%v, negotiated=%v: %s", persona, jarvis, tc.persona, args)
 				}
 			})
 		}
