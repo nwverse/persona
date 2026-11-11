@@ -203,7 +203,11 @@ async function request<T>(path: string, init: ApiOptions): Promise<T> {
   const notModified = res.status === 304 && headers.has("If-None-Match");
   if (!notModified && intercepted(res)) {
     requestCrumb(method, path, res.status);
-    reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    // Retired requests cannot reload a replacement view or credential; an unowned pairing probe can still sign in.
+    if ((isAuthContextCurrent?.() ?? true)
+      && (owner === undefined || (owner === credentialOwner() && (init.token === undefined || init.token === getToken())))) {
+      reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    }
     throw new ApiError(res.status || 401, t("lib-api.hub_no_response"), {}, false);
   }
   const text = await res.text();
