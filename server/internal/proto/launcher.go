@@ -281,6 +281,16 @@ func (l ManagedLauncher) MessagesBase() bool {
 	return l.API == "" || l.API == "messages"
 }
 
+// LaunchBaseURL is the Base URL as the provider's agent takes it: a Messages base through MessagesBaseURL, any other as
+// stored. The hub stores and delivers it, and the node launches with it, so a provider saved before the hub dropped a
+// trailing /v1 still reaches what Test connection called.
+func (l ManagedLauncher) LaunchBaseURL() string {
+	if l.MessagesBase() {
+		return MessagesBaseURL(l.BaseURL)
+	}
+	return l.BaseURL
+}
+
 // MessagesBaseURL is a gateway address as ANTHROPIC_BASE_URL takes it. Claude Code and the Anthropic SDKs add
 // /v1/messages themselves, so the /v1 many gateways put at the end of their documented address would make
 // /v1/v1/messages: the /v1 ending the path goes with any trailing slashes, a deployment prefix before it stays

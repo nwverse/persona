@@ -135,3 +135,69 @@ func TestImportDropsATrailingV1AndMatchesAStoredV1Provider(t *testing.T) {
 		t.Fatalf("%d %s", r.Code, r.Body.String())
 	}
 }
+
+// A form still holding ".../v1" for a provider stored without it tests with the stored key: the same gateway.
+func TestProbeByNameKeepsTheKeyForTheSameGatewayWithV1(t *testing.T) {
+	s, mux := launcherTestService(t)
+	var auth []string
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = append(auth, r.Header.Get("x-api-key"))
+		_, _ = w.Write([]byte(`{"type":"message","content":[]}`))
+	}))
+	defer gw.Close()
+	if code, out := postLauncher(t, s, "en", `{"name":"relay","base_url":"`+gw.URL+`/v1","model":"m","api_key":"`+fakeKey+`"}`); code != 200 {
+		t.Fatalf("%d %s", code, out["error"])
+	}
+	for _, typed := range []string{gw.URL + "/v1", gw.URL + "/v1/", gw.URL} {
+		auth = nil
+		if out := probeResult(t, mux, "/api/v1/launchers/test", `{"name":"relay","base_url":"`+typed+`"}`); out["ok"] != true || len(auth) != 1 || auth[0] != fakeKey {
+			t.Fatalf("%s: %v (key sent: %v)", typed, out, auth)
+		}
+	}
+	// Another address on the same host is another gateway: no stored key.
+	auth = nil
+	_ = probeResult(t, mux, "/api/v1/launchers/test", `{"name":"relay","base_url":"`+gw.URL+`/other"}`)
+	if len(auth) != 1 || auth[0] != "" {
+		t.Fatalf("the stored key went to another address: %v", auth)
+	}
+}
+
+// A provider stored with /v1 before saving dropped it reaches every node without it, a node from before this change too.
+func TestNodesGetAStoredV1MessagesBaseWithoutIt(t *testing.T) {
+	s, _ := launcherTestService(t)
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "legacy", BaseURL: "https://gw.example.com/team/v1", Model: "m"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", API: "messages", BaseURL: "https://api.example.com/v1", Model: "m"}})
+	want := map[string]string{"legacy": "https://gw.example.com/team", "cx": "https://api.example.com/v1"}
+	check := func(what string, list []proto.ManagedLauncher) {
+		t.Helper()
+		if len(list) != len(want) {
+			t.Fatalf("%s: %+v", what, list)
+		}
+		for _, l := range list {
+			if l.BaseURL != want[l.Name] {
+				t.Errorf("%s %s: %q, want %q", what, l.Name, l.BaseURL, want[l.Name])
+			}
+		}
+	}
+	ctx := context.Background()
+	stored, err := s.readStoredLaunchers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushed, err := s.nodeLaunchers(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("pushed", pushed)
+	keys, _ := s.readMachineKeys(ctx)
+	catalog, legacy, err := s.nodeLaunchersFor(ctx, stored, keys, "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("catalog", catalog)
+	check("legacy", legacy)
+	if storedBase(t, s, "legacy") != "https://gw.example.com/team/v1" {
+		t.Fatal("delivering it rewrote the stored record")
+	}
+}

@@ -209,11 +209,8 @@ func (s *Service) knownProviders(stored []storedLauncher) ([]knownProvider, erro
 		if err != nil {
 			return nil, i18n.Err("assistant-models.err_key_decrypt")
 		}
-		base := l.BaseURL
-		if l.MessagesBase() {
-			base = proto.MessagesBaseURL(base) // one stored before saving dropped a trailing /v1 is the same gateway
-		}
-		known = append(known, knownProvider{name: l.Name, baseURL: base, key: key})
+		// One stored before saving dropped a trailing /v1 is the same gateway.
+		known = append(known, knownProvider{name: l.Name, baseURL: l.LaunchBaseURL(), key: key})
 	}
 	return known, nil
 }
