@@ -1,5 +1,7 @@
 # Android App
 
+密码登录：输入 HTTPS hub 地址后，在系统浏览器输入管理员设置的连接密码。通过一次性授权码和 PKCE 返回 App，密码原文不上传。扫码、配对链接入口保留。
+
 `android/`: the Android client, in Kotlin + Jetpack Compose. It connects to the same hub with the same API as iOS (`docs/protocol/protocol.md`); shared additive fields, such as task-row identity, are available to every client.
 minSdk 30 (Android 11), compileSdk 37, targetSdk 37. The UI comes in three languages, 简体中文, English and 日本語. It follows the system by default and can be chosen in Settings; see "Internationalization".
 

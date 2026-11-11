@@ -70,6 +70,8 @@ type Node struct {
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
+	// fileReadDeps replaces file.read's filesystem operations in tests.
+	fileReadDeps *fileReadDependencies
 
 	home         string
 	sessionScope *nodeSessionScope
@@ -257,6 +259,12 @@ type Node struct {
 
 	// agentFilters: the extensions' filters of sessions kept out of the list (node.configure, agentfilters.go)
 	agentFilters []proto.AgentFilter
+
+	// assistantLife: a conversation's process is taken, compacted or closed by one of assistantSend,
+	// assistantCompact, compactIdle and restoreModel at a time (model_restore.go, #2528)
+	assistantLife typingLocks
+	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
+	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
 }
 
 func New(version string) (*Node, error) {
@@ -662,6 +670,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if method == "session.retire" { // before the runtimes: a session another tool owns is refused, not handed on
 		closed, err := n.retire(ctx, p.SessionID)
 		return map[string]any{"closed": closed}, err
+	}
+	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing
+		return n.restoreModel(ctx, p.SessionID)
 	}
 	if method == "session.speed" {
 		return ok(n.setCodexSpeed(ctx, p.SessionID, p.ServiceTier))

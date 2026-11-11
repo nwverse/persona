@@ -85,7 +85,7 @@
       "dp": 1
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/ContentTokens.kt": {
-      "dp": 23,
+      "dp": 22,
       "font": 3
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt": {
@@ -207,7 +207,7 @@
       "dp": 6
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt": {
-      "font": 42
+      "font": 39
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Voice.kt": {
       "color": 4,
