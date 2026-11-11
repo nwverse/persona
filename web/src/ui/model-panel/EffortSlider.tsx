@@ -51,7 +51,7 @@ export function EffortSlider({ stops, value, recommended, labelOf, unsetLabel, o
     const next = stops[Math.min(last, Math.max(0, i))];
     if (next && next !== value) onChange(next);
   }, [last, onChange, stops, value]);
-  // from none, a key lands on the lowest (→, End) or stays at none's place (←, Home) and picks it
+  // from none, → lands on the lowest and End on the highest (← and Home on the lowest too)
   const from = unsetLabel && !value ? -1 : valueIndex;
 
   // the pointer is followed on the document: a drag let go outside the track still lands
@@ -100,7 +100,7 @@ export function EffortSlider({ stops, value, recommended, labelOf, unsetLabel, o
     if (!step) return;
     e.preventDefault();
     e.stopPropagation();
-    commit(Math.max(0, from + step));
+    commit(e.key === "Home" ? 0 : e.key === "End" ? last : Math.max(0, from + step));
   };
 
   return (
