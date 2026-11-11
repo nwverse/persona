@@ -77,6 +77,12 @@ class GlassTokenContractTest {
         assertEquals(20.dp, Tokens.Radius.bubble)
     }
 
+    @Test fun spacingIsTheIPhoneScale() {
+        val t = Tokens.Space
+        assertEquals(listOf(0, 2, 4, 6, 8, 12, 16, 24, 32).map { it.dp }, listOf(t.flush, t.xxs, t.xs, t.sm, t.s, t.m, t.l, t.xl, t.xxl))
+        assertEquals(listOf(t.xs, t.s, t.l, t.xl, t.l), listOf(t.lines, t.titleToContent, t.block, t.section, t.page))
+    }
+
     @Test fun compactChromeAndSidebarBadgesKeepReadableText() {
         assertEquals(Color(0xB83A3A3C), HomeTokens.chromeDark)
         assertEquals(22.dp, HomeTokens.sidebarBadgeSize)
