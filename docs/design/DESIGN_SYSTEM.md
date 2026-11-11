@@ -847,3 +847,34 @@ to the initiating app rather than a reusable device token. Password sign-in requ
 remaining available for self-signed deployments. This changes connection features only, without selecting a model,
 speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTextField, JButton and SettingsCaption;
 Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
+
+
+## HarmonyOS native structure
+
+HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, floating Tabs, lists, menus, sheets and
+confirmation dialogs. The window breakpoint selects stack (XS/SM/MD) or native split (LG/XL); device names do not.
+The master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. Its bottom tabs are 56 vp with a
+12 vp system-component margin; the system safe area is not added a second time.
+
+An Agent's detail title is omitted only while its identifying selected row is fully visible in the expanded master.
+Compact, collapsed, filtered-out, offscreen or different-owner contexts restore the native title. Child pages keep
+their own title and back action. A title already provided by the destination is not repeated in the body. Avoid
+explanatory subtitles, explanatory child controls and duplicate actions; native control placement, names and state
+must explain their purpose. Explicit target and consequence text remains necessary for a consequential decision.
+
+Glass, Brief and Board preserve this structure and the same fields/actions, using semantic own-message colors with
+light/dark resources. Device-wide Avatar and Accent preferences are independent of the Hub and style. Native
+`WithTheme` supplies both light and dark system tokens; an own-message subtree supplies readable bubble tokens.
+Avatar choices use intrinsic native list groups and Radio controls, with no fixed-height nested list or descriptive
+captions. Preference restoration completes before selection is enabled, and a failed write retains the previous
+selection. Native system materials belong to supported controls; the client does not simulate them with
+another navigation shell. Horizontal half-fold uses `FoldSplitContainer`: reading above, the current decision or
+composer below, with native crease avoidance and a scrollable interaction area. The view samples native crease capability at creation; an image that omits fold geometry retains ordinary native Column/Scroll layout, without fabricated hover regions. Configuration updates do not replace that view’s input or transcript subtree. Ordinary posture uses measured
+interaction height rather than a fixed 50/50 split. A system photo editor returns a separate selected copy; system preview owns supported
+image zoom and document viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and
+verification contract. This is a new platform implementation and does not alter another client's default style.
+
+The composer uses native GridRow/GridCol spans and order. When the effective application font scale or pane width
+leaves too little writing space, the same input occupies a full row and full-width actions stack below it, Send before Attach, with single-line labels. The input and draft
+keep their identity; controls grow with their labels instead of clipping a fixed-height row. Native Ability configuration
+callbacks supply the actual application font scale. A local font multiplier is not a substitute for that system value.
