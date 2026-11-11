@@ -1,7 +1,8 @@
 // End-to-end check of the direction tree on the web's pages (#4352, docs/web/web.md "Persona chats"): the To-dos page
 // groups by 常驻 with each direction's counts in the sidebar's words, the secretary's group 书记官 last; the Agents list groups by 常驻
 // from the same tree, a direction opening to its tasks (state words) and a task to its agents; the default 状态 grouping
-// and the sidebar stay as they were.
+// and the sidebar's 常驻 rows keep #4610's look, each with a disclosure (folded by default) that opens to its tasks (state
+// words) and a task to its agents; no 书记官 row in the sidebar.
 //
 // Needs the web page against the fake hub with leaders, and Chrome (or any Chromium through --executable):
 //
@@ -65,8 +66,61 @@ async function open(browser, theme, width, prefs = {}, path = "/overview") {
   return { ctx, page };
 }
 
+const first = leaders.find((d) => d.tasks.some((t) => t.agents.length > 0));
+if (!first) fail("no leader with a task an agent is on");
+const task = first.tasks.find((t) => t.agents.length > 0);
+const row = (page, id) => page.locator(`aside [data-direction="${id}"]`).first();
+const disclosure = (page, id) => page.locator(`aside [data-direction="${id}"] > div > button[aria-expanded]`).first();
+
 const browser = await chromium.launch(executable ? { executablePath: executable } : { channel: "chrome" });
 try {
+  // the sidebar's 常驻 rows: folded (#4610's row and counts, a chevron beside), then one opened to its tasks and a task to
+  // its agents
+  for (const [theme, width] of [["light", 1280], ["dark", 1280], ["light", 390]]) {
+    const where = `${theme} ${width}px`;
+    const { ctx, page } = await open(browser, theme, width);
+    await row(page, first.id).waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(`${where}: no 常驻 row for ${first.name}`));
+    for (const d of leaders) {
+      const text = await row(page, d.id).textContent();
+      if (!text.includes(d.name) || !text.includes(countsText(d.counts))) fail(`${where}: ${d.name} row says ${text}`);
+    }
+    if (await page.locator('aside [data-direction="secretary"]').count()) fail(`${where}: the sidebar has a 书记官 row`);
+    if ((await disclosure(page, first.id).getAttribute("aria-expanded")) !== "false") fail(`${where}: a 常驻 row does not start folded`);
+    // the chevron is small (the name keeps its width); on a touch screen its hit area (touch-hit) is 44×44: each point 21px
+    // from its centre lands on it
+    const hit = width <= 600 ? await disclosure(page, first.id).evaluate((b) => {
+      const r = b.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      return [[-21, 0], [21, 0], [0, -21], [0, 21]].filter(([dx, dy]) => !b.contains(document.elementFromPoint(x + dx, y + dy))).map((d) => d.join(","));
+    }) : [];
+    if (hit.length) fail(`${where}: the disclosure's hit area misses ${hit.join(" ")} (under 44×44)`);
+    ok(`${where}: ${leaders.length} 常驻 rows folded with their counts, no 书记官 row${width <= 600 ? ", disclosure hit area 44×44" : ""}`);
+    if (shots) await page.screenshot({ path: join(shots, `web-sidebar-folded-${width > 600 ? "wide" : "narrow"}-${theme}.png`) });
+    await disclosure(page, first.id).click();
+    await page.locator(`aside [data-direction="${first.id}"] a[href="/todos?id=${task.id}"]`).waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${where}: the task ${task.title} does not show`));
+    const words = await row(page, first.id).locator("[data-task-state]").allTextContents();
+    if (words.length !== first.tasks.length) fail(`${where}: ${words.length} state words for ${first.tasks.length} tasks`);
+    const taskButton = row(page, first.id).locator(`button[aria-label="${task.title}的 Agent"]`);
+    if ((await taskButton.getAttribute("aria-expanded")) !== "false") fail(`${where}: a task does not start folded`);
+    await taskButton.click();
+    const agent = task.agents[0];
+    await page.locator(`aside [data-direction="${first.id}"] a[href="/s/${agent.machine_id}/${agent.session_id}"]`).waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${where}: the agent ${agent.title} does not show`));
+    await page.waitForTimeout(400); // the folds finish opening
+    ok(`${where}: ${first.name} opens to ${words.join(" / ")}, ${task.title} to its agents`);
+    if (shots) await page.screenshot({ path: join(shots, `web-sidebar-open-${width > 600 ? "wide" : "narrow"}-${theme}.png`) });
+    // the fold is kept on this device
+    await page.reload();
+    await page.waitForSelector("main", { timeout: 15000 });
+    if (width <= 600) {
+      await page.locator("main").getByRole("button", { name: "侧边栏" }).first().click();
+      await page.waitForTimeout(500);
+    }
+    await row(page, first.id).waitFor({ state: "visible", timeout: 10000 });
+    if ((await disclosure(page, first.id).getAttribute("aria-expanded")) !== "true") fail(`${where}: the opened 常驻 row is folded again after a reload`);
+    ok(`${where}: the fold is kept after a reload`);
+    await ctx.close();
+  }
+
   // the To-dos page by 常驻
   for (const theme of ["light", "dark"]) {
     const { ctx, page } = await open(browser, theme, 1280, { "persona.todos.grouping": "direction" }, "/todos");
@@ -85,13 +139,12 @@ try {
     await ctx.close();
   }
 
-  // the To-dos page's default grouping (状态) and the sidebar, as before: no 常驻 section, the sidebar's chats untouched
+  // the To-dos page's default grouping (状态), as before: no 常驻 section
   {
     const { ctx, page } = await open(browser, "light", 1280, {}, "/todos");
     await page.locator('[data-testid="todo-section"]').first().waitFor({ state: "visible", timeout: 10000 }).catch(() => fail("the To-dos page shows no status sections"));
     if (await page.locator('[data-testid="todo-group"][data-group^="direction:"]').count()) fail("the default To-dos grouping shows 常驻 sections");
-    if (await page.locator("aside [data-direction]").count()) fail("the sidebar has direction rows");
-    ok("To-dos by 状态 by default, the sidebar as before");
+    ok("To-dos by 状态 by default");
     if (shots) await page.screenshot({ path: join(shots, "web-direction-todos-default-light.png") });
     await ctx.close();
   }
