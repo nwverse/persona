@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle } from "./provider-names";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const api = vi.hoisted(() => vi.fn());
+vi.mock("./api", () => ({ api }));
+
+import { forgetProviderNames, launcherTitle, loadProviderNames, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle } from "./provider-names";
 
 describe("provider names", () => {
   it("leads with the display name and keeps the ID as the note", () => {
@@ -42,5 +46,30 @@ describe("names from the model configuration", () => {
     ];
     expect(namesFromProviders(providers)).toEqual([{ name: "relay-example-com", display_name: "我的中转 站" }, { name: "cc_glm" }]);
     expect(namesFromProviders(undefined)).toEqual([]);
+  });
+});
+
+describe("loadProviderNames", () => {
+  afterEach(() => {
+    forgetProviderNames();
+    api.mockReset();
+  });
+
+  it("reads each assistant's providers once, naming the assistant", async () => {
+    api.mockImplementation((_path: string, init: { headers?: Record<string, string> }) =>
+      Promise.resolve({ providers: [{ id: "launcher.relay", name: init.headers ? "Other relay" : "Team relay" }] }));
+    expect(await loadProviderNames()).toEqual([{ name: "relay", display_name: "Team relay" }]);
+    expect(await loadProviderNames("work")).toEqual([{ name: "relay", display_name: "Other relay" }]);
+    await loadProviderNames();
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(api).toHaveBeenNthCalledWith(1, "/model-config", { headers: undefined });
+    expect(api).toHaveBeenNthCalledWith(2, "/model-config", { headers: { "X-Persona-Manager": "work" } });
+  });
+
+  it("gives no names when the hub can't answer, and asks again next time", async () => {
+    api.mockRejectedValueOnce(new Error("404"));
+    expect(await loadProviderNames()).toEqual([]);
+    api.mockResolvedValueOnce({ providers: [{ id: "launcher.relay", name: "Team relay" }] });
+    expect(await loadProviderNames()).toEqual([{ name: "relay", display_name: "Team relay" }]);
   });
 });

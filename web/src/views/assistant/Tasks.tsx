@@ -67,6 +67,7 @@ import { SentLine, TaskSentList } from "./Sent";
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
+import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
 import { AnsweredCard, InteractionCard } from "../chat/Interactions";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
@@ -412,8 +413,11 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
 function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; task: PlanTask; numbered: boolean; ultra?: { on: boolean; blocked: string }; busy?: boolean; onUltra: (on: boolean) => void }) {
   const machines = useStore((s) => s.machines);
   const machine = machines.find((m) => m.id === task.machine)?.name ?? task.machine;
-  // its launcher by the provider's display name, the startup ID in the chip's tooltip (#5029)
-  const names = useProviderNames();
+  // its launcher by the provider's display name, the startup ID in the chip's tooltip (#5029): the providers of the
+  // assistant the chat belongs to, else the current one's
+  const chatManager = useLinkManager();
+  const chosen = useChosenManager();
+  const names = useProviderNames(chatManager ?? chosen ?? "");
   const launcher = task.launcher && !task.model ? namedLauncher(task.launcher, names) : null;
   const chips: { icon: IconName; text: string; title?: string }[] = [
     { icon: "machine", text: machine },

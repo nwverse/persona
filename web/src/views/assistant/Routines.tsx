@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { conversationPage } from "../../lib/conversation-page";
-import { shownManager } from "../../lib/manager-choice";
+import { shownManager, useChosenManager } from "../../lib/manager-choice";
 import { namedLauncher, providerIdNote, useProviderNames } from "../../lib/provider-names";
 import { href, navigate, onLinkClick } from "../../lib/router";
 import { isAutoConversation } from "../../lib/conversation-origins";
@@ -302,8 +302,9 @@ export function Routines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 type TaskChat = { sid: string; title?: string; at?: string };
 
 function TaskRow({ task, now, chats, onOpen, onMenu, onToggle }: { task: Task; now: Date; chats: TaskChat[]; onOpen: () => void; onMenu: (at: MenuAt) => void; onToggle: (on: boolean) => void }) {
-  // its launcher by the provider's display name, the startup ID in the line's tooltip (#5029)
-  const names = useProviderNames();
+  // its launcher by the provider's display name, the startup ID in the line's tooltip (#5029): the current assistant's
+  // providers, as its tasks are
+  const names = useProviderNames(useChosenManager() ?? "");
   const with_ = runsWith(task, names);
   const launcherId = task.launcher ? providerIdNote(namedLauncher(task.launcher, names)) : "";
   const last = lastRunText(task, now);
