@@ -292,15 +292,17 @@ fun ExtensionPage(
             })
     }
     val current = detail
-    if (removing && current != null) UninstallDialog(current.extension.name.ifBlank { current.extension.id }, onDismiss = { removing = false }, installedVersion = current.extension.version) { keep ->
+    if (removing && current != null) UninstallDialog(current.extension.name.ifBlank { current.extension.id }, onDismiss = { removing = false },
+        installedVersion = current.extension.version, members = current.extensionPack.map { it.id }) { keep, members ->
         removing = false
         scope.launch {
-            if (model.uninstall(keep)) {
-                feedback?.notice(res.getString(R.string.settings_ext_uninstalled, current.extension.name.ifBlank { current.extension.id }))
+            if (model.uninstall(keep, members = members)) {
+                feedback?.notice(ExtensionText.uninstalled(res, current.extension.name.ifBlank { current.extension.id }, members, model.removal))
                 onBack()
             }
         }
     }
+    state.partial?.let { PackPartialDialog(it, detail?.extension?.name?.ifBlank { null } ?: extensionId) { model.dismissPartial() } }
     // Others depend on it (#5192): named, and switched off with it once agreed.
     state.cascade?.let { ask ->
         val name = detail?.extension?.name?.ifBlank { null } ?: extensionId
@@ -308,7 +310,7 @@ fun ExtensionPage(
             destructive = true, confirm = stringResource(if (ask.keepData == null) R.string.settings_ext_dependents_off else R.string.settings_ext_dependents_remove) to {
                 scope.launch {
                     if (model.confirmCascade() && ask.keepData != null) {
-                        feedback?.notice(res.getString(R.string.settings_ext_uninstalled, name))
+                        feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal))
                         onBack()
                     }
                 }
