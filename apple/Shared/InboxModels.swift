@@ -61,6 +61,23 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var suggestion: Suggestion?
     var chain: [ChainEntry]?
     var related: [Related]?
+    /// The tier the user moved it to from its menu (Mark as FYI / Mark as Needs You; docs/assistant/inbox.md「Corrections and
+    /// learned rules」): it stays there whatever triage says. nil: the AI's (or a rule's).
+    var userTier: String?
+    /// The user put the AI on it (handed it to a conversation) and the work is not done: In Progress until the result
+    /// comes back for the user to confirm. Older hubs leave it out.
+    var progress: AIProgress?
+
+    /// What the AI the user put on an item is doing (`kind` handoff).
+    nonisolated struct AIProgress: Codable, Hashable, Sendable {
+        var kind: String
+        var since: Date?
+    }
+
+    /// Ignored: done because the user is not interested (Ignore in its menu), listed under Ignored apart from Done.
+    var isIgnored: Bool { isDone && doneBy == "ignored" }
+    /// In FYI: the user put it there, not the AI.
+    var userMarked: Bool { userTier != nil }
 
     /// One thing an item can be muted by: a repository, a chat or a sender of its source.
     nonisolated struct MuteOption: Codable, Hashable, Sendable {
@@ -265,7 +282,8 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, source, kind, account, title, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
-        case status, urgent, recap, handling, suggestion, chain, related, manager
+        case status, urgent, recap, handling, suggestion, chain, related, manager, progress
+        case userTier = "user_tier"
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
     }
 
@@ -492,6 +510,18 @@ extension APIClient {
 
     func setInboxDone(_ id: String, _ done: Bool) async throws {
         try await post("/api/v1/inbox/" + id + "/done", body: ["done": done])
+    }
+
+    /// Ignore (docs/assistant/inbox.md「Corrections and learned rules」): files it as ignored, listed under Ignored, and kept
+    /// as a correction the rules learn from.
+    func ignoreInbox(_ id: String) async throws {
+        try await post("/api/v1/inbox/" + id + "/done", body: ["done": true, "ignore": true])
+    }
+
+    /// Mark as FYI / Mark as Needs You: moves it to `tier` (action | fyi | noise), or with "" puts back what it had before.
+    /// `ruleDrafting`: enough moves like it were made that a rule is being drafted, to approve on the phone.
+    func setInboxTier(_ id: String, _ tier: String) async throws -> InboxTierAnswer {
+        try await post("/api/v1/inbox/" + id + "/tier", body: ["tier": tier], as: InboxTierAnswer.self)
     }
 
     /// Files (or brings back) many items in one request (Mark All Seen / Clear All, Mac's multi-select, Undo, and Clear All on a hub without `/bulk`): each with the version it
@@ -835,5 +865,18 @@ nonisolated struct InboxBulkResult: Decodable, Sendable, Equatable {
         changed += other.changed
         unchanged += other.unchanged
         skipped += other.skipped
+    }
+}
+
+/// `POST /api/v1/inbox/{id}/tier`'s answer: the item as the hub has it now, and whether a rule is being drafted.
+nonisolated struct InboxTierAnswer: Decodable, Sendable {
+    var item: InboxItem
+    var ruleDrafting: Bool
+
+    private enum Keys: String, CodingKey { case ruleDrafting = "rule_drafting" }
+
+    init(from decoder: Decoder) throws {
+        item = try InboxItem(from: decoder)
+        ruleDrafting = try decoder.container(keyedBy: Keys.self).decodeIfPresent(Bool.self, forKey: .ruleDrafting) ?? false
     }
 }

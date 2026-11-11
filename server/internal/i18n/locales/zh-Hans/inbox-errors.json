@@ -37,5 +37,6 @@
   "history_limit": "limit 必须是 1–{max} 之间的数字。",
   "history_cursor": "before 必须是 RFC 3339 时间，before_id 需要与 before 一起提供。",
   "history_zone": "tz 必须是时区名称，例如 Europe/Berlin。",
-  "bad_folder": "文件夹路径里至少要有一级名称。"
+  "bad_folder": "文件夹路径里至少要有一级名称。",
+  "rules_long": "规则太长了（最多 4000 个字）"
 }

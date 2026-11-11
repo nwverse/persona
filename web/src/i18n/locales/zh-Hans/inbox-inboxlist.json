@@ -63,5 +63,18 @@
   "load_older": "加载更早的",
   "loading_older": "正在加载…",
   "older_failed": "没加载到更早的：{error}",
-  "subscriptions": "订阅来源"
+  "subscriptions": "订阅来源",
+  "mark_fyi": "改为知悉即可",
+  "mark_action": "改为需要你处理",
+  "ignore": "忽略",
+  "ignore_hint": "不感兴趣",
+  "ignored_section": "忽略",
+  "tag_ai": "AI",
+  "tag_ai_title": "AI 推荐的，看看分得对不对",
+  "tag_you": "人工",
+  "tag_you_title": "你标记的",
+  "fyi_by_you": "你标记的",
+  "fyi_review_first": "先看完上面 AI 推荐的",
+  "progress": "AI 处理中",
+  "progress_title": "你交给了 AI；做完后会带着结果回到「需要你」，等你确认"
 }

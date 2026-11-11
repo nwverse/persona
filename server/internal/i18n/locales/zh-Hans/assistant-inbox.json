@@ -7,5 +7,12 @@
   "item_done": "这件事已经处理过了，回复没有发出去。要回复的话，先把它移回收件箱。",
   "suggestion_stale": "建议已更新",
   "by_policy": "按你的规则：{name}",
-  "refresh_failed": "现在读不到各个来源，列表没有更新。稍后再试。"
+  "refresh_failed": "现在读不到各个来源，列表没有更新。稍后再试。",
+  "by_you": "你改的",
+  "rule_action": "{name}的消息需要我处理",
+  "rule_fyi": "{name}的消息算知悉即可",
+  "rule_noise": "{name}的消息直接折叠",
+  "rule_ignored": "忽略",
+  "rules_title": "收件箱规则",
+  "rule_card_other": "加一条收件箱规则：「{rule}」（你最近把 {count} 件{name}的事改成了{tier}）"
 }

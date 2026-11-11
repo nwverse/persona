@@ -71,6 +71,8 @@ type inboxBook struct {
 	cfg   assistantwire.InboxConfig // the hub's (InboxConfigMethod), as last read
 	cfgAt time.Time
 
+	learning inboxLearning // the user's corrections and the rules drafted from them (inbox_reclass.go)
+
 	purgedAt time.Time // the last purge of the done items past inboxKeepHistory (purgeInboxHistory), under mu
 
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)

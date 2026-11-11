@@ -22,6 +22,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.this_browser"), anchor: "this-browser" },
   // the assistant's profile
   { tab: "persona", group: t("settings-triagesettings.title"), anchor: "triage" },
+  { tab: "persona", group: t("settings-inboxrules.title"), anchor: "inbox-rules" },
   // the hub's
   { tab: "avatar", group: t("settings.avatar"), anchor: "avatar" },
   { tab: "hub", group: t("workspace-board.setting_group"), anchor: "agent-group" },

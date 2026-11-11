@@ -355,14 +355,31 @@ struct InboxPage: View {
     private func doneAll(_ listed: [InboxItem], share: InboxShare) -> [InboxItem] {
         let have = Set(listed.map(\.key))
         let filter = InboxProjection.Filter(source: source, kind: kind, query: query)
-        let older = share.mine(store.history, model.managerRoster).filter { $0.isDone && !have.contains($0.key) && filter.matches($0) }
+        let older = share.mine(store.history, model.managerRoster).filter { $0.isDone && !$0.isIgnored && !have.contains($0.key) && filter.matches($0) }
         return older.isEmpty ? listed : (listed + older).sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
+    }
+
+    /// A share's Ignored as shown: the list's ignored items, then the history's it doesn't have, newest first.
+    private func ignoredAll(_ listed: [InboxItem], share: InboxShare) -> [InboxItem] {
+        let have = Set(listed.map(\.key))
+        let filter = InboxProjection.Filter(source: source, kind: kind, query: query)
+        let older = share.mine(store.history, model.managerRoster).filter { $0.isIgnored && !have.contains($0.key) && filter.matches($0) }
+        return older.isEmpty ? listed : (listed + older).sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
+    }
+
+    /// FYI's group of what the user put there themselves (docs/assistant/inbox.md「Corrections and learned rules」): folded
+    /// while the AI's picks above still wait to be checked, open once they are dealt with.
+    private static let byYou = "by-you"
+
+    private func byYouOpen(manager: String?, aiLeft: Int) -> Bool {
+        groupFolds[Self.groupID(InboxItem.Tier.fyi.rawValue, Self.byYou, manager: manager)] ?? (aiLeft == 0)
     }
 
     /// A group's title: it opens / closes the group (sticking at the top while its rows scroll by); selecting, its tick
     /// picks or unpicks all of it, folded or not, and "n selected" says what is picked in it.
-    private func groupHeader(_ section: String, _ g: InboxGroups.Group, manager: String?, count: Int, more: Bool = false, pickable: Bool) -> some View {
-        let open = groupOpen(section, g.key, manager: manager)
+    private func groupHeader(_ section: String, _ g: InboxGroups.Group, manager: String?, count: Int, more: Bool = false, pickable: Bool,
+                             open shown: Bool? = nil, hint: String? = nil) -> some View {
+        let open = shown ?? groupOpen(section, g.key, manager: manager)
         let n = picked.map { p in g.items.filter { p.contains($0.key) }.count } ?? 0
         return HStack(spacing: Theme.Space.sm) {
             if picked != nil && pickable {
@@ -383,6 +400,9 @@ struct InboxPage: View {
                     // the section's title size, not its weight: a level under it ("Done · 2088"), not above it (#2969)
                     Text(g.title).font(Theme.Font.caption).foregroundStyle(.secondary)
                     Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.caption).foregroundStyle(.tertiary)
+                    if let hint, !open {
+                        Text(verbatim: "· \(hint)").font(Theme.Font.caption).foregroundStyle(.tertiary)
+                    }
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
@@ -568,8 +588,11 @@ struct InboxPage: View {
                 ForEach(InboxItem.Tier.allCases, id: \.self) { tier in
                     let items = share.byTier[tier] ?? []
                     let agents = tier == .action ? share.agents : []
+                    // FYI: the AI's picks first, for the user to check; what the user put there in its own group under them
+                    let mine = tier == .fyi ? items.filter(\.userMarked) : []
+                    let ai = mine.isEmpty ? items : items.filter { !$0.userMarked }
                     if !items.isEmpty || !agents.isEmpty {
-                        let groups = tier == .working ? [] : groupsOf(items)
+                        let groups = tier == .working ? [] : groupsOf(ai)
                         let header = sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue, manager: manager,
                                                    clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
                         if titled(tier, groups: groups, agents: agents.count) {
@@ -591,9 +614,17 @@ struct InboxPage: View {
                             Section {
                                 if folds.isOpen(tier.rawValue, manager: manager) {
                                     ForEach(agents) { agentRow($0) }
-                                    ForEach(items, id: \.key) { row($0) }
+                                    ForEach(ai, id: \.key) { row($0) }
                                 }
                             } header: { header }
+                        }
+                        if !mine.isEmpty && folds.isOpen(tier.rawValue, manager: manager) {
+                            let g = InboxGroups.Group(key: Self.byYou, title: String(localized: "Marked by You"), items: mine)
+                            let open = byYouOpen(manager: manager, aiLeft: ai.count)
+                            Section { if open { ForEach(mine, id: \.key) { row($0) } } } header: {
+                                groupHeader(tier.rawValue, g, manager: manager, count: mine.count, pickable: true, open: open,
+                                            hint: ai.isEmpty ? nil : String(localized: "Review the AI’s picks first"))
+                            }
                         }
                     }
                 }
@@ -644,6 +675,16 @@ struct InboxPage: View {
                         } header: {
                             doneHeader(count: count, groups: [], manager: manager, proxy: proxy)
                         }
+                    }
+                }
+                // Ignored (docs/assistant/inbox.md「Corrections and learned rules」): what the user is not interested in,
+                // apart from Done; Move Back in a row's menu undoes it.
+                let ignored = ignoredAll(share.mine(projection.ignoredItems, roster), share: share)
+                if !ignored.isEmpty {
+                    Section {
+                        if folds.isOpen("ignored", manager: manager) { ForEach(ignored, id: \.key) { row($0) } }
+                    } header: {
+                        sectionHeader(String(localized: "Ignored [Inbox Section]"), count: ignored.count, key: "ignored", manager: manager, clear: nil)
                     }
                 }
             }
@@ -821,6 +862,19 @@ struct InboxPage: View {
             Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
         } else {
             Button { store.setDone(it, true) } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }
+            // move it (docs/assistant/inbox.md「Corrections and learned rules」): to the section it is not in, or out of sight
+            Section {
+                if it.triage != .fyi {
+                    Button { store.setTier(it, InboxItem.Tier.fyi.rawValue) } label: { Label("Mark as FYI", systemImage: Theme.Icon.view) }
+                }
+                if it.triage != .action {
+                    Button { store.setTier(it, InboxItem.Tier.action.rawValue) } label: { Label("Mark as Needs You", systemImage: Theme.Icon.needsYou) }
+                }
+                Button { store.ignore(it) } label: {
+                    Label("Ignore [Inbox Menu]", systemImage: Theme.Icon.hide)
+                    Text("Not Interested")
+                }
+            }
         }
         if let mutes = it.mutes, !mutes.isEmpty {
             Section {
@@ -962,6 +1016,12 @@ struct InboxRow: View {
                     if let label = item.kindLabel {
                         Chip(text: label, look: item.kind == "mention" || item.kind == "doc" && label == String(localized: "@Me") ? .tone(StatusPalette.needsYou) : .neutral)
                     }
+                    if !item.isDone && item.triage == .fyi {
+                        // who put it in FYI: the AI (for the user to check) or the user
+                        Chip(text: item.userMarked ? String(localized: "You [Inbox FYI Tag]") : String(localized: "AI [Inbox FYI Tag]"),
+                             look: item.userMarked ? .neutral : .tint(Theme.ai), compact: true)
+                            .accessibilityLabel(item.userMarked ? String(localized: "Marked by You") : String(localized: "Picked by the AI"))
+                    }
                     Spacer(minLength: 4)
                     Text(LarkTime.short(item.updatedAt)).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize()
                 }
@@ -994,6 +1054,11 @@ struct InboxRow: View {
                     // Inbox phase 1: the suggestion (it replaces the AI agent's draft card, which a hub mirrors it
                     // into), In Progress's state, the 'preparing a suggestion' line; its buttons are in the detail.
                     InboxEventMarkLine(mark: mark).padding(.top, Theme.Space.xxs)
+                } else if !item.isDone && item.progress != nil && item.suggestion == nil && item.handling == nil {
+                    // handed to the AI and not done: it comes back to Needs You with the result to confirm
+                    Label { Text("With the AI") } icon: { ThemedIcon(Theme.Icon.ai).foregroundStyle(Theme.ai) }
+                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                        .padding(.top, Theme.Space.xxs)
                 } else if !item.isDone && item.suggestion == nil && item.handling == nil {
                     if let draft = item.agentDraft, let send {
                         InboxDraftCard(draft: draft, changes: (item.agent?.changes ?? []).map { DocChangeText.line($0, in: item.doc) },

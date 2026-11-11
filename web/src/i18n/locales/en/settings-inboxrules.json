@@ -1,0 +1,15 @@
+{
+  "title": "Inbox rules",
+  "footer": "How the AI sorts your inbox, in your words; they win over its own judgment. When you move similar items a few times, the AI drafts a rule and asks on your phone; approved rules show up here.",
+  "rule": "Rule",
+  "placeholder": "e.g. Release notifications are FYI",
+  "add": "Add rule",
+  "edit": "Edit",
+  "remove": "Remove",
+  "save": "Save",
+  "cancel": "Cancel",
+  "empty": "No rules yet.",
+  "load_failed": "Couldn’t read the rules: {error}",
+  "retry": "Retry",
+  "save_failed": "Couldn’t save the rules: {error}"
+}

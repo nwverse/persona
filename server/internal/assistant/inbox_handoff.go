@@ -133,6 +133,8 @@ func (s *Service) sendHandoff(ctx context.Context, text, op string) (SessionRef,
 // handoffsMax, and puts it on the chain once per conversation. Under b.mu.
 func (b *inboxBook) noteHandoff(it *InboxItem, to SessionRef, op string, now time.Time) {
 	it.Handoffs = append(it.Handoffs, InboxHandoff{MachineID: to.MachineID, SessionID: to.SessionID, At: now.UTC(), Op: op})
+	// The user put the AI on it: "In progress" until the conversation hands back a result they confirm.
+	it.Progress = &InboxProgress{Kind: ProgressHandoff, Since: now.UTC(), MachineID: to.MachineID, SessionID: to.SessionID}
 	if n := len(it.Handoffs); n > handoffsMax {
 		it.Handoffs = slices.Clone(it.Handoffs[n-handoffsMax:])
 	}
@@ -290,6 +292,7 @@ func (s *Service) actOnHandedSuggestion(ctx context.Context, it *InboxItem, g *I
 		note = &inboxNote{Name: prompts.NoteHandback, Text: text, Edited: edited}
 	case g.Kind == SuggestConclusion:
 		b.chainAdd(it, confirmedEntry(l, text, false, now))
+		it.Progress = nil // the user took the result: the work is over
 		b.file(it, now, "user")
 		closed = b.closeHandling(it, "user", now) // a processing conversation still on it stops
 	default:

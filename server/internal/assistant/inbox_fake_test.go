@@ -230,6 +230,15 @@ func (in *fakeInbox) answer(ctx context.Context, p AppCall) (json.RawMessage, bo
 		in.mu.Lock()
 		out = in.cfg
 		in.mu.Unlock()
+	case assistantwire.InboxSetRules:
+		var a struct {
+			Rules string `json:"rules"`
+		}
+		_ = json.Unmarshal(p.Params, &a)
+		in.mu.Lock()
+		in.cfg.Rules = a.Rules
+		in.mu.Unlock()
+		out = map[string]any{}
 	case assistantwire.InboxMailBody:
 		var ref assistantwire.InboxMailRef
 		_ = json.Unmarshal(p.Params, &ref)

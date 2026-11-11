@@ -139,13 +139,14 @@ type triageVerdict struct {
 func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Duration) (last string, v triageVerdict) {
 	b := &s.inbox
 	b.mu.Lock()
-	last, input, rules := it.Last, b.triageInput(it), strings.TrimSpace(it.Rules)
+	last, input, rules, source := it.Last, b.triageInput(it), strings.TrimSpace(it.Rules), it.Source
 	b.mu.Unlock()
 	if rules == "" {
 		rules = s.inboxConfig(ctx).Rules
 	}
 	hello := s.hello(ctx)
-	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale)})
+	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale),
+		Corrections: s.corrections(source)})
 	var out struct {
 		Tier    string `json:"tier"`
 		Summary string `json:"summary"`

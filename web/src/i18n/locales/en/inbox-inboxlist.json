@@ -71,5 +71,18 @@
   "load_older": "Show older",
   "loading_older": "Loading…",
   "older_failed": "Couldn't load older items: {error}",
-  "subscriptions": "Subscriptions"
+  "subscriptions": "Subscriptions",
+  "mark_fyi": "Mark as FYI",
+  "mark_action": "Mark as Needs You",
+  "ignore": "Ignore",
+  "ignore_hint": "Not interested",
+  "ignored_section": "Ignored",
+  "tag_ai": "AI",
+  "tag_ai_title": "Put here by the AI: check whether it’s right",
+  "tag_you": "You",
+  "tag_you_title": "You put it here",
+  "fyi_by_you": "Marked by you",
+  "fyi_review_first": "Review the AI’s picks above first",
+  "progress": "With the AI",
+  "progress_title": "You handed this to the AI; it moves to Needs you with the result for you to confirm"
 }

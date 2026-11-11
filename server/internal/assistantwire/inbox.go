@@ -23,6 +23,9 @@ var InboxRoutes = []string{
 	"GET /api/v1/inbox/done/days",
 	"GET /api/v1/inbox/{id}",
 	"POST /api/v1/inbox/{id}/done",
+	"POST /api/v1/inbox/{id}/tier",
+	"GET /api/v1/inbox/rules",
+	"PUT /api/v1/inbox/rules",
 	"POST /api/v1/inbox/{id}/draft",
 	"POST /api/v1/inbox/{id}/reply",
 	"POST /api/v1/inbox/{id}/suggestion",
@@ -79,6 +82,8 @@ const (
 	InboxKick = "inbox.kick"
 	// InboxConfigMethod: {} → InboxConfig.
 	InboxConfigMethod = "inbox.config"
+	// InboxSetRules: {rules} → {}: keep the text as the inbox's rules (setting inbox.rules; "" falls back to manager.json's).
+	InboxSetRules = "inbox.set_rules"
 	// InboxMailBody: InboxMailRef → InboxMailMessage: a mail read in full (peeked: it stays unread).
 	InboxMailBody = "inbox.mail_body"
 	// InboxReplyMail: {account_id, uid, mailbox, text, send_id} → InboxSent: the reply to that mail, sent from the

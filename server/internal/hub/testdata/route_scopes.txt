@@ -181,6 +181,7 @@ inbox.read           GET /api/v1/inbox/done/days
 inbox.read           GET /api/v1/inbox/folders
 inbox.read           GET /api/v1/inbox/mutes
 inbox.read           GET /api/v1/inbox/policies
+inbox.read           GET /api/v1/inbox/rules
 inbox.read           GET /api/v1/inbox/tree/{kind}/{id...}
 inbox.read           GET /api/v1/inbox/{id}
 agents.read          GET /api/v1/interactions
@@ -410,6 +411,7 @@ inbox.write          POST /api/v1/inbox/{id}/draft
 inbox.write          POST /api/v1/inbox/{id}/handoff
 inbox.write          POST /api/v1/inbox/{id}/reply
 inbox.write          POST /api/v1/inbox/{id}/suggestion
+inbox.write          POST /api/v1/inbox/{id}/tier
 agents.control       POST /api/v1/interactions/{id}/choose
 agents.control       POST /api/v1/interactions/{id}/reanswer
 agents.control       POST /api/v1/interactions/{id}/resolve
@@ -563,6 +565,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/hub/update/settings
 -                    PUT /api/v1/imessage/settings
 inbox.write          PUT /api/v1/inbox/folders
+inbox.write          PUT /api/v1/inbox/rules
 inbox.write          PUT /api/v1/inbox/{id}/folder
 inbox.write          PUT /api/v1/inbox/{id}/parent
 -                    PUT /api/v1/iphone/consent

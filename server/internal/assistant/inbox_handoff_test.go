@@ -315,10 +315,17 @@ func TestInboxSuggestFromAHandoff(t *testing.T) {
 }
 
 // Each kind from a hand-off conversation, for an item with no processing conversation: the chain links the
-// conversation, a conclusion done files the item.
+// conversation. Handed over, the item is In progress; its result (a conclusion too, even "done") comes back under Needs
+// you for the user's OK, which files it (docs/assistant/inbox.md "Corrections and learned rules", In progress).
 func TestInboxSuggestFromAHandoffKinds(t *testing.T) {
 	h, _, it := handoffHub(t)
 	handOff(t, h, it)
+	h.inbox.mu.Lock()
+	st := it.status()
+	h.inbox.mu.Unlock()
+	if st != StatusWorking {
+		t.Fatalf("handed over: %s", st)
+	}
 	for _, args := range []string{`{"item":"lark:f1:100","kind":"reply","text":"好的"}`, `{"item":"lark:f1:100","kind":"agent","text":"查一下报价单"}`} {
 		if _, err := mainSuggest(h, "m1", args); err != nil {
 			t.Fatalf("%s: %v", args, err)
@@ -333,10 +340,10 @@ func TestInboxSuggestFromAHandoffKinds(t *testing.T) {
 	h.inbox.mu.Lock()
 	st, kind, agent, handling := it.status(), it.Suggestion.Kind, it.Agent, it.Handling
 	h.inbox.mu.Unlock()
-	if st != StatusFYI || kind != SuggestConclusion || agent != nil || handling != nil {
+	if st != StatusAction || kind != SuggestConclusion || agent != nil || handling != nil {
 		t.Fatalf("fyi: %s %s %+v %+v", st, kind, agent, handling)
 	}
-	if code, out := suggestionCall(t, h, it.ID, `{"version":3,"action":"confirm"}`); code != 200 || out["done_by"] != "user" {
+	if code, out := suggestionCall(t, h, it.ID, `{"version":3,"action":"confirm"}`); code != 200 || out["done_by"] != "user" || out["progress"] != nil {
 		t.Fatalf("got it: %d %v", code, out)
 	}
 
@@ -346,9 +353,13 @@ func TestInboxSuggestFromAHandoffKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	h2.inbox.mu.Lock()
-	defer h2.inbox.mu.Unlock()
-	if it2.open() || it2.DoneBy != doneByManager || it2.Agent != nil || it2.Handling != nil {
-		t.Fatalf("done: %v %q", it2.open(), it2.DoneBy)
+	open, st2, agent2, handling2 := it2.open(), it2.status(), it2.Agent, it2.Handling
+	h2.inbox.mu.Unlock()
+	if !open || st2 != StatusAction || agent2 != nil || handling2 != nil {
+		t.Fatalf("done waits for the user: %v %s", open, st2)
+	}
+	if code, out := suggestionCall(t, h2, it2.ID, `{"version":1,"action":"confirm"}`); code != 200 || out["done_by"] != "user" {
+		t.Fatalf("confirmed: %d %v", code, out)
 	}
 }
 
