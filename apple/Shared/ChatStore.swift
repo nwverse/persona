@@ -600,19 +600,16 @@ final class ChatStore {
 
     func merge(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
         if backlog || !new.isEmpty { error = nil } // data arrived: a stale "machine is offline" no longer applies
-        // A replayed disk cache can hold an id twice. Keep the newest copy before indexing; ids is already a Set,
-        // so a count mismatch finds this without scanning every ordinary merge.
+        // A replayed disk cache can hold an id twice. Keep the newest copy before indexing, but only after collecting
+        // promotion evidence; ids is already a Set, so a count mismatch finds this without scanning every ordinary merge.
         func newestCopies(_ list: [Item]) -> [Item] {
+            guard list.count > 1 else { return list }
             var seen = Set<String>()
             return Array(list.reversed().filter { seen.insert($0.id).inserted }.reversed())
         }
         let deduplicated = items.count != ids.count
-        if deduplicated {
-            items = newestCopies(items)
-            ids = Set(items.map(\.id))
-        }
-        // Promotion is monotone, including when overlapping real work takes a promoted fold's place. Retain it on
-        // the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
+        // Promotion is monotone, including when deduplication or overlapping real work takes a promoted fold's place.
+        // Retain it on the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
         // folded page can bring authoritative promotion while the UI keeps that work expanded.
         let evidence = (items + Array(opened.values) + new).filter { $0.supervisionUser == true || $0.fold?.supervisionUser == true }
         let promotedIDs = Set(evidence.filter { $0.supervisionUser == true }.map(\.id))
@@ -629,6 +626,10 @@ final class ChatStore {
                 if it.fold != nil { it.fold?.supervisionUser = true }
                 return it
             }
+        }
+        if deduplicated {
+            items = newestCopies(items)
+            ids = Set(items.map(\.id))
         }
         let retained = retainingPromotion(items)
         var changed = deduplicated || retained != items
