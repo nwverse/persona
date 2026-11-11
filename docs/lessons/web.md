@@ -1,5 +1,38 @@
 # Lessons: web UI and interactions
 
+## Dismiss a draft, not its source item (#3743)
+
+A task-progress reply card has its own feed id; its Inbox reference can be shared by later progress drafts. Persist
+Don't handle on the card, not by marking the Inbox item done or hiding every card with that reference. Send and
+Dismiss need one synchronous admission guard, and only a successful send may show a sent receipt. Undo sends the
+dismissal receipt back to the same manager and applies the full returned body so omitted dismissal fields really clear.
+A feed read started before the write must not roll it back, and a late write response must not erase newer sent/filed
+pushes. Capture a live card's manager on arrival and name even the default explicitly: API auto-routing otherwise
+substitutes a later assistant selection on card-id-only routes.
+Check a reload and a new same-reference draft in the actual tray, not only the historical card renderer.
+Keep the draft editor and its toast handlers behind a local lazy boundary; the collapsed startup tray does not need
+that UI. Pass existing task helpers into the editor instead of importing the whole Tasks module back into its lazy
+chunk. Static-render tests exercise the extracted editor directly; mounted tray tests wait for the lazy card and still
+exercise its actions. Leave Send/Dismiss admission, owner capture and revision fences in the synchronous feed layer.
+
+## Gate identity chrome by installed assistants, not by roster availability (#3967)
+
+A roster with one assistant does not need assistant identity or switching UI. Reuse the installed-assistant cardinality
+rule used by conversation titles and list grouping; offline installed assistants count and pending installs do not.
+Restore the earlier product header and its existing controls rather than hiding the whole header, which would also
+remove appearance, Settings and Disconnect. Keep product branding and the user's chosen Persona look separate from
+roster name/monogram attribution. Regress one → two → one on a mounted view, along with one installed plus a pending
+install, and assert the rendered labels, avatars and menu rows rather than only the count helper. A phone's menu and
+drawer own separate history entries: wait for each closing entry to pop before the next full-page navigation, or a
+late Back can replace the requested Inbox page with the previous main conversation. Prefer the built web preview for
+broad E2E runs on a busy machine; thousands of Vite development modules can exhaust Chromium's renderer resources.
+
+## Retention mode changes must not save an intermediate window (#3780, #3862)
+
+Switching from forever to finite retention only exposes a local draft: saving a default such as 365 days first can
+irreversibly delete older minutes before the user commits a longer window. Submit only the number committed on Enter
+or blur. Regress the absence of a PUT on mode change, cancellation, and restoring the saved mode after a refusal.
+
 ## Same-state list updates can change background progress (#3588)
 
 The task tray often has only list summaries, whereas the chat header has complete Session detail. A comparison of
@@ -707,6 +740,7 @@ If the header grows, elements below it (App.tsx connection-status pill) cannot a
 - Pages scroll in their own `overflow-y-auto` box under `<main>`, not the window, so the browser's scroll restoration does nothing for them. Overview unmounts when a card opens a conversation, and Settings' phone list shares one scroller with every category (the category's shorter content clamps `scrollTop`), so Back landed at the top. The inbox never had the problem: its list stays mounted, hidden, under the opened item.
 - `useScrollMemory(ref, key)` (`lib/scroll-memory.ts`) remembers `scrollTop` per key and restores it only when the router saw Back / Forward land on the current address (`takeReturn`); a link or a tap starts at the top. Decide the target once per key: React's StrictMode runs the layout effect twice in development, and the second run would find the return already taken.
 - Checking it in a browser: an edit made while Vite is running can keep serving the old module (the "negative control" passed with the hook disabled). Restart Vite with `--force` and fetch the module to confirm before trusting a before/after comparison.
+- The key names the page the scroller shows, not everything in the address. Settings keyed it `settings/<tab>/<sub>`, and on Models `sub` is the purpose whose dialog is open: opening and closing the dialog each read as a fresh visit and put the page at the top, away from the row just saved (#4282). Include an item in the key only where it replaces the page (`itemIsPage`). A row opened from the page in view also passes no section to `pick`: naming one scrolls that section to the top of the page the row is already on. A link from another page still names it.
 
 ## Keep background task drawers open across turn status changes (2026-11-06)
 
@@ -774,6 +808,14 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 
 - Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
 - A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
+
+## Validate MCP scalar text before JavaScript normalizes it (#3332)
+
+`Date.parse` can normalize an impossible day, and `Number.isInteger(Number(text))` can accept a rounded fraction or underflowed value. Check the original date-time components and decimal/exponent wholeness before constructing an answer; also require a safe numeric integer. A safe-integer check alone misses fractions that round to a safe integer. Preserve exact integral forms such as `2.0`, `2e3` and zero with a negative exponent. Test both the public validation/resolution helpers and the card: invalid input must disable Submit and produce no resolve request, while correcting it submits the intended value once.
+
+## Explicit default ports disappear during URL normalization (#4233)
+
+`URL.port` is empty for both an implicit port and an explicitly written HTTP `:80` or HTTPS `:443`. When recognizing links to an Agent's dev server, retain explicit authority-port intent from the original text after validating its URL, protocol and host. Do not infer a scheme default for a URL with no port, or borrow a colon from credentials, a path, query or fragment. Regress the public helper, reply chips and click routing together; keep hub-owned pages and preview capability/session/folder checks ahead of opening a preview. Recognition alone does not establish HTTPS preview transport support.
 
 ## Connection tests must use the form's credential choice (#1903)
 

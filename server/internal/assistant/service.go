@@ -51,8 +51,12 @@ type Service struct {
 	nodeAnswering atomic.Int64
 	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
 	taskStarting atomic.Int64
+	// leaderStarts counts task leaders being started: until one is linked its agent is no leader to the hub (task_leader.go).
+	leaderStarts atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
+	refs launcherSecrets
 
 	hub   Hub
 	store func() Store
@@ -66,6 +70,9 @@ type Service struct {
 	// taskRetry is how long a task waits before its one retry after a dropped link (0: taskStartRetryDelay; tests
 	// shorten it).
 	taskRetry time.Duration
+	// leaderResume bounds each attempt to put a supervision message into a closed task leader agent, and is the first
+	// wait of the retries after one failed (0: leaderResumeWait; tests shorten it, task_leader.go leaderResumeTime).
+	leaderResume time.Duration
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings

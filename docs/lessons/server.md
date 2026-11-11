@@ -1,5 +1,12 @@
 # Lessons: hub / node and networking
 
+## Shared web fixtures belong in the Docker build context (2026-11-11, #4260)
+
+The web production build typechecks test files. A JSON fixture imported from `spec/fixtures/` needs both a
+`.dockerignore` exception and a `COPY` into the web stage at the same relative path. A native build sees the
+whole checkout and can pass while the Docker build fails with TS2307. The Docker entrypoint suite now checks
+shared JSON imports, including globs, against both files, catching new fixture groups before an image build.
+
 ## Sharing frontiers and migration lanes (#3604)
 
 - Migration numbers are global across the hub and manager sets, even though their
@@ -352,7 +359,8 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 ## Rolling-upgrade identity contracts (#6223)
 
 - Treat a rename as an ABI change wherever a byte reaches another process, persisted state, a cryptographic domain or an operating-system registration. Use an explicit authenticated feature, an old-safe default and exact aliases; display names and build strings do not prove compatibility. Push-to-start needs a persisted registration capability, independent of the socket's XML capability.
-- Connection capability changes must invalidate unused warm processes (#3269). The devices manager can reconnect to another hub while retaining the node connection, so a Claude spare can carry the previous MCP namespace policy. Record the policy at process start and require it to match before adopting or reusing the spare; established conversations retain their configuration. Shared generated MCP files also serve automatic resumes and cannot be narrowed using only the current hub capability.
+- Connection capability changes must invalidate unused warm processes (#3269). The devices manager can reconnect to another hub while retaining the node connection, so a Claude spare can carry the previous MCP namespace policy. Record the policy at process start and require it to match before adopting or reusing the spare. With a capable hub, assistant resumes can also use only `persona`: a real Claude Code 2.1.322 transcript containing a legacy tool call accepted the next request after the alias was removed. Ordinary Agents' shared generated MCP files still serve automatic resumes without a per-session decision and cannot be narrowed using only the current hub capability.
+- Measure a headless assistant with its actual environment and registered conversation identity (#4238). `system/init` under ToolSearch, or a manually spawned MCP process whose session was not discovered as the assistant, exposes a smaller tool set than the real request. Compare the request's `api-request-shape` and first assistant usage together; an init tool count or a standalone `tools/list` alone is not the fixed-context baseline.
 - A deterministic receipt or thread seed, HPKE info or grant AAD is an invariant, not copy. Keep the original output bytes; decoding can accept both explicitly known domains. A dual-key JSON payload cannot repair encryption the old receiver cannot open. Never rotate a key, token or database to hide incompatibility.
 - Normalize typed protocol fields only. Generic recursive replacements can change unrelated event sources, user text and large opaque JSON numbers. Preserve field presence (including false and null), use exact aliases, and project detached manifest validation values without rewriting signed package bytes. Both copies of forwarded headers must be removed together, or the legacy copy can resurrect a forwarding loop.
 - Keep custom JSON methods off an anonymously embedded DTO. A method promoted from the embedded launcher swallowed its surrounding health and agent-type fields on both encode and decode. Use an explicit root transport envelope and test that embedding the plain DTO preserves sibling fields.
@@ -814,6 +822,9 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- Forever is a sentinel, not zero days (#3780, #3862). Preserve `minutes_days: 0` before applying the transcript-retention floor, calculating an expiry date or confirming an echoed setting. A trimmed recording's metadata proves it has retained minutes even if `minutes.json` cannot be read; a parse failure must not turn forever retention into deletion. Test repeated sweeps, unreadable trimmed minutes, switching back to finite retention and explicit user deletion.
+- A meeting answer may be spoken in front of others (#3862). Until private meetings can be marked, gate earlier minutes, their linked projects and action-item states together before retrieval; a prompt warning cannot hide material already sent to the model. Keep opt-in retrieval tests as well as a default-off test that checks the model input and returned citations.
+
 - Deleting a connector is broader than deleting an archive namespace (#1836): include its alternate chat sources, posts and items, plus indexes and project references. Record the connector at ingestion, separately from a chat's namespace, and stamp item ownership before the unchanged-item fast path. Never infer legacy ownership from an item ID, title or a shared archive alias; use explicit provenance or a known source chat, leaving ambiguous records intact. Deletion tests need another connector's records, shared aliases and unowned legacy data, not only a single source.
 - A connector's knowledge-base switch must gate every ingestion path (#1835): conversations, items (documents, meetings and events), document-title lookups and program-initiated posts. Filtering the source list alone leaves direct calls open after a switch changes. Check both the feed and the main switch at the call boundary too; a shared extension process may keep running after its connector is disabled. `Registry.Feeds` does not include `Registry.Enabled`. Test both switches independently, with a connector that still answers calls, and assert that neither source reads nor post forwarding occur while off.
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
@@ -1121,6 +1132,7 @@ and add that directory to image workflow PR paths.
 
 - `-race` always flagged devices and connector: tests only `defer cancel()` without waiting for `Machine.run` / `watchOne`, so the next test changed `reconnectGrace` / `watchBackoffFirst` while old goroutines read them (even already-finished reads race without synchronization). devices tests use `runMachine(t, m)` (Cleanup cancels, then waits with timeout for `run`); connector `Start` reads backoff parameters once and passes them to watchers.
 - Waiting for `run` exposed another bug: a tailcat connection stuck writing in `configureNode` (peer not reading) outlived ctx, while `watchTailcat` exited without closing it; `run` never returned and hub `workers.Wait()` hung at shutdown. `serve` now closes tailcat on ctx end (`context.AfterFunc`). Cancel-without-wait tests hid the hang.
+- A goroutine stopped before it starts still reads what it reads when it does start (2026-11-11, #3942). `TestPlanThenWatchStopsWhenTheCardAnswers` cancels the plan-then watch at once, and the goroutine read `planThenEvery` after `fastPlanThen`'s cleanup had put it back; `planThenAfterTerminal` now reads it before `go`. The same holds for fields: `setCatalog` prefetches a pushed entry in a goroutine that reads `n.peer`, so a test gives the node its hub before `setCatalog`, never after.
 
 
 ## Knowledge corrections and extension permissions (#1908)
@@ -1566,6 +1578,19 @@ A connector that folds several notifications into one thread (GitHub CI failures
   `json.Marshal`'s for HTML characters, U+2028, control characters and invalid UTF-8 (`TestNotifyMarshaledIsTheSameLine`).
   Give the type a `MarshalJSON`, or a `[]byte` passed anywhere else is written as base64.
 
+## HTML characters escaped at the first hop stay escaped on every later one (2026-11-10, #2907)
+
+- `json.Marshal` and a default `json.NewEncoder` write `<`, `>` and `&` as six bytes each, and an encoder keeps escapes
+  it finds in a `json.RawMessage` even with `SetEscapeHTML(false)`. A tool input of HTML went from the transcript's clip
+  through the node's rpc line to the hub's page and push: 61,011 bytes as Claude wrote them, 160,011 on the wire. Turning
+  escaping off at one hop changes nothing while an earlier one still escapes, so the clip (`transcript.marshalPlain`,
+  which `jsonLen` measures with too), every rpc line (`rpc.marshal`, `encodeLine`) and the hub's item bodies and pushes
+  (`marshalItems`, `writeItemsJSON`) leave them as they are. U+2028 and U+2029 are still escaped, as encoding/json does.
+- Prove it end to end, not per encoder: parse a line, send it over real rpc lines, read the page, the full item, the
+  push and a subscribe's backlog, and check that `tool_input` is no longer than it was written and holds the same value
+  (`TestItemsKeepHTMLCharactersOnTheWire`). A call's params carry no items and are pinned in the rpc package
+  (`TestCallKeepsHTMLCharacters`). Putting back any one escaping hop fails one of the two.
+
 ## Transport source is not pane origin (#994)
 
 A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
@@ -1706,3 +1731,14 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - Bound trickles by size, not by a constant: the stall rule catches a dead link, and the total budget is 30 minutes or the time 16 KiB/s needs. Tell our own budget from the caller's with `context.WithTimeoutCause` and a sentinel cause, or a caller's deadline reads as "too slow".
 - When the client of a synchronous call leaves, the operation it started should say so in words (`client_left`), not `context canceled`.
 - Progress is reported at most every 200 ms: a test that waits for an exact byte count can wait forever; wait for "some bytes" and prove there was no restart by counting requests.
+
+## macOS `ps` prints `nobody` as UID -2 (2026-11-10, #3687)
+
+- `uid_t` is unsigned, but macOS `ps -o uid` prints it signed: `nobody` (4294967294) shows as `-2`. Linux prints 65534, so hosted CI (Ubuntu) never sees a negative owner. `parseProcessTable` treated one as a corrupt row and failed the whole table, so `personad manager maintenance prepare|observe` broke on any Mac running a `nobody` process (`dhcp6d`, the DHCPv6 client, once a network uses DHCPv6).
+- When a check covers every row of a system table, validate the format (a number), not a range taken from one platform; keep the real constraint (the target is the current user's) on the row it is about.
+
+## A field that pushes a row past its size class (2026-11-11, #3937)
+
+- `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
+- When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
+- Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.

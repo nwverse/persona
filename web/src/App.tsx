@@ -14,9 +14,11 @@ import { useSessionPanels } from "./lib/panel-memory";
 import { resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
 import { resolveSessionLink, sessionLinkRoute, type SessionLink } from "./lib/session-link";
 import { href, navigate, onLinkClick, type Route, routePath, useRoute } from "./lib/router";
+import { agentChatKey, noteChatShown, personaChatKey } from "./lib/recent-chats";
 import { ago, sessionTitle, shortPath } from "./lib/format";
 import type { Session } from "./lib/types";
 import { unreachable } from "./lib/shell";
+import { useTabLookup } from "./lib/tab-lookup";
 import { ConnectionPill } from "./views/ConnectionPill";
 import { NARROW, useKeyboardFrame, useMedia } from "./lib/viewport";
 import { connect, disconnect, reset, type State, useStore } from "./lib/store";
@@ -198,7 +200,11 @@ function Shell() {
   useEffect(() => {
     if (tabLinkPath) navigate(tabLinkPath, true);
   }, [tabLinkPath]);
-  const pane = target?.sid ? { mid: target.mid, sid: target.sid } : undefined;
+  // a tab not among the page's rows (a paged hub lists only active and pinned ones): asked of the hub before it is gone
+  const tabRoute = route.name === "tab" ? route : undefined;
+  const lookup = useTabLookup(tabRoute, !!tabRoute && loaded && !target?.sid);
+  const found = lookup.state === "found" ? { mid: lookup.mid, sid: lookup.sid } : undefined;
+  const pane = target?.sid ? { mid: target.mid, sid: target.sid } : found;
   const launch = useStore((s) => (pane ? s.launches[pane.sid] : undefined));
   const starting = useStore((s) => (pane ? (s.sessions[pane.mid] ?? []).find((session) => session.session_id === pane.sid)?.starting : undefined));
   const shell = useRef<HTMLDivElement>(null);
@@ -300,6 +306,12 @@ function Shell() {
   // and coming back to it opens them again where they were (#5150, lib/panel-memory.ts); a Persona chat's panel too
   // (#6199)
   const chat = route.name === "persona" ? (route.sid ?? "") : undefined;
+  // the conversation on the page goes first among the recently opened ones, ⌘K's first group (#2191): an Agent's, or a
+  // Persona conversation (the main one when the page names none); any other page shows none
+  const personaMain = useStore((s) => s.assistant?.main ?? "");
+  const personaShown = route.name === "persona" ? (route.sid || personaMain) : "";
+  const shownChat = pane ? agentChatKey(pane.mid, pane.sid) : personaShown ? personaChatKey(personaShown) : "";
+  useEffect(() => noteChatShown(shownChat), [shownChat]);
   const at = pane ? `${pane.mid}/${pane.sid}` : chat !== undefined ? `persona/${chat}` : route.name;
   useSessionPanels(at, pane, chat);
 
@@ -322,12 +334,12 @@ function Shell() {
     case "session":
     case "tab":
       main = route.name === "session" && target?.link === "ambiguous" ? <SessionChoices mid={route.mid} sid={route.sid} onToggleSidebar={toggle} />
-        : !pane ? (loaded && route.name === "tab" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
+        : !pane ? (loaded && route.name === "tab" && lookup.state === "missing" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
         : launch ? <StartingAgent launch={launch} onToggleSidebar={toggle} />
         : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={toggle} inPage />;
       break;
     case "persona":
-      main = <PersonaAssistant sid={route.sid} onToggleSidebar={toggle} />;
+      main = <PersonaAssistant sid={route.sid} routed={route.mid || route.manager ? { mid: route.mid, manager: route.manager } : undefined} onToggleSidebar={toggle} />;
       break;
     case "persona-new":
       main = <PersonaAssistant fresh onToggleSidebar={toggle} />;
