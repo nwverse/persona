@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="light dark">
 <title>扩展 · Persona</title>
 <meta name="description" content="Persona 官方维护的扩展：数据源、工具、新页签、渠道和 Agent 运行时，可以按名字、功能和标签搜。">
 <meta property="og:title" content="Persona 扩展">
@@ -12,7 +12,8 @@
 <meta property="og:url" content="https://personaside.com/extensions/">
 <meta property="og:image" content="https://personaside.com/img/recording.webp">
 <link rel="canonical" href="https://personaside.com/extensions/">
-<meta name="theme-color" content="#EFE4D6">
+<meta name="theme-color" content="#EFE4D6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131217" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/favicon.png" media="(prefers-color-scheme: light)">
 <link rel="icon" href="/favicon-dark.png" media="(prefers-color-scheme: dark)">
 <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
@@ -25,9 +26,9 @@
 @font-face{font-family:"JetBrains Mono";src:url(/fonts/jetbrains-mono-latin-600-normal.woff2) format("woff2");font-weight:600;font-display:swap}
 @font-face{font-family:"Unbounded";src:url(/fonts/unbounded-latin-800-normal.woff2) format("woff2");font-weight:800;font-display:swap}
 
-/* The home page's palette and type (site/public/index.html); this page follows the app icon's paper in both schemes too. */
+/* The home page's palette and type (site/public/index.html), with a night variant below for the dark scheme. */
 :root{
-  color-scheme:light;
+  color-scheme:light dark;
   --sky:#EFE4D6;
   --sky-line:#DCCBB6;
   --sky-tint:#F6EEE4;
@@ -43,6 +44,16 @@
   --amber-tint:#FBEBC9;
   --go:#1E9C5F;
   --go-tint:#D8EFE2;
+  --night:#17161D;      /* the dark install card */
+  --slab:var(--ink);    /* the block under a lifted card or button */
+  --glass:rgba(239,228,214,.92);
+  --hint:#998C80;       /* placeholder text */
+  --tag-text:#5A4636;
+  --on-ink-sub:#B9B8C8; /* small text on a pressed chip */
+  --sk-a:#F3ECE3;--sk-b:#FBF7F2;--sk-line:#E6DACB;
+  --t1:#FDE6DC;--t2:#FBEBC9;--t3:#D8EFE2;--t4:#F6EEE4;--t5:#E4E6F3;--t6:#F1E2EE; /* monogram tiles */
+  --sheet-shadow:0 40px 80px -30px rgba(23,22,29,.55);
+  --backdrop:rgba(23,22,29,.42);
 
   --serif:"Persona Serif","Noto Serif CJK SC","Source Han Serif SC","Songti SC",serif;
   --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
@@ -53,6 +64,32 @@
   --lift:0 22px 34px -22px rgba(23,22,29,.45);
   --r:22px;
   --page:min(1180px, calc(100vw - 48px));
+}
+/* Night: the same paper and ink swapped, warm like the icon's paper. Text on orange, amber and the install card keeps
+   its own color in both schemes. */
+@media (prefers-color-scheme:dark){
+  :root{
+    --sky:#131217;
+    --sky-line:#2E2B35;
+    --sky-tint:#25232C;
+    --ink:#EEE7DD;
+    --paper:#1D1B23;
+    --mist:#A99E92;
+    --gray:#A69B90;
+    --body:#D3CBC1;
+    --cheek-text:#FF8F63;
+    --night:#0B0A0E;
+    --slab:#4A4553;
+    --glass:rgba(19,18,23,.88);
+    --hint:#7E7469;
+    --tag-text:#D8C8B5;
+    --on-ink-sub:#5A5560;
+    --sk-a:#24222A;--sk-b:#2E2B34;--sk-line:#2E2B35;
+    --t1:#4A2A21;--t2:#463619;--t3:#1D3A2B;--t4:#302A24;--t5:#272B40;--t6:#3A2838;
+    --lift:0 22px 34px -22px rgba(0,0,0,.7);
+    --sheet-shadow:0 40px 80px -30px rgba(0,0,0,.8);
+    --backdrop:rgba(0,0,0,.6);
+  }
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -79,9 +116,9 @@ button,input{font:inherit;color:inherit}
 /* ---------- buttons ---------- */
 .btn{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;font:600 16px/1 var(--sans);text-decoration:none;
   padding:15px 22px;border:var(--stroke);border-radius:999px;transition:transform .15s ease,box-shadow .15s ease;cursor:pointer}
-.btn:hover{transform:translateY(-2px);box-shadow:0 6px 0 var(--ink)}
+.btn:hover{transform:translateY(-2px);box-shadow:0 6px 0 var(--slab)}
 .btn:active{transform:none;box-shadow:none}
-.btn-cheek{background:var(--cheek);color:var(--ink)}
+.btn-cheek{background:var(--cheek);color:#17161D}
 .btn-paper{background:var(--paper);color:var(--ink)}
 .btn svg{width:18px;height:18px;flex:none}
 
@@ -102,12 +139,12 @@ h2{font-size:clamp(32px,4vw,52px);line-height:1.15;text-wrap:balance}
 .stats span{font-size:13px;line-height:1.4;color:var(--gray)}
 .stats li[hidden]{display:none}
 
-.how{position:relative;padding:24px 24px 22px;background:var(--ink);color:#E9E8F0;border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift)}
+.how{position:relative;padding:24px 24px 22px;background:var(--night);color:#E9E8F0;border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift)}
 .how h3{margin:0 0 14px;font-size:15px;font-weight:600;color:#9C9AB0;letter-spacing:.02em}
 .how ol{margin:0;padding:0;list-style:none;counter-reset:s;display:grid;gap:12px}
 .how li{position:relative;padding-left:40px;font-size:15.5px;line-height:1.55;counter-increment:s}
 .how li::before{content:counter(s);position:absolute;left:0;top:-1px;width:26px;height:26px;display:grid;place-items:center;border-radius:50%;background:#2E2D38;font:600 13px/1 var(--mono);color:#E9E8F0}
-.how li:last-child::before{background:var(--cheek);color:var(--ink)}
+.how li:last-child::before{background:var(--cheek);color:#17161D}
 .how b{color:#FFFFFF;font-weight:600}
 .how p{margin:18px 0 8px;font-size:13px;line-height:1.6;color:#9C9AB0}
 .market{position:relative;display:flex;align-items:center;gap:8px;padding:9px 46px 9px 12px;background:#25242E;border-radius:12px;font:400 13px/1.4 var(--mono);color:#E9E8F0;overflow-wrap:anywhere}
@@ -118,7 +155,7 @@ h2{font-size:clamp(32px,4vw,52px);line-height:1.15;text-wrap:balance}
 
 /* ---------- finder: search, sort and filters stay at hand while scrolling ---------- */
 .finder{position:sticky;top:0;z-index:20;padding:14px 0 12px;
-  background:rgba(239,228,214,.92);-webkit-backdrop-filter:blur(14px) saturate(1.2);backdrop-filter:blur(14px) saturate(1.2);
+  background:var(--glass);-webkit-backdrop-filter:blur(14px) saturate(1.2);backdrop-filter:blur(14px) saturate(1.2);
   border-bottom:2px solid transparent;transition:border-color .2s ease}
 .finder.stuck{border-bottom-color:var(--sky-line)}
 .bar{display:flex;align-items:center;gap:12px}
@@ -126,7 +163,7 @@ h2{font-size:clamp(32px,4vw,52px);line-height:1.15;text-wrap:balance}
 .search svg{position:absolute;left:20px;top:50%;width:20px;height:20px;margin-top:-10px;pointer-events:none}
 .search input{width:100%;height:58px;padding:0 96px 0 54px;background:var(--paper);border:var(--stroke);border-radius:999px;font-size:17px;
   -webkit-appearance:none;appearance:none;transition:box-shadow .15s ease}
-.search input::placeholder{color:#998C80}
+.search input::placeholder{color:var(--hint)}
 .search input:focus{outline:none;box-shadow:0 0 0 5px rgba(239,106,58,.28)}
 .search input::-webkit-search-cancel-button{display:none}
 .search kbd{position:absolute;right:20px;top:50%;transform:translateY(-50%);min-width:26px;height:26px;display:grid;place-items:center;padding:0 7px;
@@ -150,7 +187,7 @@ h2{font-size:clamp(32px,4vw,52px);line-height:1.15;text-wrap:balance}
 .chip:hover{transform:translateY(-1px)}
 .chip small{font:500 12px/1 var(--mono);color:var(--gray)}
 .chip[aria-pressed=true]{background:var(--ink);color:var(--paper)}
-.chip[aria-pressed=true] small{color:#B9B8C8}
+.chip[aria-pressed=true] small{color:var(--on-ink-sub)}
 
 /* ---------- results ---------- */
 .result{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 16px;margin:26px 0 16px;font-size:14.5px;color:var(--mist)}
@@ -159,7 +196,7 @@ h2{font-size:clamp(32px,4vw,52px);line-height:1.15;text-wrap:balance}
 .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin:0;padding:0;list-style:none}
 .xc{position:relative;display:flex;flex-direction:column;min-height:236px;padding:20px 22px 18px;background:var(--paper);border:var(--stroke);border-radius:var(--r);
   box-shadow:var(--lift);transition:transform .18s ease,box-shadow .18s ease}
-.xc:hover{transform:translateY(-3px);box-shadow:0 7px 0 var(--ink),var(--lift)}
+.xc:hover{transform:translateY(-3px);box-shadow:0 7px 0 var(--slab),var(--lift)}
 .xc:has(.open:focus-visible){outline:3px solid var(--ink);outline-offset:4px}
 .xc .open{position:absolute;inset:0;z-index:1;border-radius:var(--r)}
 .xc .open:focus-visible{outline:none}
@@ -171,26 +208,26 @@ h2{font-size:clamp(32px,4vw,52px);line-height:1.15;text-wrap:balance}
 .xc h3{margin:0;font-size:18px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .xc .meta{margin:3px 0 0;font:400 12.5px/1.3 var(--mono);color:var(--gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rank{align-self:start;min-width:34px;height:26px;display:grid;place-items:center;padding:0 8px;border:2px solid var(--ink);border-radius:999px;font:600 12.5px/1 var(--mono);background:var(--sky-tint)}
-.rank.r1{background:var(--cheek)}
-.rank.r2{background:var(--amber)}
-.rank.r3{background:var(--go);color:var(--paper)}
+.rank.r1{background:var(--cheek);color:#17161D}
+.rank.r2{background:var(--amber);color:#17161D}
+.rank.r3{background:var(--go);color:#FFFFFF}
 .xc .desc{margin:14px 0 0;font-size:15px;line-height:1.7;color:var(--body);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .xc-foot{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:16px;min-width:0}
 .dl{flex:none;display:inline-flex;align-items:center;gap:5px;font:600 13px/1 var(--mono)}
 .dl svg{width:14px;height:14px}
 .tags{display:flex;gap:6px;min-width:0;overflow:hidden}
-.tag{flex:none;padding:3px 9px;border-radius:999px;background:var(--sky-tint);font-size:12px;line-height:1.4;color:#5A4636;white-space:nowrap}
+.tag{flex:none;padding:3px 9px;border-radius:999px;background:var(--sky-tint);font-size:12px;line-height:1.4;color:var(--tag-text);white-space:nowrap}
 .pack{padding:3px 9px;border-radius:999px;background:var(--ink);color:var(--paper);font-size:12px;line-height:1.4;white-space:nowrap}
 mark{background:linear-gradient(transparent 55%,rgba(239,106,58,.38) 55%);color:inherit;padding:0 1px}
 
 /* loading, empty and error */
 .sk{pointer-events:none}
-.sk .ico,.sk .ln{background:linear-gradient(90deg,#F3ECE3 25%,#FBF7F2 50%,#F3ECE3 75%);background-size:300% 100%;animation:shimmer 1.4s linear infinite;border-color:#E6DACB}
+.sk .ico,.sk .ln{background:linear-gradient(90deg,var(--sk-a) 25%,var(--sk-b) 50%,var(--sk-a) 75%);background-size:300% 100%;animation:shimmer 1.4s linear infinite;border-color:var(--sk-line)}
 .sk .ln{height:14px;border-radius:7px;margin-top:10px}
 .sk .ln.w1{width:60%;height:18px;margin:0}
 .sk .ln.w2{width:38%}
 .sk .xc-body{margin-top:18px}
-.sk.xc{border-color:#E6DACB;box-shadow:none}
+.sk.xc{border-color:var(--sk-line);box-shadow:none}
 @keyframes shimmer{from{background-position:100% 0}to{background-position:0 0}}
 .state{display:flex;flex-direction:column;align-items:center;text-align:center;padding:56px 24px 64px;background:transparent;border:2.5px dashed var(--ink);border-radius:var(--r)}
 .state[hidden]{display:none}
@@ -201,8 +238,8 @@ mark{background:linear-gradient(transparent 55%,rgba(239,106,58,.38) 55%);color:
 
 /* ---------- detail ---------- */
 dialog{width:min(620px,calc(100vw - 32px));max-height:min(780px,calc(100dvh - 48px));padding:0;border:var(--stroke);border-radius:28px;background:var(--paper);color:var(--ink);
-  box-shadow:0 40px 80px -30px rgba(23,22,29,.55);overflow:auto;overscroll-behavior:contain}
-dialog::backdrop{background:rgba(23,22,29,.42);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+  box-shadow:var(--sheet-shadow);overflow:auto;overscroll-behavior:contain}
+dialog::backdrop{background:var(--backdrop);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
 dialog[open]{animation:pop .28s cubic-bezier(.2,.8,.2,1) both}
 dialog[open]::backdrop{animation:fade .28s ease both}
 @keyframes pop{from{opacity:0;transform:translateY(16px) scale(.98)}}
@@ -431,7 +468,7 @@ dialog[open]::backdrop{animation:fade .28s ease both}
   const grid = $('grid'), q = $('q'), chips = $('chips'), sortBox = $('sort'), summary = $('summary'), note = $('note');
   const compact = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 });
   const full = new Intl.NumberFormat('zh-CN');
-  const TINTS = ['#FDE6DC', '#FBEBC9', '#D8EFE2', '#F6EEE4', '#E4E6F3', '#F1E2EE'];
+  const TINTS = ['--t1', '--t2', '--t3', '--t4', '--t5', '--t6']; // monogram tiles, per scheme in the CSS
   const DL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 20h14"/></svg>';
 
   let all = [], meta = {}, hasDownloads = false, facetKey = 'tags';
@@ -449,7 +486,7 @@ dialog[open]::backdrop{animation:fade .28s ease both}
   function icon(box, e) {
     box.textContent = '';
     let h = 0; for (const c of e.id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-    box.style.setProperty('--t', TINTS[h % TINTS.length]);
+    box.style.setProperty('--t', `var(${TINTS[h % TINTS.length]})`);
     box.append(el('span', '', ([...e.name.replace(/^[^\p{L}\p{N}]+/u, '')][0] || e.id[0] || '?').toUpperCase()));
     box.setAttribute('aria-hidden', 'true');
     if (!e.icon) return;
