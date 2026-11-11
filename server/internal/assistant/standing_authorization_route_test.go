@@ -27,6 +27,8 @@ func TestStandingAuthorizationCards(t *testing.T) {
 		{"plan", proto.IxPlan, "Merge changes.", "merge", true, true, "/code/app"},
 		{"permission", proto.IxPermission, "Merge?", "merge", true, false, "/code/app"},
 		{"other_repository", proto.IxQuestion, "Merge?", "merge", true, false, "/code/other"},
+		{"same_prefix_other_repository", proto.IxQuestion, "Merge?", "merge", true, false, "/code/application"},
+		{"unavailable_nested_repository", proto.IxQuestion, "Merge?", "merge", true, false, "/code/app/vendor/other"},
 		{"production_outside_scope", proto.IxQuestion, "deploy-production?", "merge", true, false, "/code/app"},
 		{"send_outside_scope", proto.IxQuestion, "Send message?", "merge", true, false, "/code/app"},
 		{"delete_outside_scope", proto.IxQuestion, "Delete files?", "merge", true, false, "/code/app"},

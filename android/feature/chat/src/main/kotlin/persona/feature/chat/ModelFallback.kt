@@ -24,7 +24,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.api.ChatActions
 import persona.core.contracts.api.hubCodedFailure
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 
 // A refusal fallback (#2289, #2528; web lib/model-fallback.ts): the upstream refused a request and Claude Code answered
 // it with another model on its own, keeping the session there. The transcript shows the refusal as a line of its own;
@@ -89,7 +89,7 @@ internal fun ModelFallbackCard(session: Session, actions: ChatActions?, modifier
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-            JIcon(PhIcons.Warning, null, size = 16.dp, tint = palette.caution, modifier = Modifier.padding(top = 1.dp))
+            JIcon(PersonaIcons.error, null, size = 16.dp, tint = palette.caution, modifier = Modifier.padding(top = 1.dp))
             Column(Modifier.weight(1f).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
                 verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 val line = PersonaTheme.type.caption
@@ -140,7 +140,7 @@ internal fun RefusalNotice(refusal: ModelRefusal) {
             .padding(horizontal = 12.dp, vertical = 8.dp).semantics(mergeDescendants = true) {}.testTag("refusal-notice"),
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top,
     ) {
-        JIcon(PhIcons.Warning, null, size = 16.dp, tint = palette.caution, modifier = Modifier.padding(top = 1.dp))
+        JIcon(PersonaIcons.error, null, size = 16.dp, tint = palette.caution, modifier = Modifier.padding(top = 1.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(stringResource(R.string.chat_model_fallback_refusal_title), style = line.copy(fontWeight = FontWeight.SemiBold), color = palette.ink)
             Text(if (fallback) stringResource(R.string.chat_model_fallback_refusal_fallback, refusal.originalModel?.ifEmpty { null } ?: "?", refusal.fallbackModel!!)
