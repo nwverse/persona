@@ -43,7 +43,9 @@ final class ExtensionRowActionsUITests: XCTestCase {
             XCTAssertTrue(alert.waitForExistence(timeout: 5), app.debugDescription)
             XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "删除这一项")).firstMatch.exists, alert.debugDescription)
             shot(app, "confirm-" + look)
-            let cancel = alert.buttons["plugin-ui-confirm-cancel"].exists ? alert.buttons["plugin-ui-confirm-cancel"] : alert.buttons["取消"]
+            // The first match: iOS 27 nests an alert's button in one with the same identifier.
+            let byID = alert.buttons.matching(identifier: "plugin-ui-confirm-cancel").firstMatch
+            let cancel = byID.exists ? byID : alert.buttons.matching(identifier: "取消").firstMatch
             cancel.tap()
             XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
             app.terminate()
