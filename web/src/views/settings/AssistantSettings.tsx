@@ -25,6 +25,7 @@ import { lazyPage } from "../../lib/lazy-page";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 import { TaskTrust } from "./TaskTrust";
+import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
 
@@ -333,9 +334,11 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
-      <Suspense fallback={<Group anchor="standing-authorizations" title={t("settings-standing.title")}><Loading /></Group>}>
-        <StandingAuthorizations manager={manager} />
-      </Suspense>
+      <PageBoundary page="standing-authorizations">
+        <Suspense fallback={<Group anchor="standing-authorizations" title={t("settings-standing.title")}><Loading /></Group>}>
+          <StandingAuthorizations manager={manager} />
+        </Suspense>
+      </PageBoundary>
 
       {typeof info?.meeting_attendance_default === "string" && (
         <Group anchor="meetings" title={t("settings-assistantsettings.meetings_title")} footer={t("settings-assistantsettings.meeting_attendance_footer")}>
