@@ -374,7 +374,19 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
-	go n.reapAssistants(ctx)
+	reaped := make(chan struct{})
+	go func() { defer close(reaped); n.reapAssistants(ctx) }()
+	if n.keeper == nil {
+		// The end of this connection is the end of its conversations (stopAtConnectionEnd): returned only once they
+		// have exited, since the process exits right after (`node --stdio`) and they would go on without it (#4259).
+		defer func() {
+			cancel()
+			select {
+			case <-reaped:
+			case <-time.After(reaperStopWait()):
+			}
+		}()
+	}
 	go n.meterUsage(ctx, n.stateReady)
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
