@@ -10718,8 +10718,8 @@ if os.environ.get("MOCK_CHAT_LINES") == "1":
 
 # MOCK_SUBAGENT_CARDS=1: subagent cards in the chat (#1963, #5030 web): a finished exchange whose subagents completed,
 # failed and nested (one launched another, which launched a third, each its own card by when it started) fold into its
-# "Worked"; then the live exchange, with one still running in the background (its card stays in the open) and a command
-# running after it. The subagents carry the model they ran on and their tokens (#5030). A second session, "后台子 Agent",
+# "Worked"; then the live exchange, with one still running in the background and a command running after it (both in
+# its live summary, super rule 2). The subagents carry the model they ran on and their tokens (#5030). A second session, "后台子 Agent",
 # has finished its turn while a background subagent runs on (`background_working`): the bar above the composer says
 # background subtasks still use the model. Old links to a subagent ("<session>@<agent>") open its parent at its card.
 SUBCARDS = "a1f3c2d4-0000-4000-8000-0000000c1e02"

@@ -28,13 +28,13 @@ export function followSubagentLink(mid: string, sid: string): string {
 
 /** The subagent this chat is asked to show, until it did (`doneSubagentLink`). */
 export function useSubagentLink(mid: string, sid: string): string | undefined {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => void listeners.delete(l);
-    },
-    () => pending.get(key(mid, sid)),
-  );
+  const read = () => pending.get(key(mid, sid));
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+function subscribe(l: () => void) {
+  listeners.add(l);
+  return () => void listeners.delete(l);
 }
 
 export function doneSubagentLink(mid: string, sid: string) {

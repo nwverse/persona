@@ -14,7 +14,6 @@ import type { AgentStatus, ToolStep } from "../../lib/work-groups";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { forgetExpanded } from "./expanded";
 import { compactText, isLongResult, SubagentCard, subagentCardKey, subagentMeta } from "./SubagentCard";
-import { inTheOpen, type WorkProps } from "./WorkGroup";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -144,20 +143,5 @@ describe("SubagentCard: opened in place", () => {
     draw(call(input, { text: "Done." }), "completed");
     expect(head().getAttribute("aria-expanded")).toBe("true");
     expect(subagentCardKey("t:", "c-a1")).toBe("t:task:c-a1");
-  });
-});
-
-describe("what stays out of the folded work (#5030)", () => {
-  const p = (status: AgentStatus, known = false): WorkProps => ({
-    mid: "m", sid: "s", scope: "t:", expandFold: async () => {}, agentStatus: () => status, thinking: new Map(),
-    workflowCalls: { known: new Set(known ? ["c-w1"] : []), startedAt: new Map() },
-  });
-  const wf: ToolStep = { ...call({}), use: { ...call({}).use, tool_name: "Workflow", tool_use_id: "c-w1" } };
-  it("a running subagent's card and a listed workflow run's card; never in a trace", () => {
-    expect(inTheOpen(call(input), p("running"))).toBe(true);
-    expect(inTheOpen(call(input), p("completed"))).toBe(false);
-    expect(inTheOpen(wf, p("completed", true))).toBe(true);
-    expect(inTheOpen(wf, p("completed", false))).toBe(false);
-    expect(inTheOpen(call(input), { ...p("running"), trace: true })).toBe(false);
   });
 });

@@ -33,7 +33,7 @@ import { useFoldScroll } from "./fold-scroll";
 import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
-import { inTheOpen, WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
+import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 
@@ -282,8 +282,8 @@ export const SegmentView = memo(function SegmentView({
   }, [mid, sid, scope, expandFold, subagents, tasks, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
   const identity = segmentIdentity(seg);
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity, inTheOpen: (s) => inTheOpen(s, p) }),
-    [steps, live, turnStart, streaming !== undefined, identity, p],
+    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
+    [steps, live, turnStart, streaming !== undefined, identity],
   );
   useCallSeeker(scope, nodes);
   // the pictures the agent looked at this turn, between its work and its last words

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """End-to-end check of how the web chat draws an agent's work (#1963, the design's grammar): "Worked for Xs" groups that open and
 fold, a command opening in place, an edit's diff over the page, delivered prose staying out of the fold, subagent cards
-(#5030: running ones in the open, finished ones folded, opened in place, an old subagent link landing on its card, the
-bar while background subagents run after the turn), and the "Jump to bottom" / "New messages" pill.
+(#5030: one card each in the folded summary, opened in place, an old subagent link landing on its card, the bar while
+background subagents run after the turn), and the "Jump to bottom" / "New messages" pill.
 
 Needs a running web page against the fake hub with the two conversations made for it, and Playwright for Python (it
 drives the installed Chrome):
@@ -140,18 +140,20 @@ def groups_page(page, tag, shot):
 def agents_page(page, tag, shot):
     page.goto(S["base"] + AGENTS)
     main = page.locator("main")
-    running = main.locator('[data-subagent-card="running"]')
+    # super rule 2: a running subagent's card is in the live summary, folded until opened
+    live = main.locator('[data-work-group="live"]')
+    expect(live).to_contain_text("正在工作…")
+    expect(main.locator('[data-subagent-card="running"]')).to_have_count(0)
+    live.locator("button").first.click()
+    running = live.locator('[data-subagent-card="running"]')
     expect(running).to_be_visible()
-    if running.evaluate("(n) => !!n.closest('[data-work-group]')"):
-        fail(f"{tag}: the running subagent's card is inside a group")
-    expect(main.locator('[data-work-group="live"]')).to_contain_text("正在工作…")
     expect(running).to_contain_text("子 Agent")
     expect(running).to_contain_text("运行中")
     expect(running.locator("[data-task-model]")).to_have_text("Haiku 4.5")
     expect(running.locator("[data-task-meta]")).to_contain_text("Claude Code")
     expect(running.locator("[data-task-meta]")).to_contain_text("3 次工具调用")
     expect(running.locator("[data-task-elapsed]")).to_contain_text("已运行")
-    ok(f"{tag}: a running subagent's card stays in the open next to the live 「正在工作…」: status, model, tool uses, 已运行")
+    ok(f"{tag}: the live 「正在工作…」 opens to the running subagent's card: status, model, tool uses, 已运行")
     if page.locator('[role="tablist"][aria-label="子 Agent"]').count():
         fail(f"{tag}: the subagent tab strip is still there")
     ok(f"{tag}: no tab strip of subagents")
@@ -195,10 +197,12 @@ def agents_page(page, tag, shot):
         fail(f"{tag}: a side panel opened for the subagent")
     shot("agent-link")
 
-    # the turn is over and a background subagent runs on: its card in the open, the bar says model usage goes on
+    # the turn is over and a background subagent runs on: the turn drawn finished, the bar says model usage goes on
     page.goto(S["base"] + BACKGROUND)
-    expect(main.locator('[data-subagent-card="running"]')).to_be_visible()
+    expect(main.locator('[data-work-group="done"]')).to_have_count(1)
     expect(main.locator('[data-work-group="live"]')).to_have_count(0)
+    main.locator('[data-work-group="done"] > button').first.click()
+    expect(main.locator('[data-subagent-card="running"]')).to_be_visible()
     bar = page.locator('[data-running-background="subtasks"]')
     expect(bar).to_contain_text("后台子任务运行中，模型用量仍在消耗…")
     if bar.locator("[data-running-elapsed]").count():

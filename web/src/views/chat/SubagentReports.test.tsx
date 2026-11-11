@@ -49,11 +49,14 @@ async function click(selector: string) {
 }
 
 describe("associated subagent reports", () => {
-  it("keeps launch and interim reports running in the open, then folds the card with its terminal result (#5030)", async () => {
+  it("keeps launch and interim reports running under the collapsed original tool, then shows only its terminal result (#5030)", async () => {
     const started = { ...receipt, task: note("running") };
     expect(agentStatus(started, { ...meta, running: false }, false)).toBe("running");
     await draw([...initial.slice(0, 2), started, progress]);
-    // a running subagent is never folded into the work summary: its card stands in the open
+    // super rule 2: every tool call, a running subagent's too, stays in the folded summary
+    expect(host.querySelector("[data-work-group] > button")?.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector("[data-subagent-card]")).toBeNull();
+    await click("[data-work-group] > button");
     expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("running");
     expect(host.querySelector("[data-subagent-card] button")?.getAttribute("aria-expanded")).toBe("false");
     expect(host.textContent).not.toContain("The fictional checks are still running.");
@@ -64,9 +67,6 @@ describe("associated subagent reports", () => {
     expect(agentsWorking([meta], terminalCalls(running))).toEqual({ count: 1, doing: ["Checking fictional tests"] });
     const terminal = [...running, done, item(7, "tool_result", { tool_use_id: "launch", task: note("completed") })];
     await draw(terminal);
-    // finished, it folds into the summary with the rest of the turn's work
-    expect(host.querySelector("[data-subagent-card]")).toBeNull();
-    await click("[data-work-group] > button");
     expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("completed");
     // opened before, opened still (remembered per card), with only its latest report
     expect(host.querySelector("[data-subagent-card] button")?.getAttribute("aria-expanded")).toBe("true");

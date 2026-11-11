@@ -671,8 +671,8 @@ Failed, Stopped; only Failed is red), and a second line in the tertiary color: w
 actually ran on, short; never the requested one), tokens, tool uses, the time or "Running for …" each second. The head
 opens a subagent card in place (prompt, the latest result folded past four lines, last tool, output file), remembered
 per card; a workflow card's head opens the chat's Background dialog at its run. A subagent is never a conversation of
-its own (no panel, no page, no sidebar row); a running subagent card and a workflow card are never folded into the
-work summary, a finished subagent card is. Nested subagents are flat cards by start time. A card offers Stop only
+its own (no panel, no page, no sidebar row). Like every tool call the cards sit inside the work summary, running or
+not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
 where the node can stop that task. iOS and Android still draw the earlier design (#5045).
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another

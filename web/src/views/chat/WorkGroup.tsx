@@ -47,10 +47,6 @@ export interface WorkProps {
 /** A Workflow call that draws its run's card (the hub lists the run); one that does not is the row it always was. */
 const workflowCard = (s: ToolStep, p: WorkProps) => isWorkflowStep(s) && Boolean(s.use.tool_use_id && p.workflowCalls?.known.has(s.use.tool_use_id));
 
-/** A step the work summary never folds (#5030, work-groups.ts `inTheOpen`): a running subagent's card, a workflow run's
- *  card. An opened supervision trace draws every call as a row, in its summary. */
-export const inTheOpen = (s: Step, p: WorkProps): boolean => !p.trace && s.kind === "tool" && ((isAgentStep(s) && p.agentStatus(s) === "running") || workflowCard(s, p));
-
 /** A step drawn as an action row, sitting with the rows next to it. */
 const drawnAsRow = (s: Step, p: WorkProps): s is ToolStep => (p.trace && s.kind === "tool") || isRowStep(s) || (isWorkflowStep(s) && !workflowCard(s, p));
 

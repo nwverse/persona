@@ -12,7 +12,6 @@ import {
   explorationSummary,
   groupOpens,
   groupTitle,
-  isAgentStep,
   isRowStep,
   isWorkflowStep,
   planProgress,
@@ -44,9 +43,8 @@ const tool = (id: string, name = "Bash", at?: number, resultAt?: number, input: 
 
 function blocks(items: Item[], live = false, agentStatus?: (s: ToolStep) => AgentStatus): WorkNode[] {
   const seg = segments(items)[0];
-  // what WorkGroup.tsx inTheOpen keeps in the open: a running subagent's card (#5030)
-  const inTheOpen = agentStatus && ((s: Parameters<typeof isAgentStep>[0]) => isAgentStep(s) && agentStatus(s as ToolStep) === "running");
-  return workBlocks(exchangeSteps(seg), { live, turnStart: seg.user?.ts ?? seg.start, inTheOpen });
+  void agentStatus;
+  return workBlocks(exchangeSteps(seg), { live, turnStart: seg.user?.ts ?? seg.start });
 }
 
 const idOf = (n: WorkNode) => (n.kind === "step" ? n.step.id.replace(/#\d+$/, "") : n.id);
@@ -187,39 +185,28 @@ describe("while the agent works", () => {
 describe("subagents", () => {
   const items = () => [user("u1", 0), ...tool("pre", "Bash", 500), ...tool("task1", "Agent", 1000, 9000, { description: "回归", prompt: "跑回归" }), say("final", "都做完了。", 10000)];
 
-  it("a running subagent is never folded: its card stands in the open after the work before it (#5030, cindy)", () => {
+  // Super rule 2 keeps every tool call in the exchange's one summary, a running subagent's too (cindy keeps a running
+  // one in the open; that waits on an amendment of the rule).
+  it("a running subagent stays inside the execution summary", () => {
     const b = blocks(items(), false, () => "running");
-    expect(topSteps(b)).toEqual(["task1", "final"]);
-    expect(folded(b, "task1")).toBe(false);
-    expect(folded(b, "pre")).toBe(true);
-    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["g", "task1", "final"]);
+    expect(topSteps(b)).toEqual(["final"]);
+    expect(folded(b, "task1")).toBe(true);
+    expect(groups(b).length).toBeGreaterThan(0);
   });
 
-  it("a finished subagent folds into the summary, which keeps the first group's key", () => {
+  it("a finished subagent stays inside the same summary without changing the key", () => {
     const same = items();
     const running = blocks(same, false, () => "running");
     const done = blocks(same, false, () => "completed");
     expect(topSteps(done)).toEqual(["final"]);
     expect(folded(done, "task1")).toBe(true);
-    expect(groups(done)).toHaveLength(1);
-    expect(groups(done)[0].id).toBe(groups(running)[0].id);
+    // the same groups, with the same keys, either way
+    expect(groups(done).map((g) => g.id)).toEqual(groups(running).map((g) => g.id));
   });
 
-  it("a running card splits the live work: the summary before it is done, the one after it is the live one", () => {
+  it("a subagent card and the tools around it share one summary", () => {
     const b = blocks([user("u1", 0), ...tool("a", "Bash", 500), ...tool("task1", "Agent", 1000), ...tool("b", "Bash", 2000)], true, () => "running");
-    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["g", "task1", "g"]);
-    expect(groups(b).map((g) => g.live)).toEqual([false, true]);
-  });
-
-  it("subagents launched together are each a card of their own, in launch order, no wrapper", () => {
-    const b = blocks([user("u1", 0), ...tool("task1", "Agent", 1000), ...tool("task2", "Agent", 1100), ...tool("task3", "Agent", 1200)], true, () => "running");
-    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["task1", "task2", "task3"]);
-  });
-
-  it("only the running ones stand in the open; finished ones fold where they were", () => {
-    const b = blocks([user("u1", 0), ...tool("task1", "Agent", 1000), ...tool("task2", "Agent", 1100), ...tool("b", "Bash", 1200)], true, (s) => (s.use.tool_use_id === "tu-task2" ? "running" : "completed"));
-    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["g", "task2", "g"]);
-    expect(folded(b, "task1")).toBe(true);
+    expect(b.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["g"]);
   });
 });
 

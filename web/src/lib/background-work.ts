@@ -29,8 +29,9 @@ export function backgroundWork(session: Session | undefined): BackgroundWork | u
 }
 
 /** The hub says the agent's turn is over and a subagent it launched in the background still runs (#5030, cindy's
- *  background subtasks): the chat draws that turn finished, the subagent's card running in the open, and the bar above
- *  the composer says model usage goes on. A running workflow says so first (workflows.ts backgroundLine). */
+ *  background subtasks): the chat draws that turn finished (its summary folded, the subagent's card running inside it),
+ *  and the bar above the composer says model usage goes on. A running workflow says so first (workflows.ts
+ *  backgroundLine). */
 export function waitingOnSubagents(s: Session | undefined, subagents: Subagent[] | undefined = s?.subagents): boolean {
   return Boolean(s?.background_working) && !waitingOnWorkflow(s) && (subagents ?? []).some((a) => a.running && a.background);
 }
