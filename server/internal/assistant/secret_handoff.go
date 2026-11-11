@@ -190,7 +190,8 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	input := proto.SecretHandoffInput{}
 	var items, names []string
 	for _, v := range h.vars {
-		input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: v.Name, Provider: v.Provider.Extension, Title: v.Title})
+		input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: v.Name, Provider: v.Provider.Extension,
+			ProviderName: v.Provider.Name, Title: v.Title})
 		item := v.Provider.Name
 		if v.Title != "" {
 			item += " › " + v.Title
@@ -199,7 +200,7 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 		names = append(names, v.Name)
 	}
 	// Where it runs and what it is asked, for the card itself: never in the summary, which is also the push's text.
-	input.Cwd, input.Prompt = cwd, clip(oneLine(prompt), 200)
+	input.Agent, input.MachineName, input.Cwd, input.Prompt = agent, h.machineName, cwd, clip(oneLine(prompt), 200)
 	raw, _ := json.Marshal(input)
 	now := time.Now().UTC()
 	expires := now.Add(handoffCardWait)
