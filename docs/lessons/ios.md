@@ -2,6 +2,22 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A meeting-recording sheet: three traps from #4240 (2026-11-11)
+
+- A type nested in a `nonisolated` type or extension is not `nonisolated` itself; used from a test or a background queue it crashes with `dispatch_assert_queue`. Write `nonisolated` on each nested enum and struct.
+- UI tests of this feature share one mock hub for the whole run, and the hub keeps each recording's live log and asks. A test that reads `asks.first` passes alone and fails after another test asked about the same sample recording. Restart the mock hub (stop it by its port) before each run, or run the test alone.
+- `Text(timerInterval:)` has no text a UI test can read: its accessibility label is the caller's ("Recording time") and the time is the spoken value, so assert on the value. A `Label` carrying an accessibility identifier gives the identifier to its icon too; combine its children first, or the test finds the SF Symbol name as the label.
+
+## The first Photos query in a process loads the Photos database (#4250)
+
+`PHAsset.fetchAssets` looks cheap, but the first query in a process opens the Photos client database
+(`-[PHPhotoLibrary mainQueuePhotoLibrary]` → `-[PLPhotoLibrary loadDatabaseWithOptions:error:]`, Core Data plus a wait on the
+photos daemon). Run from a MainActor model, that blocked the attach panel's first opening for 50 ms to 1.3 s on a simulator,
+while later openings took 4-50 ms. Time Profiler hides most of it (the main thread is waiting, not running): measure the wall
+time and the frame gaps. Fetch in a detached task, and warm the library once in the background where the user is about to
+need it, only when access is already given. `@State var model = Model()` runs `Model()` on every init of the view (17-20
+times per launch for the chat's `AttachPanel`), so one-time work goes in `.task` behind a flag, not in an initializer.
+
 ## The general pasteboard belongs to the app on screen (#4192)
 
 `UIPasteboard.general.string = …` neither throws nor returns anything, and in the background (an app woken by a silent
@@ -97,9 +113,11 @@ from colliding with its buttons.
 - Gate entry points on source setup, configured accounts and an unfiltered session list, not the personal page's search/unread preferences. Unknown availability starts hidden; a source/account response alone cannot reveal the chip. Keep an event listener alive while the Agents tab is visible so the first session can reveal a previously hidden entry, and fence cancelled reads and changed hub credentials.
 - A mock returning sessions with `sources: []` is not a configured fixture. Entry and remove UI tests use `MOCK_PERSONAL_AGENTS=1` and `TEST_RUNNER_PERSONA_PERSONAL_HUB`; `/mock/personal-agents?state=configured|empty|missing|disabled|no_accounts` changes availability and broadcasts an `agents` event. Native preference captures need a configured source too: `MOCK_PERSONAL_UPGRADE=1` supplies the named conversation and leaves preferences at 404. A capture with a synthetic pairing does not by itself prove an old-to-new upgrade; preserve old-build state for that separate acceptance.
 
-## Pages that move sideways under iPhone Duo's side bars (#2752)
+## Pages that move sideways under iPhone Duo's side bars (#2752, #3755)
 
 - Under iPhone Duo's vertical bars (the outer display, the inner one on its side), a view that hosts a `UINavigationController` and moves sideways makes the controller run its deferred transition on every layout pass and lay its top view controller out twice (`transitionConductor:didStartDeferredTransition:context:` → `_layoutTopViewControllerLookForNested:`, then `_computeAndApplyScrollContentInsetDeltaForViewController:` → `_updateTopViewFramesToMatchScrollOffsetInViewController:…`). The shell's slide between Assistant and Agents spent 28 ms a frame (p95), 140 ms of hitches a second. An `offset`, a render-only `transformEffect` and a page under a mask all cost the same; only not moving helps (`ShellPageSlide` cross-fades there). An ordinary iPhone runs the same passes cheaply, so measure on the Duo simulator.
+- Any motion that carries the shell's pages sideways is the same bug: the drawer slid the whole page aside to uncover the sidebar (#3755). Sampled through three opens and closes on the Duo simulator, the navigation controllers' relayout (`-[UINavigationController __viewWillLayoutSubviews]` → `-[_UIViewControllerTransitionConductor startDeferredTransitionIfNeeded]` → `_layoutTopViewControllerLookForNested:`) was over half of the main thread's busy samples, against 21 samples on an iPhone: 35 ms a frame (p95), 1.1 ms once the page stayed and the sidebar slid in over it (`AssistantDrawer.inPlace`). A new sideways motion of a page needs the same check on the Duo simulator. A breakpoint on `-[UINavigationController _startDeferredTransitionIfNeeded]` never fires in iOS 27.2 (the conductor runs it); count `transitionConductor:didStartDeferredTransition:context:` instead.
+- A sidebar that slides over the page must be opaque all the way in: `AssistantDrawer.settle` sets the sidebar's alpha inside its `UIView.animate`, so it faded in while sliding and the page showed through it; under side bars the alpha is set with `UIView.performWithoutAnimation`.
 - Measuring with the runtime CLI (`scripts/app/personactl.py launch`), install the build first (`xcrun simctl install`): the launcher runs whatever is installed, and a round of experiments once measured an older build.
 
 ## A split's detail stack shares its modifiers only with its root page (#3680)
@@ -159,6 +177,10 @@ A frozen transcript can reveal its withheld rows during Jump to Latest and move 
 
 - A machine's token summary and its navigation card can repeat the same text. Scope the tap to the actual card button, not an application-wide text query. Choose a known multi-agent demo fixture before testing sibling selection, and expand a folded chat title before looking for its tabs. The home needs-you list intentionally shows at most three rows: verify the overflow route when Inbox actions are not among them, rather than assuming every kind is visible. Tests expecting the Agents list must clear `dev.openChat` at launch: opening a new assistant conversation does not discard the Agent chat a previous test correctly restored.
 - Simulator entitlement emulation lives in the Mach-O `__TEXT,__entitlements` section generated from `*-Simulated.xcent`. `codesign`'s host-signature output alone can report no groups even when the simulator's effective groups are present. An unsigned test build can omit the simulated section and make the pairing registry unreadable; build the test app with ad-hoc signing and check the generated section instead of blaming the tab lifecycle. Device exports still need the normal signature entitlement check.
+
+## Duplicate transcript cache entries (#4305)
+
+`ChatStore.ids` being a Set does not prove `items` is unique after loading a replayed disk cache. A later backlog containing one of those IDs then builds `Dictionary(uniqueKeysWithValues:)` over the duplicates and traps on the main thread. Collect monotone promotion evidence before normalizing existing and incoming items, then keep the last copy of each ID before fold/index processing to match the merge's new-copy-wins contract; merely changing the dictionary to `uniquingKeysWith` would hide the crash while retaining duplicate transcript rows. Cover the real `ChatCache.save → ChatStore.init → apply(backlog)` crash, same-batch duplicate metadata and reconnect tool/image replays in Debug and Release tests.
 
 ## Retained chat visibility (#739)
 

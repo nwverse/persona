@@ -281,6 +281,28 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertIn("SKIP  apple/** builds and tests", out)  # the Mac-only checks are still reported
         self.assertNotIn("test_doc_paths.py", out)
 
+    def test_token_inputs_run_the_token_suite(self):
+        self.commit_on_top("scripts/assets/test_gen_tokens.py", FAILING, "base")
+        for path in ("spec/tokens/dimension.json", "apple/Shared/Design/Theme.swift",
+                     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"):
+            with self.subTest(path=path):
+                self.write(path, "changed\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/assets/test_gen_tokens.py", out)
+
+    def test_icon_inputs_run_the_icon_suite(self):
+        self.commit_on_top("scripts/assets/test_gen_icon_meanings.py", FAILING, "base")
+        for path in ("spec/icons/meanings.json", "apple/Shared/Design/Icons.swift",
+                     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/PersonaIcons.kt"):
+            with self.subTest(path=path):
+                self.write(path, "changed\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/assets/test_gen_icon_meanings.py", out)
+
     def test_a_docker_change_runs_the_entrypoint_suite(self):
         self.break_suite("test_docker_entrypoint.py")
         self.write("deploy/docker/entrypoint.sh", "echo changed\n")
@@ -546,10 +568,16 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertNotIn("no fast check maps to", out)
 
     def test_other_spec_files_stay_unmapped(self):
+        self.write("spec/other/x.json", '{"changed": true}\n')
+        out, packages = self.check_fast()
+        self.assertEqual([], packages, out)
+        self.assertIn("no fast check maps to: spec/other/x.json", out)
+
+    def test_a_token_source_runs_no_server_package(self):
         self.write("spec/tokens/colors.json", '{"changed": true}\n')
         out, packages = self.check_fast()
         self.assertEqual([], packages, out)
-        self.assertIn("no fast check maps to: spec/tokens/colors.json", out)
+        self.assertNotIn("no fast check maps to", out)
 
     def test_a_doc_runs_only_the_package_that_reads_it(self):
         self.write("docs/example-guide.md", "guide changed\n")
@@ -566,6 +594,27 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("scripts/test/server_test_env.py", "# changed\n")
         out, packages = self.check_fast()
         self.assertEqual(["./internal/db/dbtest/..."], packages, out)
+
+    def test_an_sdk_ts_source_runs_the_trusted_adapter_check(self):
+        # The trusted Deno adapter bundles sdk/ts/src (#4221): a change there runs denohost's tests, where
+        # TestTrustedAdapterMatchesOfficialSDK catches a stale adapter. The rest of sdk/ts is not bundled.
+        bun = self.go_log.parent / "bun"  # a fake bun next to the fake go: bun test passes
+        bun.write_text("#!/bin/sh\n")
+        bun.chmod(0o755)
+        self.write("sdk/ts/README.md", "changed\n")
+        out, packages = self.check_fast()
+        self.assertEqual([], packages, out)
+        self.write("sdk/ts/src/wire.ts", "export {}\n")
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/extension/denohost/..."], packages, out)
+
+    def test_without_bun_the_trusted_adapter_check_says_it_skipped(self):
+        self.env = {**self.env, "PATH": os.pathsep.join(
+            d for d in self.env["PATH"].split(os.pathsep) if not (Path(d) / "bun").exists())}
+        self.write("sdk/ts/src/wire.ts", "export {}\n")
+        out, packages = self.check_fast()
+        self.assertEqual([], packages, out)
+        self.assertIn("SKIP  trusted Deno adapter", out)
 
     def test_a_server_go_change_also_runs_the_repo_wide_guards(self):
         # The guards fail on code outside their own package (#1936 broke the lazyre guard on main that way), so a change

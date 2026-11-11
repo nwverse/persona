@@ -42,6 +42,8 @@ Phase one is done and this document follows the code; how it was split into issu
 - A call lives only on screen: on a phone, going to the background, leaving the chat or an incoming call ends it (6.5), and its captions are not saved into the conversation (section 2's table).
 - No voice on the Mac, and Android opens voice for the main chat only.
 
+**Meeting mode** (#3862, planned): a call bound to a recorded meeting's room conversation (`start` with `mode: "meeting"` and `recording_id`), connected for the whole meeting on the recorder's own capture, hearing only what the user says while holding Talk (`talk` frames; Talk's audio in either transcription mode), with `delegate_task` to the room as its only tool and no owner notes in its instructions. A room takes no other call (`meeting_room`); the contract is [meeting-minutes.md](./meeting-minutes.md) "Phase 4: realtime voice in the meeting".
+
 **Not yet** (phase two, unscheduled): saved captions interleaved by time in the thread; background and lock-screen calls (Live Activities); switching chats by voice; voice on the Mac and the watch; Android's entry for agents; an entry without a chat (`ShellHome`); dedicated realtime-voice settings with `POST /test` (5.6); other upstream protocols (decision 3) and several upstreams in the App.
 
 **GPT-Live constraints** (upstream docs and existing code, expanded through tests in #3495)

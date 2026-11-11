@@ -39,6 +39,7 @@ def features():
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
+                ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
@@ -1256,6 +1257,15 @@ if os.environ.get("MOCK_OVERVIEW_DENSE"):
                          source_kind="runtime", agent_label="claude", state_since=ago(minutes=2),
                          capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True, "attach": False}))
 
+# MOCK_SESSIONS_MANY=<n> (#4410): n more idle sessions, enough to page an Agents list several pages deep with
+# MOCK_SESSIONS_LIST=1. GET /mock/sessions/touch moves the newest of them to now: the list's revision changes and every
+# cursor of the old one answers 409 cursor_expired, as the hub's do once a frozen view has expired.
+if os.environ.get("MOCK_SESSIONS_MANY"):
+    for _i in range(int(os.environ["MOCK_SESSIONS_MANY"])):
+        SESSIONS.append(sess("server", "e4410a00-0000-4000-8000-%012d" % (_i + 1), "Session %03d" % (_i + 1),
+                             "/home/me/code/fixture", "idle", "idle", "fixture", 24, "fixture-%03d" % (_i + 1), _i + 1,
+                             60 * (_i + 1), "Done."))
+
 # MOCK_OPENCODE=1 (#3070, docs/integrations/opencode.md): opencode in herdr panes on the server. Four are herdr sessions the Persona
 # plugin completes (working, needs you with a permission card, finished unread, idle with a long conversation), one has
 # no plugin (terminal only, with why), and gemini is an agent nothing reads (terminal only).
@@ -1335,6 +1345,18 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
         SESSIONS.append(sess("macbook", sid, title, f"/Users/me/code/{project}", status, state, "", 0, "", 0, mins,
                              "好的，我先看一下。", agent=agent, **kw))
+    # The CSV chat's subagents (thread_spawn): the node lists each with its chat (codex_registry.go); the Agents list puts
+    # them under that chat's Subtasks, as the Codex App does.
+    CSV_CHAT = "d3a0e7a0-0000-4000-8000-000000000005"
+    for n, (title, status, state, mins) in enumerate([("检查 BOM 和换行符", "working", "working", 1),
+                                                      ("找出所有导出入口", "offline", "offline", 3),
+                                                      ("补编码的回归测试", "offline", "offline", 3)], start=1):
+        sid = f"d3a0e7a0-0000-4000-8000-00000000010{n}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/billing", status, state, "", 0, "", 0, mins, "看完了。",
+                             agent="codex", **dict(NO_SPACE, agent_surface="desktop", started_by_persona=False, space_kind="codex_app",
+                             space_id="codex-project:/Users/me/code/billing", space_name="billing", agent_name="Codex App",
+                             source_kind="codex_history", source_thread_id=sid, capabilities={"read": True},
+                             is_subagent=True, parent_session_id=CSV_CHAT, root_session_id=CSV_CHAT, parent_thread_id=CSV_CHAT)))
 
 # MOCK_SPLIT_TABS=1: herdr's layout for the sidebar's "By machine" tree and the chat's pane tabs (#1963): two machines (the
 # NAS offline, its agent only under "Recent"), workspaces whose tabs hold one pane or two (claude and codex in one slot),
@@ -1529,6 +1551,23 @@ ASSISTANT = [
     assistant_sess(ASK4, "整理这个季度的读书笔记", 60 * 50, "第 30 本整理好了。"),
 ]
 
+
+def mock_png(w=96, h=64):
+    """A made-up picture (a two-tone gradient) as base64 PNG, for photos the mock hands back."""
+    rows = b"".join(b"\x00" + bytes(v for x in range(w) for v in (40 + x, 120 + y, 200 - x // 2)) for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+    return base64.b64encode(png).decode()
+
+
+# MOCK_PERSONA_QUEUE=1 (#4342): the first Persona chat is at work with two of the user's messages queued (the second
+# went with a photo, so its words are the apps' stand-in) and one from another conversation, which the assistant holds
+# until the turn ends (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
+QUEUED_PHOTOS = {"请看图片": [{"mime": "image/png", "data": mock_png()}]}
+if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
+    ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
+                         "queued": ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」：会议纪要整理好了，要不要发给参会的人？"]})
+
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
 # waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
@@ -1550,15 +1589,30 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
-# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
-# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
+# sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+MOCK_DIRECTION_NAMES = {}
 if os.environ.get("MOCK_LEADERS") == "1":
-    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+    for i, (title, name, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles and names
+        ("1110 | 探索 | 你是「Persona 产品」方向的主管", "Persona 产品", 60 * 30, "本周两个实验都在跑。"),
+        ("1110 | 探索 | 你是「基础设施」方向的主管", "基础设施", 60 * 45, "部署脚本的改动已派出。"),
+        ("1109 | 探索 | 你是「增长」方向的主管", "增长", 60 * 50, "注册转化的对比看完了。"),
+        ("1108 | 探索 | 你是「支付对账」方向的主管", "支付对账", 60 * 55, "对账任务已派出。"),
+    ]):
         c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
         c["origin"] = "user"
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
+        MOCK_DIRECTION_NAMES[c["session_id"]] = name
+
+
+def mock_leaders_list():
+    """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
+    titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
+    return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
+                         "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -1566,7 +1620,8 @@ def health_sess(sid, title, minutes, last):
     return {**assistant_sess(sid, title, minutes, last), "cwd": "/home/me/.persona/health", "space": "health"}
 
 
-ASSISTANT += [
+# MOCK_HEALTH_EMPTY=1: the health space has no conversations yet (entering Health opens its new conversation page, #4329).
+ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
     health_sess("hlth0001-0000-4000-8000-000000000001", "这周的睡眠", 40, "这周平均每晚睡 6 小时 42 分，比上周少 18 分钟。"),
     health_sess("hlth0002-0000-4000-8000-000000000002", "体检报告：血脂", 60 * 26, "LDL 3.6 mmol/L，略高于参考范围，建议三个月后复查。"),
     health_sess("hlth0003-0000-4000-8000-000000000003", "步数目标", 60 * 70, "最近 7 天平均 7,860 步，离每天 8,000 步差一点。"),
@@ -1696,7 +1751,69 @@ SCHEDULE = [
      "prompt": "周五发周报前，把这周的数据再核对一遍，有对不上的列出来。", "enabled": True, "created_by": "assistant",
      "machine_id": "macbook", "created_at": ago(hours=5)},
 ]
-TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "enabled", "launcher", "permission_mode", "effort", "push")
+TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push")
+
+# MOCK_CRON=1 (#4399, docs/assistant/assistant.md "Scheduled tasks"): the hub runs cron tasks (feature task_cron) and has
+# one, every 30 minutes in work hours on weekdays. GET /api/v1/assistant/tasks/cron answers the web editor's examples as
+# the hub does (lnquy/cron's words, the next runs in UTC+8) and refuses anything else with the hub's kind of message.
+CRON_PREVIEWS = {
+    "*/30 9-18 * * 1-5": ({"en": "Every 30 minutes, between 09:00 and 18:59, Monday through Friday",
+                           "zh-Hans": "每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五",
+                           "ja": "30 分ごと, 09:00 と 18:59 の間、月曜日 から 金曜日 まで"},
+                          lambda d: d.minute in (0, 30) and 9 <= d.hour <= 18 and d.isoweekday() <= 5),
+    "0 9 * * 1-5": ({"en": "At 09:00, Monday through Friday", "zh-Hans": "在09:00, 星期一至星期五",
+                     "ja": "次において実施09:00、月曜日 から 金曜日 まで"},
+                    lambda d: d.minute == 0 and d.hour == 9 and d.isoweekday() <= 5),
+    "0 10 1 * *": ({"en": "At 10:00, on day 1 of the month", "zh-Hans": "在10:00, 限每月 1 号", "ja": "次において実施10:00、月の 1 日目"},
+                   lambda d: d.minute == 0 and d.hour == 10 and d.day == 1),
+}
+
+
+def cron_lang(header):
+    """The hub's language for the words: the request's Accept-Language, else Chinese."""
+    first = (header or "").split(",")[0].strip().lower()
+    return "en" if first.startswith("en") else "ja" if first.startswith("ja") else "zh-Hans"
+
+
+def cron_runs(expr, n=5):
+    """The next n runs of a known expression after NOW, on the UTC+8 wall clock (each match is on a half hour)."""
+    match = CRON_PREVIEWS[expr][1]
+    d = NOW.astimezone(SCHEDULE_TZ).replace(second=0, microsecond=0)
+    d += timedelta(minutes=30 - d.minute % 30)
+    out = []
+    while len(out) < n:
+        if match(d): out.append(d.isoformat())
+        d += timedelta(minutes=30)
+    return out
+
+
+def cron_view(t, lang):
+    """A task as GET /api/v1/assistant/tasks has it: a cron task gains its words and next runs."""
+    if t.get("repeat") != "cron" or t.get("cron") not in CRON_PREVIEWS: return t
+    v = dict(t, cron_text=CRON_PREVIEWS[t["cron"]][0][lang])
+    if t.get("enabled"):
+        runs = cron_runs(t["cron"])
+        v.update(next_runs=runs, next_run=runs[0])
+    return v
+
+
+def cron_refusal(expr, lang):
+    """The hub's message for an expression the mock does not know."""
+    n = len(expr.split())
+    if n != 5:
+        return {"en": f'"{expr}" has {n} fields. A cron expression has 5: minute hour day-of-month month day-of-week (like 0 9 * * 1-5; seconds aren’t supported).',
+                "zh-Hans": f'"{expr}" 有 {n} 段。cron 表达式是 5 段：分 时 日 月 周（比如 0 9 * * 1-5，不支持秒）。',
+                "ja": f'"{expr}" のフィールドは {n} 個です。cron 式は 5 個です：分 時 日 月 曜日（例：0 9 * * 1-5。秒は使えません）。'}[lang]
+    v = expr.split()[0]
+    return {"en": f'In "{expr}", the minute (0–59) can’t be "{v}". Use a number in its range, *, a list (1,15), a range (9-18) or a step (*/30).',
+            "zh-Hans": f'"{expr}" 里的分钟（0–59）不能是 "{v}"。请写范围内的数字、*、列表（1,15）、区间（9-18）或步长（*/30）。',
+            "ja": f'"{expr}" の分（0–59）に "{v}" は使えません。範囲内の数字、*、リスト（1,15）、範囲（9-18）、ステップ（*/30）を使ってください。'}[lang]
+
+
+if os.environ.get("MOCK_CRON") == "1":
+    SCHEDULE.insert(2, {"id": "rt_cron", "title": "工作时间巡检", "prompt": "工作时间里每半小时看一眼 CI 和各台电脑上的 Agent，有卡住的告诉我。",
+                        "repeat": "cron", "cron": "*/30 9-18 * * 1-5", "enabled": True, "created_by": "assistant",
+                        "last_run": ago(minutes=20), "last_status": "ok", "created_at": ago(days=1)})
 
 
 def save_task(old, new):
@@ -1715,6 +1832,9 @@ def save_task(old, new):
         t["until"] = new["until"]
     if t.get("repeat") == "daily":
         t["next_run"] = next_at(t.get("time", "09:00"), t.get("weekdays") or [])
+    elif t.get("repeat") == "cron":
+        t.pop("at", None)
+        t["next_run"] = cron_runs(t["cron"])[0] if t.get("cron") in CRON_PREVIEWS else None
     elif t.get("repeat") == "interval":
         if old.get("every_minutes") != t.get("every_minutes") or not t.get("at"):
             t["at"] = later(minutes=t.get("every_minutes") or 30)
@@ -1839,9 +1959,10 @@ SCHEDULE_RAN = []  # what "Run now" started (UI tests read it back at /mock/sche
 ASSISTANT_HUB_NOTES = "代码都在 ~/code 下，平时用 MacBook 开发。\n周报每周五下班前先给我草稿，不要直接发。\n服务器上的 /srv 目录不要动。"
 ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "Asia/Shanghai", "notes": None, "main": ASK1,
                     "main_tasks_quiet": True,  # Notify tasks dispatched from the main chat only in that chat (#1731), on by default
-                    # Every agent Persona starts is a supervised task (#3617), off by default; closed sessions archive
-                    # themselves after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
-                    "agent_tasks": False, "archive_closed_days": 3,
+                    # Every agent Persona starts is a supervised task (#3617), off by default; new Inbox messages on a
+                    # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
+                    # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
+                    "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
@@ -1867,7 +1988,8 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"], kb_topics=cfg["kb_topics"])
+        out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
+                   kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if isinstance(cfg.get("timezone_picked"), bool):  # once a client said so, as the hub (#1855)
@@ -3708,6 +3830,74 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
+# MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
+# step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
+# `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once
+# ("Reading 3 files"), `parallel` a search with two reads beside it ("+2"), `thinking` a thought after the calls came back.
+# The thought is pushed MOCK_LIVE_STEP_PUSH seconds (default 3) after the chat's latest page went out: a page folds the
+# finished calls and any thought with them (fold_work, as the hub does), a push never is. `thinking-folded`: the thought
+# is in the page from the start, so the newest step reaches the app inside a fold (its `latest_thinking`).
+LIVE_STEP = os.environ.get("MOCK_LIVE_STEP", "")
+LIVE_STEP_LATER = {"items": [], "due": None}
+if LIVE_STEP:
+    def _live_call(name, inp, ts_min):
+        """A call still running: its tool_use, no result yet."""
+        return it("assistant", "tool_use", ts_min, tool_use_id="toolu_live_%04d" % (_seq[0] + 1), tool_name=name, tool_input=inp)
+
+    _src = "/Users/me/code/weather/WeatherWidget/"
+    _turn = [it("user", "text", 1.1, text="把中号布局的降雨条做完，再跑一遍小组件的快照测试。"),
+             it("assistant", "thinking", 1.05, text="先看中号布局现在怎么画降雨条，再改颜色和间距。")]
+    _turn += tool("Read", {"file_path": _src + "MediumWidgetView.swift"}, "1\timport SwiftUI\n…", 1)
+    _turn += tool("Edit", {"file_path": _src + "MediumWidgetView.swift", "old_string": "RainBar(hours)", "new_string": "RainBar(hours, dry: 0.2)"},
+                  "The file " + _src + "MediumWidgetView.swift has been updated.", 0.95)
+    if LIVE_STEP == "bash":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests",
+                                         "description": "Run the widget snapshot tests"}, 0.9))
+    elif LIVE_STEP == "command":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests/testMediumRainBarDryThreshold"}, 0.9))
+    elif LIVE_STEP in ("reads", "parallel"):  # calls made together: every tool_use before any result
+        for _f in ("RainBar.swift", "Provider.swift", "SmallWidgetView.swift")[: 3 if LIVE_STEP == "reads" else 2]:
+            _turn.append(_live_call("Read", {"file_path": _src + _f}, 0.9))
+        if LIVE_STEP == "parallel":
+            _turn.append(_live_call("Grep", {"pattern": "precipitationChance", "path": "Sources"}, 0.9))
+    elif LIVE_STEP in ("thinking", "thinking-folded"):
+        _turn += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -only-testing:WeatherWidgetTests/SnapshotTests",
+                               "description": "Run the widget snapshot tests"}, "Test Suite 'SnapshotTests' passed.\n    Executed 6 tests, with 0 failures", 0.6)
+        _thought = [it("assistant", "thinking", 0.5, text="The snapshots match on both sizes, so only the dark rain bar is left.\n"
+                                                         "Its colors come from the app's palette; check how the app picks them first.")]
+        if LIVE_STEP == "thinking":
+            LIVE_STEP_LATER["items"] = _thought
+        else:
+            _turn += _thought
+    ITEMS[WIDGET] = ITEMS[WIDGET] + _turn
+
+
+def live_step_page_sent(sid):
+    """MOCK_LIVE_STEP=thinking: a page of the widget chat went out; the held thought follows it after a while."""
+    if sid != WIDGET or not LIVE_STEP_LATER["items"]:
+        return
+    first = LIVE_STEP_LATER["due"] is None
+    LIVE_STEP_LATER["due"] = time.time() + float(os.environ.get("MOCK_LIVE_STEP_PUSH", "3"))
+    if not first:
+        return
+
+    def push():
+        while time.time() < LIVE_STEP_LATER["due"]:
+            time.sleep(0.2)
+        before, new = ITEMS[sid][-1]["seq"], LIVE_STEP_LATER["items"]
+        LIVE_STEP_LATER["items"] = []
+        ITEMS[sid] = ITEMS[sid] + new
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try:
+                    out({"type": "items", "machine_id": "macbook", "session_id": sid, "items": new, **span(new, before)})
+                except Exception:
+                    pass
+    threading.Thread(target=push, daemon=True).start()
+
+
 # MOCK_TASKS=1: the unified entry (docs/assistant/unified-entry.md, #930). The main conversation dispatches tasks: a started plan
 # of two (the widget fix working, the unit tests waiting for an answer — ix_tests), a read-only one that finished with a
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
@@ -3955,6 +4145,102 @@ if MOCK_TASKS:
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
             _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
+    # MOCK_BRIEFS=1 (#3822, docs/assistant/unified-entry.md "Briefs"): tasks carry the brief they are held to. The open
+    # plan's task has a real one (the owner's own words, long enough to be cut, the goal, criteria, time and what is out
+    # of bounds). The widget fix has a real one too, taken over twice (a lineage of three), with one scope change and an
+    # overdue mark. The blog move's was made later (reconstructed: no request, the hand-over prompt). The release notes
+    # ended against theirs: a criterion met, one not checked, one dropped by a scope change, and something done beyond
+    # it, on its page, its review line and its receipt.
+    if os.environ.get("MOCK_BRIEFS") == "1":
+        def _brief(bid, minutes, goal, done_when, expect, **more):
+            b = {"id": bid, "created_at": ago(minutes=minutes), "started_by": "owner", "goal": goal, "done_when": done_when,
+                 "criteria": done_when, "expect_minutes": expect, "expect_minutes_now": expect, "log": [],
+                 "clock_at": ago(minutes=minutes), "due_at": later(hours=24)}
+            b.update(more)
+            return b
+
+        def _asked(minutes, text):
+            return {"text": text, "at": ago(minutes=minutes), "conversation": ASK1, "message_id": "mock-brief-%d" % int(minutes)}
+
+        TASK_PLANS["plan_mock_3"]["tasks"][0]["brief"] = _brief(
+            "brief_mock_pr42", 2, "Every review comment on PR #42 is answered or fixed",
+            ["Each review comment has a reply or a commit", "The checks on PR #42 pass"], 45,
+            request=_asked(3, "The reviewers left a pile of comments on PR #42 yesterday. Go through all of them: fix what is "
+                              "clearly right, and for anything you disagree with write a short reply saying why instead of "
+                              "changing the code. Do not merge it, I want to read the replies first. If a comment needs a "
+                              "bigger refactor, leave it and list it for me at the end."),
+            out_of_bounds=["Do not merge the PR", "No refactors beyond what a comment asks for"])
+        _widget_done_when = ["The fix is merged", "A snapshot test covers landscape"]
+        _widget_brief = _brief(
+            "brief_mock_widget", 3 * 24 * 60, "The home screen widget no longer crashes in landscape",
+            ["The fix is merged", "Landscape screenshots are in the PR"], 60,
+            request=_asked(3 * 24 * 60 + 2, "The weather widget crashes when I rotate the phone. Fix it and add a test so it stays fixed."),
+            out_of_bounds=["Do not change the widget's layout"], criteria=_widget_done_when, expect_minutes_now=90,
+            clock_at=ago(days=2), due_at=ago(days=1), overdue_at=ago(hours=20),
+            log=[{"at": ago(days=2), "kind": "scope", "todo_id": "todo_brief_widget_2", "by": ASK1,
+                  "change": "A snapshot test replaces the screenshots", "why": "A test keeps it fixed; screenshots go stale",
+                  "done_when": _widget_done_when, "expect_minutes": 90, "added": ["A snapshot test covers landscape"],
+                  "dropped": ["Landscape screenshots are in the PR"]},
+                 {"at": ago(hours=20), "kind": "overdue", "todo_id": "todo_task_widget"}])
+        _widget_lineage = [
+            {"todo_id": "todo_brief_widget_1", "title": "Fix the widget's landscape crash", "agent": "claude", "machine": "studio",
+             "session_id": "mock-brief-a", "started": ago(days=3), "ended": ago(days=2, hours=12), "why": "Its computer went offline",
+             "superseded_by": "todo_brief_widget_2"},
+            {"todo_id": "todo_brief_widget_2", "title": "Take over the widget fix", "agent": "codex", "machine": "macbook",
+             "session_id": "mock-brief-b", "started": ago(days=2, hours=12), "ended": ago(minutes=45),
+             "why": "The model service kept failing", "continues": "todo_brief_widget_1", "superseded_by": "todo_task_widget"},
+            {"todo_id": "todo_task_widget", "title": "修小组件横屏崩溃", "agent": "claude", "machine": "macbook", "session_id": WIDGET,
+             "started": ago(minutes=44), "continues": "todo_brief_widget_2", "current": True},
+        ]
+        _release_done_when = ["Every change merged this week is listed", "Grouped as features, fixes and other"]
+        _release_result = {"at": ago(minutes=18), "todo_id": "todo_task_release", "verdict": "accepted", "criteria": [
+            {"criterion": "Every change merged this week is listed", "state": "met", "evidence": "7 listed, the same as the repository shows"},
+            {"criterion": "Grouped as features, fixes and other", "state": "unchecked"},
+            {"criterion": "Each entry links its issue", "state": "dropped", "change": "Links are added by the release script",
+             "changed_at": ago(minutes=25)}], "also_done": ["Fixed two typos in last week's notes"]}
+        _release_brief = _brief(
+            "brief_mock_release", 30, "This week's release notes are ready to send",
+            _release_done_when + ["Each entry links its issue"], 20, criteria=_release_done_when, result=_release_result,
+            request=_asked(31, "Write up this week's release notes from what was merged."),
+            log=[{"at": ago(minutes=25), "kind": "scope", "todo_id": "todo_task_release", "by": ASK1,
+                  "change": "Links are added by the release script", "why": "The script already adds them when it publishes",
+                  "done_when": _release_done_when, "dropped": ["Each entry links its issue"]}])
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_widget":
+                _t.update(brief=_widget_brief, lineage=_widget_lineage)
+                _t.setdefault("supervision", {"supervisor": ASK1, "state": "", "round": 0, "reviews": [], "updated_at": ago(minutes=40)})
+                _t["supervision"].update(done_when=_widget_done_when, expect_minutes=90, state="", reviews=[])
+            if _t["id"] == "todo_task_blog":
+                _t["brief"] = _brief("brief_mock_blog", 60 * 26, _t["title"], [], 0, started_by="unknown", reconstructed=True,
+                                     handover="You are taking over a session that stopped half way: the posts are converted, "
+                                              "the theme is not. Carry on from the branch it left, and keep the old URLs working.")
+                _t["lineage"] = [{"todo_id": _t["id"], "title": _t["title"], "agent": "claude", "machine": "studio", "session_id": BLOG,
+                                  "started": ago(minutes=60 * 26), "current": True}]
+            if _t["id"] == "todo_task_release":
+                _t.update(done_at=ago(minutes=18), done_by="review", done_reason="The notes are written and can be sent",
+                          brief=_release_brief,
+                          lineage=[{"todo_id": _t["id"], "title": _t["title"], "agent": "claude", "machine": "macbook", "session_id": RELEASE,
+                                    "started": ago(minutes=30), "ended": ago(minutes=18), "why": "The notes are written and can be sent",
+                                    "current": True}],
+                          supervision={"supervisor": ASK1, "done_when": _release_done_when, "expect_minutes": 20, "state": "accepted",
+                                       "round": 0, "updated_at": ago(minutes=18),
+                                       "reviews": [{"at": ago(minutes=18), "verdict": "accepted", "note": "Written to docs/release-notes.md",
+                                                    "checks": [{"criterion": _release_done_when[0], "met": True,
+                                                                "evidence": "7 listed, the same as the repository shows"}]}],
+                                       # the ledger's own per-criterion state (#3635): the page's one list of criteria
+                                       "criteria": [{"criterion": _release_done_when[0], "state": "met", "at": ago(minutes=18),
+                                                     "evidence": "7 listed, the same as the repository shows", "by": "supervisor:" + ASK1},
+                                                    {"criterion": _release_done_when[1], "state": "pending"}]})
+        # The release notes' review line carries the result (the line of MOCK_TASKS_REPORTS when it is there), and its
+        # receipt the criteria as they stood when the agent stopped.
+        _review = next((i for i in TASK_FEED[ASK1] if i["id"] == "feed_v1"), None)
+        if _review is None:
+            _review = _feed("feed_v1", 18, "review", "todo_task_release", {"title": "整理发布说明", "verdict": "accepted",
+                                                                          "note": "Written to docs/release-notes.md"})
+            TASK_FEED[ASK1].append(_review)
+        _review["body"]["result"] = _release_result
+        next(i for i in TASK_FEED[ASK1] if i["id"] == "feed_m7")["body"]["criteria"] = [
+            {"criterion": c, "state": "unchecked"} for c in _release_done_when]
     # MOCK_TASKS_PENDING_REVIEW=1: the Today card lists the stopped release-notes task waiting for review (#4889).
     if os.environ.get("MOCK_TASKS_PENDING_REVIEW") == "1":
         for _t in TODOS_INIT + TODOS:
@@ -3963,6 +4249,21 @@ if MOCK_TASKS:
                           "done_when": ["List this week's merged changes"], "reviews": [], "updated_at": ago(minutes=20)})
         next(i for i in TASK_FEED[ASK1] if i["kind"] == "today")["body"]["pending_review"] = [
             {"id": "todo_task_release", "title": "整理发布说明"}]
+    # MOCK_TASKS_PARKED=1: the blog migration is parked by its supervisor (#3804): open, in In progress with until when
+    # and why, never in Needs you.
+    if os.environ.get("MOCK_TASKS_PARKED") == "1":
+        _PARKED = {"reason": "The new theme has to be picked before the pages are moved", "until": ago(days=-3),
+                   "waiting_on": "owner_priority", "count": 1}
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_blog":
+                _t.update(done_at=None, supervision={
+                    "supervisor": ASK1, "state": "parked", "parked": _PARKED, "round": 0, "done_when": ["Every page renders in Astro"],
+                    "updated_at": ago(minutes=50),
+                    "reviews": [{"at": ago(minutes=50), "verdict": "parked", "reason": _PARKED["reason"], "until": _PARKED["until"],
+                                 "waiting_on": _PARKED["waiting_on"], "parks": 1}]})
+        TASK_FEED[ASK1] += [_feed("feed_parked", 50, "review", "todo_task_blog", {
+            "title": "博客迁移到 Astro", "verdict": "parked", "note": _PARKED["reason"], "until": _PARKED["until"],
+            "waiting_on": _PARKED["waiting_on"]})]
     # MOCK_TASKS_AUTO_REVIEW=1 (with MOCK_TASKS_PENDING_REVIEW=1): the independent reviewer looked at the release notes
     # task's change first (#2173): nothing blocking, one finding, its report under the criteria.
     if os.environ.get("MOCK_TASKS_AUTO_REVIEW") == "1":
@@ -9498,6 +9799,83 @@ def mock_tool_names():
 
 if os.environ.get("MOCK_TOOL_NAMES") == "1":
     mock_tool_names()
+
+
+# MOCK_TOOL_OUTCOMES=1 (#4303): tool results carry the node's `outcome` (docs/protocol/protocol.md "Tool outcomes"). One
+# finished turn has a test run that failed with exit code 1 and an output the page cut (its last lines in `tail`), an
+# edit the user denied, a write refused before it ran, a command the user interrupted and one that outran its timeout and
+# went on in the background. Only the test run is drawn in red; the others say what stopped them in gray. The failed run
+# and the denied edit also have a chat of their own (…4304, …4305), so the opened detail ends its chat and a screenshot
+# shows it without scrolling. Made-up content.
+OUTCOMES = "a1f3c2d4-0000-4000-8000-0000000c4303"
+OUTCOMES_ONE = {"failed": "a1f3c2d4-0000-4000-8000-0000000c4304", "denied": "a1f3c2d4-0000-4000-8000-0000000c4305"}
+
+
+def outcome_tool(name, inp, result, ts_min, outcome, err=False):
+    items = tool(name, inp, result, ts_min, err=err)
+    items[1]["outcome"] = outcome
+    return items
+
+
+def mock_tool_outcomes():
+    rows = [1000, 2000, 4000, 8000, 8500, 8760]
+    lines = ["Exit code 1", "=== RUN   TestExportBatch"]
+    for n in range(1, 61):
+        lines += ["=== RUN   TestExportBatch/rows_%d" % (n * 150), "    csv_test.go:41: wrote %d rows in %d batches" % (n * 150, (n * 150 + 499) // 500),
+                  "--- PASS: TestExportBatch/rows_%d (0.0%ds)" % (n * 150, n % 9)]
+    lines += ["--- PASS: TestExportBatch (0.38s)", "=== RUN   TestExportLastBatch"]
+    for r in rows:
+        lines.append("    csv_test.go:88: rows=%d: got %d rows, want %d" % (r, r - 500 if r % 500 == 0 else r, r) if r % 500 == 0
+                     else "    csv_test.go:84: rows=%d: ok" % r)
+    lines += ["--- FAIL: TestExportLastBatch (0.02s)", "FAIL", "FAIL\tweather/export\t0.412s", "FAIL"]
+    whole = "\n".join(lines)
+    data = whole.encode()
+    end = data.rfind(b"\n", 0, 4096)
+    tail = "\n".join(lines[-30:])
+    while len(tail.encode()) > 2048:
+        tail = tail.split("\n", 1)[1]
+
+    def failed(t):
+        items = outcome_tool("Bash", {"command": "go test ./export/...", "description": "Run the export tests"},
+                             data[:end].decode() + "\n…（已截断，点开看全文，共 %d 字节）" % len(data), t,
+                             {"status": "failed", "exit_code": 1, "tail": tail}, err=True)
+        items[1]["full_size"] = len(data)
+        FULL[items[1]["id"]] = {k: v for k, v in items[1].items() if k != "full_size"} | {"text": whole}
+        return items
+
+    def denied(t):
+        return outcome_tool("Edit", {"file_path": "/Users/me/code/weather/export/csv.py", "old_string": "    if len(batch) == BATCH:\n        flush(batch)",
+                                     "new_string": "    if len(batch) == BATCH:\n        flush(batch)\n        batch = []"},
+                            "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, "
+                            "the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+                            t, {"status": "denied"}, err=True)
+
+    _t = [it("user", "text", 30, text="The export test fails on the last batch: find out why")]
+    _t += failed(29.9)
+    _t += denied(29.8)
+    _t += outcome_tool("Write", {"file_path": "/Users/me/code/weather/export/csv_test.py", "content": "def test_last_batch():\n    assert export(8760) == 8760\n"},
+                       "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>", 29.7,
+                       {"status": "blocked"}, err=True)
+    _t += outcome_tool("Bash", {"command": "python3 scripts/export_year.py --year 2026", "description": "Export a year of hourly data"},
+                       "[Request interrupted by user for tool use]", 29.6, {"status": "interrupted"}, err=True)
+    _t += outcome_tool("Bash", {"command": "make bench-export", "description": "Benchmark the export", "timeout": 120000},
+                       "Command timed out after 2m 0s and was moved to the background (ID: b7k2m9). Output is being written to: "
+                       "/tmp/weather/tasks/b7k2m9.output. You will be notified when it completes.", 29.5, {"status": "timed_out"})
+    _t.append(it("assistant", "text", 29.4, text="The last batch is dropped when the row count is a multiple of 500. "
+                                                 "Tell me when I may change export/csv.py."))
+    ITEMS[OUTCOMES] = _t
+    SESSIONS.append(sess("macbook", OUTCOMES, "Why the last export batch goes missing", "/Users/me/code/weather", "done", "read", "weather", 1,
+                         "outcomes", 21, 29.4, "The last batch is dropped when the row count is a multiple of 500."))
+    asks = {"failed": ("Run the export tests", failed, "TestExportLastBatch fails: the last 500 rows go missing."),
+            "denied": ("Fix the dropped batch", denied, "I'll wait until you say I may change export/csv.py.")}
+    for n, (name, (ask, call, done)) in enumerate(asks.items()):
+        ITEMS[OUTCOMES_ONE[name]] = [it("user", "text", 28 - n, text=ask)] + call(27.9 - n) + [it("assistant", "text", 27.8 - n, text=done)]
+        SESSIONS.append(sess("macbook", OUTCOMES_ONE[name], ask, "/Users/me/code/weather", "done", "read", "weather", 1, "outcomes-" + name,
+                             22 + n, 27.8 - n, done))
+
+
+if os.environ.get("MOCK_TOOL_OUTCOMES") == "1":
+    mock_tool_outcomes()
 
 
 # MOCK_REPLY_MARKDOWN=1 (#3863): a reply with a table whose delimiter row aligns its columns (leading, trailing, centered;
@@ -15265,8 +15643,11 @@ MOCK_HELP = [
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
+    "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
+    "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
@@ -15772,6 +16153,9 @@ class H(BaseHTTPRequestHandler):
                 threading.Thread(target=narrate, args=args, daemon=True).start()
                 return self.send_json({"ok": True})
             return self.send_json(narrate(*args))
+        if p == "/mock/sessions/touch" and os.environ.get("MOCK_SESSIONS_MANY"):  # #4410: expire the paged list's cursors
+            SESSIONS[[s["session_id"] for s in SESSIONS].index("e4410a00-0000-4000-8000-000000000001")]["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            return self.send_json({"ok": True})
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
@@ -16056,6 +16440,7 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
@@ -16065,7 +16450,12 @@ class H(BaseHTTPRequestHandler):
             purpose = next((x for x in catalog["purposes"] if x["id"] == unquote(p.rsplit("/", 1)[1])), None)
             if not purpose: return self.send_json({"error": "模型用途不存在"}, 404)
             return self.send_json({"purpose": purpose, "providers": catalog["providers"]})
-        if p == "/api/v1/assistant/tasks": return self.send_json({"tasks": SCHEDULE})
+        if p == "/api/v1/assistant/tasks":
+            return self.send_json({"tasks": [cron_view(t, cron_lang(self.headers.get("Accept-Language"))) for t in SCHEDULE]})
+        if p == "/api/v1/assistant/tasks/cron":  # the web editor checks an expression as it is typed (MOCK_CRON)
+            expr, lang = " ".join(q.get("cron", [""])[0].split()), cron_lang(self.headers.get("Accept-Language"))
+            if expr not in CRON_PREVIEWS: return self.send_json({"error": cron_refusal(expr, lang)}, 400)
+            return self.send_json({"cron": expr, "text": CRON_PREVIEWS[expr][0][lang], "timezone": "Asia/Taipei", "next_runs": cron_runs(expr)})
         if p == "/api/v1/assistant/routines": return self.send_json({"routines": schedule_routines()})
         if p == "/api/v1/assistant/followups": return self.send_json({"followups": schedule_followups()})
         if p.startswith("/api/v1/machines/") and p.endswith("/stat"):
@@ -16204,6 +16594,10 @@ class H(BaseHTTPRequestHandler):
             del SCHEDULE_RAN[:]
             return self.send_json({"ok": True})
         if p == "/mock/renamed": return self.send_json({"renamed": RENAMED})
+        if p == "/mock/model-fallback/reset" and MODEL_FALLBACK:  # #2528: back to before "Back to configured model"
+            for _s in SESSIONS + ASSISTANT:
+                if _s.pop("model_restore", None): push_machine(_s["machine_id"])
+            return self.send_json({"ok": True})
         if p == "/mock/modes": return self.send_json({"modes": MODES_LOG})
         if p == "/mock/node_actions": return self.send_json({"actions": NODE_ACTIONS})
         if p == "/mock/served": return self.send_json({"served": SERVED})
@@ -16438,6 +16832,7 @@ class H(BaseHTTPRequestHandler):
             out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
+            live_step_page_sent(sid)
             return self.send_json(out)
         if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
             q = parse_qs(urlparse(self.path).query)
@@ -16478,6 +16873,9 @@ class H(BaseHTTPRequestHandler):
                 after, _, back = fail.partition(":")
                 if t > float(after) and not (back and t > float(after) + float(back)):
                     return self.send_json({"error": "node macbook: not connected"}, 503)
+            row = next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
+            if row is not None and row.get("status") == "offline":  # no pane runs it (node/panescreen.go)
+                return self.send_json({"text": "", "status": "offline"})
             return self.send_json({"text": TERMINAL, "status": "idle"})
         if p.startswith("/api/v1/kb/"):  # the knowledge base (Persona › Knowledge base)
             parts = p.split("/")[4:]
@@ -17429,6 +17827,15 @@ class H(BaseHTTPRequestHandler):
                 if len(parts) >= 7:
                     SENT_TO.append({"machine_id": parts[4], "session_id": parts[5],
                                     "client_msg_id": body.get("client_msg_id"), "text": body.get("text")})
+                    # MOCK_PERSONA_QUEUE=1 (#4342): a working Persona chat queues it after the user's own, photos kept
+                    q = next((x for x in ASSISTANT if x["session_id"] == parts[5] and x.get("state") == "working"), None)
+                    if q is not None and os.environ.get("MOCK_PERSONA_QUEUE") == "1":
+                        held = q.get("queued_relayed") or 0
+                        own = (q.get("queued") or [])[:len(q.get("queued") or []) - held]
+                        q["queued"] = own + [body.get("text") or ""] + (q.get("queued") or [])[len(own):]
+                        if body.get("images"):
+                            QUEUED_PHOTOS[body.get("text") or ""] = [{"mime": i.get("mime"), "data": i.get("data")} for i in body["images"]]
+                        push_machine(q["machine_id"])
             return self.send_json({"ok": True})
         if p == "/api/v1/inbox/refresh": return self.send_json(inbox_list(parse_qs(urlparse(self.path).query)))
         if p == "/api/v1/inbox/done" and self.command == "POST":  # "Mark all as handled" / "Undo"
@@ -17579,7 +17986,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant/tasks" and self.command == "POST":
             t = save_task({"id": "task_" + uuid.uuid4().hex[:8], "created_at": ago()}, json.loads(self.last_body or b"{}"))
             SCHEDULE.append(t)
-            return self.send_json({"task": t})
+            return self.send_json({"task": cron_view(t, cron_lang(self.headers.get("Accept-Language")))})
         if p == "/api/v1/assistant/routines" and self.command == "PUT":  # the Android app saves all its routines at once
             saved, error = put_routines(json.loads(self.last_body or b"{}"))
             if error: return self.send_json({"error": error}, 400)
@@ -17646,7 +18053,7 @@ class H(BaseHTTPRequestHandler):
                 del SCHEDULE[i]
                 return self.send_json({"ok": True})
             SCHEDULE[i] = save_task(SCHEDULE[i], json.loads(self.last_body or b"{}"))
-            return self.send_json({"task": SCHEDULE[i]})
+            return self.send_json({"task": cron_view(SCHEDULE[i], cron_lang(self.headers.get("Accept-Language")))})
         if p.startswith("/api/v1/sessions/") and self.command == "DELETE" and len(p.split("/")) == 6:
             # Delete conversation (docs/protocol/protocol.md): out of the lists; refused while it runs, as the hub's deleted_sessions.go.
             if is_read_only(self): return self.send_json({"error": "read-only role cannot delete conversations"}, 403)
@@ -17763,6 +18170,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["archive_closed_days"] = days
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("inbox_signals"), bool):
+                ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
@@ -17845,6 +18254,14 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "machine is offline"}, 503)
             if body.get("cwd", "").endswith("/broken"):  # a launcher that never gets ready
                 return self.send_json({"error": "claude did not become ready within 1m0s\nzsh: command not found: claude"}, 502)
+            # Resume Session (#4328): a session that isn't running comes back in a new tab under the same id, answered
+            # once it is up (a resume is never async). MOCK_RESUME_ERROR=<why>: the node refuses it.
+            resume = next((x for x in SESSIONS if body.get("resume_session_id") and x["session_id"] == body["resume_session_id"]), None)  # the row itself (all_sessions() decorates copies)
+            if resume is not None:
+                if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
+                resume.update(status="idle", state="idle")
+                push_machine(resume["machine_id"])
+                return self.send_json({"session": decorated_session(resume)})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
             if codex and (body.get("async") or not (body.get("prompt") or "").strip()):
                 return self.send_json({"error": "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", "code": "codex_needs_prompt"}, 400)
@@ -17959,8 +18376,9 @@ class H(BaseHTTPRequestHandler):
             if body.get("clear_draft"):
                 return self.send_json({"ok": True})
             if os.environ["MOCK_SEND_REFUSE"] == "dialog_open":
-                return self.send_json({"error": "电脑上的终端正开着一个对话框（确认、选择列表等），这条消息没有发出去：先回答或关掉它再发。",
-                                       "code": "dialog_open", "delivered": "none"}, 409)
+                # As the hub words a node's refusal: its own sentence, the dialog's first line flat beside it (#3752).
+                return self.send_json({"error": "终端正在等待选择，请先到终端处理。", "code": "dialog_open", "delivered": "none",
+                                       "retryable": False, "notice": False, "dialog": "Bash command"}, 409)
             return self.send_json({"error": "电脑上的输入框里有没发出去的内容：「顺便把 README 也更新一下」。这条消息没有发出去，免得拼在一起。",
                                    "code": "input_draft", "delivered": "none", "draft": "顺便把 README 也更新一下",
                                    "clearable": "顺便把 README 也更新一下"}, 409)
@@ -17997,27 +18415,43 @@ class H(BaseHTTPRequestHandler):
                     return self.send_json({"ok": True})
             return self.send_json({"error": "session not found"}, 404)
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue/send-now"):  # node session.queue.send_now (#6088)
-            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None)
+            s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
             refuse = os.environ.get("MOCK_SEND_NOW")  # refuses with that code, to see the app's words for it
             if refuse:
                 return self.send_json({"error": "refused (%s)" % refuse, "code": refuse,
                                        **({"delivered": "unknown"} if refuse == "send_now_in_doubt" else {})}, 409)
-            s["queued"] = []
+            relayed = s.get("queued_relayed") or 0  # a Persona chat's from other conversations stay (#4342)
+            s["queued"] = s["queued"][len(s["queued"]) - relayed:] if relayed else []
             push_machine(s["machine_id"])
             return self.send_json({"sent": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue"):  # node editQueue: pull every queued message back, re-queue `keep`
             body = json.loads(self.last_body or b"{}")
             QUEUE_EDITS.append(body)
             # The stored session (all_sessions() hands out copies): the new order is what the next list says (#6088).
-            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None) \
+            s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None) \
                 or next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
-            pulled = list((s or {}).get("queued") or [])
+            queued = list((s or {}).get("queued") or [])
+            relayed = (s or {}).get("queued_relayed") or 0  # a Persona chat: keep indexes the user's own (#4342)
+            pulled, held = queued[:len(queued) - relayed], queued[len(queued) - relayed:]
             if not pulled: return self.send_json({"error": "nothing is queued"}, 502)
-            s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)]
+            s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)] + held
             push_machine(s["machine_id"])
+            if s.get("assistant"):
+                return self.send_json({"queue": pulled, "images": [QUEUED_PHOTOS.get(q, []) for q in pulled]})
             return self.send_json({"queue": pulled})
+        if MODEL_FALLBACK and p.startswith("/api/v1/sessions/") and p.endswith("/restore-model"):  # #2528, as the node answers
+            s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None)
+            if not s:
+                return self.send_json({"error": "this session is gone", "code": "restore_gone"}, 409)
+            if not s.get("assistant"):
+                return self.send_json({"error": "use /model in the session's terminal", "code": "restore_unsupported"}, 409)
+            if not s.get("model_fallback") or s.get("model_restore"):
+                return self.send_json({"error": "no fallback to go back from", "code": "restore_nothing"}, 409)
+            s["model_restore"] = {"state": "next_start", "to": MODEL_FALLBACK_TO, "at": ago(minutes=0)}
+            push_machine(s["machine_id"])
+            return self.send_json({"restore": "next_start", "restore_to": MODEL_FALLBACK_TO, "closed": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/modes"):  # permission mode / effort chips
             body = json.loads(self.last_body or b"{}")
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
@@ -18344,6 +18778,12 @@ class H(BaseHTTPRequestHandler):
                     if ctl: drive.update(cols=ctl["cols"], rows=ctl["rows"])
                     drive["send"](full=bool(ctl))
                     continue
+                if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and any(
+                        x["session_id"] == msg.get("session_id") and x.get("status") == "offline" for x in all_sessions()):
+                    # Nothing runs it (#4328): the stream ends with the node's words (node/send.go paneFor), watched or driven.
+                    send({"type": "terminal", "machine_id": msg.get("machine_id"), "session_id": msg.get("session_id"),
+                          "error": "session %s is not running" % msg.get("session_id")})
+                    continue
                 if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_CONTROL and msg.get("control"):
                     sid, mid, ctl = msg.get("session_id"), msg.get("machine_id"), msg["control"]
                     if os.environ.get("MOCK_TERMINAL_BUSY") and not msg.get("takeover"):
@@ -18452,6 +18892,7 @@ class H(BaseHTTPRequestHandler):
                                "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
+                        live_step_page_sent(sid)
                     # What is being generated, right after the backlog, as the hub's sendLiveText does (#1966).
                     if LIVE_TEXT.get(sid):
                         send({"type": "delta", "machine_id": mid, "session_id": sid, "text": LIVE_TEXT[sid]})
@@ -20118,6 +20559,8 @@ MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 age
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 MOCK_HELP.append("MOCK_CLOSEOUT=1  Four stopped agents on the server that ended their turn with a closeout (#3612): done with merged and deployed confirmed by the hub; "
                  "done saying merged where the hub found it is not; blocked on someone, nothing checked; not done, its reply only the block. Each last reply carries the raw block")
+MOCK_HELP.append("MOCK_TASKS_PARKED=1  With MOCK_TASKS=1: the blog migration task is parked by its supervisor (#3804): `supervision.state` "
+                 "`parked` with `supervision.parked` {reason, until, waiting_on, count}; it is In progress, not in Needs you")
 MOCK_HELP.append("MOCK_ORPHANED=1  Open to-dos nobody is working on (#3618): `orphaned` on the PR check (error), the blog (offline) and, "
                  "with MOCK_TASKS=1, the blog task (closed) and the release notes task (error)")
 
@@ -20172,6 +20615,30 @@ if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") in ("1", "summary"):
     TODOS = copy.deepcopy(TODOS_INIT)
     TASK_PLANS.clear()
     TASK_FEED[ASK1] = []
+
+# MOCK_MODEL_FALLBACK=1 (#2528, docs/protocol/protocol.md "Going back to the configured model"): after an upstream refusal
+# Claude Code moved two sessions to a fallback model that then wasn't there: the review agent (a terminal session: the card
+# only says to type /model) and the main conversation (headless: "Back to configured model" closes its idle process).
+# Each transcript has the refusal notice (Item.model_refusal, the public fields and the refusal's own words) and the 404
+# after it; POST …/restore-model answers as the node does and pushes Session.model_restore (web/e2e/model-fallback.mjs).
+MODEL_FALLBACK = os.environ.get("MOCK_MODEL_FALLBACK") == "1"
+MODEL_FALLBACK_TO = "claude-opus-5-5"  # the configured model the node would read when it closes the process
+if MODEL_FALLBACK:
+    _refusal = {"subtype": "model_refusal_fallback", "original_model": "claude-opus-5-5", "fallback_model": "claude-sonnet-5-5",
+                "category": "cyber", "scope": "session", "explanation": "The upstream provider declined this request.",
+                "text": "Claude Code is unable to respond to this request with claude-opus-5-5, so it will continue with "
+                        "claude-sonnet-5-5 for the rest of this session."}
+    _error = "API Error: 404 model: claude-sonnet-5-5 is not available for this account"
+    for _sid, _ask in ((REVIEW, "接着看 PR #42 里新加的鉴权中间件"), (ASK1, "帮我看看 PR #42 的鉴权改动有没有漏洞")):
+        ITEMS[_sid] = ITEMS.get(_sid, []) + [
+            it("user", "text", 2, text=_ask),
+            it("system", "notice", 1.9, text=_refusal["text"], model_refusal=dict(_refusal)),
+            it("assistant", "text", 1.8, text=_error)]
+        for _s in SESSIONS + ASSISTANT:
+            if _s["session_id"] == _sid:
+                _s.update(model_fallback=dict(_refusal), turn_error=_error, turn_error_code="model_fallback_unavailable",
+                          status="done", state="idle", last_text=_error, updated_at=ago(minutes=1.8))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")

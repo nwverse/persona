@@ -18,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.lifecycle.Lifecycle
@@ -513,7 +514,7 @@ private fun SettingsContent(
                 row(SettingsPage.About, R.string.settings_section_about, PhIcons.Info, R.string.settings_row_about_subtitle),
                 custom { position ->
                     JGroupItem(position) {
-                        JRow(stringResource(R.string.settings_update_check), value = when {
+                        JRow(stringResource(R.string.settings_update_check), leadingIcon = PhIcons.ArrowClockwise, value = when {
                             busy -> stringResource(R.string.settings_update_checking)
                             installing -> stringResource(R.string.settings_update_installing)
                             update != null -> stringResource(R.string.settings_update_found)
@@ -543,11 +544,23 @@ private fun SettingsContent(
                 HubCard(name = stringResource(persona.core.designsystem.R.string.designsystem_brand_persona), connected = paired && connection == ConnectionState.Online,
                     statusText = if (paired) connection.label() else stringResource(R.string.settings_not_paired),
                     facts = if (paired) machines.count { it.online }.let { online ->
-                        listOf(stringResource(R.string.settings_hub_computers_online) to pluralStringResource(R.plurals.settings_hub_computers_count, online, online),
-                            stringResource(R.string.settings_hub_address) to (services.hubAddress ?: stringResource(R.string.settings_not_provided)))
+                        listOf(stringResource(R.string.settings_hub_computers_online) to pluralStringResource(R.plurals.settings_hub_computers_count, online, online))
                     } else emptyList(),
                     busy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
                     modifier = Modifier.testTag("settings-hub-card").padding(bottom = Tokens.Space.m), onClick = { open(SettingsPage.Diagnostics) })
+            }
+            if (paired) item {
+                JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
+                    JRow {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+                            Text(stringResource(R.string.settings_hub_address), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                            SelectionContainer(Modifier.testTag("settings-hub-address-selection")) {
+                                Text(services.hubAddress ?: stringResource(R.string.settings_not_provided), Modifier.fillMaxWidth(),
+                                    style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+                            }
+                        }
+                    }
+                }
             }
             // The hub list is the one row a single hub group adds to settings (docs/android/android.md "Multiple hubs").
             // Hub version (docs/operations/hub-update.md "In the app") follows it while there is a real hub (not demo mode).
@@ -576,7 +589,7 @@ private fun SettingsContent(
             }
             if (paired) item {
                 JButton(stringResource(R.string.settings_disconnect_forget), { confirmDisconnect = true },
-                    Modifier.fillMaxWidth().padding(top = Tokens.Space.xl), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
+                    Modifier.fillMaxWidth().padding(top = Tokens.Space.section), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
             }
             item { deviceFeedback() }
         }

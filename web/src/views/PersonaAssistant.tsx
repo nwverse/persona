@@ -6,7 +6,7 @@ import { api, errorText } from "../lib/api";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MentionSource } from "./chat/MentionMenu";
 import { startConversation } from "../lib/assistant-start";
-import { feedCacheScope, readFeedCache } from "../lib/feed-cache";
+import { feedCacheScope, mainConversationMachine, readFeedCache } from "../lib/feed-cache";
 import { startOfDay } from "../lib/feed";
 import { ago, uuid } from "../lib/format";
 import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFailure } from "../lib/readiness";
@@ -18,6 +18,7 @@ import { adoptedConversation, noteSent, outboxMessage } from "../lib/outbox";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { ChatView, Header } from "./chat/ChatView";
+import { MainRuntimeSlot } from "./assistant/MainRuntimeSlot";
 import { UserBubble } from "./chat/SegmentView";
 import { Composer, type Outgoing } from "./chat/Composer";
 import { StarterLauncherChip } from "./assistant/AssistantChat";
@@ -149,7 +150,7 @@ export function PersonaAssistant({ sid, fresh, routed, onToggleSidebar }: { sid?
     return page && (page.manager ?? "") === manager ? page : null;
   }, [scope, manager, sid, fresh, assistant]);
   const main = assistant?.main ?? cached?.sessionID;
-  const machine = home ? homeMachine || read.machine : (assistant?.machine_id ?? cached?.machineID);
+  const machine = home ? homeMachine || read.machine : ((sid && sid !== main ? assistant?.machine_id : mainConversationMachine(assistant)) ?? cached?.machineID);
   if (fresh) return <Starter onToggleSidebar={onToggleSidebar} />;
   const id = sid ?? main;
   if (id) {
@@ -344,6 +345,7 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
         </button>
       </header>
       )}
+      <MainRuntimeSlot starting={Boolean(main && sending)} />
       <div className={sending ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5 pb-[10vh]"}>
         <div className={sending ? "contents" : "w-full max-w-[640px]"} style={sending ? undefined : { animation: `fade-up 450ms ${EASE} both` }}>
           {sending ? (

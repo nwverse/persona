@@ -59,7 +59,8 @@ type Settings struct {
 	// OwnerAliases are the names the user explicitly adds for kb.owner; an empty list clears them.
 	OwnerAliases []string `json:"owner_aliases,omitempty"`
 	// Main is the main conversation (the Persona tab opens it): one long-running conversation, the others are side ones.
-	Main string `json:"main,omitempty"`
+	Main          string `json:"main,omitempty"`
+	MainMachineID string `json:"main_machine_id,omitempty"` // confirmed routing device of Main
 	// Former are the main conversations replaced since (newest first, POST /api/v1/assistant/main/new): their machine
 	// keeps listing them, archived, however long they are quiet.
 	Former []FormerMain `json:"former_main,omitempty"`
@@ -68,7 +69,8 @@ type Settings struct {
 	MainTasksQuiet *bool `json:"main_tasks_quiet,omitempty"`
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
-	StartRequestedTasks *bool `json:"start_requested_tasks,omitempty"`
+	StartRequestedTasks     *bool  `json:"start_requested_tasks,omitempty"`
+	TaskWorkspacePreference string `json:"task_workspace_preference,omitempty"`
 	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
 	RecordingDays *int `json:"recording_days,omitempty"`
 	// MinutesDays: how many days a meeting's minutes stay once its transcript went with RecordingDays (#3780,
@@ -76,6 +78,9 @@ type Settings struct {
 	MinutesDays *int `json:"minutes_days,omitempty"`
 	// KBTopics: the knowledge base organizes knowledge points by topic (#3783, kb/topics.go). nil is on (the default).
 	KBTopics *bool `json:"kb_topics,omitempty"`
+	// MainBackgroundFolded: the apps fold the main conversation's background rounds (another conversation's message,
+	// a scheduled task or follow-up) into one line that opens on request (#4314). nil is on (the default).
+	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -86,6 +91,9 @@ type Settings struct {
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
 	AgentTasks *bool `json:"agent_tasks,omitempty"`
+	// InboxSignals: new Inbox messages the judge links to a supervised task reach its supervisor as the signal inbox
+	// (#4293, supervise_inbox.go). nil is off (the default): each one is a supervisor turn.
+	InboxSignals *bool `json:"inbox_signals,omitempty"`
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
@@ -336,6 +344,11 @@ func (s *Service) minutesDaysNow() int {
 // kbTopics: the knowledge base organizes knowledge points by topic (kb_topics, on by default).
 func (s *Service) kbTopics(ctx context.Context) bool { return quietOn(s.settings(ctx).KBTopics) }
 
+// mainBackgroundFolded: the apps fold the main conversation's background rounds (main_background_folded, on by default).
+func (s *Service) mainBackgroundFolded(ctx context.Context) bool {
+	return quietOn(s.settings(ctx).MainBackgroundFolded)
+}
+
 // kbTopicsNow is kbTopics for the knowledge base loop, from the last settings read well: a database that does not
 // answer neither starts nor stops the curation.
 func (s *Service) kbTopicsNow() bool {
@@ -362,7 +375,7 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 		return nil
 	}
 	v := s.effective(ctx, saved)
-	p := &Profile{MachineID: v.MachineID, Main: v.Main, Launcher: v.Launcher, Timezone: v.Timezone}
+	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
 	if tasks != nil && todos != nil {
 		p.Keep = keptSessions(v, tasks, todos.Links)
 	}
@@ -382,7 +395,7 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink) []SessionRef {
 			out = append(out, SessionRef{MachineID: machine, SessionID: id})
 		}
 	}
-	add(v.MachineID, v.Main)
+	add(v.mainRouteMachine(), v.Main)
 	for _, f := range v.Former { // archived, still to be found
 		add(f.MachineID, f.SessionID)
 	}
@@ -429,7 +442,8 @@ type assistantView struct {
 	NotesEffective     string             `json:"notes_effective"`  // what the assistant is told about the user
 	MainTasksQuiet     bool               `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
-	StartRequestedTasks bool `json:"start_requested_tasks"`
+	StartRequestedTasks     bool   `json:"start_requested_tasks"`
+	TaskWorkspacePreference string `json:"task_workspace_preference"`
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
@@ -437,6 +451,8 @@ type assistantView struct {
 	MinutesDays int `json:"minutes_days"`
 	// KBTopics is in effect, like MainTasksQuiet.
 	KBTopics bool `json:"kb_topics"`
+	// MainBackgroundFolded is in effect, like MainTasksQuiet.
+	MainBackgroundFolded bool `json:"main_background_folded"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault string `json:"meeting_attendance_default"`
 	// IdleCloseHours is in effect (0: off).
@@ -449,6 +465,8 @@ type assistantView struct {
 	InterjectBackground bool `json:"interject_background"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
 	AgentTasks bool `json:"agent_tasks"`
+	// InboxSignals is in effect, like DoneNeedsDelivery.
+	InboxSignals bool `json:"inbox_signals"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -460,15 +478,21 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		sp = space[0]
 	}
 	v := s.settings(ctx)
+	if sp == "" {
+		v.MainMachineID = s.confirmedMainMachine(ctx, v)
+	}
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
-		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
+		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
+		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
 		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground,
-		AgentTasks:          v.AgentTasks != nil && *v.AgentTasks}
+		AgentTasks:          v.AgentTasks != nil && *v.AgentTasks,
+		InboxSignals:        v.InboxSignals != nil && *v.InboxSignals}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session
@@ -487,11 +511,20 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			}
 		}
 	}
+	if sp == "" && v.MainMachineID != "" && v.MainMachineID != v.MachineID {
+		if c, ok := s.session(ctx, v.MainMachineID, v.Main); ok && c.Assistant && spaceOf(c) == "" {
+			out.Conversations = append(out.Conversations, c)
+		}
+	}
 	return out
 }
 
 func (s *Service) profileRoutes() {
 	s.handle("GET /api/v1/assistant", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("view") == "main-runtime" {
+			apierr.WriteJSON(w, s.mainExecution(r.Context()))
+			return
+		}
 		archived := r.URL.Query().Get("archived")
 		space := r.URL.Query().Get("space")
 		if !validSpace(space) {

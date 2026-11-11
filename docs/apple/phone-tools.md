@@ -99,7 +99,13 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 
 ### Saved places (#1598)
 
-The places reminders by place go off at belong to the user, not to the assistant's memory: **Settings › Assistant › Saved Places** lists them and lets the user add, change and delete them (`SavedPlacesView`, `SavedPlacesModel`). A place is a name (what the user calls it in a chat), an address, coordinates and the reminder's radius (150 m by default, 100–2000). In the editor it is found by searching an address or a name (MapKit, `LocationTool.find`, the same search as `phone_location_search`) or from the current location, and a map shows the circle.
+The places reminders by place go off at belong to the user, not to the assistant's memory: **Settings › Assistant › Saved Places** lists them and lets the user add, change and delete them (`SavedPlacesView`, `SavedPlacesModel`). A place is a name (what the user calls it in a chat), an address, coordinates and the reminder's radius (150 m by default, 100–2000). The editor (#4248) puts a map first, there from the start: a saved place opens centered on it, and a new one on the user when location access is already allowed (the editor never asks by itself; Use Current Location does), else wherever MapKit opens. The place is set in three ways:
+
+- **Search**: suggestions follow what is typed (`MKLocalSearchCompleter`, addresses and places, favoring the area the map shows); picking one looks up its coordinates and address (`LocationTool.find(_:)` for a suggestion). The keyboard's Search key runs a full search (`LocationTool.find(_:limit:near:)`, the same search as `phone_location_search`, which passes no region so its answers are unchanged). MapKit's "nothing there" says no places were found; any other failure says the search couldn't run.
+- **Use Current Location**, which asks for When In Use access once.
+- **A tap on the map** moves the place there and looks up its address. The map pans and zooms; a tap on a far-out map (much more than the place's own span) zooms in on the place, otherwise the user's zoom stays.
+
+The circle on the map follows the reminder's radius. Delete from the list (swipe or context menu) asks first, like the editor's Delete, and a full swipe does nothing.
 
 - **Kept by the manager** in its settings (`assistant.places`, `server/internal/assistant/places.go`), per manager. `GET/POST /api/v1/assistant/places`, `PUT/DELETE /api/v1/assistant/places/{id}` (`docs/protocol/protocol.md`); names are unique (case aside), writes need full credentials.
 - **The assistant** reads them with `list_places` before a reminder by place. When a place is missing, it finds it with the user (`phone_location_current` there, or `phone_location_search` and the user's pick) and keeps it with `save_place`, which adds the place or changes the one of the same name; so whatever it uses, the user sees and can correct.

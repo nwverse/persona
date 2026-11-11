@@ -43,7 +43,7 @@ Scope: tokens, components, interaction patterns, content, dark mode, Dynamic Typ
 | --- | --- | --- | --- |
 | Tokens | `apple/Shared/Design/Theme.swift`, `apple/Shared/Design/ColorSpec.swift`, `apple/Shared/Design/StyleSpec.swift`, `apple/Shared/Design/Palette.swift`, `apple/Shared/StatusPalette.swift` | `web/src/styles.css`, `web/src/ui/look.ts` | `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` (generated), hand-written siblings in the same folder |
 | Components | `apple/Persona/DesignSystem/` | `web/src/ui/atoms.tsx`, `web/src/ui/` | the same Android folder |
-| Cross-platform token source | none (Swift is read-only for the generator) | generated tokens | `spec/tokens/README.md`, `scripts/assets/gen_tokens.py` |
+| Cross-platform token source | none: `spec/tokens` records the Swift values, and `scripts/assets/test_gen_tokens.py` fails when they drift | none: `web/src/styles.css` is hand-written, and nothing reads the generated CSS | `Tokens.kt` is generated from `spec/tokens` (`spec/tokens/README.md`) by `scripts/assets/gen_tokens.py`; Android CI and the pre-commit hook fail when it is stale |
 | Written rules | `docs/apple/ios.md`, `docs/apple/icons.md`, `docs/apple/shell.md`, `docs/apple/sidebar.md` | `docs/web/web.md` | `docs/android/android-design.md` |
 
 Relationship to other docs:
@@ -75,7 +75,7 @@ Relationship to other docs:
 | `apple/PersonaTests/ContinuousMotionTests.swift` | Every unending animation lists where Reduce Motion stops it. |
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
-| `scripts/app/android_token_baseline.py` | Hard-coded counts in `android/feature` only. It does not scan the design system module. |
+| `scripts/app/android_token_baseline.py` | Per-file counts of hard-coded colors, font sizes and dp in every Android module, the design system included (not the generated `Tokens.kt`), and of Material 3 components that pages may not use. Counts may only go down; a wildcard `material3` import outside the design system fails. |
 | `scripts/app/android_slot_order.py` | An Android design-system component with a composable slot ends with a function-typed parameter (trailing lambdas keep working); the existing exceptions in `android/core/designsystem/tools/slot-order-baseline.json` may only shrink (#4146). |
 
 Not enforced anywhere: hit-area size, accessibility labels, shadows (inline literals), `.font(.system(size:))` in some Lark and Feishu views, numeric `listRowInsets`, `Spacer(minLength:)` and `lineWidth`.
@@ -122,7 +122,7 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Waiting in the background | working dot at 0.6 | secondary | clock mark |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
-Web uses amber for Needs you (`web/src/styles.css:233`). Android's generated token is red but its live value is blue. See DS-01.
+Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01.
 
 #### Fills, diff, hues, shell neutrals
 
@@ -176,7 +176,7 @@ Notes:
 
 - The names do not match Apple's text-style names (`caption` is footnote, `label` is Apple's caption). Keep the Persona names in code and use the table above in docs.
 - Emphasis tokens (`bodyStrong`, `secondaryStrong`, `captionStrong`, `labelStrong` and so on, `:356-365`) are the only way to change weight. `TypeScaleTests` forbids `.weight(` on a level.
-- Android Glass matches the sizes (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt:90-105`) with a 12 sp floor. The generated `Tokens.Type` block is stale (DS-12).
+- Android Glass reads the same levels from `spec/tokens/type.json` (`Tokens.Type`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt`): each role takes a level's size and weight, emphasis is semibold, and line height is left to the platform. `scripts/assets/test_gen_tokens.py` checks the levels against `Theme.Font` and `Theme.Level` (DS-12, resolved 11-11).
 - Web has no type tokens: about 3,000 `text-[Npx]` uses across 20 sizes, some below 11 px.
 - Mac uses fixed sizes times `Font.scale`, floor 11 pt.
 
@@ -203,7 +203,7 @@ Dynamic Type behavior:
 | `xl` | 24 | `section` |
 | `xxl` | 32 | |
 
-`sm` (6) is smaller than `s` (8), which reads backwards (DS-17). Web has no spacing tokens (Tailwind 4 px steps; page margin 20/32 px). Android: `xl` 20, `xxl` 24, `xxxl` 32 and no `sm` (DS-05). Off-grid values in use: card padding default 14, watch card 10/12, chip vertical 2.5 (DS-09).
+`sm` (6) is smaller than `s` (8), which reads backwards (DS-17). Web has no spacing tokens (Tailwind 4 px steps; page margin 20/32 px). Android has the same names and values since 11-11 (`spec/tokens/dimension.json`, #4209); its old `xl` (20), which iOS's spacing lacks, became `Tokens.Size.iconXS` where it sized an icon and the gap iOS uses everywhere else (DS-05). Off-grid values in use: card padding default 14, watch card 10/12, chip vertical 2.5 (DS-09).
 
 ### 2.4 Radius
 
@@ -244,7 +244,7 @@ Apple has no shadow tokens. Shadows are inline literals:
 | Soft button | black 0.12 (0.25 tinted), r6, y3 | `apple/Persona/DesignSystem/Styling.swift:183` |
 | Composer | black 0.08, r12, y4 | `apple/Persona/DesignSystem/ShellComposerBar.swift:477` |
 | Message action bar | black 0.25, r10, y4 | `apple/Persona/Views/Chat/MessageMenu.swift:461` |
-| Drawer card | black 0.18, r24 | `apple/Persona/Views/Assistant/AssistantSidebar.swift:350` |
+| Drawer card (under iPhone Duo's side bars, the sidebar over the page) | black 0.18, r24 | `apple/Persona/Views/Assistant/AssistantSidebar.swift:219` |
 
 The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`) plus `--shadow-knob` for the switch knob. Android has four literals. See DS-08.
 
@@ -261,9 +261,10 @@ The Glass style relies on Liquid Glass and has no shadow. The vendored Beautiful
 | `drawer(velocity:)` | interpolating spring 0.32 s, no bounce (`:650`) | drawer and pager |
 | `springBack` | spring 0.3 s, bounce 0.25 (`:654`) | |
 | `keyboard` | interpolating spring (`:662`) | |
-| Needs-you breath | 1 s, scale 1.2 | the only attention loop |
+| Needs-you breath | 1 s, scale 1.2 | the only attention loop; Android Glass draws the same ring (`JStatusDot`, `JStatusMark`) |
+| `Theme.Motion.recordingLevelFrame` | a 1/30 s clock | the live recording's level meter only (`RecordingLevelMeter`); fixed-height bars scaled vertically, one still frame with Reduce Motion or Low Power Mode. Reason: the level changes many times a second, and a 30 fps clock read inside the meter redraws only the meter (#4240) |
 
-The composer and attach panel own about 40 more one-off tokens (Telegram-derived). Web: 150 ms state, 220 ms glide, 300 ms collapse, one easing curve, no springs. Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. Android live values are 160/320 ms and differ from the generated 250/300 (DS-11).
+The composer and attach panel own about 40 more one-off tokens (Telegram-derived). Web: 150 ms state, 220 ms glide, 300 ms collapse, one easing curve, no springs. Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. `spec/tokens/motion.json` carries this shared set (state, layout, expand, reveal, conceal, drawer, springBack, keyboard and the needs-you breath), checked against `Theme.Motion` by `scripts/assets/test_gen_tokens.py`. Android Glass moves with the `state` and `layout` springs (`IosSpring` in `PersonaTheme.kt`: damping ratio `1 - bounce`, stiffness `(2π / duration)²`); Brief and Board keep their tweens (DS-11).
 
 Reduce Motion:
 
@@ -286,6 +287,9 @@ device, and the phone's own data tools (`phone_*`) keep their icon.
 
 `Theme.Icon.monitor` (`waveform.path.ecg`) is a command watched in the background, each line it prints an event (Claude
 Code's `Monitor`). A command run once keeps `Theme.Icon.terminal`.
+
+`Theme.Icon.denied` (`hand.raised.slash`) is a tool call the user, a permission rule or a hook turned down (#4303). It is
+drawn in gray at the end of the call's row: the call did not run, so it is not an error and never takes the triangle.
 
 ### 2.9 Styles and theme colors
 
@@ -312,6 +316,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
+- Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
 - Duplicates: four composer implementations exist (DS-19).
 
 ### 3.2 Message bubbles
@@ -334,7 +339,19 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 `.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
 
+The web task plan's workspace row (#3659) reuses the assistant form `fieldClass`, native labelled selects/inputs, and
+the existing plan Edit dialog. The compact policy choice stays on the plan card because it authorizes where a task
+will write; the optional branch and existing checkout picker are contextual fields. A server-backed, live-announced
+path preview uses no browser path convention. Settings › Assistant reuses `Group`/`Row` and the manager-scoped
+save-confirmation pattern for the default. Task details reuse the same read-only policy/path line. The workspace
+controls and the plan Edit dialog load on demand with `lazyPage`, keeping the policy/path summary while the controls'
+chunk arrives and the existing loading indicator for Edit. Neither editor adds controls to the cold first-screen
+bundle. No new look,
+theme, motion, primary navigation, or destructive action is introduced.
+
 The closeout card (web, #3612; `web/src/views/chat/CloseoutCard.tsx`) is a stopped Agent session's own account of its work, drawn above the transcript and never inside a message: the card surface (`rounded-card`, `bg-surface`, `shadow-card`) at the chat column's width, a head that folds the details (`Collapse`), and label / value rows. It says it is the Agent's own report. A claim the hub checked shows the finding beside it in one of three states that differ in words, mark and color: confirmed (`--green` with the check), contradicted (`--orange` on `--orange-tint` with the warning mark) and not checked (`--ink-3`). Why a new card: no existing surface sets a claim against a finding, and a status tint over the whole card would read as an error, which a closeout is not (`docs/web/web.md`, "Color hierarchy and quiet surfaces"). Other clients that draw it keep the three states and the "own report" line.
+
+The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a task is held to: on the plan card before **Start**, and on the to-do's page above its criteria. It adds no surface: it is the inset well the review checklist already uses (`rounded-control`, `bg-inset`, `shadow-hairline`), with the closeout card's label / value rows. Whose words a line holds is never left to styling: the owner's own are introduced as theirs with the date, work they did not ask for names who started it, and a brief made later says it was reconstructed and labels the hand-over prompt as that. Long text is held to a few lines with **Show all** in place (principle 2). On the plan card the whole brief is folded to who asked and one line that counts the rest, behind that one control, and the card's buttons stay at the bottom edge of the tray it scrolls in: added detail never puts a pending request's answer out of reach (section 4.8). The criteria keep one list, the review checklist's own (met, missing, open, not checked); under it a finished task adds only the criteria a scope change dropped (`--ink-3`, the undo mark, the criterion struck through, the word and the change that dropped it) and what was done beyond the brief. Overdue is a caution chip (`--orange` on `--orange-tint` with the clock) plus a sentence, not a tint over the box. Other clients that draw a brief keep the same first lines and add the dropped state to their one list of criteria.
 
 ### 3.4 Lists and rows
 
@@ -344,7 +361,9 @@ The closeout card (web, #3612; `web/src/views/chat/CloseoutCard.tsx`) is a stopp
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
 - Row actions: swipe actions and a context menu with the same actions. Agents rows on iOS have no swipe (context menu only, #1244).
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
+- Web sidebar groups share visible disclosure chevrons and sticky, interactive headings in every grouping (to-do, computer, repository, project and state). Nested group headings stack below their parents and the measured Persona row; the next sibling replaces the current heading as it scrolls past. The Agents title, grouping segments and quick filters form one sticky toolbar below Persona (at the viewport top on the phone Agents page). One inward-chevron button toggles between Collapse all when any visible group is open and Expand all when they are all folded; its spoken label and tooltip name the next action. The toolbar stays above the section headings on an opaque theme background, with no fog over the first heading. The existing menu retains both explicit actions, affecting its groups and nested disclosures while keeping the block and grouping controls open. Individual folds remain independently reversible; flat conversation lists have no invented group headings.
 - Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
+- Older rows folded by activity (web paged Agents list, #4236): an "Active within" menu beside the list's count (Any time, the default, then 24 hours, 7 days, 30 days) folds the rows last active before the window into one Earlier group at the list's end, folded by default, with how many it holds and how many of them need the user on its header. It is a display choice ("List controls": grouping and display), not a filter: no row leaves the list, no count changes, and Any time undoes it. Why not a filter chip: a filter hides rows, and sessions that need the user must stay visible (below).
 
 #### Sessions that need the user
 
@@ -382,13 +401,14 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping the selected segment opens its menu.
 - Regular width: system tab view and split navigation; the same sidebar in a column.
 - Page titles: `.pageTitle`, `.detailTitle` (`apple/Persona/DesignSystem/PageTitle.swift`).
-- Side rail for iPhone Duo (`apple/Persona/DesignSystem/ShellSideRail.swift:50`).
+- Side rail for iPhone Duo (`apple/Persona/DesignSystem/ShellSideRail.swift:50`). Under its side bars the shell's pages never move sideways: they cross-fade instead of sliding, and the drawer's sidebar slides in over the page, which stays (`docs/apple/ios.md`, "iPhone Duo").
 - Platforms: web phone shell matches (drawer plus top-bar switch); Android `HomeNavigation` has a 36 dp segment height versus Apple's 44 (DS-18).
 - Assistant identity appears in navigation and conversation chrome only with at least two installed assistants (offline assistants count; pending installs do not). With one, keep the earlier product header and controls, without the assistant name, avatar, status/computer line or roster dropdown. Web keeps AppMark, Persona, connection/computer status and its appearance menu; `ASSISTANT_MENU_WIDTH` in `web/src/ui/menu-model.ts` preserves the product menu's 220 px and the roster's 264 px widths. Android keeps its product sidebar header. Settings › Assistants still provides New assistant. Conversation titles remain their existing product/session titles and messages add no roster identity with one assistant; the user's chosen Persona look stays unchanged. This requested correction applies to all clients; the Apple implementation is tracked separately.
 - Assistant switcher (two or more installed assistants): the head of the sidebar is the current assistant (avatar, name, status line, a chevron) and opens the roster: installed assistants as a single-choice list (the default tagged, the current one checked, a count on the others, an offline one's whole row faded to 55% and still selectable), the ones still installing, then New assistant and Manage assistants… (`docs/assistant/managers.md`, "The current assistant"). Web: `web/src/views/AssistantSwitcher.tsx`, a `Menu` whose rows take a lead mark, a tag, a count (with the words a screen reader says for it, `badgeLabel`) and a faded state (`dim`); the row's earlier entries (appearance's three rows under a heading, other hubs, Settings, Disconnect) follow under a divider. The menu scrolls, and no submenu opens over its last rows, so every row stays reachable at 200% zoom and the largest text size. Settings' first group ("<name>'s settings") titles itself with the same avatar and name, and its **Switch**, a text button at the title's end, opens the same rows (web: `AssistantSwitchButton`, `views/settings/SettingsGroups.tsx`); the rows of that group read and write the current assistant only. Why a new pattern: the assistant is a scope for the whole app, not a page, so it sits above the pages rather than in the assistant page's top bar where the segmented switcher was. Android: `AssistantSwitcher` opens the roster in `JMenu` (its content slot holds the rows above New assistant and Manage assistants…), as wide as the sidebar and over its rows, closed by a tap outside, scrolled when it does not fit.
 
 ### 3.6 Sheets
 
+- **Live recording sheet** (#4240, `RecordingLiveSheet`): a large-detent sheet with its own navigation stack for something that keeps running when it is dismissed. It opens by itself when the activity starts, **Hide** or a swipe leaves it, and a one-row card on the page is the way back. After the activity ends the same sheet cross-fades to a wrap-up of what happens next, so the user is not dropped on a list. Reason: a recording is the one task whose controls must stay under the thumb while the user looks at what is being heard, and whose end needs visible follow-through (saved, transcribed, synced, minutes) instead of a word in a list row.
 - System `.sheet` with detents for most things (43 detent sites). Settings is a near-full sheet with a close button.
 - Link card: detents 0.6 and large, background stays interactive down to 0.6 (`apple/Persona/Views/Link/LinkSheet.swift:142-146`).
 - Edit sheets: `sheetCancel` asks to discard on Mac only; on iOS it discards at once (`apple/Persona/DesignSystem/SheetActions.swift:44`).
@@ -403,7 +423,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
 - `SystemPasteButton` (`apple/Persona/DesignSystem/ClipboardButtons.swift`) wraps the system `PasteButton` for anything that sends what is on the phone's clipboard: a capsule in the accent with the system's own icon and word. Why not `.themedButton`: only the system Paste button reads the clipboard without iOS asking "Allow Paste?" first (the tap is the permission), and the system draws it, so it can be tinted and shaped but not restyled. Place it beside a themed button that does the same thing by reading the clipboard, with one line saying it sends without the prompt (the computer page's Clipboard section, #3064).
-- Web buttons are 32 px tall (hit area expanded on touch). Android: Large 48, Medium 40, Small 32 dp (DS-06).
+- Web buttons are 32 px tall (hit area expanded on touch). Android: Large 48, Medium 40, Small 32 dp drawn, each taking taps across 48 dp: Compose extends a smaller control's touch target to 48 dp unless a clipping parent cuts it off, so a frame around small controls clips with `clipDrawing`, not `clip` (DS-06; `TouchTargetTest` checks buttons, chips, switches and segments in every style).
 - A group of actions has at most one solid primary button. A recommended choice has an outline and a "Recommended" tag, not a second solid button. Red is for failure and destructive actions only.
 
 ### 3.7.1 Switches (web)
@@ -426,6 +446,12 @@ Assistant avatar: a disc with the first character of the assistant's name. The d
 
 The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
 
+Model configuration reuses settings `Group` / `Row` and neutral `Pill` components for execution-form groups and chips
+(`docs/assistant/model-config.md`, "Execution form"). Long explanatory pills opt into `wrap` on narrow rows; other
+pills keep their existing single-line layout. A separate, labelled 44 px **?** control expands help inline on
+hover, focus or click, with Escape/outside-click dismissal. Why inline: explanations include environment and configuration
+details that must remain readable on phones and at larger text sizes; a short tooltip or a nested button would not fit.
+
 Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
 Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
 The subtitle, not another icon vocabulary, explains what is running and its counts/phase; only a real wait with no
@@ -434,6 +460,12 @@ projection and cross-platform rules are in `docs/assistant/unified-entry.md`, "B
 This is a requested status correction, not a new style or setting; the existing reduced-motion behavior applies.
 Workflow phase text may ellipsize, but the done/started count stays visible; simultaneous command/subagent counts
 use another subtitle line rather than pushing the workflow count out of the row.
+
+The web main conversation has one compact header line on the welcome page and in the open main chat (#4572).
+It uses the same neutral text in both places and reveals the full line on hover, focus or tap when space is tight.
+The summary describes the observed harness and execution environment. The new conversation's launcher remains a
+separate composer setting. A missing execution report, a proxy node and the last known location each have distinct
+copy; none is presented as the current location.
 
 ### 3.9 Empty states
 
@@ -486,6 +518,8 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Long press on a message | lifted menu with an action bar |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
+| Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328) |
+| Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
@@ -505,6 +539,11 @@ Severity ladder to adopt:
 4. `.alert` for short prompts and text entry.
 
 The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
+
+A blocked terminal card on the web offers **Close Agent**, including when no choices can be parsed from the screen.
+Its footer reuses `Button`, explains that the pending confirmation is cancelled and the conversation kept, and
+requires **Close and archive** or **Cancel**. Close controls use the existing 44 px grid minimum and single-line labels.
+The archive toast offers Undo; Undo restores visibility without reopening the Agent or granting its request.
 
 Task-progress reply drafts (#3743) use the reversible rung: **Send** is primary, **Later** and **Don't handle** are
 secondary. Don't handle removes only the exact draft from Needs you, sends nothing and leaves its task, Agent and
@@ -549,12 +588,20 @@ server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any
 no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
 shared with computer tools). Details in `docs/lessons/ios.md`.
 
+A tool row says what its call came to when the node sends `outcome` (#4303, `docs/protocol/protocol.md` "Tool
+outcomes"). Only a call that ran and failed turns the row and its chip red, and its result says "Exit code N". A call
+that was denied, refused before it ran or interrupted gets a gray mark with its word (Denied, Did not run, Interrupted)
+for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that timed out says Timed out. Under an output the
+page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
+full text. Without an outcome (an older node) a row draws as before.
+
 ### 4.8 Pending requests
 
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
 - **Home**: the bottom of the session page. A request that blocks the Agent stays visible there until it is answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). Several read "1 of 3", one open at a time; any can be folded to answer later.
 - **One count, per session**: the Agents list's Needs you section, its Needs you filter and the tab's badge count the sessions that wait for the user, each once, its requests in its row oldest first, the way `docs/assistant/managers.md` ("Counts") counts an assistant's waiting agents (principle 4). The Inbox's Agent section and the Assistant's composer entries open the same requests; the composer's entries count tasks (`docs/assistant/unified-entry.md`).
+- **Background rounds and supervisors** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation a round another conversation, a scheduled task or a follow-up started reuses the quiet supervision record, one muted line `@<source> · Background round` that always opens, never a new component; a round that asked or told the user stays shown. While that switch is on, the composer's Needs you groups rows under the conversation supervising them, this one's first, with a plain caption header and no other change: the same rows, order within a group and count.
 - **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
@@ -578,6 +625,16 @@ that no new messages are added. The editor retains the configured preference sep
 The link is shown once with a copy action and is never listed again. The public viewer is a
 separate, read-only document with the same palette tokens, plain text only and work details collapsed (section 4.7).
 Web: `web/src/sharing/`, `web/public-share/`; Android: `AgentShareSheet`; server contract in #3604.
+
+### 4.10 Web workspace selection and management
+
+In Agents' repository tree, the workspace title and its leading disclosure button toggle the same remembered fold at every depth. A title also selects the exact workspace, including an empty one; opening an Agent uses that Agent’s own row, never the workspace title or a descendant chosen by proximity. A visible overflow button offers the same actions as the context menu, including on touch devices. The desktop sidebar and phone Agents page share these rows and actions rather than adding a management destination.
+
+The existing `Dialog`, `Button`, `Menu`, `Collapse` and status components carry workspace management. Creation shows its source and starting branch, keeps additional choices in the advanced group, and starts no Agent automatically. An optional Agent start names the exact existing workspace. Creation acknowledgment shows the actual resulting path and branch; an interrupted request offers reconciliation of that same intent.
+
+The workspace catalog, selection and management actions follow the current assistant. Switching assistants retires outstanding catalog reads, clears the selection and invalidates pending mutation previews, including a switch away and back. Management loads on the first workspace action; its loading menu keeps the same dismissal and phone Back behavior, and operation receipts survive menu reopening.
+
+Removal uses the confirmation sheet pattern in section 4.4 because it needs branch and uncommitted-file choices. The dialog identifies the workspace and explains which files and running sessions will be lost. Keep the branch by default; require an explicit discard choice for uncommitted files. Confirmation stays unavailable until the computer supplies a valid preview. A changed target requires another preview, and an uncertain dispatched removal offers status reconciliation rather than another destructive submission. Renaming uses the existing text-entry dialog pattern and preserves workspace, branch and Agent identities.
 
 ## 5. Content
 
@@ -677,7 +734,7 @@ Titles of plans, permissions, questions and terminal prompts, the same on every 
 4. State never rides on color alone: pair with text or a symbol.
 5. A gesture-only action has an accessibility action or visible control.
 6. Animations: transitions and press effects respect Reduce Motion; every loop is listed in `ContinuousMotionTests`.
-7. Text contrast at least 4.5:1 (3:1 for text of 18 pt or larger, bold text, and non-text marks), verified for each style and theme color. Composite cases (text on a tinted fill) need a test.
+7. Text contrast at least 4.5:1 (3:1 for text of 18 pt or larger, bold text, and non-text marks), verified for each style and theme color. Composite cases (text on a tinted fill) need a test. The exception is iOS's own palette, and Android's Glass with it (11-11): white words on the accent 3.5:1, the accent as a link 3:1, words on the user's bubble 4.5:1, with the system's secondary gray as it is (`apple/Shared/Design/PersonaPalette.swift`, `android/core/designsystem/src/test/kotlin/persona/core/designsystem/StyleContrastTest.kt`).
 8. Layouts survive the largest accessibility size without clipping.
 9. Transient messages are announced to VoiceOver.
 10. Headers carry the header trait; modal sheets trap focus.
@@ -691,35 +748,35 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Styles | 5 | 1 | 3 (Glass shared) | different sets |
 | Accent presets | 5 | same hex | same set | consistent |
 | Roles (danger, positive, ai) | reference | different hex | same hex | web differs |
-| Needs-you color | blue | amber | blue live, red generated | inconsistent (DS-01) |
+| Needs-you color | blue | amber | blue | web differs (DS-01) |
 | Type scale | Dynamic Type, 28/22/17/17/15/13/12 | px literals | sizes match, no in-app size setting | web has no tokens |
-| Spacing | 0-32 with `sm` 6 | Tailwind default | `xl` 20, `xxl` 24 | Android differs (DS-05) |
+| Spacing | 0-32 with `sm` 6 | Tailwind default | same scale | web differs |
 | Radius | 6/10/14/20/22 | 6/8/10 plus literals | 6/10/14/20/22, per-style variants | web and Android differ |
-| Min target | 44 | 44 hit area, 28-32 visuals | 48 floor, 32-40 controls | violated on Android and web visuals |
-| Motion | token set | 150/220/300 ms | 160/320 ms live | different |
+| Min target | 44 | 44 hit area, 28-32 visuals | 48 dp touch targets, 32-40 visuals | violated on web visuals |
+| Motion | token set | 150/220/300 ms | Glass: the iOS state and layout springs | web differs |
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
 | Toast | capsule, top | dark capsule, bottom | Snackbar, 3 mechanisms | different |
 | Haptics | 4 kinds, 393 sites | none | 4 kinds, 35 sites | thin on Android |
-| Icons | SF Symbols | custom strokes | Phosphor | no shared map |
+| Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
-| Tokens source | hand-written | hand-written | generated from stale JSON | drift is silent |
+| Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## 8. Inconsistencies and duplicate definitions
 
 | ID | What | Where | Impact | Recommended unification |
 | --- | --- | --- | --- | --- |
-| DS-01 | Needs-you color: docs say red; code is blue on Apple; amber on web; Android generated token red, live value blue | `docs/apple/ios.md:124` (records red as kept at the user's request on 2026-11-06), `docs/apple/ios.md:920`, `docs/apple/icons.md:81`, `docs/protocol/agent-states.md:10`, `docs/web/web.md:1429`; `apple/Shared/StatusPalette.swift:20`; `web/src/styles.css:233`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` (generated needs-you) and `android/core/designsystem/src/main/kotlin/persona/core/designsystem/StatusPalette.kt` (hard-coded blue) | Users see different colors for the same state on three platforms; docs mislead | Product owner decides once (code today: Apple blue; ios.md:124 records a user request for red), fix the JSON and regenerate Android, fix the four docs, change web or record it as a deliberate exception |
+| DS-01 | Needs-you color: blue on Apple and Android (decided 11-11); amber on the web | `apple/Shared/StatusPalette.swift:20`; `spec/tokens/color.status.json`; `web/src/styles.css:233` | The web shows another color for the same state | Move the web to the same blue (its own issue) |
 | DS-02 | Weights documented as bold; code is semibold | `docs/apple/ios.md` (heading, sectionHeader) vs `apple/Shared/Design/Theme.swift:338`, `:346` | Doc misleads new styles | Fix the doc |
 | DS-03 | Docs list five radii; code has seven plus `appIcon` | `apple/Shared/Design/Theme.swift:181-198` | `thumbnail` and `page` undocumented | Document all, or fold `thumbnail` into `badge` |
 | DS-04 | Duplicate hex values under different names (`#1D7A4C`/`#4CC38A` in Diff.add, Hue.green, unread text; `#2E6FD0`/`#5B9BFF` in loop and Hue.blue; `#B35400`/`#FF9F0A` in cautionText and Hue.orange; system blue literal written twice) | `apple/Shared/Design/Theme.swift:151,171,173,813-815`; `apple/Shared/StatusPalette.swift:24`; `apple/Shared/Design/Styles/Glass.swift:23`; `apple/Shared/Design/Palette.swift:8` | A change in one silently misses the others | Alias to one source; make the blue accent read `Palette.systemBlue` |
-| DS-05 | Space scale: same names, different numbers on Android; shared JSON describes the wrong source | `apple/Shared/Design/Theme.swift:203-213`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt:244-253`; `spec/tokens/dimension.json` | Cross-platform layout drifts; 84 Android call sites affected | Adopt the Apple scale and migrate; add a drift check against the Swift file |
-| DS-06 | Minimum target: Android Small/Medium buttons 32/40 dp, chips 36, switches 26-30, segment 36 against a 48 floor; web visuals 28 px | `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt:100`, `:307-309`, `:462`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/HomeTokens.kt:39`; `web/src/ui/atoms.tsx:106` | Fails the baseline on two platforms | Inflate hit area to the floor in the component |
+| DS-05 | Resolved 11-11 (#4209): Android's spacing has the iOS names and values, `spec/tokens` follows `Theme.Space` (checked by `scripts/assets/test_gen_tokens.py`), and the old 20 is gone: icons take `Tokens.Size.iconXS`, gaps the value iOS uses in the same place | `apple/Shared/Design/Theme.swift`; `spec/tokens/dimension.json` | None left | Keep the drift test green |
+| DS-06 | Minimum target: web visuals 28 px. Android draws Small/Medium buttons 32/40 dp, chips 36, switches 26-30 and segments 35-36, and Compose extends their touch targets to 48 dp; the Glass and Board `JSegmented` frames clipped that extension away until they switched to `clipDrawing`; Android's switch, search clear button and heading actions reach 48dp through Compose's touch area without growing (`TouchTargetTest`, 11-11) | `web/src/ui/atoms.tsx:106`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt` (`clipDrawing`, `JSegmented`); `android/core/designsystem/src/test/kotlin/persona/core/designsystem/TouchTargetTest.kt` | Fails the baseline on web; Android meets it while no clipping parent cuts a target | Web: inflate hit area to the floor in the component. Android: frames around small controls clip drawing only (`clipDrawing`), and new small controls join `TouchTargetTest` |
 | DS-07 | Two rounded-container primitives with different color sources | `apple/Persona/DesignSystem/Styling.swift:8` (style card color) vs `apple/Persona/DesignSystem/Components.swift:429-438` (system grouped color) | Clay, Island, Lark cards do not match neighboring surfaces | Make `.card()` read the style's card color; add an "inset well" component for `Fill.well` blocks |
 | DS-08 | No shadow or elevation tokens; shadows are inline literals in six places; BeautifulUI elevation unused | section 2.6 | Inconsistent depth; bypasses the ratchet | Add `Theme.Shadow` from these literals |
 | DS-09 | Off-grid magic numbers: card padding 14, chip padding 2.5, watch 10/12, toast and disabled opacity | `apple/Persona/DesignSystem/Components.swift:222,429`; `apple/Shared/Design/Theme.swift:431-451` | Cannot retune globally | Move to tokens; add an opacity scale |
 | DS-10 | Overlapping size steps 1 pt apart; value-named boxes; 44 under six names | `apple/Shared/Design/Theme.swift:457-570` | Token choice is arbitrary | Merge neighbors; rename `boxNN` by meaning; alias the 44s to `tapTarget` |
-| DS-11 | Two motion sets: curve and spring repeated under several names; Android live motion differs from generated; web has one curve | `apple/Shared/Design/Theme.swift:662-707`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/PersonaTheme.kt` | Different feel across platforms | Share one curve token; pick one Android set |
-| DS-12 | Android `Tokens.Type` is stale and partly unused | `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` (Type block) vs `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt:90-105` | Misleading source of truth | Regenerate from `Theme.Font` |
+| DS-11 | Motion: `spec/tokens/motion.json` holds the iOS shared set, checked against `Theme.Motion`; Android Glass's state and layout use its springs and its Needs You dot and mark breathe as on iOS (11-11, #4209). Open: the other shared motions (expand, reveal, conceal, drawer, springBack, keyboard) in Android components; web has one curve | `apple/Shared/Design/Theme.swift`; `spec/tokens/motion.json`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/PersonaTheme.kt`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/StatusComponents.kt` | Some Android transitions still use their own timing | Adopt each motion where its iOS counterpart moves |
+| DS-12 | Resolved 11-11 (#4209): `spec/tokens/type.json` holds the nine `Theme.Font` levels with `Theme.Level`'s sizes and line heights, checked against the Swift, and Android Glass reads them | `spec/tokens/type.json`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt` | None left | Keep the drift test green |
 | DS-13 | Radius philosophy: fixed on Apple, per-style on Android, literals on web (about 480) | `apple/Shared/Design/Theme.swift:178-180`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/PersonaTheme.kt:54-62`; `web/src/ui/atoms.tsx:973` | Same screen looks different | State the rule; replace web literals with tokens |
 | DS-14 | Dynamic Type caps are literal sizes at 36 sites; only two are named | section 6.2 | Inconsistent behavior at large sizes | Name roles (glyph in button, badge, top bar) |
 | DS-15 | Empty and loading states in several shapes: `EmptyStateView` vs `ContentUnavailableView` (22), `LoadableContent` (about 9 uses) vs 262 bare `ProgressView`, plain text | `apple/Persona/DesignSystem/Components.swift:385,739`; `apple/Persona/Views/SplitNavigation.swift:216` | Inconsistent look; BeautifulUI never applies to system views | Route empty and failed states through `EmptyStateView` with an error factory and Retry |
@@ -742,7 +799,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | DS-32 | `SecureField` still used for secrets on iOS; `HubTag` and `StatusLabel` dead | `apple/Persona/Views/Settings/ConnectorSignInViews.swift:553`; `apple/Persona/Views/Settings/ExtensionAuthViews.swift:206`; `apple/Persona/DesignSystem/HubComponents.swift:16`; `apple/Persona/DesignSystem/Components.swift:348` | Breaks a written rule; dead code | Use `SecretField`; delete the dead views |
 | DS-33 | Pages read `AppStyle.current.usesBeautifulUI` and duplicate BeautifulUI forms (about 330 lines) | `apple/Persona/Views/Interactions/InteractionViews.swift:1323`; `apple/Persona/Views/Voice/VoiceBar.swift:135` | Two renderings to test | Move branches into design-system components |
 | DS-34 | Reduce Motion not honored by navigation, toast, press and symbol effects | `apple/Persona/Views/Shell/ShellPager.swift:158`; `apple/Persona/DesignSystem/Toasts.swift:74`; `apple/Persona/DesignSystem/Styling.swift:187` | Accessibility | Gate through `Theme.Motion.reduced` |
-| DS-35 | Android ratchet skips its own design system module (329 color and 1168 dp literals); doc says no literal colors | `scripts/app/android_token_baseline.py`; `docs/android/android-design.md:130` | Rule not enforced where it matters most | Extend the scan or amend the doc |
+| DS-35 | Resolved 11-11 (#4209): the Android ratchet scans the design system module too (331 color and 1193 dp literals at the start), so its literals can only go down | `scripts/app/android_token_baseline.py`; `android/core/designsystem/tools/token-baseline.json` | None left; moving the literals to tokens is phase 1's T2 to T4 | Keep lowering the baseline |
 
 ## 9. Recommended next steps
 
@@ -782,6 +839,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.
 - [ ] Structure: in every grouping a session that needs the user is visible without opening anything; rows follow the work-item row; primary screens show no raw model IDs, session IDs, paths or engine names (sections 3.4, 5.6).
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
+- [ ] Performance (Apple clients): the review checklist in `docs/apple/performance.md` is pasted and marked; no new main-thread IO, expensive `@State` initial value or work in `body`, and a change to a hot path (chat list, composer, Agents list, pushes, launch, images) attaches before and after numbers.
 
 ## Codex speed controls (#3865)
 
@@ -790,3 +848,18 @@ current value, including Unknown before native settings arrive. Its Fast choice 
 Selection waits for native acknowledgment and the session push. Standard is the reversible choice. This requested
 control reuses Menu typography, spacing, focus behavior and light/dark tokens. Settings > Agents > Codex uses the
 existing agent-settings row for the native default. No account or session is automatically switched to Fast.
+
+## Hub connection password (#4474)
+
+The administrator's Devices page owns the connection-password switch and registration form. It is off until an
+administrator sets a password and enables it. The form uses the existing admin Card, Button, ErrorBox and toast
+patterns, and explicitly offers revocation of existing device credentials. Disabling password sign-in or replacing
+the password is visible here; neither action silently removes devices unless the administrator selects revocation.
+
+The web sign-in page shows the password form only when the hub enables it, alongside the existing pairing entry.
+Native pairing offers password sign-in with a hub address and keeps scan/link pairing reachable. The system browser
+owns password entry so all clients use the same OPAQUE implementation; the callback carries a single-use code bound
+to the initiating app rather than a reusable device token. Password sign-in requires trusted HTTPS, with QR pairing
+remaining available for self-signed deployments. This changes connection features only, without selecting a model,
+speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTextField, JButton and SettingsCaption;
+Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
