@@ -107,7 +107,26 @@ The offline list follows the sidebar (`node/claudedesktop.go`), before a row is 
 - it leaves out the transcripts of archived sessions (on the Mac measured, every finished /btw question was an archived session) and their earlier transcripts;
 - it leaves out an unarchived session's earlier transcript once the list has shown the one it runs now (newest first, so normally the current one comes first). When the current one is not listed, or the earlier one is newer, the earlier one stays: at worst a session shows twice, never not at all.
 
-It also lists the transcript every unarchived session of the index runs, however long it has been quiet and however little it says yet, as the sidebar does. These are counted on their own, recent or not: the newest 100, beyond the usual 7 days, taking none of the 80 places of the other sessions. One whose transcript has no title or directory yet (opened in the app with nothing said, or just gone on in a new transcript) shows the entry's `title` and `cwd`, so a message to it resumes it there. Another platform's runs (`agentfilters.go`) stay out even when the index names them. Only what an entry says is acted on: a transcript no entry names, or an entry that cannot be read (or is over 4 MB), hides nothing. A kept session and Persona's own forks are listed as before, and running sessions are untouched (their questions and permission prompts must stay reachable). A session archived in the app and later resumed elsewhere under the same transcript leaves the offline list once it stops, as the sidebar does; unarchiving it in the app lists it again. Unarchived side sessions and /btw questions are rows of their own here. Only these files are read, never the app's config file (it holds credentials); a file is parsed again only when it changed. Only macOS's layout is known. Tests: `node/claudedesktop_test.go`.
+It also lists the transcript every unarchived session of the index runs, however long it has been quiet and however little it says yet, as the sidebar does. These are counted on their own, recent or not: the newest 100, beyond the usual 7 days, taking none of the 80 places of the other sessions. One whose transcript has no title or directory yet (opened in the app with nothing said, or just gone on in a new transcript) shows the entry's `title` and `cwd`. Another platform's runs (`agentfilters.go`) stay out even when the index names them. Only what an entry says is acted on: a transcript no entry names, or an entry that cannot be read (or is over 4 MB), hides nothing. A kept session and Persona's own forks are listed as before, and running sessions are untouched (their questions and permission prompts must stay reachable). A session archived in the app and later resumed elsewhere under the same transcript leaves the offline list once it stops, as the sidebar does; unarchiving it in the app lists it again. Unarchived side sessions and /btw questions are rows of their own here. Only these files are read, never the app's config file (it holds credentials); a file is parsed again only when it changed. Only macOS's layout is known. Tests: `node/claudedesktop_test.go`.
+
+### Sending to a desktop session nothing runs (#4300)
+
+`node/claudedesktop_open.go`. A message to a session the sidebar lists (an unarchived entry of the index) goes back to the app when no claude runs it. Before, it was resumed with `claude --resume` in a terminal tab, so the session ran outside the app, and on a machine without a terminal engine it was refused.
+
+- **Opening it:** the node opens the session at the app's own link, `claude://claude.ai/epitaxy/<sessionId>`, in the background (`/usr/bin/open -g`). The link uses the entry's `sessionId` (`local_<uuid>`), and only in that form. One app keeps both directories (`Claude` and `Claude-3p`), and it handles `claude://`.
+- **What the app does:** it starts that session's claude, with its peer inbox, without coming to the front or changing what its window shows. This takes about 3 seconds on a Mac (Claude Code 2.1.321, 2026-11-11).
+- **Sending:** once that claude runs and its inbox socket is there (up to 30 seconds), the message goes to the inbox as above, and the turn shows in the app.
+  - If the app goes on in a new transcript as it opens the session, the node follows the one the entry names.
+  - A claude seen without an inbox is given 3 seconds to name one.
+  - In bypass permissions mode the message is held there like any message to the inbox (`crossSessionInbound`).
+- **Refused, with nothing sent:**
+  - Another claude has the session open (a terminal's without an inbox, a program's): `open_elsewhere`, as before, never a second claude.
+  - The app does not open it in time: `desktop_open_failed`.
+  - A slash command: `peer_command`. The inbox runs none, and resuming it in a terminal would take the session out of the app. `/exit` is handled as before.
+  - The app's claude has no inbox (an older Claude Code): `peer_unsupported`, the session left open in the app.
+- **The old way:** when the link cannot be opened at all (no app handles it), nothing was started, and the session is resumed as before. So is any session the index does not list.
+- **Launcher and model:** the app resumes the session with its own settings. A launcher or model picked on the phone for resuming does not apply to it.
+- Tests: `node/claudedesktop_open_test.go`.
 
 ## Blocking configuration directories (#676)
 
