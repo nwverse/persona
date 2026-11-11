@@ -168,6 +168,14 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
   changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
   the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+- **What is handed out only once must not be dropped by a shortcut** (#4256). `plugins.assistant` gives a machine a
+  skill's files once and counts them as sent when it answers, but the minute refresh asked for them before deciding that
+  an unchanged CLAUDE.md needed no `assistant.prepare`, and dropped them: after an upgrade that changed only a skill, the
+  assistant's machine kept the old files for over an hour. The node then reported the skill missing
+  (`plugin_skills_need`), the files were queued to go again, and the next refresh dropped them the same way. Now the
+  refresh compares the skills' names and digests too, never skips an answer that brings files, and prepares a directory
+  again on its next round when the node reported skills missing there. For "the new skill has no effect", compare the
+  modification time of `~/.persona/plugin-skills/<name>/.persona-plugin` on the assistant's machine with the upgrade's.
 
 - Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.
 - **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
