@@ -98,6 +98,7 @@ import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
 import { conversationTitle } from "../assistant/conversations";
+import { externalOpening } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
@@ -1138,6 +1139,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wfCalls = useMemo(() => workflowCalls(runs), [wfKey]);
   // Preserve conversation identity; execution summaries have the same collapsed default everywhere (#2602).
   const lineStyle = workLineStyle(assistant, (session ?? archivedHere)?.assistant);
+  // an extension opened this conversation (#3758): "From Lark /agent" under its first message, once the page reaches it
+  const openedWith = useMemo(() => (assistant ? externalOpening(session, tr.items, tr.hasMore) : undefined), [assistant, session, tr.items, tr.hasMore]);
+  const openingId = openedWith?.id;
+  const openingOrigin = openedWith?.origin;
   // A stopped agent's closeout is a card above the transcript (#3612, CloseoutCard): while it is there, the reply that
   // carried the raw block, the last exchange's, shows without it.
   const closeoutShown = !assistant && Boolean(shownCloseout(session));
@@ -1147,8 +1152,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     return last?.kind === "segment" ? last.seg.id : undefined;
   }, [closeoutShown, lines]);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, closeoutSegment }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, closeoutSegment],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, openingId, openingOrigin, closeoutSegment],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──

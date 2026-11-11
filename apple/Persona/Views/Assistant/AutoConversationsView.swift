@@ -114,14 +114,18 @@ struct AutoConversationsView: View {
         let from = AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
         let detail = [filter == .all ? from?.name : nil, [.working, .needsYou, .unread].contains(s.state) ? s.state.label : s.updatedAt.map { Fmt.relative($0) }]
             .compactMap { $0 }.joined(separator: " · ")
+        let external = AutoConversationSource.external(s.origin)
         return Button { open(s.key) } label: {
             HStack(spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    if let t = ConversationTitle(title) {
-                        Text("\(Text(t.head).foregroundStyle(Color.secondary))\(t.topic)")
-                            .font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                    } else {
-                        Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                    HStack(spacing: Theme.Space.xs) {
+                        if let t = ConversationTitle(title) {
+                            Text("\(Text(t.head).foregroundStyle(Color.secondary))\(t.topic)")
+                                .font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                        } else {
+                            Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                        }
+                        if let external { ExternalSourceMark(source: external) } // an extension opened it (#3758)
                     }
                     if !detail.isEmpty {
                         Text(detail).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
@@ -135,7 +139,8 @@ struct AutoConversationsView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel([title, detail.isEmpty ? nil : detail].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label")))
+        .accessibilityLabel([title, filter == .all ? nil : external?.from, detail.isEmpty ? nil : detail].compactMap { $0 }
+            .joined(separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label")))
         .accessibilityIdentifier("auto-conversation")
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button { Task { await model.archiveConversation(s.key, true) } } label: {
