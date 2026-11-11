@@ -2272,24 +2272,24 @@
       },
       "extractionState": "manual"
     },
-    "%@ Needs Your Permission": {
+    "%@ Is Waiting for Your Approval": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ Needs Your Permission"
+            "value": "%1$@ Is Waiting for Your Approval"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@に許可が必要です"
+            "value": "%1$@が承認を待っています"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ 需要你授权"
+            "value": "%1$@ 在等你批准"
           }
         }
       },
@@ -76003,24 +76003,24 @@
         }
       }
     },
-    "Needs Your Permission": {
+    "Waiting for Your Approval": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Needs Your Permission"
+            "value": "Waiting for Your Approval"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "許可が必要です"
+            "value": "承認を待っています"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "需要你授权"
+            "value": "在等你批准"
           }
         }
       },

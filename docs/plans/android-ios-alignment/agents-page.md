@@ -48,8 +48,8 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 **A11. Smaller differences.**
 
 - A "Waiting in the background" quick filter, and the selected chip in its own state's color (Android always tints it like Needs You). Done (11-12): `AgentQuickFilter.BackgroundWaiting` with its clock, out of Working's count (a paged list takes the hub's `background_waiting` out of working); the Glass home's chosen chip takes its state's color (`ByStatusTest`, `ByStatusShotsTest`). Its lighter tone is still to come.
-- Collapse All keeps the computer headings open.
-- A long list shows 20 rows, then "Show All N".
+- Collapse All keeps the computer headings open. Done (11-12): it folds the sections on top of what is folded, so a computer heading stays as it is (`AgentsFoldAllTest`).
+- A long list shows 20 rows, then "Show All N". Done (11-12): `AgentRowCap` (20, or all up to 25) and `AgentShowAllRow` with "Collapse" once open; every row while searching, filtering or paged (`AgentsTreeTest`, `ShowAllRowShotsTest`).
 - Sort not under By Status (iOS hides it there: the sections are the states). Done (11-12): the list settings leave Sort out under By Status (`AgentsHomeAffordancesTest`).
 - Interrupt in the row's long-press menu. Done (11-12): after Pin while the agent works or needs you and can be interrupted, on the list and the space page (`AgentOperations.interruptSession`, `AgentsHomeAffordancesTest`).
 - A tab with several agents shows as a tab row in By Repository too, not only by computer.
