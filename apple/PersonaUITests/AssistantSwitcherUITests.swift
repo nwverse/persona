@@ -10,6 +10,12 @@ final class AssistantSwitcherUITests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
     private var hub = ""
 
+    /// Back on the default assistant's main conversation for the classes after this one (`AssistantUITestReset`).
+    override class func tearDown() {
+        MainActor.assumeIsolated { AssistantUITestReset.toDefaultMain(hub: ProcessInfo.processInfo.environment["PERSONA_SWITCHER_HUB"]) }
+        super.tearDown()
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
@@ -126,5 +132,22 @@ final class AssistantSwitcherUITests: XCTestCase {
         guard let dir = env["PERSONA_SHOTS"] else { return }
         let look = env["PERSONA_SHOTS_APPEARANCE"] ?? "light"
         try? png.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name)-\(look).png"))
+    }
+}
+
+/// The app as a launch on the default assistant's main conversation leaves it: the pick and the conversation on screen
+/// are kept across launches, and a test class after one that switched or opened another conversation would start there.
+/// `hub`: the mock hub to pair with (its main conversation is `server/b2e4d6f8-0000-4000-8000-000000000001`).
+@MainActor enum AssistantUITestReset {
+    static func toDefaultMain(hub: String?) {
+        guard let hub else { return }
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-app.tab", "assistant", "-openAssistantManager", "assistant",
+                               "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001", "-openAssistantSidebar", "NO"]
+        app.launchPinned()
+        _ = app.buttons["assistant-sidebar-button"].waitForExistence(timeout: 20)
+        sleep(3) // the roster read and `-openAssistantManager`'s pick
+        app.terminate()
     }
 }

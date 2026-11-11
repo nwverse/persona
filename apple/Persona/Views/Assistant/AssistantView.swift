@@ -291,12 +291,20 @@ struct AssistantView: View {
                 let d = UserDefaults.standard
                 guard d.string(forKey: "openAssistantPage") != nil || d.string(forKey: "openShellPage") != nil else { return }
                 // With `-openAssistantManager <id>` the page first switches to that assistant, which closes pushed pages
-                // (`assistantSwitches`), and a launch with no conversation kept picks the main one once the hub answers,
-                // which goes back to the root too: open them after both.
+                // (`assistantSwitches`), and a launch that never chose a conversation picks the main one once the hub
+                // answers, which goes back to the root too: open them after those, and only wait for what will happen.
+                var mainComing = d.object(forKey: "assistant.current") == nil
                 if let id = d.string(forKey: "openAssistantManager") {
+                    let switches = model.assistantSwitches
                     for _ in 0..<40 where model.currentAssistant?.id != id { try? await Task.sleep(for: .milliseconds(250)) }
+                    if model.assistantSwitches != switches { mainComing = true }
                 }
-                for _ in 0..<20 where model.assistantCurrent == nil { try? await Task.sleep(for: .milliseconds(250)) }
+                if mainComing {
+                    // Until a conversation is on screen, or the settings are read and there is no main conversation to pick.
+                    for _ in 0..<20 where model.assistantCurrent == nil && !(model.assistantConfig != nil && model.assistantMain == nil) {
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                }
                 try? await Task.sleep(for: .milliseconds(300)) // after their own going back
                 switch UserDefaults.standard.string(forKey: "openAssistantPage") {
                 case "avatars": showAvatars = true

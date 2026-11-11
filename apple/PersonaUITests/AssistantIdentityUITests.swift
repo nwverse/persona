@@ -3,6 +3,13 @@ import XCTest
 final class AssistantIdentityUITests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
+    /// Back on the default assistant's main conversation for the classes after this one: these tests open another
+    /// conversation and switch assistants (`AssistantUITestReset`).
+    override class func tearDown() {
+        MainActor.assumeIsolated { AssistantUITestReset.toDefaultMain(hub: ProcessInfo.processInfo.environment["PERSONA_IDENTITY_MULTIPLE_HUB"]) }
+        super.tearDown()
+    }
+
     @MainActor private func launch(_ hubKey: String, extra: [String] = []) throws -> XCUIApplication {
         let hub = try XCTUnwrap(env[hubKey], "Provide an isolated mock hub for this roster size")
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
@@ -108,7 +115,9 @@ final class AssistantIdentityUITests: XCTestCase {
         XCTAssertTrue(work.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "assistant-switcher-row-m-8b04d2").firstMatch.exists)
         work.tap()
-        let named = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "工作")).firstMatch
+        // The head itself (not the row just tapped, while the list goes away) names the assistant switched to.
+        let named = app.buttons.matching(NSPredicate(format: "(identifier == %@ OR identifier == %@) AND label BEGINSWITH %@",
+                                                     "assistant-switcher", "assistant-sidebar", "工作")).firstMatch
         XCTAssertTrue(named.waitForExistence(timeout: 10), "the head names the assistant switched to:\n\(app.debugDescription)")
     }
 }

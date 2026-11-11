@@ -142,6 +142,7 @@ struct ManagerSwitchTests {
         #expect(reads("m-2") == 2, "back online: its page is read again")
 
         // The default's settings read while m-2 was current show at once: wait for its page's own read too.
+        await waitUntil { model.assistantByGroup[""] != nil }
         let settled = reads(nil)
         model.selectAssistantManager(nil)
         await waitUntil { model.assistantConfig?.launcher == "claude" && reads(nil) == settled + 1 }
@@ -414,6 +415,26 @@ struct ManagerSwitchTests {
         model.selectAssistantManager(nil)
         #expect(model.assistantSwitches == switches + 1, "a switch closes the pushed pages")
         #expect(model.assistantCurrent?.sessionID != "w1", "and leaves another assistant's conversation")
+    }
+
+    /// Back from an assistant without a main conversation (none on screen, as a relaunch there finds it), the default's
+    /// main conversation opens once its settings are read.
+    @Test func backFromAnAssistantWithoutAMainConversationTheDefaultsOpens() async throws {
+        let saved = UserDefaults.standard.object(forKey: "assistant.current")
+        defer { UserDefaults.standard.set(saved, forKey: "assistant.current") }
+        let hub = FakeHub()
+        let tz = TimeZone.current.identifier
+        hub.on("GET", "/api/v1/assistant") { req in
+            Data((req.headers[Self.header] == "m-1" ? #"{"machine_id":"w","launcher":"codex","cwd":"/w","conversations":[],"timezone":"\#(tz)"}"#
+                                                     : #"{"machine_id":"a","launcher":"claude","cwd":"/a","conversations":[],"timezone":"\#(tz)","main":"main-a"}"#).utf8)
+        }
+        let model = try model(hub, roster: try Self.roster())
+        model.selectAssistantManager("m-1")
+        await waitUntil { model.assistantConfig?.launcher == "codex" }
+        model.assistantCurrent = nil // m-1 has no main conversation: its new-conversation page
+        model.selectAssistantManager(nil)
+        await waitUntil { model.assistantCurrent != nil }
+        #expect(model.assistantCurrent?.sessionID == "main-a", "the default's main conversation")
     }
 
     /// While another assistant is current, the default's settings (Health, the channels) are read once in this run.
