@@ -214,7 +214,8 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		}
 	}
 	s.kbRezone(k.store, loc)
-	e := &kb.Engine{Store: k.store, Model: s.kbModel("inbox.triage"), ModelFor: func(id string) kb.Model { return s.kbModel(id) },
+	// The models are counted per lane run (kb_lanes.go: kbCounted, through the run's context).
+	e := &kb.Engine{Store: k.store, Model: kbCounted(s.kbModel("inbox.triage")), ModelFor: func(id string) kb.Model { return kbCounted(s.kbModel(id)) },
 		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, MinutesWritten: s.minutesWritten, LiveChanged: s.meetingKick, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
 		Selection: s.kbSelectionNow, TopicsOn: s.kbTopicsNow}
 	e.ObserveChanges()
@@ -391,24 +392,28 @@ func (s *Service) kbConnected() bool {
 }
 
 // kbLoop archives, compresses and keeps up the knowledge base, every two minutes (five seconds after a kick, which
-// also has the connector that changed read then), from
-// when the assistant first connected until ctx ends. While it is not connected the knowledge base is closed. A mesh
-// member's waits: the center's knowledge base is the group's (docs/server/mesh.md), this one's stays as it was.
+// also has the connector that changed read then), from when the assistant first connected until ctx ends. Each round
+// starts the lanes (kb_lanes.go) that are not still running. While it is not connected the knowledge base is closed,
+// once no lane runs (a lane started goes on to the end of its run with the engine it started with, as a round did). A
+// mesh member's waits: the center's knowledge base is the group's (docs/server/mesh.md), this one's stays as it was.
 func (s *Service) kbLoop(ctx context.Context) {
 	if s.kb.dir == "" {
 		return
 	}
 	var r kbRounds
+	lanes := s.kbLaneSet(&r)
 	t := time.NewTicker(kbPoll)
 	defer t.Stop()
 	for {
 		switch {
 		case !s.kbConnected():
-			s.kbClose()
+			if !lanes.busy() {
+				s.kbClose()
+			}
 		case !s.hello(ctx).Assistant.Standby:
 			if e, err := s.kbGet(ctx); err == nil {
 				s.kbTakeWaiting(e) // turns that came while it could not open, also when another call opened it
-				s.kbRound(ctx, e, &r)
+				lanes.startDue(func() bool { return s.kbPrepare(ctx, e) }, func(l *kbLane) { s.kbRunLane(ctx, e, l) })
 			}
 		}
 		var soon <-chan time.Time
@@ -419,38 +424,50 @@ func (s *Service) kbLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-soon:
+		case l := <-lanes.done:
+			lanes.ended(l) // a lane that became due while it ran starts now
 		case <-s.kb.wake:
+			lanes.tick()
 		case <-t.C:
+			lanes.tick()
 		case <-s.kb.kick:
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(kbDebounce):
 			}
+			lanes.tick()
 		}
 	}
 }
 
-// kbRounds is when the loop last did what it does less often than every round.
+// kbRounds is when the archive lane last did what it does less often than every run (only that lane touches it).
 type kbRounds struct {
 	items, prune, links time.Time
 	tagMore             bool // item tagging stopped at its cap with untagged items left
 }
 
-// kbRound is one go of the loop.
-func (s *Service) kbRound(ctx context.Context, e *kb.Engine, r *kbRounds) {
+// kbPrepare is what a round does before it starts lanes: nothing when the knowledge base is read-only or the user's
+// zone cannot be read (false: the lanes wait for the next round); else the archive kept in the user's zone and the
+// owner's name for the models' prompts read again.
+func (s *Service) kbPrepare(ctx context.Context, e *kb.Engine) bool {
 	if e.Store.ReadOnly() || !s.kbWritable(ctx) {
-		return
+		return false
 	}
 	loc, ok := s.kbZone(ctx)
 	if !ok {
 		s.logf("kb: the user's time zone could not be read: archiving waits for the next round")
-		return
+		return false
 	}
 	s.kbRun(ctx, func() { s.kbRezone(e.Store, loc) })
-	e.Owner = s.owner(ctx)                          // only this loop reads it (the models' prompts)
+	e.SetOwner(s.owner(ctx)) // the lanes read it while they run
+	return true
+}
+
+// kbArchiveLane is one run of the archive lane (kb_lanes.go): its steps one after another, each under kbRun so a panic
+// in one is logged and the steps after it still run.
+func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) {
 	s.kbRun(ctx, func() { s.kbConnectors(ctx, e) }) // mail, GitHub, the plugins'…, each when it is due
-	// Every step runs under kbRun: a panic in one is logged and the steps after it still run.
 	s.kbRun(ctx, func() {
 		for i, c := range e.DueForCompression(time.Now()) {
 			if i >= kbCompressMax || ctx.Err() != nil {
@@ -465,19 +482,13 @@ func (s *Service) kbRound(ctx context.Context, e *kb.Engine, r *kbRounds) {
 		}
 	})
 	s.kbRun(ctx, func() { e.RefreshProjects(ctx, 3) })
-	// Knowledge points by topic (kb/topics.go; assistant.kb_topics): a couple of distill calls, then a couple of merges.
-	s.kbRun(ctx, func() {
-		e.DistillTopics(ctx, 2)
-		e.RefreshTopics(ctx, 2)
-	})
-	// Recordings: those past recording_days go, or keep only their minutes until minutes_days (every round: a setting
-	// may just have shortened), complete ones get their summary, meetings their minutes (kb/minutes.go).
+	// Recordings: those past recording_days go, or keep only their minutes until minutes_days (every run: a setting may
+	// just have shortened), complete ones get their summary (their minutes are the minutes lane's).
 	s.kbRun(ctx, func() {
 		if n := e.PruneRecordings(time.Now()); n > 0 {
 			s.logf("kb: pruned %d recording(s)", n)
 		}
 		e.SummarizeRecordings(ctx, 3)
-		e.WriteMinutes(ctx, 2)
 	})
 	// Same work under two names, and the Moments (company feed) posts about each project: a few model calls every half hour.
 	if time.Since(r.links) >= kbItemsPoll {

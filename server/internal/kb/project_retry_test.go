@@ -32,7 +32,7 @@ func TestRefreshProjectsBacksOffAfterFailures(t *testing.T) {
 		if n := e.RefreshProjects(ctx, 3); n != 0 || m.calls != calls+1 {
 			t.Fatalf("failure %d: refreshed %d with %d call(s), want 0 with 1", i+1, n, m.calls-calls)
 		}
-		r := e.projectRetries["a"]
+		r, _ := e.projectRetries.get("a")
 		if wait := r.at.Sub(start); r.failures != i+1 || wait < want || wait > want+time.Minute {
 			t.Fatalf("failure %d: %d failure(s), next try in %v; want %d, %v", i+1, r.failures, wait, i+1, want)
 		}
@@ -40,7 +40,7 @@ func TestRefreshProjectsBacksOffAfterFailures(t *testing.T) {
 			t.Fatalf("failure %d: a round before the next try sent it again", i+1)
 		}
 		r.at = time.Now().Add(-time.Second) // the wait is over
-		e.projectRetries["a"] = r
+		e.projectRetries.set("a", r)
 	}
 	if len(logs) != 3 || !strings.Contains(logs[2], "failed 3 time(s) in a row, next try in 40m0s") {
 		t.Fatalf("logs = %q", logs)
@@ -50,7 +50,7 @@ func TestRefreshProjectsBacksOffAfterFailures(t *testing.T) {
 	if n := e.RefreshProjects(ctx, 3); n != 1 {
 		t.Fatalf("refreshed %d after the model came back", n)
 	}
-	if _, ok := e.projectRetries["a"]; ok {
+	if _, ok := e.projectRetries.get("a"); ok {
 		t.Error("the failures were not cleared by a success")
 	}
 	if p, _ := e.Store.Project("a"); p.Dirty {
@@ -93,8 +93,8 @@ func TestRefreshProjectsForgetsProjectsNoLongerDirty(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.RefreshProjects(ctx, 3)
-	if len(e.projectRetries) != 0 {
-		t.Fatalf("retries = %v", e.projectRetries)
+	if n := e.projectRetries.len(); n != 0 {
+		t.Fatalf("%d waiting", n)
 	}
 }
 

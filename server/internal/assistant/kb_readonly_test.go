@@ -100,7 +100,7 @@ func TestKBReadOnlyAbsentArchiveAndWriteRefusals(t *testing.T) {
 		t.Fatal("read-only engine has processing callbacks")
 	}
 	s.kbAgentTurn(ctx, assistantwire.KBAgentTurn{Line: "example"})
-	s.kbRound(ctx, e, &kbRounds{})
+	kbRoundNow(ctx, s, e)
 	s.kbConnectors(ctx, e)
 	s.kbCollectItems(ctx, e)
 	if _, _, _, err := (busArchive{s: s}).Changes(ctx, "", 1); !errors.Is(err, kb.ErrReadOnly) {
@@ -181,7 +181,7 @@ func TestKBReadOnlyExistingArchiveRemainsUnchanged(t *testing.T) {
 	s.kb.waiting = []assistantwire.KBAgentTurn{{Line: "must not be written"}}
 	s.kb.mu.Unlock()
 	s.kbTakeWaiting(e)
-	s.kbRound(context.Background(), e, &kbRounds{})
+	kbRoundNow(context.Background(), s, e)
 	if _, err := e.Apply(kb.KindProject, "example", kb.Update{Summary: "overwrite"}); !errors.Is(err, kb.ErrReadOnly) {
 		t.Fatal(err)
 	}

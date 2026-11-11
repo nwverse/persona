@@ -57,7 +57,7 @@ type Engine struct {
 	Sources      []Source
 	Model        Model
 	ModelFor     func(string) Model
-	Owner        string // how the owner is called (the AI writes the Chinese "I" for them)
+	Owner        string // how the owner is called (the AI writes the Chinese "I" for them); SetOwner changes it later
 	Logf         func(string, ...any)
 	// ExtraDirs are directories outside the data dir that Search also reads (Markdown files, read only): notes the
 	// user keeps elsewhere, e.g. a git repository of facts. Absolute paths.
@@ -110,13 +110,28 @@ type Engine struct {
 
 	find findCache // what Find read last time, kept while the files are unchanged (find_cache.go)
 
-	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
+	projectRetries retrySet // projects whose rewrite failed, by slug (RefreshProjects)
 	// topicRetries: sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>").
-	topicRetries map[string]projectRetry
+	topicRetries retrySet
 	// recordingRetries: recordings whose summary failed, by id (SummarizeRecordings).
-	recordingRetries map[string]projectRetry
+	recordingRetries retrySet
 	// itemRetries: documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems).
-	itemRetries map[string]projectRetry
+	itemRetries retrySet
+
+	// ownerNow is how the owner is called as the knowledge base loop last read it (SetOwner); its lanes read it while
+	// it is set (#4247), so it is not the Owner field. Nil: Owner.
+	ownerNow atomic.Pointer[string]
+}
+
+// SetOwner sets how the owner is called in the models' prompts from now on; safe while the lanes run.
+func (e *Engine) SetOwner(owner string) { e.ownerNow.Store(&owner) }
+
+// ownerName is how the owner is called: what SetOwner set last, else Owner.
+func (e *Engine) ownerName() string {
+	if o := e.ownerNow.Load(); o != nil {
+		return *o
+	}
+	return e.Owner
 }
 
 func (e *Engine) modelFor(id string) Model {

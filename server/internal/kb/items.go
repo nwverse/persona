@@ -142,18 +142,14 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 			if it.TaggedAt.IsZero() && it.Title != "" && !it.Locked {
 				key := it.Kind + "/" + it.ID
 				due[key] = true
-				if now.Before(e.itemRetries[key].at) {
+				if e.itemRetries.waits(key, now) {
 					continue
 				}
 				todo = append(todo, it)
 			}
 		}
 	}
-	for key := range e.itemRetries { // tagged, locked or gone in the meantime
-		if !due[key] {
-			delete(e.itemRetries, key)
-		}
-	}
+	e.itemRetries.keep(due) // tagged, locked or gone in the meantime
 	for calls := 0; len(todo) > 0 && ctx.Err() == nil; calls++ {
 		if calls >= max {
 			return true, nil
@@ -177,7 +173,7 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 		}
 		var out itemTags
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBItemsInput(in), 6000, &out)
+		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
 			if ai.IsPaused(err) || ctx.Err() != nil {
@@ -185,13 +181,13 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 			}
 			var f projectRetry
 			for _, it := range batch {
-				f = retryLater(&e.itemRetries, it.Kind+"/"+it.ID)
+				f = e.itemRetries.fail(it.Kind + "/" + it.ID)
 			}
 			e.logf("tag items: %v (%d item(s), failed %d time(s) in a row, next try in %s)", err, len(batch), f.failures, retryWait(f.failures))
 			continue
 		}
 		for _, it := range batch {
-			delete(e.itemRetries, it.Kind+"/"+it.ID)
+			e.itemRetries.clear(it.Kind + "/" + it.ID)
 		}
 		e.Store.applyMu.Lock()
 		now := time.Now().UTC()

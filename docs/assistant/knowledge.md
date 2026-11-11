@@ -10,7 +10,7 @@ Since 2026-11-04 the knowledge base belongs to the manager (the assistant proces
 As part of moving hub business logic into managers (`docs/assistant/assistant.md` ("Boundary with hub")), the entire knowledge base moved into the manager (currently there is just one, the assistant):
 
 - **The manager runs the knowledge base** (`server/internal/assistant/kb*.go`): the engine (`server/internal/kb`: archiving, model-based compression and organization, indexing, timezone, people / groups / projects, attaching Moments posts to projects),
-  its loop (every 2 minutes, or 5 seconds after a source has new data), and its state (files in the data directory, the `kb_entities` index table, `handles.key`; same layout as before, only the manager writes).
+  its loop (every 2 minutes, or 5 seconds after a source has new data; its work runs in lanes, "Pipeline" below), and its state (files in the data directory, the `kb_entities` index table, `handles.key`; same layout as before, only the manager writes).
   The assistant's `kb_*` tools, knowledge base in live snapshots, and knowledge directory in the assistant directory's CLAUDE.md are local manager calls (no longer `app.call kb.*`).
 - **Sources** (in the manager's `internal/extmgr` since 2026-11-05; the methods below are unchanged but now called directly in-process, without the bus; attachments also no longer have a 4 MB limit): data delivered by connectors and plugins (chat messages, posts…). The knowledge base asks sources (`app.call connectors.*`, data in and out):
   `connectors.archives` (which connectors to read now: signed in with "Include in knowledge base" on, their polling intervals, other archive names, attachment support; and those with documents / meetings / events),
@@ -161,6 +161,22 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
 
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
+The loop's work runs in three **lanes** (`assistant/kb_lanes.go`, #4247), each in its own goroutine, so a slow step in one (a meeting's
+minutes, a slow model) no longer holds back the others. Every round (2 minutes, a wake, or 5 seconds after a kick) starts each lane
+that is not still running; a lane that became due while it ran starts again as soon as it ends. The lanes are split by what they write,
+so no two write the same files at once:
+
+- **archive**: steps 1–5 below except knowledge points and minutes, one after another in the order given (the project rewrites see
+  what the same run's compression made due): sources, compression, project rewrites, recordings' summaries and retention, duplicate
+  projects and Moments links, item tagging, pruning. It writes chats, projects, people, recordings' summaries and items.
+- **topics**: knowledge points (step 3b), two distill calls then two merges, two at a time (topics and their sources' marks, under
+  the store's topic lock, a merge applied only while its topic is as it was asked about).
+- **minutes**: meeting minutes from recordings ([meeting-minutes.md](meeting-minutes.md)), whose calls can take many minutes.
+
+Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
+<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). While the
+assistant is not connected, the knowledge base closes once no lane runs; a lane started goes on to the end of its run, as a round did.
+
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.
    Fetch incrementally by cursor (`afterPosition`); a newly seen chat starts with its latest 100 messages. Append to that day's `messages/*.md` (dates and times in the user's timezone, see "Time zones" below).
    Download images / files / rich-text images to `attachments/<date>/` (up to 20 MB each), leaving `[附件](相对路径)` ("attachment; relative path") in the line; record Lark document links in `docs/`.
@@ -188,8 +204,8 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
    and projects whose aliases are locked (set by hand) are not touched.
    Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + summaries of up to 8 related chats; a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
    `meta.json` bidirectionally. Long-term projects (`long`) never revert to short-term.
-3b. **Topics** (#3783, `kb/topic_distill.go`, `kb/topic_merge.go`; "Topics" below): after the project rewrites, at most 2 distill calls (new timeline lines or a changed chat summary → candidate
-   knowledge points) and 2 merges (a topic's candidates folded into its points) per round, while `assistant.kb_topics` is on.
+3b. **Topics** (#3783, `kb/topic_distill.go`, `kb/topic_merge.go`; "Topics" below): in the topics lane, at most 2 distill calls (new timeline lines or a changed chat summary → candidate
+   knowledge points) and 2 merges (a topic's candidates folded into its points) per run, two calls at a time, while `assistant.kb_topics` is on.
 4. **Documents / meetings / events**: every 30 minutes read Lark calendar (yesterday through 8 days ahead, busy events) and the latest 30 meetings, fill titles for 10 documents (first line of Markdown export),
    and send new or changed items to the model in batches of 40 for tags and project links, at most 3 calls per round; items left over are tagged in the next rounds without reading the sources again.
    The items of a batch whose call failed wait like a chat whose compression failed, and the next batch goes on (#4246; before, tagging had no per-round limit and the same failing batch was sent every half hour).
