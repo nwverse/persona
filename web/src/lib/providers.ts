@@ -1,5 +1,5 @@
 // Settings › Model providers (#2455, docs/integrations/launchers.md): the add / edit wizard's form for a compatible gateway typed by hand
-// (cindy's AddProviderWizard: connect → models, the rest folded under "Advanced"; the hub's presets are lib/launcher-presets.ts), its checks, the POST / PUT body, and the "Import from ~/.zshrc" preview. Pure: the views
+// (cindy's AddProviderWizard: connect → models, the rest folded under "Advanced"; the hub's presets are lib/launcher-presets.ts), its checks, the POST / PUT body, and the import preview of a computer's aliases. Pure: the views
 // in views/settings/Provider*.tsx only render it.
 import { ApiError, errorText } from "./api";
 import { hostOf as urlHost } from "./hubs";
@@ -7,7 +7,7 @@ import { displayNameProblem, launcherNameProblem, testableKey } from "./launcher
 import type { ScopeView } from "./provider-scope";
 import { TIER_SLOTS, type TierSource } from "./provider-tiers";
 import { EFFORTS } from "./session-actions";
-import { t } from "../i18n";
+import { formatList, t } from "../i18n";
 
 export type ProviderAPI = "messages" | "responses" | "chat";
 
@@ -265,8 +265,11 @@ export function headersProblem(raw: string): string {
   return "";
 }
 
+/** The hub keeps at most this many variables in a provider's environment (checkEnv); an import leaves the rest out as `limit`. */
+const ENV_LIMIT = 50;
+
 /** The hub's checkEnv (and the node's reading of it): NAME=value a line, "export " before it is fine, a line starting
- *  with # is a comment, at most 50. */
+ *  with # is a comment, at most ENV_LIMIT. */
 export function envProblem(raw: string): string {
   const lines = raw.split("\n");
   let count = 0;
@@ -277,7 +280,7 @@ export function envProblem(raw: string): string {
     const at = rest.indexOf("=");
     const name = at < 0 ? "" : rest.slice(0, at).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return t("lib-providers.env_line", { line: i + 1 });
-    if (++count > 50) return t("lib-providers.env_limit");
+    if (++count > ENV_LIMIT) return t("lib-providers.env_limit");
   }
   return "";
 }
@@ -482,41 +485,149 @@ export const testText = (r: TestResult) => (r.ok ? t("lib-providers.test_ok", { 
 /** The model "Test connection" asks with: the default, else the first checked, else the first listed. */
 export const testModel = (f: ProviderForm) => f.model.trim() || f.models.find((m) => m.checked)?.id || f.models[0]?.id || "";
 
-// ── Import from ~/.zshrc ────────────────────────────────────
+// ── Import from a computer's aliases ────────────────────────
 
-/** GET /api/v1/launchers/import's provider (no key, no headers). */
+/** Why an alias's variable is not carried into the new provider's environment (the hub's rules, docs/integrations/launchers.md). */
+export type SkipReason = "credential" | "shell" | "computer" | "limit";
+/** What hiding an alias after the import would do: `ok` hides it, `in_use` / `elsewhere` keep it (with why), `none` has nothing to hide. */
+export type HideCheck = "ok" | "in_use" | "elsewhere" | "none";
+
+/** One alias of an imported group: the file it came from and whether it can be hidden once imported. */
+export interface ImportSource {
+  alias: string;
+  /** "~/.zshrc", "~/.bashrc", "~/.bash_aliases". */
+  file: string;
+  hide: HideCheck;
+  /** in_use: plain names of what uses it (a purpose, a scheduled task, a profile). */
+  uses?: string[];
+  /** elsewhere: the computers where the new provider would not stand in for it. */
+  elsewhere?: string[];
+}
+
+/** GET /api/v1/launchers/import's provider: the aliases on one URL and key (no key, no headers, no variable values). */
 export interface ImportedProvider extends Omit<ProviderView, "origin"> {
   aliases: string[];
   existing?: string;
+  /** One that will be created (no `existing`) under another name than `name`: an alias Persona already lists makes the hub
+   *  save "<alias>-2". `name` stays what POST takes. */
+  create_as?: string;
   source?: string;
+  /** Names of the variables that go into the provider's environment, sorted. */
+  env_names?: string[];
+  /** The alias's variables that are left out, and why. */
+  skipped_env?: { name: string; reason: SkipReason | string }[];
+  /** One per alias, in `aliases` order (absent from older hubs). */
+  sources?: ImportSource[];
+  /** Settings other than the model its aliases set differently (tiers, effort, args, limits, proxy, headers, env, auth, custom_model). */
+  differs?: string[];
+  /** Two or more aliases: what each becomes as a provider of its own. */
+  variants?: ImportedProvider[];
+}
+
+/** POST /api/v1/launchers/import's answer. */
+export interface ImportResult {
+  created?: string[];
+  updated?: string[];
+  hidden?: string[];
+  kept?: Omit<ImportSource, "file">[];
 }
 
 export interface ImportRow {
+  /** What the row is called: the name a group made one provider is saved under, else the group's own. */
   name: string;
   host: string;
   models: string;
   aliases: string;
-  /** "Merge into xx" or "New". */
+  /** "Merge into xx", "New", or how many providers a split group makes. */
   action: string;
   merge: boolean;
 }
 
 export const hostOf = (u?: string) => (u ? urlHost(u) : "");
+const names = (xs: string[]) => xs.join(t("lib-providers.alias_separator"));
 
-export function importRow(p: ImportedProvider): ImportRow {
+/** The group asks "A provider for each alias" / "One provider": its aliases set more than the model differently. */
+export const importCanSplit = (p: ImportedProvider) => !!p.differs?.length && (p.variants?.length ?? 0) > 1;
+
+/** The providers a group becomes: its variants when split, else the group itself. */
+export const importOutcome = (p: ImportedProvider, split: boolean) => (split && importCanSplit(p) ? p.variants! : [p]);
+
+/** The name a provider of the import is saved under. */
+export const importCreates = (p: ImportedProvider) => p.create_as || p.name;
+
+export function importRow(p: ImportedProvider, split = false): ImportRow {
   const n = new Set([...(p.models ?? []).map((m) => m.id), ...(p.model ? [p.model] : [])]).size;
+  const parts = split && importCanSplit(p);
   return {
-    name: p.name,
+    name: parts ? p.name : importCreates(p),
     host: hostOf(p.base_url) || t("lib-providers.official_host"),
     models: t("lib-providers.model_count", { count: n }),
-    aliases: (p.aliases ?? []).join(t("lib-providers.alias_separator")),
-    action: p.existing ? t("lib-providers.merge_into", { name: p.existing }) : t("lib-providers.create"),
-    merge: !!p.existing,
+    aliases: names(p.aliases ?? []),
+    action: parts ? t("lib-providers.split_count", { count: p.variants!.length }) : p.existing ? t("lib-providers.merge_into", { name: p.existing }) : t("lib-providers.create"),
+    merge: !parts && !!p.existing,
   };
 }
 
-export const importSummary = (r: { created?: string[]; updated?: string[] }) =>
-  t("lib-providers.import_summary", { created: r.created?.length ?? 0, updated: r.updated?.length ?? 0 });
+/** Where the aliases came from, a line per file ("From a, b in ~/.zshrc"); an older hub names no file. */
+export function importFrom(p: ImportedProvider): string[] {
+  if (!p.sources?.length) return p.aliases?.length ? [t("lib-providers.from_aliases", { aliases: names(p.aliases) })] : [];
+  const files = new Map<string, string[]>();
+  for (const s of p.sources) files.set(s.file, [...(files.get(s.file) ?? []), s.alias]);
+  return [...files].map(([file, aliases]) => t("lib-providers.from_file", { aliases: names(aliases), file }));
+}
+
+/** The variables the provider brings along, or "" when none. */
+export const importBrings = (p: ImportedProvider) => (p.env_names?.length ? t("lib-providers.brings", { names: names(p.env_names) }) : "");
+
+const SKIP_ORDER = ["credential", "shell", "computer", "limit"];
+
+/** The variables left out, a line per reason in plain words; an unknown reason reads as the generic one. */
+export function importLeftOut(p: ImportedProvider): string[] {
+  const by = new Map<string, string[]>();
+  for (const s of p.skipped_env ?? []) {
+    const reason = SKIP_ORDER.includes(s.reason) ? s.reason : "other";
+    by.set(reason, [...(by.get(reason) ?? []), s.name]);
+  }
+  return [...SKIP_ORDER, "other"].filter((r) => by.has(r)).map((r) => t(`lib-providers.left_out_${r}`, { names: names(by.get(r)!), max: ENV_LIMIT }));
+}
+
+const DIFFERS = ["tiers", "effort", "args", "limits", "proxy", "headers", "env", "auth", "custom_model"];
+
+/** What the group's aliases set differently ("These aliases set the tier models and proxy differently."), or "". */
+export function importDiffers(p: ImportedProvider): string {
+  if (!p.differs?.length) return "";
+  const what = p.differs.map((d) => (DIFFERS.includes(d) ? t(`lib-providers.differs_${d}`) : d));
+  return t("lib-providers.differs", { what: formatList(what) });
+}
+
+/** The providers the picked groups become (importOutcome). */
+const pickedOutcomes = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) =>
+  list.filter((p) => picked.has(p.name)).flatMap((p) => importOutcome(p, split.has(p.name)));
+
+/** The sources the hide row speaks for: the picked groups', each as the provider it lands in (a split group's variants). */
+export const importSources = (list: ImportedProvider[], picked: Set<string>, split: Set<string>): ImportSource[] =>
+  pickedOutcomes(list, picked, split).flatMap((x) => x.sources ?? []);
+
+/** Whether the import really merges into a provider that is there: a picked group that lands in one, or a variant of a
+ *  split one that does. */
+export const importMerges = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) =>
+  pickedOutcomes(list, picked, split).some((x) => !!x.existing);
+
+/** How many providers the import makes or merges into: a split group counts each alias. */
+export const importCount = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) => pickedOutcomes(list, picked, split).length;
+
+/** Why an alias stays when the imported ones are hidden. */
+export function importStays(s: Omit<ImportSource, "file">): string {
+  if (s.hide === "in_use" && s.uses?.length) return t("lib-providers.stays_in_use", { alias: s.alias, uses: formatList(s.uses) });
+  if (s.hide === "elsewhere" && s.elsewhere?.length) return t("lib-providers.stays_elsewhere", { alias: s.alias, computers: formatList(s.elsewhere) });
+  return t("lib-providers.stays", { alias: s.alias });
+}
+
+export const importSummary = (r: ImportResult) => {
+  const counts = { created: r.created?.length ?? 0, updated: r.updated?.length ?? 0 };
+  if (!r.hidden?.length && !r.kept?.length) return t("lib-providers.import_summary", counts);
+  return t("lib-providers.import_summary_hide", { ...counts, hidden: r.hidden?.length ?? 0, kept: r.kept?.length ?? 0 });
+};
 
 /** What a failed import says: the two cases the hub names, otherwise its message. */
 export function importErrorText(e: unknown): string {

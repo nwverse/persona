@@ -271,14 +271,14 @@ func (s *Service) launcherRoutes() {
 			apierr.WriteJSON(w, map[string]any{"ok": true, "deleted": true})
 			return
 		}
-		s.models.mu.Unlock()
 		// an rc-file launcher, or plain claude (#4384): hidden in Persona, the file is not touched; a start that names it,
-		// or a default that runs it, still runs it
-		hidden := s.hiddenLaunchers(ctx)
-		if !slices.Contains(hidden, name) {
-			hidden = append(hidden, name)
+		// or a default that runs it, still runs it. Under the lock, like an import's hiding and a restore.
+		hidden, err := s.readHiddenLaunchers(ctx)
+		if err == nil && !slices.Contains(hidden, name) {
+			err = s.putSetting(ctx, launchersHiddenKey, append(hidden, name))
 		}
-		if err := s.putSetting(ctx, launchersHiddenKey, hidden); err != nil {
+		s.models.mu.Unlock()
+		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -329,8 +329,13 @@ func (s *Service) launcherRoutes() {
 	})
 	s.handle("POST /api/v1/launchers/{name}/restore", func(w http.ResponseWriter, r *http.Request) {
 		ctx, name := r.Context(), r.PathValue("name")
-		hidden := slices.DeleteFunc(s.hiddenLaunchers(ctx), func(n string) bool { return n == name })
-		if err := s.putSetting(ctx, launchersHiddenKey, hidden); err != nil {
+		s.models.mu.Lock() // launchers.hidden changes one at a time (the import, hiding, restoring)
+		hidden, err := s.readHiddenLaunchers(ctx)
+		if err == nil {
+			err = s.putSetting(ctx, launchersHiddenKey, slices.DeleteFunc(hidden, func(n string) bool { return n == name }))
+		}
+		s.models.mu.Unlock()
+		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}

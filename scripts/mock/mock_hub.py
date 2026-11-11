@@ -10562,27 +10562,58 @@ LAUNCHER_PRESETS = [
      "models_error": "插件读模型列表超时"},
 ]
 
-# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and ~/.zshrc import. Two managed
+# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and the alias import. Two managed
 # providers (one with every advanced field), "Test connection" that passes or fails (a key or address with "bad" in it fails),
-# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
-# too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers. With the
-# feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
+# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and the rc-file launchers of the aliases macbook's import
+# preview reads (#5024). The import itself answers in every mode (a page served by Vite against a plain mock asked for it and got
+# a 404): 4 providers on macbook (one merging into gw_full when it is there, one whose aliases differ in more than the model, one
+# from ~/.bashrc with variables carried over and left out), its hide checks recomputed against the launchers each time; studio's
+# node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
+# With the feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
 # launchers list the managed providers with their display names (gw_full has one, anthropic_main shows its ID).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
+# GET /api/v1/launchers/import's groups as the hub reads them from macbook's aliases. `existing` (a provider on the same address,
+# a variant's by its origin) and `hide` (none once Persona lists no such launcher or hides it) are worked out per request,
+# import_preview(); `hide` here is what an alias Persona lists would get.
 PROVIDER_IMPORT = [
-    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "model": "example-opus",
+    # two aliases that differ only in the model: one provider, merging into gw_full when it is there
+    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use", "model": "example-opus",
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
-     "aliases": ["cc_full", "cc_full_haiku"], "existing": "gw_full"},
-    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True,
-     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"]},
-    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True,
-     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}],
-     "aliases": ["cc_kimi", "cc_kimi_fast"], "has_headers": True},
+     "aliases": ["cc_full", "cc_full_haiku"],
+     "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
+     "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},
+    # one gateway and key, but the aliases set their tiers and effort differently: each can become a provider of its own
+    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}], "has_headers": True,
+     "effort": "high", "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"],
+     "aliases": ["cc_kimi", "cc_kimi_fast"], "differs": ["tiers", "effort"],
+     "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}],
+     "variants": [
+         {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}], "has_headers": True, "effort": "high",
+          "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "aliases": ["cc_kimi"],
+          "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"}]},
+         {"name": "cc_kimi_fast", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3-turbo", "models": [{"id": "kimi-k3-turbo"}], "has_headers": True, "effort": "low", "haiku_model": "kimi-k3-turbo",
+          "aliases": ["cc_kimi_fast"], "sources": [{"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}]},
+     ]},
+    # from ~/.bashrc: two variables carried over, three left out; the server defines cc_relay for another address
+    {"name": "cc_relay", "base_url": "https://relay.example.org", "auth": "api_key", "has_key": True, "own_service": "use",
+     "model": "relay-pro", "models": [{"id": "relay-pro"}], "aliases": ["cc_relay"], "has_env": True,
+     "env_names": ["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "DISABLE_TELEMETRY"],
+     "skipped_env": [{"name": "HOME", "reason": "computer"}, {"name": "RELAY_TOKEN", "reason": "credential"}, {"name": "WORKDIR", "reason": "shell"}],
+     "sources": [{"alias": "cc_relay", "file": "~/.bashrc", "hide": "elsewhere", "elsewhere": ["服务器"]}]},
 ]
+# what a preview group carries that a stored provider does not
+IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "variants", "env_names", "skipped_env")
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
@@ -10596,6 +10627,14 @@ if MOCK_PROVIDERS:
          "no_proxy": "localhost,127.0.0.1", "timeout_ms": 600000, "compact_window": 400000, "max_context": 800000, "effort": "high"},
         {"name": "anthropic_main", "source": "persona", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-4-5", "has_key": True,
          "auth": "api_key", "models": [{"id": "claude-sonnet-4-5", "context_window": 200000}]},
+    ]
+    # the aliases the import reads on macbook, as Persona lists them (cc_glm is there already)
+    LAUNCHERS[-1:-1] = [
+        {"name": "cc_full", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-opus", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_full_haiku", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-haiku", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
     ]
     _features_without_auto_name = features
 
@@ -10646,6 +10685,51 @@ def machine_launchers():
     return launcher_health_list(out)
 
 
+def _import_hide(src):
+    """One alias's hide check as the hub makes it now: none when Persona lists no rc-file launcher of that name or hides it."""
+    rc = [l for l in LAUNCHERS if l["source"] == "zshrc" and l["name"] == src["alias"]]
+    if not rc or any(l.get("hidden") for l in rc): return {"alias": src["alias"], "file": src["file"], "hide": "none"}
+    return dict(src)
+
+
+def _import_existing(base_url, alias=None):
+    """The stored provider an import lands in: one on the same address (the mock knows no keys), or for a variant one that
+    came from that alias (origin zshrc:<alias>@<machine>)."""
+    for l in LAUNCHERS:
+        if l["source"] == "persona" and l.get("base_url") == base_url and (alias is None or (l.get("origin") or "").startswith("zshrc:%s@" % alias)):
+            return l["name"]
+    return None
+
+
+def _import_name(name, taken):
+    """The name an imported provider is saved under: its own, or with -2, -3… when a launcher already has it (an alias
+    Persona lists does), as the hub's importLaunchers names it."""
+    out, n = name, 2
+    while out in taken: out, n = "%s-%d" % (name, n), n + 1
+    return out
+
+
+def import_preview():
+    """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
+    created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
+    same launchers; the names a group may take are taken for the groups after it."""
+    out, taken = [], {l["name"] for l in LAUNCHERS}
+    for g in copy.deepcopy(PROVIDER_IMPORT):
+        names = set()
+        for x in [g] + g.get("variants", []):
+            x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
+            existing = _import_existing(x["base_url"], x["aliases"][0] if x is not g else None)
+            if existing:
+                x["existing"] = existing
+                continue
+            name = _import_name(x["name"], taken)
+            if name != x["name"]: x["create_as"] = name
+            names.add(name)
+        taken |= names
+        out.append(g)
+    return out
+
+
 def _provider_redacted(b):
     """What the e2e reads back of a request: the key and the headers only as whether they were sent."""
     out = {k: v for k, v in b.items() if k not in ("api_key", "headers")}
@@ -10675,6 +10759,55 @@ def _display_name_refused(h, b):
     if len(d) <= 64 and not any(unicodedata.category(c) == "Cc" for c in d): return False
     h.send_json({"error": "显示名最多 64 个字，不能有换行等控制字符"}, 400)
     return True
+
+
+def import_route(h, method, q, body):
+    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
+    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
+    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
+    hidden, the others kept with why."""
+    b = json.loads(body or b"{}") if method == "POST" else {}
+    machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
+    if machine == "studio":
+        h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 alias，需要更新 node"}, 409); return
+    if not machine_online(machine):
+        h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return
+    if method == "GET":
+        h.send_json({"machine": machine, "providers": import_preview()}); return
+    PROVIDER_LOG["import"] = b
+    groups = {g["name"]: g for g in import_preview()}
+    names, split = b.get("providers") or [], b.get("split") or []
+    unknown = [n for n in names if n not in groups] + [n for n in split if n not in names]
+    if unknown:
+        h.send_json({"code": "bad_request", "error": "没有可导入的 %s" % unknown[0]}, 400); return
+    created, updated, landed = [], [], []
+    taken = {l["name"] for l in LAUNCHERS}
+    for g in (groups[n] for n in names):
+        for x in (g["variants"] if g["name"] in split and g.get("variants") else [g]):
+            landed += x.get("sources", [])
+            if x.get("existing"):
+                l = next(l for l in LAUNCHERS if l["name"] == x["existing"])
+                have = {m["id"] for m in l.get("models", [])}
+                l["models"] = l.get("models", []) + [m for m in x.get("models", []) if m["id"] not in have]
+                updated.append(x["existing"])
+                continue
+            name = x.get("create_as") or x["name"]  # as previewed, unless something took it since
+            if name in taken: name = _import_name(x["name"], taken)
+            l = {k: v for k, v in x.items() if k not in IMPORT_ONLY}
+            l.update(name=name, source="persona", origin="zshrc:%s@%s" % (x["aliases"][0], machine))
+            LAUNCHERS.insert(0, l)
+            taken.add(name)
+            created.append(name)
+    hidden, kept = [], []
+    if b.get("hide_aliases"):
+        for src in map(_import_hide, landed):  # recomputed against what was just saved
+            if src["hide"] == "ok":
+                for l in LAUNCHERS:
+                    if l["source"] == "zshrc" and l["name"] == src["alias"]: l["hidden"] = True
+                hidden.append(src["alias"])
+            elif src["hide"] != "none":
+                kept.append({k: v for k, v in src.items() if k != "file"})
+    h.send_json({"created": created, "updated": updated, "hidden": hidden, "kept": kept})
 
 
 # POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
@@ -10720,10 +10853,12 @@ def _catalog_route(h, body):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
-    "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
-    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route) and the catalog lookup
+    (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection" and "Fetch
+    models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test keeps its own
+    answers then (_builtin_preset_route)."""
+    if p == "/api/v1/launchers/import":
+        import_route(h, method, q, body); return True
     if p == "/api/v1/launchers/catalog" and method == "POST":
         _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
@@ -10738,29 +10873,6 @@ def providers_route(h, method, p, q, body):
         except ValueError:
             return False
         if not isinstance(b, dict) or b.get("preset"): return False
-    if p == "/api/v1/launchers/import":
-        machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
-        if machine == "studio":
-            h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 ~/.zshrc，需要更新 node"}, 409); return True
-        if not machine_online(machine):
-            h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return True
-        if method == "GET":
-            h.send_json({"machine": machine, "providers": PROVIDER_IMPORT}); return True
-        PROVIDER_LOG["import"] = b
-        created, updated = [], []
-        for imp in PROVIDER_IMPORT:
-            if imp["name"] not in b.get("providers", []): continue
-            if imp.get("existing"):
-                l = next(x for x in LAUNCHERS if x["name"] == imp["existing"])
-                have = {m["id"] for m in l.get("models", [])}
-                l["models"] = l.get("models", []) + [m for m in imp["models"] if m["id"] not in have]
-                updated.append(imp["existing"])
-            else:
-                l = {k: v for k, v in imp.items() if k not in ("aliases", "existing")}
-                l.update(source="persona", origin="zshrc:%s@%s" % (imp["aliases"][0], machine))
-                LAUNCHERS.insert(0, l)
-                created.append(imp["name"])
-        h.send_json({"created": created, "updated": updated}); return True
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)

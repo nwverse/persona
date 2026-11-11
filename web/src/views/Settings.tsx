@@ -754,6 +754,12 @@ function Models() {
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("settings.search_placeholder")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" aria-label={t("settings.search_providers")} />
           {query && <IconButton icon="x" label={t("settings.clear")} size={22} iconSize={12} onClick={() => setQuery("")} />}
         </label>
+        {list && (
+          // for people who already run claude from aliases on a computer: turns them into providers (the dialog explains when there is no computer)
+          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => setImporting(true)}>
+            <span className="max-sm:sr-only">{t("settings-providerimport.import")}</span>
+          </Button>
+        )}
         <Button tone="accent" icon="plus" onClick={() => setEditing("new")}>
           <span className="max-sm:hidden">{t("settings.add_provider")}</span>
           <span className="sm:hidden">{t("settings.add_provider_short")}</span>
@@ -800,16 +806,6 @@ function Models() {
       {hidden.length > 0 && (
         <Group title={t("settings.hidden_title", { count: hidden.length })} footer={t("settings.hidden_footer")}>
           {hidden.map(row)}
-        </Group>
-      )}
-      {list && !query && (
-        // "Import from ~/.zshrc" reads a computer's ~/.zshrc, so it is for people who already run claude there, and needs a computer
-        <Group title={t("settings.providers_advanced")} footer={machines.length ? t("settings.zshrc_import_hint") : t("settings.zshrc_import_no_machines")}>
-          <Row label={t("settings-providerimport.title")} icon="terminal">
-            <Button tone="secondary" icon="download" disabled={machines.length === 0} onClick={() => setImporting(true)}>
-              {t("settings-providerimport.import")}
-            </Button>
-          </Row>
         </Group>
       )}
       {list && !query && sync.length > 0 && (

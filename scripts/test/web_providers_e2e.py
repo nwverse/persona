@@ -3,7 +3,9 @@
 gateway (pick → connect → models, "Advanced" folded), named by a display name in any language with the startup ID under
 "More options" or left to the hub (#5029), the Connect step checking the address and key by itself (#4881) and "Test"
 failing by hand, the Claude Code tiers and the advanced fields coming back when a provider is reopened, a rename and a PUT
-that leaves out what was not touched, and "Import from ~/.zshrc" (preview, merge, the outdated and offline computers).
+that leaves out what was not touched, and the import from a computer's aliases (#5024: the header button, the preview with the file
+each alias came from, variables carried over and left out, a group's "A provider for each alias" / "One provider" choice by mouse
+and keyboard, hiding the imported aliases with why the others stay, merge, the outdated and offline computers).
 
 Needs the web page against the fake hub with MOCK_PROVIDERS=1 and Playwright for Python:
 
@@ -248,20 +250,61 @@ def edit_full(r):
 
 def zshrc_import(r):
     page = r.page
-    page.get_by_role("button", name="导入").first.click()
-    d = r.dialog("从 ~/.zshrc 导入")
+    page.get_by_role("button", name="导入", exact=True).click()
+    d = r.dialog("从电脑上的 alias 导入")
+    expect(d.get_by_text("~/.zshrc、~/.bashrc 和 ~/.bash_aliases", exact=False)).to_be_visible()
     d.get_by_label("电脑", exact=True).select_option("macbook")
     rows = d.get_by_role("list", name="可以导入的供应商").get_by_role("checkbox")
-    expect(rows).to_have_count(3)
+    expect(rows).to_have_count(4)
     full = d.locator('[data-import="cc_full"]')
     expect(full).to_contain_text("合并到 gw_full")
     expect(full).to_contain_text("gw.example.com")
+    expect(full).to_contain_text("来自 ~/.zshrc 里的 cc_full、cc_full_haiku")
     kimi = d.locator('[data-import="cc_kimi"]')
     expect(kimi).to_contain_text("2 个模型")
-    expect(kimi).to_contain_text("来自 cc_kimi、cc_kimi_fast")
-    expect(kimi).to_contain_text("新建")
+    expect(kimi).to_contain_text("2 个供应商")
+    ok("the preview lists 4 providers: host, model count, the file the aliases came from, one 合并到 gw_full")
+
+    relay = d.locator('[data-import="cc_relay"]')
+    expect(relay).to_contain_text("来自 ~/.bashrc 里的 cc_relay")
+    relay_detail = d.locator('[data-import-detail="cc_relay"]')
+    expect(relay_detail).to_contain_text("一并带上 CLAUDE_CODE_MAX_OUTPUT_TOKENS、DISABLE_TELEMETRY。")
+    expect(relay_detail).to_contain_text("不带上 RELAY_TOKEN：看起来是密钥或密码。")
+    expect(relay_detail).to_contain_text("不带上 WORKDIR：值要在 shell 里才能算出来。")
+    expect(relay_detail).to_contain_text("不带上 HOME：只适用于那台电脑。")
+    ok("a ~/.bashrc alias says which variables it carries over and why the others are left out")
+
+    choice = d.get_by_role("radiogroup", name="怎样导入 cc_kimi")
+    each, one = choice.get_by_role("radio", name="每个 alias 一个供应商"), choice.get_by_role("radio", name="合成一个供应商")
+    expect(d.locator('[data-import-detail="cc_kimi"]')).to_contain_text("这几个 alias 的各档模型和默认思考档位不一样。")
+    expect(each).to_have_attribute("aria-checked", "true")
+    variants = d.get_by_role("list", name="cc_kimi 会变成的供应商")
+    expect(variants.locator("li")).to_have_count(2)
+    # each alias is listed in Persona already, so the hub saves its provider as <alias>-2, and the preview says so
+    expect(variants.locator("li").nth(0)).to_contain_text("cc_kimi-2")
+    expect(variants.locator("li").nth(1)).to_contain_text("cc_kimi_fast-2")
+    expect(relay.locator(".font-mono").first).to_have_text("cc_relay-2")
+    expect(d.get_by_role("button", name="导入 5 个")).to_be_visible()
+    one.click()
+    expect(one).to_have_attribute("aria-checked", "true")
+    expect(variants).to_have_count(0)
+    expect(d.get_by_role("button", name="导入 4 个")).to_be_visible()
+    one.focus()
+    page.keyboard.press("ArrowUp")
+    expect(each).to_have_attribute("aria-checked", "true")
+    expect(each).to_be_focused()
+    expect(d.get_by_role("button", name="导入 5 个")).to_be_visible()
+    ok("a group whose aliases differ starts on 每个 alias 一个供应商 (counted per alias); 合成一个供应商 and back by click and arrow key")
+
+    hide = d.get_by_role("checkbox", name="在 Persona 里隐藏已导入的 alias")
+    expect(hide).to_have_attribute("aria-checked", "true")
+    stays = d.locator("[data-import-stays]")
+    expect(stays).to_contain_text("会隐藏 cc_full、cc_glm和cc_kimi。")
+    expect(stays).to_contain_text("cc_full_haiku 保留：模型档位「性能」的 Agent 预设「strong」在用它。")
+    expect(stays).to_contain_text("cc_kimi_fast 保留：主对话在用它。")
+    expect(stays).to_contain_text("cc_relay 保留：新的供应商无法在服务器上替代它。")
     r.shot("import-preview")
-    ok("the preview lists 3 providers: host, model count, aliases, one 合并到 gw_full")
+    ok("hiding the imported aliases is on, names what it hides and why the others stay")
 
     d.get_by_label("电脑", exact=True).select_option("studio")
     expect(d.get_by_role("alert")).to_have_text("这台电脑的 Persona 需要更新")
@@ -270,15 +313,18 @@ def zshrc_import(r):
     ok("409 node_outdated and 503 offline are told apart")
 
     d.get_by_label("电脑", exact=True).select_option("macbook")
-    expect(rows).to_have_count(3)
+    expect(rows).to_have_count(4)
     d.locator('[data-import="cc_glm"]').click()
     expect(d.locator('[data-import="cc_glm"]')).to_have_attribute("aria-checked", "false")
-    d.get_by_role("button", name="导入 2 个").click()
-    expect(page.get_by_text("新建 1 个，合并 1 个")).to_be_visible()
+    expect(stays).not_to_contain_text("cc_glm")
+    d.get_by_role("button", name="导入 4 个").click()
+    expect(page.get_by_text("新建 3 个，合并 1 个；隐藏 alias 2 个，保留 3 个")).to_be_visible()
     expect(d).to_be_hidden()
-    assert sorted(r.log()["import"]["providers"]) == ["cc_full", "cc_kimi"], r.log()["import"]
-    expect(page.get_by_text("cc_kimi", exact=True).first).to_be_visible()
-    ok("importing 2 says 新建 1 个，合并 1 个 and lists the new provider")
+    sent = r.log()["import"]
+    assert sorted(sent["providers"]) == ["cc_full", "cc_kimi", "cc_relay"], sent
+    assert sent["split"] == ["cc_kimi"] and sent["hide_aliases"] is True, sent
+    expect(page.get_by_text("cc_kimi_fast-2", exact=True).first).to_be_visible()
+    ok("importing 4 posts split and hide_aliases, says 新建 3 个，合并 1 个；隐藏 alias 2 个，保留 3 个 and lists the new providers")
 
 
 def phone(browser, base, hub, token, shots):
@@ -303,10 +349,15 @@ def phone(browser, base, hub, token, shots):
     expect(d.get_by_label("代理", exact=True)).to_be_visible()
     r.shot("phone-models")
     d.get_by_role("button", name="取消").click()
-    page.get_by_role("button", name="导入").first.click()
-    d = r.dialog("从 ~/.zshrc 导入")
+    # the header's import button is an icon at this width, named for screen readers, on one line with search and add
+    imp = page.get_by_role("button", name="导入", exact=True)
+    add = page.get_by_role("button", name="新增", exact=True)
+    ib, ab = imp.bounding_box(), add.bounding_box()
+    assert ib["width"] < 48 and ib["height"] <= 40 and abs(ib["y"] - ab["y"]) < 2, (ib, ab)
+    imp.click()
+    d = r.dialog("从电脑上的 alias 导入")
     d.get_by_label("电脑", exact=True).select_option("macbook")
-    expect(d.get_by_role("list", name="可以导入的供应商").get_by_role("checkbox")).to_have_count(3)
+    expect(d.get_by_role("list", name="可以导入的供应商").get_by_role("checkbox")).to_have_count(4)
     r.shot("phone-import")
     ctx.close()
     ok("390 wide: the wizard and the import sheet fit")

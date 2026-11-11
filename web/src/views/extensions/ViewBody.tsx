@@ -24,6 +24,7 @@ import { Button, cx, EASE, Loading, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { Switch } from "../settings/SettingsParts";
 import { ChartFrame, LABEL_H, plotHeight } from "./ChartFrame";
+import { ExtensionChart } from "./view-sections-lazy";
 import { NEW_ICON_GLYPH } from "./icon-map";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { colorOf, hue, hueTint } from "../../lib/extension-ui-v6";
@@ -46,8 +47,8 @@ function CodeItem({ children }: { children: ReactNode }) {
   return <Suspense fallback={<Loading />}>{children}</Suspense>;
 }
 
-// Only chart items draw it: its own chunk, fetched by the idle preload or the first chart (lib/lazy-page.ts).
-const ExtensionChart = lazyPage(() => import("./ExtensionChart").then((m) => m.ExtensionChart), { idle: true });
+// Only chart items draw it (ExtensionChart): registered on the first screen in view-sections-lazy.tsx, so the idle
+// preload still fetches it now that this file is a chunk of its own (#3614).
 
 const TEXT: Record<UITone, string> = { neutral: "text-ink", positive: "text-green", caution: "text-orange", danger: "text-red" };
 const BAR: Record<UITone, string> = { neutral: "bg-accent", positive: "bg-green", caution: "bg-orange", danger: "bg-red" };
@@ -86,8 +87,7 @@ export interface ViewHandlers extends V6Handlers {
   renderItem?: (item: UIItem, handlers: ViewHandlers) => ReactNode | undefined;
 }
 
-/** Nothing acts (an assistant's card): what a press would do is never asked for. */
-export const INERT: ViewHandlers = { values: {}, setValue: () => {}, busy: "", onPress: () => {}, onChoose: () => {} };
+export { INERT } from "./view-sections-lazy";
 
 /** A view's sections. `embedded`: inside another page (lighter); `compact`: a card (no chrome, small charts). */
 export function ViewSections({ view, embedded, compact, ...handlers }: ViewHandlers & { view: UIView; embedded?: boolean; compact?: boolean }) {
