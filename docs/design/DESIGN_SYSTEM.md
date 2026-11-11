@@ -53,7 +53,7 @@ Relationship to other docs:
 - `docs/apple/icons.md` covers the icon vocabulary and sizing.
 - `docs/android/android-design.md` covers Android styles, glass levels and page-writing rules.
 - `docs/web/web.md` covers web layout and conventions.
-- `docs/SUPER_RULES.md` holds the three product rules cited in section 4. Changes there need administrator approval.
+- `docs/SUPER_RULES.md` holds the highest-priority rules, including the product audience foundation and the interaction rules cited in section 4. Changes there need administrator approval.
 - `docs/design/DECISIONS.md` is the history of these rules: what was decided, when, and what it replaced. It holds no rules; where it and this document differ, this document wins.
 
 ### 1.2 Rules
