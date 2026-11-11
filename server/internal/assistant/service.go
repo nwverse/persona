@@ -124,6 +124,8 @@ type Service struct {
 	placeBook      placeBook      // places.go
 	accept         acceptBook     // acceptance.go
 	deploy         deployProbe    // deploy_check.go: is the work in the running hub
+
+	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll bool
 	later            laterBook    // later.go: questions that can wait for a briefing
@@ -612,6 +614,10 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	}
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
 	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
+	if !meeting {
+		// An assistant turn that failed is logged; a conversation conversation_new opened tells its parent (spawned.go).
+		s.afterSettle(context.WithoutCancel(ctx), s.assistantTurnSettled, r.MachineID, r.SessionID)
+	}
 	if !meeting {
 		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 	}
