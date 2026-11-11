@@ -49,11 +49,7 @@ func speakPlugin(t *testing.T, cfg Config) (*Plugin, *httptest.Server, *lockedLo
 	pl := New(cfg, "http://127.0.0.1:1", "hubtoken", log.New(logs, "", 0))
 	srv := httptest.NewServer(pl.Handler())
 	t.Cleanup(srv.Close)
-	t.Cleanup(func() {
-		for deadline := time.Now().Add(10 * time.Second); pl.active.Load() > 0 && time.Now().Before(deadline); {
-			time.Sleep(5 * time.Millisecond)
-		}
-	})
+	t.Cleanup(func() { waitFor(t, "every read-aloud to end", func() bool { return pl.active.Load() == 0 }) })
 	return pl, srv, logs
 }
 
@@ -148,11 +144,7 @@ func TestSpeakStreamsTheVoice(t *testing.T) {
 		t.Fatalf("the text: %v", f)
 	}
 	up.next("session.close")
-	for deadline := time.Now().Add(5 * time.Second); pl.active.Load() > 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the read-aloud still counts as open")
-		}
-	}
+	waitFor(t, "the read-aloud to stop counting as open", func() bool { return pl.active.Load() == 0 })
 	got := logs.String()
 	if strings.Contains(got, "ZEBRA") || !strings.Contains(got, "speak 1: rt/m1, voice v1, 48 characters: done; 6 bytes at 24000 Hz") {
 		t.Fatalf("log: %s", got)
@@ -351,11 +343,7 @@ func TestSpeakClosesTheSessionWhenThePhoneHangsUp(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the session stayed open")
 	}
-	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(logs.String(), "the app hung up"); time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("log: %s", logs.String())
-		}
-	}
+	waitFor(t, "the log to say the app hung up", func() bool { return strings.Contains(logs.String(), "the app hung up") })
 }
 
 // A session that says nothing in time: 504 no_audio, and the session is closed.
