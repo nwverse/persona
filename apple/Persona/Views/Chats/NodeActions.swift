@@ -19,15 +19,18 @@ nonisolated struct TerminalPanes: Decodable, Sendable, Equatable {
         var worktree: Bool
         var tabs: [Tab]
         var panes: [Pane]
+        /// The host's workspaces (the Terminals page's New Terminal, #4754).
+        var workspaces: [Workspace] = []
 
-        enum CodingKeys: String, CodingKey { case kind, tabs, panes, newTab = "new_tab", worktree }
+        enum CodingKeys: String, CodingKey { case kind, tabs, panes, workspaces, newTab = "new_tab", worktree }
 
-        init(kind: String, newTab: Bool = false, worktree: Bool = false, tabs: [Tab] = [], panes: [Pane] = []) {
+        init(kind: String, newTab: Bool = false, worktree: Bool = false, tabs: [Tab] = [], panes: [Pane] = [], workspaces: [Workspace] = []) {
             self.kind = kind
             self.newTab = newTab
             self.worktree = worktree
             self.tabs = tabs
             self.panes = panes
+            self.workspaces = workspaces
         }
 
         init(from decoder: Decoder) throws {
@@ -37,6 +40,19 @@ nonisolated struct TerminalPanes: Decodable, Sendable, Equatable {
             worktree = try c.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
             tabs = try c.decodeIfPresent([Tab].self, forKey: .tabs) ?? []
             panes = try c.decodeIfPresent([Pane].self, forKey: .panes) ?? []
+            workspaces = try c.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
+        }
+    }
+
+    nonisolated struct Workspace: Decodable, Sendable, Equatable {
+        var id: String
+        var label: String
+        enum CodingKeys: String, CodingKey { case id, label }
+        init(id: String, label: String = "") { self.id = id; self.label = label }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
         }
     }
 
@@ -56,10 +72,42 @@ nonisolated struct TerminalPanes: Decodable, Sendable, Equatable {
         var title: String? = nil
         var cwd: String? = nil
         var sessionID: String? = nil
+        /// The address its terminal streams by (`pane:<id>`).
+        var terminal: String = ""
+        /// The program in front of a plain pane ("zsh", "vim"…), as the host names it (#4754).
+        var foreground: String? = nil
+        /// The stopped Agent whose terminal this is: a pane Persona opened for that session, no Agent in it now (#4754).
+        var agentSession: String? = nil
         var id: String { pane }
         enum CodingKeys: String, CodingKey {
-            case pane, agent, title, cwd
-            case tabID = "tab_id", workspaceID = "workspace_id", sessionID = "session_id"
+            case pane, agent, title, cwd, terminal, foreground
+            case tabID = "tab_id", workspaceID = "workspace_id", sessionID = "session_id", agentSession = "agent_session"
+        }
+        init(pane: String, tabID: String, workspaceID: String, agent: String? = nil, title: String? = nil, cwd: String? = nil,
+             sessionID: String? = nil, terminal: String = "", foreground: String? = nil, agentSession: String? = nil) {
+            self.pane = pane
+            self.tabID = tabID
+            self.workspaceID = workspaceID
+            self.agent = agent
+            self.title = title
+            self.cwd = cwd
+            self.sessionID = sessionID
+            self.terminal = terminal.isEmpty ? "pane:" + pane : terminal
+            self.foreground = foreground
+            self.agentSession = agentSession
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            pane = try c.decode(String.self, forKey: .pane)
+            tabID = try c.decodeIfPresent(String.self, forKey: .tabID) ?? ""
+            workspaceID = try c.decodeIfPresent(String.self, forKey: .workspaceID) ?? ""
+            agent = try c.decodeIfPresent(String.self, forKey: .agent)
+            title = try c.decodeIfPresent(String.self, forKey: .title)
+            cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
+            sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
+            terminal = try c.decodeIfPresent(String.self, forKey: .terminal) ?? "pane:" + pane
+            foreground = try c.decodeIfPresent(String.self, forKey: .foreground)
+            agentSession = try c.decodeIfPresent(String.self, forKey: .agentSession)
         }
     }
 }
@@ -86,7 +134,12 @@ extension APIClient {
     /// One of the node menu's routes, `POST /machines/{mid}/<path>`; only allowlisted fields and boolean flags reach the node.
     @discardableResult
     func nodeAction<Body: Encodable & Sendable>(machine: String, _ path: String, _ body: Body, timeout: TimeInterval = 40, opID: UUID? = nil) async throws -> Data {
-        try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        do {
+            return try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        } catch var error as APIError {
+            if error.status == 502 && error.code == "internal" { error.showsNodeReason = true }
+            throw error
+        }
     }
 }
 

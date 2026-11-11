@@ -43,8 +43,8 @@
     <string name="designsystem_loading">加载中</string>
     <string name="designsystem_processing">正在处理…</string>
     <string name="designsystem_with_state">%1$s，%2$s</string>
-    <string name="designsystem_decision_command">需要你授权</string>
-    <string name="designsystem_decision_tool">需要你授权</string>
+    <string name="designsystem_decision_command">在等你批准</string>
+    <string name="designsystem_decision_tool">在等你批准</string>
     <string name="designsystem_decision_plan">计划等你审批</string>
     <string name="designsystem_decision_question">在问你</string>
     <string name="designsystem_decision_form">要你填几项</string>
@@ -130,6 +130,9 @@
     </plurals>
     <string name="designsystem_group_expand">展开分组</string>
     <string name="designsystem_group_collapse">折叠分组</string>
+    <string name="designsystem_show_all">显示全部 %1$d 个</string>
+    <string name="designsystem_show_fewer">收起</string>
+    <string name="designsystem_count_waiting_background">%1$d 个后台等待中</string>
     <string name="designsystem_machine_monitor">机器监控</string>
     <string name="designsystem_details">详情</string>
     <string name="designsystem_space">空间</string>
@@ -192,6 +195,19 @@
     <string name="designsystem_editor_picture">要编辑的图片</string>
     <string name="designsystem_editor_undo">撤销</string>
     <string name="designsystem_editor_clear">清除</string>
+    <!-- The image editor's crop, turn, widths and redo (#4992, iOS ImageEditor) -->
+    <string name="designsystem_markup_crop">裁剪</string>
+    <string name="designsystem_editor_rotate">旋转</string>
+    <string name="designsystem_editor_reset">还原</string>
+    <string name="designsystem_editor_redo">重做</string>
+    <string name="designsystem_editor_shape">比例</string>
+    <string name="designsystem_editor_shape_free">自由</string>
+    <string name="designsystem_editor_shape_original">原始比例</string>
+    <string name="designsystem_editor_shape_square">正方形</string>
+    <string name="designsystem_editor_width">粗细</string>
+    <string name="designsystem_editor_width_thin">细</string>
+    <string name="designsystem_editor_width_medium">中</string>
+    <string name="designsystem_editor_width_thick">粗</string>
     <string name="designsystem_viewer_load_failed">图片加载失败</string>
     <string name="designsystem_viewer_action_failed">操作没有完成，请重试</string>
     <string name="designsystem_render_too_slow">画得太久</string>
@@ -319,4 +335,6 @@
     <string name="designsystem_candle_volume">量 %1$s</string>
     <string name="designsystem_stepper_minus">减少</string>
     <string name="designsystem_stepper_plus">增加</string>
+    <string name="designsystem_copy_too_large">文本过大无法复制，请使用分享</string>
+    <string name="designsystem_copied">已拷贝</string>
 </resources>

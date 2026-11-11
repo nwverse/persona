@@ -48,11 +48,22 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
 			return nil, planInvalid{err}
 		}
+		p.Tasks[i].Permission = strings.TrimSpace(p.Tasks[i].Permission)
+		if m, ok := s.machineByName(ctx, p.Tasks[i].Machine); ok && p.Tasks[i].Role == roleLeader && s.isWorkMachine(m.ID) {
+			return nil, planInvalid{fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only "+
+				"the reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)}
+		}
 		if !s.placeTask(ctx, &p.Tasks[i]) {
 			return nil, i18n.Err("assistant-tasks.task_no_machine", i18n.Args{"task": p.Tasks[i].Title, "machine": strconv.Quote(p.Tasks[i].Machine)})
 		}
+		if err := s.resolveTaskWorkspace(ctx, &p.Tasks[i]); err != nil {
+			return nil, planInvalid{err}
+		}
 	}
 	p.State = planStarted
+	for i := range p.Tasks {
+		p.Tasks[i].OwnerStarted = ownerStarts(ctx)
+	}
 	ok, err := s.movePlan(ctx, p, planOpen)
 	if err != nil {
 		return nil, err
@@ -66,7 +77,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if t.ReuseTodo != "" {
 			// The todo is already there with its own title, notes and task card in the conversation's feed (a Lark topic
 			// opened it): the task runs on it, and nothing is made or shown twice.
-			todo, err = s.takeTodoForTask(p.Conversation, t.ReuseTodo)
+			todo, err = s.takeTodoForTask(ctx, p.ID, p.Conversation, t.ReuseTodo)
 			if err != nil {
 				t.Error = err.Error()
 				continue
@@ -80,7 +91,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		} else {
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
-			todo, err = s.createTaskTodo(ctx, title, t.Prompt, p.Conversation, p.ID, t.Project)
+			todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project)
 			if err != nil {
 				t.Error = err.Error()
 				continue
@@ -90,6 +101,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		}
 		t.TodoID = todo.ID
+		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
 		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
 		// The main conversation or a leader follows up what it hands out (supervise.go); a task the main conversation
 		// handed to a leader is that leader's, while it still is one (else the main conversation's again).
@@ -97,10 +109,21 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			if t.Supervisor != "" && s.isLeader(ctx, t.Supervisor) {
 				sup = t.Supervisor
 				if t.ReuseTodo == "" {
-					s.taskCard(ctx, sup, todo.ID) // the leader sees its task's card too; the plan's stays where it was made
+					s.taskCard(ctx, sup, todo.ID, "") // the leader sees its task's card too; the plan's stays where it was made
 				}
 			}
 			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+		} else if sup, ok := s.defaultPlanSupervisor(ctx, p.Conversation, t.Parent); ok {
+			// Any other conversation's task is its own to supervise: its signals go to the conversation that planned it,
+			// which also sees its card and reviews it. No second card when that is the planning conversation itself.
+			if t.ReuseTodo == "" && sup != p.Conversation {
+				s.taskCard(ctx, sup, todo.ID, "")
+			}
+			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+		}
+		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
+			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+			continue
 		}
 		if t.ReuseTodo != "" {
 			continue
@@ -163,7 +186,7 @@ func (s *Service) reusableTodo(conversation, id string, taking bool) error {
 
 // takeTodoForTask is the todo a started plan's task runs on (PlanTask.ReuseTodo), checked again now (it may have been
 // closed or taken since the plan was made) and held until the task's agent is linked (releaseTakenTodo).
-func (s *Service) takeTodoForTask(conversation, id string) (Todo, error) {
+func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation, id string) (Todo, error) {
 	s.tasks.mu.Lock()
 	if s.tasks.reusing[id] {
 		s.tasks.mu.Unlock()
@@ -174,6 +197,27 @@ func (s *Service) takeTodoForTask(conversation, id string) (Todo, error) {
 	if err := s.reusableTodo(conversation, id, true); err != nil {
 		s.releaseTakenTodo(id)
 		return Todo{}, err
+	}
+	// TodoID is the execution binding; ReuseTodo preserves each historical plan's intended target.
+	// Retire old bindings while this takeover holds the to-do, before the new agent can ask for approval.
+	// Creation order is not start order, and a later retry can change an old plan's UpdatedAt.
+	plans, err := s.conversationPlans(ctx, conversation)
+	if err != nil {
+		s.releaseTakenTodo(id)
+		return Todo{}, err
+	}
+	for _, p := range plans {
+		if p.ID == planID {
+			continue
+		}
+		for i, task := range p.Tasks {
+			if task.TodoID == id {
+				if err := s.patchPlanTask(ctx, p.ID, i, func(t *PlanTask) { t.TodoID = "" }); err != nil {
+					s.releaseTakenTodo(id)
+					return Todo{}, err
+				}
+			}
+		}
 	}
 	t, _ := s.todoNow(id)
 	return formatTodo(t), nil
@@ -223,9 +267,16 @@ func (s *Service) startPlanTaskAsync(planID, conversation string, i int, t PlanT
 
 // runPlanTaskStart is the shared start body; its caller owns the idle reservation through every return path.
 func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTask, retry bool) {
+	t.planID, t.planIndex = planID, i
+	defer s.releaseTaskWorkspace(t.TodoID)
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
 	placed, placedWhy := t.Machine, t.Why
+	if t.Role == roleLeader { // its tools are listed once it is linked: a list asked for meanwhile waits (task_leader.go)
+		s.leaderStarts.Add(1)
+		defer s.leaderStarts.Add(-1)
+	}
+	t.Permission = strings.TrimSpace(t.Permission)
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
@@ -243,15 +294,15 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			}
 		}
 	}
-	if t.Machine != placed || t.Why != placedWhy { // the card shows where it runs, and on what (launcher_fit.go)
+	if t.Machine != placed || t.Why != placedWhy { // workspace admission already persisted the actual checkout
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
-		err = s.linkTodoAgent(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, "")
+		err = s.linkPlanAgent(ctx, t, mid, sid, false)
 		if errors.Is(err, db.ErrTodoCompleted) {
 			// The user tapped "Done" while the agent was starting (a busy machine takes minutes, #1396). The task stays
 			// done and its agent stays in it: nothing reads failed, and the close loop still finds the agent to retire.
-			err = s.linkTodoAgentOfDoneTask(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, "")
+			err = s.linkPlanAgent(ctx, t, mid, sid, true)
 			if err != nil {
 				s.logf("task %s: link to the finished task: %v", t.TodoID, err)
 			}
@@ -380,9 +431,13 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	}
 	p.Tasks[i].normalizeReadonlyPermission()
 	t := p.Tasks[i]
+	t.Permission = strings.TrimSpace(t.Permission)
 	m, ok := s.machineByName(ctx, t.Machine)
 	if !ok {
 		return nil, i18n.Err("assistant-tasks.no_machine", i18n.Args{"machine": strconv.Quote(t.Machine)})
+	}
+	if err := s.leaderOnWorkMachine(&t, m); err != nil { // a retry of a leader plan saved on a computer that is work-trust now
+		return nil, fmt.Errorf("%w; nothing was started", err)
 	}
 	if !m.Reachable {
 		return nil, machineOffline(m.Name)
@@ -455,6 +510,16 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 		s.tasks.mu.Lock()
 		delete(s.tasks.retrying, cur.ID)
 		s.tasks.mu.Unlock()
+	}
+	if stoppedAgent(cut) { // it stopped since (read-only, #4754): a new agent goes on with the task (tasks_successor.go)
+		defer release()
+		if live, _ := liveTaskAgents(s.taskAgents(ctx, cur)); len(live) > 0 {
+			return s.todoView(ctx, cur.ID) // another agent of the task still runs: it is that one's
+		}
+		if _, err := s.startTaskSuccessor(ctx, cur, cut, continueText); err != nil {
+			return nil, err
+		}
+		return s.todoView(ctx, cur.ID)
 	}
 	if err := s.call(ctx, cut.MachineID, DeviceSessionSend, map[string]any{"session_id": cut.SessionID, "text": continueText}, nil); err != nil {
 		release()

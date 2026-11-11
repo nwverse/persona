@@ -1,8 +1,11 @@
 package hub
 
 import (
+	"cmp"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"maps"
 	"time"
 
@@ -32,10 +35,33 @@ func (w pushWants) fn() func(NotifyPrefs) bool {
 // devices: a member's computers are the center's machines. owner is the manager that asked for it: the devices that
 // turned its pushes off get none (NotifyPrefs.MutedManagers).
 func (h *Hub) notifyDone(owner, kind, machineID, machine, sessionID, title, text string, wants pushWants) {
+	h.notifyDoneUnder(owner, kind, machineID, machine, sessionID, title, text, wants, "")
+}
+
+// notifyDoneUnder is notifyDone with the push's apns-collapse-id ("": one of its own).
+func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title, text string, wants pushWants, collapseID string) {
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
-	h.push.sendFrom(owner, build, "", wants.fn(), wants.quiet(), nil)
+	h.push.sendFrom(owner, build, collapseID, wants.fn(), wants.quiet(), nil)
 	h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+}
+
+// managerPushCollapseID is the apns-collapse-id of manager's push with notification id (assistantwire.Notification.ID;
+// "" without one): the same push asked for again once the hub no longer remembers handing it over (handedOverFor)
+// takes the place of the one the phone shows instead of adding a second. A hash of the manager and the id, so it
+// replaces only that manager's push of that id: never a card's, a decision's (td_), a notify API alert, an extension's
+// push or the hub's own.
+func managerPushCollapseID(manager, id string) string {
+	if id == "" {
+		return ""
+	}
+	manager = cmp.Or(manager, assistantwire.AssistantID)
+	sum := sha256.New()
+	sum.Write([]byte("push\x00"))
+	sum.Write(binary.AppendUvarint(nil, uint64(len(manager))))
+	sum.Write([]byte(manager))
+	sum.Write([]byte(id))
+	return "push:" + hex.EncodeToString(sum.Sum(nil)[:16])
 }
 
 // notifyReply reminds the devices that take "needs you" pushes of an agent still waiting on the user's answer (#5096).
@@ -69,8 +95,12 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 // (assistantwire.Notification.LinkCovered).
 func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine string, linkCovered bool) {
 	build := func(l i18n.Lang) map[string]any { return interactionPayloadIn(l, ix, machine) }
+	summary := ix.Summary
+	if ix.Private { // a Just me turn's card: what it asks stays in the app
+		summary = ""
+	}
 	h.emitToExtensions(owner, "agent.needs_you", map[string]any{"machine_id": ix.MachineID, "machine": machine, "session_id": ix.SessionID,
-		"interaction_id": ix.ID, "kind": ix.Kind, "summary": ix.Summary})
+		"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
 	wants := pushWants{Kind: "input"}
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
@@ -92,7 +122,9 @@ func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine stri
 // hours do to it (quiethours.go): skipped, or marked "quiet" for the client to post without a sound. manager is the
 // one that asked for it: a device that turned that manager's pushes off (NotifyPrefs.MutedManagers) gets none, as with
 // its push (Pusher.sendFrom); "" is the hub's own, for every device wants takes. Returns the selected count and the
-// count of capable connections before preferences are applied; neither is a client delivery receipt.
+// count of capable connections before preferences are applied; neither is a client delivery receipt. A device without a
+// push route and without a ws_notify socket now keeps what its settings take for its next connection (notifyring.go);
+// that is not counted.
 func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(NotifyPrefs) bool, rule quietRule, required ...string) (selected, reachable int) {
 	msgs := map[i18n.Lang]map[string]any{}
 	msgIn := func(l i18n.Lang) map[string]any {
@@ -103,6 +135,27 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 		msgs[l] = m
 		return m
 	}
+	type form struct {
+		lang  i18n.Lang
+		quiet bool
+	}
+	encoded := map[form][]byte{}
+	msgFor := func(l i18n.Lang, quiet bool) []byte {
+		if b, ok := encoded[form{l, quiet}]; ok {
+			return b
+		}
+		msg := msgIn(l)
+		if quiet {
+			msg = maps.Clone(msg)
+			msg["quiet"] = true
+		}
+		b, err := json.Marshal(msg)
+		if err != nil {
+			b = nil // sent nowhere, as sendJSON did
+		}
+		encoded[form{l, quiet}] = b
+		return b
+	}
 	// Mute phone holds these back while a desktop is online, with the same rule as the APNs pushes (alertWanted): an
 	// Android phone alerts from them. desktopOnline takes h.mu, so it is read before.
 	wants = alertWanted(wants, h.desktopOnline())
@@ -111,36 +164,40 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 	if rule != quietNone && h.push != nil {
 		now, loc = h.push.now(), h.userLocation()
 	}
+	// wantsOn is whether device's settings take it, and whether inside its quiet hours (posted without a sound).
+	wantsOn := func(device string) (ok, quiet bool) {
+		prefs := defaultPrefs()
+		if h.push != nil {
+			prefs = h.push.prefs(device)
+		}
+		if prefs.mutes(manager) || wants != nil && !wants(prefs) {
+			return false, false
+		}
+		quiet = rule != quietNone && prefs.Quiet.activeAt(now, loc)
+		return !(quiet && rule == quietSkip), quiet
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	live := map[string]bool{} // the devices with a ws_notify socket now
 	for c := range h.clients {
 		if !c.has("ws_notify") {
 			continue
 		}
+		live[c.device] = true
 		if len(required) > 0 && !c.has(required[0]) {
 			continue
 		}
 		reachable++
-		prefs := defaultPrefs()
-		if h.push != nil {
-			prefs = h.push.prefs(c.device)
-		}
-		if prefs.mutes(manager) || wants != nil && !wants(prefs) {
+		ok, quiet := wantsOn(c.device)
+		if !ok {
 			continue
 		}
-		quiet := rule != quietNone && prefs.Quiet.activeAt(now, loc)
-		switch {
-		case quiet && rule == quietSkip:
-			continue
-		case quiet:
-			msg := maps.Clone(msgIn(c.lang()))
-			msg["quiet"] = true
-			c.sendJSON(msg)
-		default:
-			c.sendJSON(msgIn(c.lang()))
+		if b := msgFor(c.lang(), quiet); b != nil {
+			c.queue(b)
 		}
 		selected++
 	}
+	h.ringNotify(live, required, wantsOn, msgIn, msgFor)
 	return selected, reachable
 }
 

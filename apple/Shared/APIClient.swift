@@ -76,8 +76,10 @@ nonisolated struct APIError: LocalizedError, Sendable {
     var details: JSONValue?
     /// Route context for the one pre-code knowledge refusal; never match diagnostics from unrelated endpoints.
     var requestPath: String?
+    /// A node-menu action relays the computer's actionable refusal as 502 internal; keep those words, not a generic service error.
+    var showsNodeReason = false
     var errorDescription: String? {
-        let text = businessMessage ?? (code == "internal" && status >= 500
+        let text = businessMessage ?? (code == "internal" && status >= 500 && !showsNodeReason
             ? String(localized: "The service couldn't complete this request. Try again later. (HTTP \(status))") : message)
         guard status >= 500, let requestID else { return text }
         return String(localized: "\(text) (request \(requestID))")
@@ -94,10 +96,10 @@ nonisolated struct APIError: LocalizedError, Sendable {
     /// Business codes precede status and free-form server wording. Raw fields remain available for diagnostics.
     var businessMessage: String? {
         switch code {
-        case "kb_disabled": String(localized: "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.")
+        case "kb_disabled": String(localized: "This assistant has turned off the knowledge base. Enable it in the assistant's configuration to use it.")
         case "kb_unavailable": String(localized: "The knowledge base isn't ready yet. Try again shortly.")
-        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings.")
-        case "assistant_offline": String(localized: "The manager is offline or restarting. Try again shortly.")
+        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the assistant's configuration before editing or syncing recordings.")
+        case "assistant_offline": String(localized: "The assistant is offline or restarting. Try again shortly.")
         case "node_unreachable":
             fields["delivered"] == "none"
                 ? String(localized: "This computer is offline: Persona Link isn't running, or the computer is asleep.")
@@ -175,6 +177,8 @@ nonisolated struct APIClient: Sendable {
     var personaNaming = false
     /// The hub's hello has `sessions_lookup`: one session's complete row can be asked for by machine and id.
     var sessionLookup = false
+    /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
+    var sessionList = false
     /// Execution surface is diagnostic only; authorization still uses the paired hub credential.
     var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
@@ -270,11 +274,13 @@ nonisolated struct APIClient: Sendable {
     /// `opID`: the write's op id (`X-Persona-Op-Id`, docs/protocol/protocol.md「操作回执」): the hub does it once however often
     /// it arrives. A repeat it cannot answer yet comes back `202 {"state":"pending" | "unknown"}`: thrown as an
     /// APIError with `OpReceipt.pendingCode` / `unknownCode`, so no caller takes it for done.
+    /// `extraHeaders`: what this one request says besides (a hand-off card's approval declares its feature).
     func request(_ method: String, _ path: String, query: [String: String] = [:], body: (any Encodable)? = nil,
-                 timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
+                 timeout: TimeInterval = 30, opID: UUID? = nil, extraHeaders: [String: String] = [:]) async throws -> Data {
         let query = larkScoped(path, query)
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
             .merging(routing(path, query)) { _, manager in manager }
+            .merging(extraHeaders) { _, extra in extra }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data: Data
             do {
@@ -353,6 +359,37 @@ nonisolated struct APIClient: Sendable {
         let http = resp as? HTTPURLResponse
         if http?.statusCode == 304 { return (nil, etag) }
         return (try checked(data, resp, requestID: requestID, path: path), http?.value(forHTTPHeaderField: "ETag"))
+    }
+
+    /// A request whose answer is read as it arrives (the realtime voice saying a text, `voiceSpeak`): the response once
+    /// its headers are in, then its bytes. A status outside 2xx throws as `request` does, with the body it came with.
+    /// Neither the fake transport nor Demo Mode streams: it throws there, and callers do what they do without it.
+    func streamed(_ method: String, _ path: String, body: (any Encodable)? = nil,
+                  timeout: TimeInterval = 30) async throws -> (HTTPURLResponse, URLSession.AsyncBytes) {
+        if transport != nil || config.isDemo { throw APIError(status: 501, message: "Streaming isn't available here") }
+        var req = URLRequest(url: url(path, query: [:]), timeoutInterval: timeout)
+        req.httpMethod = method
+        config.authorize(&req)
+        req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
+        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
+        for (name, value) in routing(path, [:]) { req.setValue(value, forHTTPHeaderField: name) }
+        if let body {
+            req.httpBody = try JSON.encoder.encode(AnyEncodable(body))
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (bytes, resp) = try await session.bytes(for: req, delegate: HubRedirects.shared)
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if !(200..<300).contains(http.statusCode) {
+            var data = Data()
+            for try await byte in bytes {
+                data.append(byte)
+                if data.count >= 16 << 10 { break }
+            }
+            _ = try checked(data, resp, requestID: requestID, path: path)
+        }
+        return (http, bytes)
     }
 
     /// A bounded, staged attachment sent from disk. The fake transport reads it only in tests.
@@ -459,8 +496,9 @@ nonisolated struct APIClient: Sendable {
     }
 
     @discardableResult
-    func post(_ path: String, body: (any Encodable)? = nil, timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
-        try await request("POST", path, body: body ?? [String: String](), timeout: timeout, opID: opID)
+    func post(_ path: String, body: (any Encodable)? = nil, timeout: TimeInterval = 30, opID: UUID? = nil,
+              extraHeaders: [String: String] = [:]) async throws -> Data {
+        try await request("POST", path, body: body ?? [String: String](), timeout: timeout, opID: opID, extraHeaders: extraHeaders)
     }
 
     func delete(_ path: String) async throws {
@@ -582,6 +620,38 @@ nonisolated struct APIClient: Sendable {
     /// Install ego lite, Open ego lite, Cancel: `install`, `open`, `cancel`.
     func browserJob(machine: String, _ action: String) async throws -> MachineBrowser {
         try JSON.decoder.decode(MachineBrowser.self, from: await request("POST", "/api/v1/machines/\(machine)/browser/\(action)"))
+    }
+
+    /// The iPhones a computer reaches for the assistant (the extension iphone, docs/extensions/iphone.md).
+    func iphone(machine: String) async throws -> MachineIPhone {
+        try JSON.decoder.decode(MachineIPhone.self, from: await request("GET", "/api/v1/machines/\(machine)/iphone", timeout: 60))
+    }
+    /// The machine page's Allow the Assistant to Operate iPhones Through This Computer.
+    func setIPhone(machine: String, enabled: Bool) async throws -> MachineIPhone {
+        struct Body: Encodable { var enabled: Bool }
+        return try JSON.decoder.decode(MachineIPhone.self, from: await request("PUT", "/api/v1/machines/\(machine)/iphone", body: Body(enabled: enabled), timeout: 60))
+    }
+    /// Pair (an iPhone plugged into the computer), Forget, Cancel: `pair`, `forget`, `cancel`.
+    func iphoneJob(machine: String, _ action: String, device: String?) async throws -> MachineIPhone {
+        struct Body: Encodable { var device: String? }
+        return try JSON.decoder.decode(MachineIPhone.self, from: await request("POST", "/api/v1/machines/\(machine)/iphone/\(action)", body: Body(device: device), timeout: 60))
+    }
+    /// Every iPhone the computers reach, for this iPhone to find itself among them.
+    func iphones() async throws -> IPhoneList {
+        try JSON.decoder.decode(IPhoneList.self, from: await request("GET", "/api/v1/iphone", timeout: 60))
+    }
+    /// This iPhone's own Allow the Assistant to Operate This iPhone.
+    /// With it goes this app's own bundle id and name, read from the bundle (never written down here): the hub keeps them
+    /// so the assistant never operates Persona itself on the phone, where its approval cards show.
+    func setIPhoneConsent(device: String, allowed: Bool) async throws -> IPhoneSeen {
+        struct App: Encodable { var bundleID: String?; var name: String?
+            enum CodingKeys: String, CodingKey { case bundleID = "bundle_id", name } }
+        struct Body: Encodable { var device: String; var allowed: Bool; var app: App }
+        let info = Bundle.main.infoDictionary
+        let app = App(bundleID: Bundle.main.bundleIdentifier,
+                      name: info?["CFBundleDisplayName"] as? String ?? info?["CFBundleName"] as? String)
+        return try JSON.decoder.decode(IPhoneSeen.self, from: await request("PUT", "/api/v1/iphone/consent",
+                                                                           body: Body(device: device, allowed: allowed, app: app)))
     }
 
     /// Browser Sign-ins (#1304): the sites with cookies in the Mac's ego lite; only the user's own apps may ask.
@@ -721,6 +791,13 @@ nonisolated struct APIClient: Sendable {
     }
 
     private func sp(_ k: SessionKey) -> String { "/api/v1/sessions/\(k.machineID)/\(k.sessionID)" }
+
+    /// Genuine user-input identities and full-history ordinals, without loading transcript bodies.
+    func userInputIndex(_ k: SessionKey) async throws -> ChatUserInputIndex {
+        let index = try await getDecodedOffMain(sp(k) + "/items", query: ["user_inputs": "1", "lazy_images": "1"], as: ChatUserInputIndex.self)
+        guard index.isValid else { throw APIError(status: 0, message: "incomplete user input index") }
+        return index
+    }
 
     /// A page of history going back `turns` whole exchanges (user prompt + answer) before beforeSeq (nil: the latest
     /// page, with no before_seq at all: an empty one reached runtimes as 0, which some refuse).
@@ -1039,10 +1116,14 @@ nonisolated struct APIClient: Sendable {
     }
 
     struct QueueEdit: Encodable { var keep: [Int] }
-    struct QueueResponse: Decodable { var queue: [String] }
+    struct QueueResponse: Decodable {
+        var queue: [String]
+        /// Photos for each returned queue item; a Persona chat includes them so take-back can restore the composer.
+        var images: [[ImagePayload]]?
+    }
     /// Pulls the queued input back out of claude and re-queues the indexes in `keep`; returns what was queued.
-    func editQueue(_ k: SessionKey, keep: [Int]) async throws -> [String] {
-        try await post(sp(k) + "/queue", body: QueueEdit(keep: keep), as: QueueResponse.self).queue
+    func editQueue(_ k: SessionKey, keep: [Int]) async throws -> QueueResponse {
+        try await post(sp(k) + "/queue", body: QueueEdit(keep: keep), as: QueueResponse.self)
     }
 
     /// Gives the agent what waits in its queue now (#6088, Claude Code's own send-now: a command it runs moves to the
@@ -1061,21 +1142,117 @@ nonisolated struct APIClient: Sendable {
         /// What the assistant is told about the user (Settings › Assistant › About Me).
         var notes: String?
         var timezone: String?
+        /// The user picked `timezone` by hand (#1855, Android's Time zone without Match phone): devices then leave it. nil
+        /// from a hub that was never told, or one without picking.
+        var timezonePicked: Bool?
         /// The main conversation's session id (the Persona tab opens it); nil until there is one.
         var main: String?
         /// Notify Main-Chat Tasks Only in the Main Chat (#1731): tasks the main conversation starts are quiet (`TodoItem.quiet`). The
         /// value in effect (on by default); nil from a hub without the setting, which hides the switch.
         var mainTasksQuiet: Bool?
+        /// Fold Background Rounds (docs/apple/ios.md "Background rounds"): the main conversation folds rounds another
+        /// conversation, a scheduled task or a follow-up started into one line. The value in effect; nil from a hub
+        /// without the setting, which hides the switch and folds as if on (`backgroundFolded`).
+        var mainBackgroundFolded: Bool?
         /// The role a meeting recording starts with (#2981, docs/assistant/meeting-minutes.md「Attendance fields」): `off`,
         /// `listener` or `participant`; nil from a hub without attending.
         var meetingAttendanceDefault: String?
+        /// The side conversations that lead a direction of the owner's work (docs/assistant/unified-entry.md "Leader
+        /// conversations"), in the hub's order; nil when there are none or from an older hub. The sidebar shows them as
+        /// the Directions group, under the names `assistantLeaders()` gives.
+        var leaders: [String]?
         enum CodingKeys: String, CodingKey {
-            case launcher, cwd, conversations, timezone, main
+            case launcher, cwd, conversations, timezone, main, leaders
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
-            case meetingAttendanceDefault = "meeting_attendance_default"
+            case mainBackgroundFolded = "main_background_folded"
+            case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
         }
+
+        /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
+        var backgroundFolded: Bool { mainBackgroundFolded ?? true }
     }
     func assistant() async throws -> AssistantState { owned(try await get("/api/v1/assistant")) }
+    /// A direction as `GET /api/v1/assistant/leaders` lists it (#3519, #3695): its leader conversation's id and the name
+    /// the hub gives the direction (the name set, else its project's, else the title without its "MMDD | kind | " prefix).
+    struct LeaderInfo: Codable, Sendable, Equatable {
+        var id: String
+        var name: String?
+        var ended: Bool?
+    }
+    /// The direction tree (#4352, `GET /api/v1/assistant/directions/tree`): every current direction with the open tasks
+    /// it supervises, then the secretary group. Clients read the names, the counts and the order here; no client works
+    /// out the grouping itself.
+    struct DirectionsTree: Decodable, Sendable, Equatable {
+        var directions: [TreeDirection]
+    }
+    /// One direction of the tree, or its secretary group (`secretary`: the main conversation's, not a direction the
+    /// sidebar lists).
+    struct TreeDirection: Decodable, Sendable, Equatable {
+        var id: String
+        var name: String?
+        var secretary: Bool?
+        var counts: DirectionCounts?
+    }
+    /// How many of a direction's listed tasks are in each state (#4352): its row reads the first two as
+    /// "N working · N need you".
+    struct DirectionCounts: Codable, Sendable, Equatable {
+        var working: Int
+        var needsYou: Int
+        enum CodingKeys: String, CodingKey { case working, needsYou = "needs_you" }
+        init(working: Int = 0, needsYou: Int = 0) {
+            self.working = working
+            self.needsYou = needsYou
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            working = try c.decodeIfPresent(Int.self, forKey: .working) ?? 0
+            needsYou = try c.decodeIfPresent(Int.self, forKey: .needsYou) ?? 0
+        }
+    }
+    /// Makes a conversation a direction (#4331, `POST /api/v1/assistant/directions/{id}/make`): its work is led from
+    /// there from now on.
+    func makeDirection(_ id: String) async throws {
+        _ = try await request("POST", "/api/v1/assistant/directions/\(id)/make", body: [String: String]())
+    }
+    /// Ends a direction (#4331, `POST /api/v1/assistant/directions/{id}/end`): its tasks keep their supervisor.
+    func endDirection(_ id: String) async throws {
+        _ = try await request("POST", "/api/v1/assistant/directions/\(id)/end")
+    }
+    /// The directions as `GET /api/v1/assistant/leaders` lists them: current ones only (#4331).
+    func leaders() async throws -> [LeaderInfo] {
+        struct Body: Decodable { var leaders: [LeaderInfo]? }
+        let body = try await get("/api/v1/assistant/leaders", as: Body.self)
+        return body.leaders ?? []
+    }
+    static func directionNames(_ list: [LeaderInfo]) -> [String: String] {
+        var out: [String: String] = [:]
+        for l in list where !(l.ended ?? false) && !l.id.isEmpty {
+            if let name = l.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { out[l.id] = name }
+        }
+        return out
+    }
+    /// The direction tree (#4352): a hub older than it answers 404, and the caller keeps what `leaders()` gave it.
+    func directionsTree() async throws -> DirectionsTree {
+        try await get("/api/v1/assistant/directions/tree", as: DirectionsTree.self)
+    }
+    /// The tree's current directions, its secretary group left out, in its order.
+    static func directions(_ tree: DirectionsTree) -> [TreeDirection] {
+        tree.directions.filter { $0.secretary != true && !$0.id.isEmpty }
+    }
+    /// The directions' names from the tree, by leader conversation id.
+    static func directionNames(_ tree: DirectionsTree) -> [String: String] {
+        var out: [String: String] = [:]
+        for d in directions(tree) {
+            if let name = d.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { out[d.id] = name }
+        }
+        return out
+    }
+    /// The directions' counts from the tree, by leader conversation id.
+    static func directionCounts(_ tree: DirectionsTree) -> [String: DirectionCounts] {
+        var out: [String: DirectionCounts] = [:]
+        for d in directions(tree) { if let counts = d.counts { out[d.id] = counts } }
+        return out
+    }
     /// `st` with its conversations stamped with the manager this client named: the hub relays another manager's answer as
     /// it came, without the `manager` its own lists put on each session. Nothing named: the default's, left as they came.
     private func owned(_ st: AssistantState) -> AssistantState {
@@ -1106,17 +1283,20 @@ nonisolated struct APIClient: Sendable {
         var timezone: String?
         var notes: String?
         var mainTasksQuiet: Bool?
+        var mainBackgroundFolded: Bool?
         var meetingAttendanceDefault: String?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
+            case mainBackgroundFolded = "main_background_folded"
         }
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
-                      mainTasksQuiet: Bool? = nil, meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
+                      mainTasksQuiet: Bool? = nil, mainBackgroundFolded: Bool? = nil,
+                      meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
         owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
             body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet,
-                                      meetingAttendanceDefault: meetingAttendanceDefault))))
+                                      mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).
@@ -1146,11 +1326,11 @@ nonisolated struct APIClient: Sendable {
     // MARK: Assistant schedule, memory (docs/assistant/assistant.md)
 
     /// Something the assistant does on its own (docs/assistant/assistant.md「Scheduled tasks」): once (a follow-up it scheduled), every
-    /// day at a time (a morning briefing), or every N minutes (a patrol). Runs go into the conversation it came from, else into the
+    /// day at a time (a morning briefing), every N minutes (a patrol), or on a cron expression (hubs with task_cron). Runs go into the conversation it came from, else into the
     /// task's own one (the first run starts it, the next ones continue it), with its own launcher / permission mode /
     /// effort (nil = the assistant's defaults); pushed when done.
     struct ScheduledTask: Codable, Identifiable, Hashable, Sendable {
-        enum Repeat: String, Codable, Sendable, CaseIterable { case once, daily, interval }
+        enum Repeat: String, Codable, Sendable, CaseIterable { case once, daily, interval, cron }
         var id: String
         var title: String
         var prompt: String
@@ -1159,6 +1339,11 @@ nonisolated struct APIClient: Sendable {
         var time: String          // daily: "HH:MM" in the phone's time zone
         var weekdays: [Int]       // daily: 1 = Monday … 7 = Sunday; empty = every day
         var everyMinutes: Int     // interval
+        /// cron: "minute hour day-of-month month day-of-week" (or @daily…) in the user's time zone; sent back as it is, so the
+        /// hub keeps it (the app shows it, the web edits it).
+        var cron: String = ""
+        var cronText: String?     // read-only: the expression in words in the app's language, nil when the hub has none
+        var nextRuns: [Date] = [] // read-only: a cron task's next runs
         var enabled: Bool
         var machineID: String?
         var sessionID: String?    // the conversation it came from, runs go into it; nil = the task's own one
@@ -1185,6 +1370,7 @@ nonisolated struct APIClient: Sendable {
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
             case lastStatus = "last_status", lastError = "last_error"
             case runMachineID = "run_machine_id", runSessionID = "run_session_id"
+            case cron, cronText = "cron_text", nextRuns = "next_runs"
         }
         /// Push When Done is Only Its Alerts: a run's answer is not pushed, only what it sends with notify_user.
         var pushesOnlyAsked: Bool { push == Self.pushAsked }
@@ -1213,6 +1399,9 @@ nonisolated struct APIClient: Sendable {
             time = text(.time) ?? "09:00"
             weekdays = try c.decodeIfPresent([Int].self, forKey: .weekdays) ?? []
             everyMinutes = try c.decodeIfPresent(Int.self, forKey: .everyMinutes) ?? 0
+            cron = text(.cron) ?? ""
+            cronText = text(.cronText)
+            nextRuns = ((try? c.decodeIfPresent([Date].self, forKey: .nextRuns)) ?? nil)?.compactMap(\.realDate) ?? []
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
             machineID = text(.machineID); sessionID = text(.sessionID)
             launcher = text(.launcher); permissionMode = text(.permissionMode); effort = text(.effort)
@@ -1227,6 +1416,7 @@ nonisolated struct APIClient: Sendable {
             try c.encode(id, forKey: .id); try c.encode(title, forKey: .title); try c.encode(prompt, forKey: .prompt)
             try c.encode(repeats, forKey: .repeats); try c.encodeIfPresent(at, forKey: .at)
             try c.encode(time, forKey: .time); try c.encode(weekdays, forKey: .weekdays); try c.encode(everyMinutes, forKey: .everyMinutes)
+            if !cron.isEmpty { try c.encode(cron, forKey: .cron) } // only a cron task has one: an older hub never gets it
             try c.encode(enabled, forKey: .enabled); try c.encode(sessionID ?? "", forKey: .sessionID)
             try c.encode(permissionMode ?? "", forKey: .permissionMode)
             try c.encodeIfPresent(push, forKey: .push)
@@ -1499,8 +1689,11 @@ nonisolated struct APIClient: Sendable {
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID()) async throws -> ResolveResult {
-        try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID))
+    /// `handoffCard`: a hand-off card's own approval, which says so (`SecretHandoff.feature`) on this request alone.
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false) async throws -> ResolveResult {
+        let headers = handoffCard ? ["X-Persona-Features": SecretHandoff.feature] : [:]
+        return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID,
+                                                                                 extraHeaders: headers))
     }
 
     /// One session's cards and how they ended (GET /api/v1/interactions/history), newest first; a row this app can't read

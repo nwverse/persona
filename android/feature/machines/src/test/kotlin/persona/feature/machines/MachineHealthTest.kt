@@ -13,6 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import persona.core.contracts.Machine
 import persona.core.contracts.api.*
+import persona.core.domain.usage.*
 import java.time.Instant
 
 /** "What this computer can do" as features (web lib/node-health.ts) and "Subscription limits"'s arithmetic (web lib/usage-windows.ts). */
@@ -170,6 +171,35 @@ class MachineHealthTest {
         model.browserFromList(null)
         assertNull(model.state.value.browser)
         assertFalse(model.watchesBrowser(online = true))
+    }
+
+    /** Back in front the page asks at once: a job that ended while it was hidden shows now, not after the first pause, and stops the watch. */
+    @Test fun aWatchBackInFrontReadsAtOnce() = runTest {
+        val running = persona.core.contracts.MachineBrowser(enabled = true, installed = false, job = persona.core.contracts.MachineJob("install", "running"))
+        var reads = 0
+        var answer = running
+        val api = object : Api() {
+            override suspend fun browser(machineId: String): persona.core.contracts.MachineBrowser { reads++; return answer }
+        }
+        val model = MachineHealthViewModel(api)
+        model.browserFromList(running)
+        val first = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.watchBrowser("m") { model.watchesBrowser(online = true) } }
+        assertEquals("the first start waits: what is shown is fresh", 0, reads)
+        testScheduler.advanceTimeBy(2_001)
+        assertEquals(1, reads)
+        first.cancel() // the page is hidden; the install ends meanwhile
+        answer = running.copy(installed = true, job = persona.core.contracts.MachineJob("install", "done"))
+        testScheduler.advanceTimeBy(60_000)
+        assertEquals("nothing is asked while hidden", 1, reads)
+        val again = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            model.watchBrowser("m", readFirst = true) { model.watchesBrowser(online = true) }
+        }
+        assertEquals(2, reads)
+        assertEquals("done", model.state.value.browser?.job?.state)
+        assertFalse(model.watchesBrowser(online = true))
+        assertTrue("the watch ends with the job", again.isCompleted)
+        testScheduler.advanceTimeBy(10_000)
+        assertEquals(2, reads)
     }
 
     /** An offline machine's card says why and what to do, read from the hub's error (web classifyConnection, #4463). */

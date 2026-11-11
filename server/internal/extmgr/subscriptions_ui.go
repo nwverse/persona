@@ -42,6 +42,8 @@ func (h *Manager) subscriptionUI(w http.ResponseWriter, r *http.Request) {
 		By:        subscriptions.Actor{ID: actorOf(ctx), Name: p.Name},
 		Name:      h.subscriptionConnectorName,
 		Native:    h.subscriptionNative,
+		Drafts:    h.subscriptionDrafts(),
+		Platform:  in.Context.Platform,
 	}
 	res, err := subscriptionsui.Handle(ctx, h.subs, env, subscriptionsui.Request{State: in.State, Action: in.Action, Values: in.Values})
 	switch {
@@ -52,8 +54,14 @@ func (h *Manager) subscriptionUI(w http.ResponseWriter, r *http.Request) {
 		writeSubscriptionErr(w, err)
 		return
 	}
+	// Drawn for the app's UI version as an extension page is: the view itself (an older app gets a switch as a row it
+	// taps, version 6's icons as older ones), then the result's lines and items.
 	slot, _ := extension.Slot("extension_page")
-	if err := extension.FitResult(&res, slot, version, lang); err != nil {
+	err = extension.FitResult(&res, slot, version, lang)
+	if res.View != nil && err == nil {
+		_, err = extension.Fit(res.View, slot, version, lang)
+	}
+	if err != nil {
 		h.logf("subscriptions: page does not fit ui_version %d: %v", version, err)
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -97,4 +105,15 @@ func (h *Manager) subscriptionNative(service string) string {
 		}
 	}
 	return ""
+}
+
+// subscriptionDrafts keeps the model drafts the pages start (#2040); one that finishes redraws the pages on every app,
+// as an extension's invalidate does for its own.
+func (h *Manager) subscriptionDrafts() *subscriptionsui.Drafts {
+	h.subDraftsOnce.Do(func() {
+		h.subDrafts = subscriptionsui.NewDrafts(func() {
+			h.broadcast(map[string]any{"type": "extension_ui", "extension": subscriptionsui.PagesID, "invalidate": true})
+		})
+	})
+	return h.subDrafts
 }

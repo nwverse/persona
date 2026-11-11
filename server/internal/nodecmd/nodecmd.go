@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
@@ -44,7 +45,8 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
                            one (the office skill): personad office --help
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md「Starting from the phone」)`
+                           message as its last argument, no shell in between (docs/integrations/codex.md「Starting from the phone」)
+` + iphone.Usage
 
 // SysmonUsage is `sysmon`'s line in the usage text.
 const SysmonUsage = `  personad sysmon [n]       print this machine's system info and 1 + n metric samples (n default 3, at most 8640,
@@ -67,10 +69,12 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	case "hook":
 		nodeclient.RunHook(ctx, rest, os.Stdin, os.Stdout)
 	case "launch": // a launcher kept in Settings › Models: its settings from the local node, then claude (docs/integrations/launchers.md)
-		if len(rest) < 1 {
-			return true, UsageError("usage: " + CommandName() + " launch <launcher> [claude args…]")
+		ticket, rest, err := launchTicket(rest) // --ticket: a hand-off's values too (node/secretenv.go)
+		if err != nil || len(rest) < 1 {
+			return true, UsageError("usage: " + CommandName() + " launch [--ticket <ticket>] <launcher> [claude args…]\n       " +
+				CommandName() + " launch --ticket <ticket> -- claude [claude args…]")
 		}
-		return true, runLaunch(stop, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
+		return true, runLaunch(stop, ticket, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)
@@ -85,6 +89,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Notify(ctx, rest, os.Stdout, os.Stderr))
 	case "office":
 		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
+	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
+		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":
 		n, err := sysmonCount(rest)
 		if err != nil {

@@ -64,6 +64,10 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// At rest the strip is on the shell's page anyway.
     private func opensMenu(_ value: AppTab) -> Bool {
         guard chosen == value else { return false }
+        // No menu to open (the switch over a phone's tabs, iPhone Duo open, #3680): the chosen segment is a plain button,
+        // not an empty menu that VoiceOver called List Options.
+        if value == .chats, WorkMenu.self == EmptyView.self { return false }
+        if value == .assistant, ChatMenu.self == EmptyView.self { return false }
         guard let pager = shell?.pager else { return true }
         return !pager.moving
     }
@@ -244,16 +248,15 @@ private struct WaitingBadge: View {
 
     var body: some View {
         let waiting = model.agentsWaiting
-        if waiting > 0, AppStyle.current.usesBeautifulUI {
-            BUIPill(waiting > 99 ? "99+" : "\(waiting)", tone: .custom(ink: StatusPalette.needsYou.text, fill: StatusPalette.needsYou.tint))
+        if AppStyle.current.usesBeautifulUI, let text = CountBadge.text(waiting) {
+            BUIPill(text, tone: .custom(ink: StatusPalette.needsYou.text, fill: StatusPalette.needsYou.tint))
                 .offset(offset)
                 .allowsHitTesting(false)
                 .accessibilityLabel(StateName.count(.needsYou, waiting))
         } else if waiting > 0 {
-            CountBadge(count: waiting, look: .tone(StatusPalette.needsYou))
+            CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
                 .offset(offset)
                 .allowsHitTesting(false)
-                .accessibilityLabel(StateName.count(.needsYou, waiting))
         }
     }
 }
@@ -266,10 +269,9 @@ private struct AssistantWaitingBadge: View {
     var body: some View {
         let waiting = model.badges.assistant
         if waiting > 0 {
-            CountBadge(count: waiting, look: .tone(StatusPalette.needsYou))
+            CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
                 .offset(x: Theme.Space.s, y: -Theme.Space.sm)
                 .allowsHitTesting(false)
-                .accessibilityLabel(StateName.count(.needsYou, waiting))
         }
     }
 }

@@ -98,6 +98,7 @@ internal object ExtensionIcons {
         "pause" -> PhIcons.Pause
         "stop" -> PhIcons.Stop
         "speaker" -> PhIcons.SpeakerHigh
+        "music" -> PhIcons.MusicNote
         "tv" -> PhIcons.Television
         "plug" -> PhIcons.Plug
         "battery" -> PhIcons.BatteryHigh
@@ -137,7 +138,7 @@ internal fun RowAvatar(item: ExtensionViewItem, handle: ExtensionViewHandle) {
     val painter = model?.let { if (it is ExtensionHubPicture && handle.pictures != null) rememberAsyncImagePainter(it, handle.pictures) else if (it is String) rememberAsyncImagePainter(it) else null }
     // The letters stand in until the picture has loaded, and when it never does.
     val loaded = painter?.state?.collectAsState()?.value is coil3.compose.AsyncImagePainter.State.Success
-    JAvatar(ExtensionViewText.initials(item), size = Tokens.Space.xxxl, image = painter?.takeIf { loaded })
+    JAvatar(ExtensionViewText.initials(item), size = Tokens.Space.xxl, image = painter?.takeIf { loaded })
 }
 
 @Composable
@@ -316,7 +317,7 @@ internal fun ExtensionTabs(tabs: persona.core.contracts.api.ExtensionViewTabs, v
                         tab.badge?.takeIf { it.isNotBlank() }?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
                         if (on && state.acting == tabs.action.id) { Spacer(Modifier.width(Tokens.Space.xs)); JSpinner() }
                     }
-                    Box(Modifier.width(Tokens.Space.xxl).height(Tokens.Space.xxs).clip(RoundedCornerShape(Tokens.Space.xxs)).then(if (on) Modifier.background(palette.accent) else Modifier))
+                    Box(Modifier.width(Tokens.Space.xl).height(Tokens.Space.xxs).clip(RoundedCornerShape(Tokens.Space.xxs)).then(if (on) Modifier.background(palette.accent) else Modifier))
                 }
             }
         }

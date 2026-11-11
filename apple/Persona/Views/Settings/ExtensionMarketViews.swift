@@ -148,14 +148,29 @@ struct ExtensionMarketView: View {
 private struct MarketExtensionRow: View {
     var item: ExtensionCatalogItem
     var showsMarket: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        HStack(alignment: .top, spacing: Theme.Space.m) {
+            ExtensionLogo(url: item.iconURL)
+            content
+        }
+        .padding(.vertical, Theme.Space.xxs)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            HStack(spacing: Theme.Space.s) {
-                Text(item.name).font(Theme.Font.bodyStrong).lineLimit(1)
-                Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
-                Spacer(minLength: Theme.Space.s)
+            if typeSize.isAccessibilitySize {
+                Text(item.name).font(Theme.Font.bodyStrong).fixedSize(horizontal: false, vertical: true)
+                Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary)
                 MarketStateChip(item: item)
+            } else {
+                HStack(spacing: Theme.Space.s) {
+                    Text(item.name).font(Theme.Font.bodyStrong).lineLimit(1)
+                    Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: Theme.Space.s)
+                    MarketStateChip(item: item)
+                }
             }
             if let d = item.description, !d.isEmpty {
                 Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
@@ -168,11 +183,13 @@ private struct MarketExtensionRow: View {
                     }
                 }
             }
+            if let downloads = item.downloads, downloads >= 0 {
+                Text("Downloads: \(downloads)").font(Theme.Font.label).foregroundStyle(.secondary)
+            }
             if let p = item.problem, !p.isEmpty {
                 Text(p).font(Theme.Font.label).foregroundStyle(Theme.danger).lineLimit(2)
             }
         }
-        .padding(.vertical, Theme.Space.xxs)
     }
 }
 
@@ -202,6 +219,7 @@ private struct MarketStateChip: View {
 /// new version asks for in addition), or remove when it came from this market.
 struct MarketExtensionDetailView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var page: MarketExtensionModel
     @State private var confirmRemove = false
     /// The install ended waiting for a sign-in: the extension's page opens over this one.
@@ -214,7 +232,7 @@ struct MarketExtensionDetailView: View {
             if let p = page.item {
                 header(p)
                 if let op = page.operation {
-                    ExtensionOperationSection(operation: op, name: p.name) {
+                    ExtensionOperationSection(operation: op, name: p.name, partial: page.partialLines(for: op)) {
                         Task { if await page.retry() { done(op.kind) } }
                     } review: {
                         Task {
@@ -268,7 +286,7 @@ struct MarketExtensionDetailView: View {
         #endif
         // Closed without Install: the operation waiting on this preview is canceled.
         .sheet(item: $page.preview, onDismiss: { page.declined() }) { pv in
-            ExtensionInstallSheet(preview: pv, name: page.item?.name ?? pv.manifest.name ?? pv.manifest.id) {
+            ExtensionInstallSheet(preview: pv, name: page.item?.name ?? pv.manifest.name ?? pv.manifest.id, installedNames: page.memberNames) {
                 // The sheet closes at once; the steps show on this page (and stay if it is left). The operation is
                 // taken before it closes, so its onDismiss does not cancel what was just agreed to.
                 let kind: ExtensionOperation.Kind = pv.upgrade == true ? .upgrade : .install
@@ -310,16 +328,22 @@ struct MarketExtensionDetailView: View {
 
     @ViewBuilder private func header(_ p: ExtensionCatalogItem) -> some View {
         Section {
+            // At the accessibility sizes the name and its line wrap and the state goes under them, or the chip beside them
+            // left "Ex…" (#4058).
+            let large = typeSize.isAccessibilitySize
             HStack(spacing: Theme.Space.m) {
-                Image(systemName: Theme.Icon.plugins).resizable().scaledToFit().foregroundStyle(Theme.accent)
-                    .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
+                ExtensionLogo(url: p.iconURL)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(p.name).font(Theme.Font.heading).lineLimit(1)
+                    Text(p.name).font(Theme.Font.heading).lineLimit(large ? nil : 1)
                     Text([p.version, p.publisher, p.marketName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(large ? nil : 1)
+                    if let downloads = p.downloads, downloads >= 0 {
+                        Text("Downloads: \(downloads)").font(Theme.Font.label).foregroundStyle(.secondary)
+                    }
+                    if large { MarketStateChip(item: p) }
                 }
                 Spacer(minLength: Theme.Space.s)
-                MarketStateChip(item: p)
+                if !large { MarketStateChip(item: p) }
             }
             .padding(.vertical, Theme.Space.xs)
             if let d = p.description, !d.isEmpty { Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary) }
@@ -371,7 +395,7 @@ struct MarketExtensionDetailView: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text(page.isPack ? String(localized: "Uninstalling only the pack keeps its members. Uninstalling with members deletes their settings and data.") : String(localized: "Its settings and data are deleted too. You can install it again from the market later."))
+                    Text(page.uninstallMessage)
                 }
             }
         } footer: {
@@ -453,9 +477,31 @@ private struct PermissionLine: View {
 
 /// The preview to agree to: the package downloaded and checked, what it may do (for an upgrade, what it asks for in
 /// addition first), then Install / Update.
+/// A pack member's row (#4122): its name, and under it its id beside the version and market (only the version and
+/// market under the id of one not installed). The lines wrap at the accessibility sizes.
+struct ExtensionPackMemberRow: View {
+    var line: ExtensionPackMemberLine
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        let large = typeSize.isAccessibilitySize
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Text(line.title).font(Theme.Font.body).lineLimit(large ? nil : 1)
+            if let detail = line.detail {
+                Text(detail).font(Theme.Font.label).foregroundStyle(.secondary)
+                    .lineLimit(large ? nil : 1).truncationMode(.middle)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct ExtensionInstallSheet: View {
     var preview: ExtensionPreview
     var name: String
+    /// The installed extensions' names by id, for a pack's members (#4122); the ones installed with it are named by
+    /// their own manifests.
+    var installedNames: [String: String] = [:]
     var confirm: () async -> Bool
     @Environment(\.dismiss) private var dismiss
     @State private var busy = false
@@ -483,9 +529,10 @@ struct ExtensionInstallSheet: View {
                     } header: { SettingsHeading(String(localized: "Dependencies")) }
                 }
                 if let members = preview.manifest.extensionPack, !members.isEmpty {
+                    let names = ExtensionPackMemberLine.names(installed: installedNames, preview: preview)
                     Section {
                         ForEach(members, id: \.id) { member in
-                            LabeledContent(member.id, value: member.version ?? "")
+                            ExtensionPackMemberRow(line: ExtensionPackMemberLine(member, name: names[member.id]))
                         }
                     } header: { SettingsHeading(String(localized: "Pack Members")) }
                 }
@@ -603,7 +650,8 @@ struct ExtensionMarketsView: View {
             }
             ForEach(page.markets) { m in
                 Section {
-                    MarketRow(market: m, busy: page.busyMarket == m.id) { act in
+                    MarketRow(market: m, busy: page.busyMarket == m.id, removalCount: page.removalMarket == m.id ? page.removalCount : nil,
+                              prepareRemoval: { await page.prepareRemoval(of: m.id) }) { act in
                         switch act {
                         case .refresh: Task { await page.refreshMarket(m.id) }
                         case .token: tokenFor = m
@@ -659,15 +707,19 @@ private struct MarketRow: View {
     enum Act { case refresh, token, remove }
     var market: ExtensionMarket
     var busy: Bool
+    var removalCount: Int?
+    var prepareRemoval: () async -> Bool
     var act: (Act) -> Void
     @State private var confirmRemove = false
+    @State private var preparingRemoval = false
+    @State private var removalAttempt = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.s) {
                 Text(market.title).font(Theme.Font.bodyStrong).lineLimit(1)
                 Spacer(minLength: Theme.Space.s)
-                if busy { ProgressView().controlSize(.small) }
+                if busy || preparingRemoval { ProgressView().controlSize(.small) }
             }
             Text(market.spec).font(Theme.Font.code).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
             if let d = market.description, !d.isEmpty { Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary) }
@@ -690,7 +742,17 @@ private struct MarketRow: View {
             action(String(localized: "Refresh"), .refresh, id: "market-refresh-\(market.id)")
             action(market.hasToken ? String(localized: "Change Token") : String(localized: "Set Token"), .token, id: "market-token-\(market.id)")
             Spacer(minLength: 0)
-            Button(role: .destructive) { confirmRemove = true } label: { Text("Delete").lineLimit(1) }
+            Button(role: .destructive) {
+                removalAttempt += 1
+                let attempt = removalAttempt
+                Task {
+                    preparingRemoval = true
+                    let prepared = await prepareRemoval()
+                    guard attempt == removalAttempt else { return }
+                    preparingRemoval = false
+                    if prepared { confirmRemove = true }
+                }
+            } label: { Text("Delete").lineLimit(1) }
             .buttonStyle(.borderless)
             .foregroundStyle(Theme.danger) // a Mac borderless button draws its role in the accent
             .accessibilityIdentifier("market-remove-\(market.id)")
@@ -699,11 +761,12 @@ private struct MarketRow: View {
                     .accessibilityIdentifier("market-remove-confirm")
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("The hub stops reading this market. Extensions installed from it stay.")
+                Text(ExtensionMarketText.removalReason(removalCount))
+                    .accessibilityIdentifier("market-remove-note")
             }
         }
         .font(Theme.Font.secondary)
-        .disabled(busy)
+        .disabled(busy || preparingRemoval)
     }
 
     /// Several buttons in one row of a list: borderless, or the whole row is one button.

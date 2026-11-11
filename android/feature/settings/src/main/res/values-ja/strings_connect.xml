@@ -42,7 +42,6 @@
     <string name="settings_pairing_next">次へ</string>
     <string name="settings_pairing_paste">リンクを貼り付け</string>
     <string name="settings_pairing_back_to_scan">スキャンに戻る</string>
-    <string name="settings_pairing_connect_title">ハブに接続</string>
     <string name="settings_pairing_connect_body">ハブをインストールすると画面に QR コードが表示されます。接続済みのデバイスで「設定 › デバイス › 新しいデバイスを接続」を開き、そこに出るコードを読み取ることもできます。</string>
     <string name="settings_pairing_scan">スキャンしてペアリング</string>
     <string name="settings_pairing_connect_push">Googleサービスがなくても通知を受け取れます。通知はスマートフォンとハブの常時接続で届きます。</string>
@@ -76,6 +75,8 @@
     <string name="settings_pairing_failure_timeout">ハブに接続できません。自宅では、スマートフォンとハブのあるパソコンが同じネットワークにつながっているか確認してください。外出先では、自宅のルーターが外部からの接続を許可しているか確認してください。</string>
     <string name="settings_pairing_failure_local">自宅でハブに接続するには、Personaにローカルネットワークへのアクセスを許可してください。</string>
     <string name="settings_pairing_failure_certificate">証明書かハブの身元が一致しません。ハブを入れ直した場合は、ログイン済みのデバイスで新しいコードを出してもう一度読み取ってください。</string>
+    <string name="settings_pairing_failure_proxy_certificate">%1$s の証明書はこのスマートフォンで信頼されていません。このアドレスはリバースプロキシかトンネルを経由しているため、その証明書がこのドメイン名に有効か確認してください。ハブ自体は問題なく、コードを作り直しても解決しません。</string>
+    <string name="settings_pairing_failure_proxy_this_address">このアドレス</string>
     <string name="settings_pairing_failure_expired">このコードは期限切れか、すでに使われています。ログイン済みのデバイスで新しいコードを出してください。</string>
     <string name="settings_pairing_failure_incompatible">接続コンポーネントかハブがこのペアリング方法に対応していません。更新してからもう一度お試しください。</string>
     <string name="settings_pairing_failure_tls_required">このアドレスには暗号化された接続が必要です。HTTPSのアドレスでペアリングし直してください。</string>
@@ -201,7 +202,6 @@
     <string name="settings_engine_title">エンジン</string>
     <string name="settings_engine_confirm">確認して続ける</string>
     <string name="settings_engine_save">保存</string>
-    <string name="settings_engine_heading">このコンピューターで使うエンジン</string>
     <string name="settings_engine_reading">このマシンを読み込み中</string>
     <string name="settings_engine_demo">体験モードではエンジンを変更できません。</string>
     <string name="settings_engine_later">ペアリングは完了しました。エンジンはあとでAgentsのマシン監視から選べます。</string>
@@ -209,7 +209,6 @@
     <string name="settings_engine_missing_title">このマシンを読み込めません</string>
     <string name="settings_engine_retry">再試行</string>
     <string name="settings_engine_continue">ひとまず続ける</string>
-    <string name="settings_engine_must_choose">続けるにはエンジンを1つ選んでください。ネットワークを確認してから、もう一度確認をタップしてください。</string>
     <string name="settings_engine_save_failed">保存に失敗しました：%1$s</string>
 
     <!-- Candidate addresses (Connection diagnostics) -->

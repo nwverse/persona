@@ -25,12 +25,15 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	CreationID       string    `json:"creation_id,omitempty"`
+	Incarnation      string    `json:"incarnation,omitempty"`
 	Pane             string    `json:"pane,omitempty"`
 	Launcher         string    `json:"launcher"`
 	Model            string    `json:"model,omitempty"`
 	ModelFingerprint string    `json:"model_fingerprint,omitempty"`
 	ModelEffort      string    `json:"model_effort,omitempty"`
 	Runtime          string    `json:"runtime,omitempty"` // the assistant runtime it was asked to run on (assistant_sdk.go)
+	ConfigDir        string    `json:"config_dir,omitempty"`
 	Cwd              string    `json:"cwd"`
 	IsMain           bool      `json:"is_main,omitempty"`
 	StartedAt        time.Time `json:"started_at"`
@@ -48,6 +51,9 @@ type sessionState struct {
 	// Guest: a guest conversation's tools (assistant_guest.go): every process it runs in has no built-in tools and
 	// only these of Persona's. Nil is an ordinary conversation.
 	Guest []string `json:"guest,omitempty"`
+	// GuestKind is a guest conversation's kind: "" for an extension's, guestMeeting for a meeting's room
+	// (assistant_guest.go), whose every process loads none of the owner's Claude Code setup either.
+	GuestKind string `json:"guest_kind,omitempty"`
 	// Ultracode: what was last seen of ultracode in the process Persona runs this session in (ultracode.go). Written
 	// by setUltracode only, which never makes a record for a session that has none.
 	Ultracode *ultracodeRecord `json:"ultracode_process,omitempty"`
@@ -213,6 +219,9 @@ func (s *stateFile) setPane(id, pane string) {
 
 func (s *stateFile) put(id string, v sessionState) {
 	s.mu.Lock()
+	if old, ok := s.Sessions[id]; ok && old.CreationID != "" {
+		v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
+	}
 	s.Sessions[id] = v
 	persist := s.persist
 	s.mu.Unlock()

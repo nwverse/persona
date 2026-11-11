@@ -52,7 +52,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     private val scope = app.scope
     private val version = app.packageManager.getPackageInfo(app.packageName, 0).versionName.orEmpty()
     private val os by lazy {
-        val system = detectedPhoneSystem()
+        val system = detectedPhoneSystem(app)
         buildJsonObject { put("name", system.name); put("version", system.version); put("sdk", Build.VERSION.SDK_INT) }
     }
     private val heartbeatPolicy by lazy {
@@ -201,6 +201,10 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         override suspend fun discard(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.discard(clientMessageId) ?: false
         }
+        // By its session: a cancelled message is in no group's outbox any more.
+        override fun restore(message: OutboxMessage) {
+            groupOf(message.session.machineId)?.data?.messages?.restore(message.copy(session = GroupKeys.rawKey(message.session)))
+        }
         override suspend fun retry(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.retry(clientMessageId) ?: false
         }
@@ -211,6 +215,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             .firstOrNull { data -> data.messages.outbox.value.any { it.clientMessageId == clientMessageId } }
             ?: current.value
     }
+
+    /** Whether the group owning this namespaced machine currently has a desktop app connected. */
+    fun desktopOnline(machineId: String): Boolean? = groupOf(machineId)?.let { groupDesktops.online(it.id) }
 
     /** The group a merged-list machine id belongs to (by its suffix). */
     internal fun groupOf(machineId: String): GroupRuntime? {
@@ -698,7 +705,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         groups.value.forEach { it.reconnect() }
     }
 
-    override val groupLinks get() = groups.value.map { group -> GroupLink(group.state) { refreshNetwork(); group.reconnect() } }
+    override val groupLinks get() = groups.value.map { group ->
+        GroupLink(group.state, reconnect = { refreshNetwork(); group.reconnect() }, wake = group::onWake)
+    }
 
     override fun send(message: JsonObject): Boolean = selected.value?.connectionOrNull?.send(message) ?: false
 

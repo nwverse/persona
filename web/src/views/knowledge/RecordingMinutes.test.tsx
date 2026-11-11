@@ -2,9 +2,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { initI18n } from "../../i18n";
+import { initI18n, t } from "../../i18n";
 import { setToken } from "../../lib/api";
-import { type KBDetailResponse } from "../../lib/kb";
+import { formatAt, formatSpan, minutesKeptUntil, type KBDetailResponse } from "../../lib/kb";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { toast } from "../../ui/atoms";
 import { EntryDetail } from "./KBDetail";
@@ -74,6 +74,19 @@ describe("recording minutes in Knowledge detail", () => {
     const added = [...section().querySelectorAll("li")].find((li) => li.textContent?.includes("Share notes"))!;
     expect(added.textContent).toContain("Added");
     expect(added.textContent).not.toContain("Add to to-dos");
+  });
+
+  it("says when in the app's own dates from start / end, and the hub's when only without them (#4713)", async () => {
+    const body = fixture();
+    const start = new Date(2026, 10, 10, 14).toISOString();
+    const end = new Date(2026, 10, 10, 14, 30).toISOString();
+    Object.assign(body.detail.minutes!, { start, end });
+    await load(body);
+    const when = section().querySelector("[data-minutes-when]")!.textContent!;
+    expect(when).toBe(formatSpan(start, end));
+    expect(when).toContain(formatAt(start));
+    expect(when).toMatch(/14:00–14:30$/);
+    expect(section().textContent).not.toContain("2026-11-10 14:00–14:30");
   });
 
   it("targets the spoken transcript line, scrolls only its scroller and briefly highlights it", async () => {
@@ -241,6 +254,58 @@ describe("recording minutes in Knowledge detail", () => {
     await reply(requests.at(-1)!, fixture());
     expect(writes()).toHaveLength(1);
     expect(button("Retry refresh")).toBeUndefined();
+  });
+
+  // #3780: past recording_days only the minutes are kept; they are read and confirmed as before, never made again.
+  const trimmed = () => {
+    const data = fixture();
+    data.detail.meta!.trimmed_at = "2026-11-25T02:00:00Z"; delete data.detail.segments; delete data.detail.summary;
+    return data;
+  };
+  const assistantAsk = () => requests.find((r) => r.url === "/api/v1/assistant")!;
+
+  it("keeps a trimmed recording's minutes and to-dos, says until when, and offers no regenerate", async () => {
+    const data = trimmed();
+    await load(data);
+    expect(new Headers(assistantAsk().init.headers).get("X-Persona-Manager")).toBe("assistant");
+    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_transcript_expired"));
+    await reply(assistantAsk(), { manager: "assistant", recording_days: 14, minutes_days: 365 });
+    const until = minutesKeptUntil(data.detail.meta!.started_at as string, 365)!;
+    expect(until).toContain("2027");
+    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_kept_until", { date: until }));
+    expect(section().textContent).toContain("Keep the cap");
+    expect(button("Regenerate")).toBeUndefined();
+    expect(button("Make minutes")).toBeUndefined();
+    expect(button("Copy")).toBeDefined();
+    expect(section().querySelector<HTMLButtonElement>('[aria-label="Go to transcript at 14:00:12"]')!.disabled).toBe(true);
+    expect(host.textContent).toContain(t("knowledge-kbdetail.transcript_expired"));
+    expect(host.textContent).not.toContain(t("knowledge-kbdetail.transcript_empty"));
+    click("Add to to-dos");
+    expect(writes().map((w) => w.url)).toEqual([`${minutesPath}/todos`]);
+  });
+
+  it("says minutes are kept until deleted when retention is forever", async () => {
+    await load(trimmed());
+    await reply(assistantAsk(), { manager: "assistant", recording_days: 14, minutes_days: 0 });
+    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_kept_forever"));
+    expect(section().textContent).not.toContain("1970");
+    expect(button("Regenerate")).toBeUndefined();
+  });
+
+  it.each([
+    ["has no minutes_days", { manager: "assistant" }, 200],
+    ["cannot be read", { error: "Synthetic failure" }, 503],
+  ])("says only that the transcript expired when the assistant %s", async (_, body, status) => {
+    await load(trimmed());
+    await reply(assistantAsk(), body, status);
+    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_transcript_expired"));
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing more of a whole recording", async () => {
+    await load();
+    expect(requests.some((r) => r.url === "/api/v1/assistant")).toBe(false);
+    expect(section().querySelector("[data-minutes-kept]")).toBeNull();
   });
 
   it.each(["route", "credential", "manager"])("ignores late writes after a %s change", async (change) => {

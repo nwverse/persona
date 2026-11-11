@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -20,9 +21,12 @@ const feedBrief = "brief" // ref: the routine's task id; body: briefBody
 // to verify, and the newest of done (10) and failed (8), whose totals say how many there were. Texts the hub writes (a
 // waiting card's line) are in the bot's language.
 type briefBody struct {
-	Title string    `json:"title"` // the routine's name
-	At    time.Time `json:"at"`
-	Hours int       `json:"hours"` // how far back done / failed look
+	// NorthStar is what the report opens with: its lines and the numbers they say (north_star.go).
+	NorthStar     briefBodyNorthStar `json:"north_star"`
+	Confirmations briefConfirmations `json:"confirmations"`
+	Title         string             `json:"title"` // the routine's name
+	At            time.Time          `json:"at"`
+	Hours         int                `json:"hours"` // how far back done / failed look
 	// WaitingUnknown: the cards waiting were not read yet (the hub had just started): `waiting` is empty for want of knowing.
 	WaitingUnknown bool            `json:"waiting_unknown,omitempty"`
 	Waiting        []briefBodyRow  `json:"waiting"`
@@ -38,6 +42,19 @@ type briefBody struct {
 	// Progress are the tasks being worked on, the longest running first (at most 8); stage is plan / develop / review / merge / deploy / verify, "" when not known.
 	Progress      []briefBodyProgress `json:"progress"`
 	ProgressTotal int                 `json:"progress_total"`
+}
+
+// briefBodyNorthStar is a `brief` item's north star: the lines as the report says them, and today's and yesterday's
+// (until the same time) numbers; a number is null when it is unknown.
+type briefBodyNorthStar struct {
+	Lines                  []string `json:"lines"`
+	Interruptions          *int     `json:"interruptions"`
+	InterruptionsYesterday *int     `json:"interruptions_yesterday"`
+	Partial                bool     `json:"partial,omitempty"`
+	Availability           *float64 `json:"availability"`
+	AvailabilityYesterday  *float64 `json:"availability_yesterday"`
+	Attempts               int      `json:"attempts"`
+	OK                     int      `json:"ok"`
 }
 
 // briefBodyRow is a row of what waits: a card (waiting) with its line, or a task to verify (accept) with its title.
@@ -79,11 +96,12 @@ type briefBodyProgress struct {
 
 // body is the facts as a `brief` item's body.
 func (f *briefFacts) body(s *Service, title string) briefBody {
-	b := briefBody{Title: title, At: f.At, Hours: int(briefWindow / time.Hour), WaitingUnknown: f.WaitingUnknown, DoneTotal: f.DoneTotal,
+	b := briefBody{Confirmations: f.Confirmations, Title: title, At: f.At, Hours: int(briefWindow / time.Hour), WaitingUnknown: f.WaitingUnknown, DoneTotal: f.DoneTotal,
 		Failed: f.Failed, FailedTotal: f.FailedTotal, Waiting: []briefBodyRow{}, Done: []briefBodyDone{}, Accept: []briefBodyRow{}, ProgressTotal: f.ProgressTotal, Progress: []briefBodyProgress{}}
 	if b.Failed == nil {
 		b.Failed = []todayFailed{}
 	}
+	b.NorthStar = f.NorthStar.body(f.NorthStarLines)
 	row := func(r boardRow) briefBodyRow {
 		return briefBodyRow{ID: r.id, Title: r.summary, From: r.from, Link: r.link, WaitedS: int64(r.waited / time.Second), Nudged: r.nudged}
 	}
@@ -159,20 +177,45 @@ func (s *Service) briefRoutes() {
 	// POST /api/v1/todos/{id}/accept {"asked_at"}: the Accept button of a `brief` item. It verifies the task when asked_at is
 	// the round that waits now; a button of an earlier round, or a task already verified, is 409. A decision whose
 	// recommendation could not be sent to the task's agent is 502, and asks that cannot be read or an acceptance that
-	// cannot be saved is 503; either way nothing was taken (conclusion.go, errAcceptStore).
+	// cannot be saved is 503; either way nothing was taken (conclusion.go, errAcceptStore). A decision also takes
+	// {"option"}: the label of the option chosen (the recommended one is what the plain press takes; no such option is
+	// 400), or {"response"}: decide_yourself, not_what_i_asked or explain_first, which takes nothing and goes to the
+	// task's supervisor (decision.go; any other value is 400).
 	s.handle("POST /api/v1/todos/{id}/accept", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change todos"))
 			return
 		}
 		var in struct {
-			AskedAt string `json:"asked_at"`
+			AskedAt  string `json:"asked_at"`
+			Option   string `json:"option"`
+			Response string `json:"response"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.AskedAt == "" {
 			apierr.Write(w, http.StatusBadRequest, errors.New("asked_at is required"))
 			return
 		}
-		ok, err := s.acceptTryFromBrief(r.Context(), r.PathValue("id"), in.AskedAt)
+		var ok bool
+		var err error
+		switch {
+		case in.Response != "" && in.Option != "":
+			apierr.Write(w, http.StatusBadRequest, errors.New("give option or response, not both"))
+			return
+		case in.Response != "":
+			if !slices.Contains(ownerResponses, in.Response) {
+				apierr.Write(w, http.StatusBadRequest, errors.New("response must be decide_yourself, not_what_i_asked or explain_first"))
+				return
+			}
+			ok, err = s.ownerCannotAnswer(r.Context(), r.PathValue("id"), in.AskedAt, in.Response)
+		case in.Option != "":
+			ok, err = s.chooseOption(r.Context(), r.PathValue("id"), in.AskedAt, in.Option)
+		default:
+			ok, err = s.acceptTryFromBrief(r.Context(), r.PathValue("id"), in.AskedAt)
+		}
+		if errors.Is(err, errDecisionOption) {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		if errors.Is(err, errAcceptStore) { // nothing accepted: the button works again once the store answers
 			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return

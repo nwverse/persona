@@ -6,7 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /** Navigation requests consumed when the Assistant home is shown. */
-enum class AssistantSidebarAction { Home, NewConversation, MainConversation, ScheduledTasks, SessionInfo, Launcher }
+enum class AssistantSidebarAction { Home, NewConversation, MainConversation, ScheduledTasks, SessionInfo, Launcher, Health }
 
 /** The shell owns one history sidebar, independent of the Assistant page's navigation lifetime. */
 class AssistantSidebarHost {

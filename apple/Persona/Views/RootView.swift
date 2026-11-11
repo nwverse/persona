@@ -205,6 +205,9 @@ struct RootView: View {
         // The Theme Color on the windows too, for what UIKit draws in the window's tint (Settings' row icons, `WindowTint`).
         .onChange(of: model.look, initial: true) { WindowTint.apply() }
         #endif
+        #if DEBUG || PERF_SIGNPOST
+        .task { MainThreadWatchdog.shared.start() }
+        #endif
         #if DEBUG
         .overlay(alignment: .bottomTrailing) { PerfCountProbe() }
         // UI tests see the small window (VNC in picture in picture, #1343), which is the system's.
@@ -368,6 +371,18 @@ struct PageTabSwitchRow: View {
     }
 }
 
+/// The switch as a row over a page opened in Agents' split column on a phone's tabs. The column's stack has it as an
+/// inset (`SplitNavigation`), and that reached only its root page: an opened page covers the whole column, so the switch
+/// went as soon as an agent was opened, and nothing led back to Assistant (#3680). Only where it shows: everywhere else
+/// the page is left exactly as it was.
+struct PageTabSwitchInset: ViewModifier {
+    var shown: Bool
+
+    func body(content: Content) -> some View {
+        if shown { content.safeAreaInset(edge: .top, spacing: 0) { PageTabSwitchRow() } } else { content }
+    }
+}
+
 /// A phone's tabs (`pageTabSwitch`): no tab bar; the pages draw the switch.
 private struct PageTabSwitch: ViewModifier {
     func body(content: Content) -> some View {
@@ -522,7 +537,7 @@ private struct TabPage<Page: View>: View, Equatable {
     private var badge: Text? {
         if model.isDemo { return Text("Demo") }
         let total = ExtensionSlots.shared.total
-        if total.count > 0 { return Text(total.count > 99 ? "99+" : "\(total.count)") }
+        if let text = CountBadge.text(total.count) { return Text(text) }
         return total.dot ? Text("•") : nil
     }
 }
@@ -585,7 +600,8 @@ private struct InnerWidthProbe: View {
 
     var body: some View {
         Color.clear
-            .frame(width: 0, height: 0)
+            .frame(width: Theme.Size.line, height: Theme.Size.line)
+            .allowsHitTesting(false)
             .onChange(of: width) { seen.count += 1 }
             .screenProbe("tree-inner", seen)
     }

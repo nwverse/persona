@@ -4,7 +4,8 @@
     <string name="chat_api_error_retry">重试</string>
     <string name="chat_api_error_request_id">请求 ID</string>
     <string name="chat_api_error_copy_request_id">复制请求 ID</string>
-    <string name="chat_api_error_copy_session">复制 Session</string>
+    <string name="chat_api_error_session">会话</string>
+    <string name="chat_api_error_copy_session">复制会话</string>
     <string name="chat_api_error_time">时间</string>
     <string name="chat_api_error_copy_raw">复制原文</string>
     <string name="chat_api_error_transient">临时故障</string>
@@ -38,6 +39,8 @@
     <string name="chat_chrome_status_unconfirmed">待核对</string>
     <string name="chat_chrome_status_needs_you">等你处理</string>
     <string name="chat_chrome_status_stopping">中断中</string>
+    <string name="chat_chrome_worked_minutes">%1$d 分</string>
+    <string name="chat_chrome_worked_hours">%1$d 小时 %2$d 分</string>
     <string name="chat_chrome_more">更多操作</string>
     <string name="chat_chrome_actions_title">会话操作</string>
     <string name="chat_chrome_todo">待办 · %1$s</string>
@@ -140,7 +143,7 @@
     <string name="chat_request_allow">允许</string>
     <string name="chat_request_deny">拒绝</string>
     <string name="chat_request_always_allows">总是同意会放行：%1$s</string>
-    <string name="chat_request_fields_elsewhere">这个请求要先填写内容才能允许，请到网页或 iPhone 上处理；在这里仍可以拒绝。</string>
+    <string name="chat_request_fill_in_allow">填写并允许</string>
     <string name="chat_request_secret_run_commands">依次运行的命令</string>
     <string name="chat_request_secret_run_password">密码</string>
     <string name="chat_request_secret_run_note">只用这一次，不会保存，助手也看不到。</string>
@@ -263,6 +266,13 @@
     <string name="chat_modes_auto_detail">自己判断风险，安全的直接做</string>
     <string name="chat_modes_bypass">全部放行</string>
     <string name="chat_modes_bypass_detail">什么都不问；只能在新开时选</string>
+    <string name="chat_modes_header">权限模式：%1$s</string>
+    <string name="chat_modes_unknown">未知</string>
+    <string name="chat_modes_bypass_detail_running">改文件、跑命令都不问你</string>
+    <string name="chat_modes_confirm_bypass_title">全部放行？</string>
+    <string name="chat_modes_confirm_leave_title">离开全部放行？</string>
+    <string name="chat_modes_confirm_leave_action">切到 %1$s</string>
+    <string name="chat_modes_confirm_leave_text">这个 Agent 不是以全部放行启动的，切走后在这里切不回来。</string>
     <string name="chat_modes_effort_minimal">极低</string>
     <string name="chat_modes_effort_low">低</string>
     <string name="chat_modes_effort_medium">中</string>
@@ -433,4 +443,11 @@
     <string name="chat_doc_rtf">RTF 文档</string>
     <string name="chat_doc_pdf">PDF 文档</string>
     <string name="chat_doc_other">文档</string>
+    <string name="chat_turn_fix_not_logged_in">模型没接好：Claude Code 没登录</string>
+    <string name="chat_turn_fix_not_logged_in_detail">在那台电脑上登录一次，或者改用 API Key。</string>
+    <string name="chat_turn_fix_auth_failed">模型没接好：Key 不对</string>
+    <string name="chat_turn_fix_auth_failed_detail">Key 不对或过期了，换一个能用的。</string>
+    <string name="chat_turn_fix_model_route">模型没接好：这个模型用不了</string>
+    <string name="chat_turn_fix_model_route_detail">模型名不对，或者这个模型现在用不了，换一个试试。</string>
+    <string name="chat_turn_fix_action">去修</string>
 </resources>

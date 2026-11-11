@@ -211,7 +211,7 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	d := &Detail{Kind: kind, ID: SafeID(id)}
 	var meta string
 	switch kind {
-	case KindChat, KindPerson, KindProject, KindRecording:
+	case KindChat, KindPerson, KindProject, KindRecording, KindTopic:
 		meta = e.Store.path(kind, id, "meta.json")
 		d.Path = e.Store.path(kind, id)
 		d.Summary = e.Store.Summary(kind, id)
@@ -237,6 +237,12 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		return nil, ErrNotFound
 	}
 	d.Meta = raw
+	if kind == KindRecording {
+		e.Store.recFilesMu.RLock()
+		m, _ := e.Store.readMeeting(id)
+		e.Store.recFilesMu.RUnlock()
+		d.Meta = metaWithMeeting(raw, m)
+	}
 	if kind == KindProject {
 		d.Log = e.Store.Log(id, 30)
 		if p, ok := e.Store.Project(id); ok {
@@ -253,7 +259,21 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		_ = json.Unmarshal(recording["segments.json"], &segs)
 		d.Segments = nonNilSegments(segs)
 		if raw, err := os.ReadFile(e.Store.path(kind, id, "minutes.json")); err == nil && json.Valid(raw) {
+			var r Recording
+			if json.Unmarshal(recording["meta.json"], &r) == nil {
+				raw = minutesWithSpan(raw, &r, e.Store.Zone())
+			}
 			d.Minutes = raw
+		}
+		d.Meta, d.Recap = e.dayDetail(id, d.Meta)
+		if d.Summary == "" && d.Recap != nil {
+			// A trimmed day recording keeps its recap, not summary.md: its summary is the recap's.
+			var rc struct {
+				Summary string `json:"summary"`
+			}
+			if json.Unmarshal(d.Recap, &rc) == nil && rc.Summary != "" {
+				d.Summary = rc.Summary + "\n"
+			}
 		}
 		if recentChars > 0 {
 			raw := recording["transcript.md"]
@@ -262,6 +282,9 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	}
 	if kind == KindChat && recentChars > 0 {
 		d.Recent = e.Store.Since(id, time.Now().AddDate(0, 0, -7), recentChars)
+	}
+	if kind == KindTopic {
+		d.Points = e.Store.TopicPoints(id)
 	}
 	var refs struct {
 		Projects []string `json:"projects"`
@@ -516,6 +539,9 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 		return c.ID, nil
 	case KindPerson:
+		if u.Status != "" && u.Status != "active" && u.Status != "ignored" && u.Status != "self" {
+			return "", fmt.Errorf("unknown person status %q", u.Status)
+		}
 		p, ok := e.Store.Person(id)
 		if !ok {
 			return "", ErrNotFound
@@ -539,6 +565,9 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 			protectUpdate(u, &p.Tagging)
 			if u.Note != "" {
 				p.Note = oneLine(u.Note)
+			}
+			if u.Status != "" {
+				p.Status = u.Status
 			}
 			p.Projects = addUnique(p.Projects, linked...)
 			p.Chats = removeStrings(p.Chats, u.RemoveChats)
@@ -588,6 +617,41 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		}
 		e.index(kind, it.ID, it.Title, it.Tagging, it.Note, it.At)
 		return it.ID, nil
+	case KindTopic:
+		// The curation owns the points (topics.go); by hand the name, the one line, aliases, tags and pinned facts,
+		// which the merge reads and never overwrites.
+		if u.Summary != "" {
+			return "", errors.New("a topic's summary is written from its points: correct it with pinned facts")
+		}
+		e.Store.topicMu.Lock()
+		defer e.Store.topicMu.Unlock()
+		t, ok := e.Store.Topic(id)
+		if !ok {
+			return "", ErrNotFound
+		}
+		tagUpdate(u, &t.Tagging)
+		protectUpdate(u, &t.Tagging)
+		if u.Name != "" {
+			t.Name = oneLine(u.Name)
+		}
+		if u.Note != "" {
+			t.Note = oneLine(u.Note)
+		}
+		t.Aliases = removeStrings(addUnique(t.Aliases, u.Aliases...), u.RemoveAliases)
+		if err := e.Store.putEntity(KindTopic, t.Slug, t, &t.Tagging, true); err != nil {
+			return "", err
+		}
+		if u.Name != "" || u.Note != "" {
+			f, err := e.Store.topicFile(t.Slug)
+			if err != nil {
+				return "", err
+			}
+			if err := e.Store.writeTopicSummary(t, f.Points); err != nil {
+				return "", err
+			}
+		}
+		e.index(KindTopic, t.Slug, t.Name, t.Tagging, t.Note, t.Updated)
+		return t.Slug, nil
 	case KindRecording:
 		id, _ = RecordingID(id)
 		// The phone owns the content (PutRecording); by hand only the tags, the pinned facts and the projects.
@@ -662,7 +726,7 @@ func (e *Engine) entries(projects, chats, people []string) []Entry {
 		}
 	}
 	for _, id := range people {
-		if p, ok := e.Store.Person(id); ok {
+		if p, ok := e.Store.Person(id); ok && p.Status != "ignored" && p.Status != "self" {
 			ps = append(ps, Entry{Kind: KindPerson, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 				Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 		}

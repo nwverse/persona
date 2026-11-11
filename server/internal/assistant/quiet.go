@@ -121,7 +121,7 @@ func (s *Service) sendQuietNotice(id string) {
 		return
 	}
 	c, ok := s.session(ctx, machine, to)
-	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(to) > 0 {
+	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
 		if !s.queueNotice(id, n, to, msg) {
 			return
 		}
@@ -192,7 +192,7 @@ func (s *Service) replaceQueuedNotice(to string, msg relayMsg) bool {
 	for i := range q {
 		// The first one may be going in right now (drainRelays takes it off once delivered): leave it.
 		if q[i].Tool == noticeTool && q[i].From == msg.From && (i > 0 || !b.draining[to]) {
-			q[i] = msg
+			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
 			s.saveRelayLocked()
 			return true
 		}
@@ -292,6 +292,7 @@ func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Dev
 	if supervisor != "" {
 		s.superviseTodo(ctx, todo.ID, supervisor, nil, 0)
 	}
+	s.briefFor(ctx, s.callerOrigin(ctx, conversation), todo, nil, 0) // who asked, before its agent is linked (task_brief.go)
 	if err := s.linkTodoAgent(ctx, todo.ID, m.ID, sid, title, cwd, ""); err != nil {
 		s.logf("agent_start %s: link %s: %v", short(sid), todo.ID, err)
 	}

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaKit
 
 /// What a chat last went through, in its structure only (#3783): the batches that came in (how many, which lines, what
 /// the store did with them), when the streamed text started and was cleared, and how the end of the chat was drawn
@@ -78,7 +79,7 @@ final class ChatTrace {
     /// One line of the chat, by kind and transcript line: `a17` an answer, `u10` a message, `work(3,live)`.
     static func code(_ line: ChatLine) -> String {
         switch line.content {
-        case .supervision(_, let trace, let live): "supervision(\(trace.count)\(live ? ",live" : ""))"
+        case .supervision(_, let trace, let live, let source): "\(source == nil ? "supervision" : "background")(\(trace.count)\(live ? ",live" : ""))"
         case .supervisionInput(let item): "supervision-input\(item.seq)"
         case .row(let r):
             switch r {
@@ -98,6 +99,7 @@ final class ChatTrace {
         case .agents(_, let calls, _, _): "agents\(calls.count)"
         case .toolRun(_, let calls, _, _): "run\(calls.count)"
         case .workEnd: "end"
+        case .answerPart(let item, _, let index, _): "a\(item.seq).\(index)"
         case .apiError(let item, _, let count): "err\(item.seq)x\(count)"
         case .feed(let f): "feed:\(f.kind.rawValue)"
         case .quick: "quick"

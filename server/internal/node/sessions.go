@@ -12,10 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // hostTextSlack: the transcript's words this long after the host's record of the answer still belong to that turn.
@@ -126,6 +126,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Status, s.AttentionReason = proto.StatusBlocked, head
 			}
 		}
+		// An allow its Claude did not take: the dialog it left holds the terminal, whatever herdr says (allowwatch.go).
+		if head := n.allowDialog(id); head != "" && !onList[id] && !n.isDriving(id) {
+			s.Status, s.AttentionReason = proto.StatusBlocked, head
+		}
 		if !onList[id] { // the list's prompt is no suggestion of its
 			s.Suggestion = n.noteStatus(id, a.Agent, a.PaneID, s.Status) // suggestion.go
 		}
@@ -140,7 +144,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
 					s.Title = m.title
 				}
-				if s.Title == "" || s.Title == "Claude Code" {
+				if s.Title == "" || s.Title == "Claude Code" && !m.titleManual {
 					s.Title = ""
 					untitled(&s, m)
 				}
@@ -179,12 +183,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if !a.LastTextAt.IsZero() && promptAt.After(a.LastTextAt) {
 				s.Asks = ""
 			} else {
-				s.Asks = transcript.AskOf(a.LastText)
+				s.Asks = closeout.AskOf(a.LastText)
 			}
 			s.AsksRead = true
 		}
 		if a.Agent == "codex" {
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
+			n.codexSpeedRow(&s)
 		}
 		if a.Agent == piAgent {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -214,6 +219,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	// Runtimes (runtimes.go): listed as they say, appended straight into the list and dropped there when already seen.
 	from := len(out)
 	out = n.runtimes.appendSessions(out)
+	if pass != nil {
+		pass.runtimes = n.runtimes.codexThreads() // conversations that are Codex threads here: listed once (runtimecodex.go)
+	}
 	peak := len(out)
 	j := from
 	for i := from; i < len(out); i++ {
@@ -221,6 +229,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if seen[s.SessionID] {
 			continue
 		}
+		n.decorateState(s)
 		if n.runtimeAssistant(s.SessionID) { // the assistant keeps its mode (assistant_runtime.go)
 			if m := n.assistantModeOf(s.SessionID); m != "" {
 				s.PermissionMode = m
@@ -260,6 +269,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	n.markInterrupted(out[from:], seen) // the restart cut these off (#1917)
 	for i := from; i < len(out); i++ {
 		n.decorateIn(&out[i], pass)
+		n.markStopped(&out[i]) // read-only (stopped.go, #4754)
 	}
 	n.listRows.Store(int32(max(peak, len(out))))
 	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.
@@ -333,15 +343,8 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	if s.PaneID != "" && s.Host == "" {
 		s.Host = host.ParsePane(s.PaneID).Kind // the host it runs in (#2576)
 	}
-	if st, ok := n.state.get(s.SessionID); ok {
-		s.StartedByPersona = true
-		s.Launcher = st.Launcher
+	if st, ok := n.decorateState(s); ok {
 		s.Compaction = st.Compaction
-		// A row without a pane is listed where its record says it started, when that is an assistant or health
-		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
-		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
-			s.Cwd = st.Cwd
-		}
 	}
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)
@@ -351,6 +354,21 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
 	n.ultracodeRow(s, pass)
+}
+
+// decorateState restores metadata recorded when Persona started the session.
+func (n *Node) decorateState(s *proto.Session) (sessionState, bool) {
+	st, ok := n.state.get(s.SessionID)
+	if ok {
+		s.StartedByPersona = true
+		s.Launcher = st.Launcher
+		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
+		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
+			s.Cwd = st.Cwd
+		}
+	}
+	return st, ok
 }
 
 func snippet(s string) string {

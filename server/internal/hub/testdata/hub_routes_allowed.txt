@@ -14,6 +14,11 @@ DELETE /api/v1/managers/{id}
 DELETE /api/v1/sessions/{mid}/{sid}
 GET /api/v1/admin/assistant
 GET /api/v1/admin/devices
+GET /api/v1/admin/owner-subjects # trusted authentication subject enrollment
+POST /api/v1/admin/owner-subjects # trusted authentication subject enrollment
+GET /api/v1/admin/devices/{credential_id}/owner # credential authentication binding
+PUT /api/v1/admin/devices/{credential_id}/owner # credential authentication binding
+DELETE /api/v1/admin/devices/{credential_id}/owner # credential withdrawal
 GET /api/v1/admin/machines
 GET /api/v1/admin/mesh
 GET /api/v1/admin/network
@@ -134,6 +139,7 @@ POST /api/v1/machines/{mid}/node-update/{action}
 POST /api/v1/machines/{mid}/panes
 POST /api/v1/machines/{mid}/panes/agent
 POST /api/v1/machines/{mid}/panes/close
+POST /api/v1/machines/{mid}/panes/close_finished
 POST /api/v1/machines/{mid}/panes/git
 POST /api/v1/machines/{mid}/panes/split
 POST /api/v1/machines/{mid}/ports/{port}/open
@@ -143,9 +149,12 @@ POST /api/v1/machines/{mid}/tabs/close
 POST /api/v1/machines/{mid}/tabs/rename
 POST /api/v1/machines/{mid}/worktree/add
 POST /api/v1/machines/{mid}/worktree/create
+POST /api/v1/machines/{mid}/worktree/delete
 POST /api/v1/machines/{mid}/worktree/prepare
+POST /api/v1/machines/{mid}/worktree/preset
 POST /api/v1/machines/{mid}/worktree/remove
 POST /api/v1/machines/{mid}/worktree/rename
+POST /api/v1/machines/{mid}/worktree/source
 POST /api/v1/machines/{mid}/worktree/status
 POST /api/v1/managers
 POST /api/v1/managers/{id}/code
@@ -164,6 +173,7 @@ POST /api/v1/sessions/{mid}/{sid}/modes
 POST /api/v1/sessions/{mid}/{sid}/queue
 POST /api/v1/sessions/{mid}/{sid}/queue/send-now
 POST /api/v1/sessions/{mid}/{sid}/rename
+POST /api/v1/sessions/{mid}/{sid}/restore-model # a relay to the node (session.restore_model, #2528)
 POST /api/v1/sessions/{mid}/{sid}/rewind
 POST /api/v1/sessions/{mid}/{sid}/screen/before
 POST /api/v1/sessions/{mid}/{sid}/seen
@@ -188,3 +198,12 @@ PUT /api/v1/pins
 # Phone write delivery receipts (full credentials only).
 GET /api/v1/phone/write-queue
 POST /api/v1/phone/write-queue/{id}/cancel
+/api/v1/auth/password/
+GET /api/v1/auth/password/state
+POST /api/v1/auth/password/start
+POST /api/v1/auth/password/finish
+POST /api/v1/auth/password/exchange
+GET /api/v1/admin/password-login
+POST /api/v1/admin/password-login/register/start
+POST /api/v1/admin/password-login/register/finish
+PUT /api/v1/admin/password-login

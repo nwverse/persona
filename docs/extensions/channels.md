@@ -22,7 +22,7 @@ The WeChat extension contributes a connector `wechat`, but that connector only h
 | Persona App: iOS, Mac, Android, web | Each client's chat page, `POST /api/v1/sessions/{m}/{s}/messages` (`client_msg_id` is a random id) | The one the user picked in the App | Live stream (WebSocket) | Cards, answered in place | Channel `app` |
 | Apple Watch | The watch App, via the same hub API | Main chat / the one picked | Same as above | Notification buttons, cards on the watch | One client of channel `app` |
 | Siri / Shortcuts (Ask Persona) | `apple/Persona/Intents` (`docs/apple/siri.md`) | Main chat | The App polls `items` for up to 24 seconds and reads out the last words | None | One client of channel `app` (its own polling is a second copy of "wait for the turn to finish", see "Not done yet") |
-| WeChat bot | Built-in extension `wechat` (`server/plugins/wechat`, `docs/extensions/wechat.md`, #1447) | Main chat, or a chat started with `/new` | The extension checks the session through the hub API every 2 seconds, takes this turn's answer, and sends text | Text round trip (reply with a number, allow / deny) | Channel `wechat` (contributed by the extension) |
+| WeChat bot | Public marketplace extension `wechat` (`nwverse/persona-extensions`, `docs/extensions/wechat.md`) | Main chat, or a chat started with `/new` | The shared channel pipeline tracks this turn and calls the extension's `channel.send` | Text round trip (reply with a number, allow / deny) | Channel `wechat` (contributed by the extension) |
 | Lark bot | Sending and receiving in the hub (`hub/bots*.go`, `feishubot/`), chat logic in the assistant (`assistant/feishu*.go`, `docs/extensions/bots.md`) | Main chat, a `/new` chat, the Agent picked with `/agents`, or the chat bound to the message being replied to | The hub watches the session internally, replies right away with a progress card refreshed every 3 seconds, and writes the answer into that card at the end (process folded); turns for which an old version created an agent message still finish the old way | Card buttons | Channel `feishu` (built in) |
 | `/agent` in Lark | In the extension that connects Lark (since #1571; previously the hub's lark_agent.go, lark_agent_docs.go; `docs/extensions/lark-agent.md`) | A new headless chat per request / thread | The Agent calls `lark_agent_reply` and replies to that message / comment **as me** | None | Not in the hub's channel list (since #1571 no longer a built-in channel; `GET /api/v1/channels` doesn't list it); `lark_agent` is still a reserved id that extension channels can't use |
 | Voice | The `voice` extension in the manager's manager.json, the built-in voice extension (`server/internal/voice`, `docs/extensions/extensions.md` ("Voice")) | The voice model speaks for itself; things to hand to the main chat are sent into the main chat through the hub API | Audio | None | Channel `voice` (the `voice` extension point contributed by an extension; listed but not using the pipeline below) |
@@ -166,7 +166,7 @@ While the assistant process is restarting or disconnected from hub, **receivers 
 - **Which channel receives them**: a channel "drives" the chat if it is the channel's target, has a run waiting on it, or has a thread binding from the last 24 hours (`threads`), and `asks` is on;
   with `all_asks` on, all Agents' questions are sent. Questions from other Agents on the computers still only appear in the App.
 - **`asks: buttons`** (Lark bot): the assistant draws cards, and button answers use the same hub `resolve` (`interactions.resolve`).
-- **`asks: text`** (WeChat, future Telegram): the assistant renders text (`channel.AskText`), and the user's next message is the answer (`channel.ReadAnswer`):
+- **`asks: text`** (WeChat, future Telegram): the assistant renders text (`channel.AskText`), and the user's next message is the answer (`channel.ReadAnswer`). The one exception is the assistant's `ask_user` raised with `wait: false` (`channel.Ask.Later`): no turn waits on it, so only a reply that names one of its options answers it, and other words are an ordinary message (`docs/assistant/assistant.md`, "Asking without holding the turn"). The rules:
 
   | Card | How to answer |
   | --- | --- |
@@ -198,7 +198,7 @@ A channel with `pushes` off and `sync` on still receives main-chat mirrors.
   Clients recognize the channel by prefix: if the prefix (before the first `-`) matches a channel id from `GET /api/v1/channels`, that's its source; the chat page draws "From WeChat" below the message.
   The App sends UUIDs, whose first segment is 8 hexadecimal characters, so channel ids must not be 8 hex characters (rejected at registration). Messages the voice extension hands to main chat use `voice-<random id>`.
 - **Per chat**: sessions have `channels` (channels that have sent messages into this chat, most recent first, `proto.Session.Channels`; recorded by the assistant and reported in its snapshot, drawn by the manager's fleet), shown as small channel icons in the chat list;
-  headless chats started by `/agent` use `lark_agent`. Old Apps don't recognize this field and display as before.
+  only channel messages fill it: a chat an extension opens (Lark `/agent` among them) has none (its `origin` says where it came from, `docs/protocol/protocol.md` "Origin of assistant chats"). Old Apps don't recognize this field and display as before.
 - Each turn's run records its channel; `GET /api/v1/channels/{id}` includes "how many answers and questions are pending".
 
 ### Queuing, deduplication, concurrency
@@ -265,13 +265,13 @@ Errors beyond the error code include only `message`, never content or secrets. I
 
 **Conformance tests**: `channel/conformance.Check(t, manifest, run, init)`, in addition to process-extension protocol checks: each channel in the manifest returns "sent" or `cannot_send` from `channel.send`;
 the same `ref` twice returns the same result (sent only once); `channel.typing` is accepted; requests without `ref` aren't; unknown channels return `no_contribution`, unknown methods `unknown_method`.
-The WeChat extension runs it (`TestWeChatProgramIsAChannel` in `extmgr/wechat_test.go`).
+The WeChat extension runs the SDK's channel conformance tests in its own repository.
 
 ### Writing a channel extension
 
 Every call above is described in `schema/extension/channel.schema.json` (its `x-methods`), with the SDKs' types generated from it. With the Go SDK alone: answer the `channel` namespace with `ext.Methods{"send": ext.Method(…), "typing": …}.For(<channel id>)`, hand over the owner's messages with `ext.Hub.ChannelReceive`, refuse with `ext.CannotSend` while there is nowhere to send to, and test it with `exttest.CheckChannels` (the conformance checks above, every message held to the schema). `channel/conformance.Check` holds every message both ways to the schema too.
 
-In the server's own tree, do the same: the WeChat program (`server/plugins/wechat`) is the SDK's `ext.Serve` with these methods and `ext.Hub.ChannelReceive`. `connector/serve`'s runner is left only for the conformance kit and tests.
+Public extensions, including WeChat, use the SDK's `ext.Serve` with these methods and `ext.Hub.ChannelReceive`. `connector/serve`'s runner is left only for the conformance kit and tests.
 Other languages follow the protocol above, one JSON line per message (`docs/extensions/extensions.md` ("Process extension protocol")).
 
 ## 5. Compatibility and migration
@@ -316,7 +316,7 @@ if the assistant is disconnected, return `503 assistant_offline`; fields are unc
   - With `settings_url` (Lark bot), an extra "More Settings" row opens the old page.
 - **Connector page**: existing WeChat connector and Lark bot entries in Settings › Connectors remain; a top explanation says it's a chat channel and links to "Settings › Channels". Apple says "Set it up in Settings › Channels". Binding on the channel page and login on the connector page use the same API; either works identically.
 - **Chat page**: a small "From WeChat" line below channel-origin user messages (channel icon + name, secondary color); no marker for App-origin messages.
-- **Chat list**: if session `channels` is nonempty, show a small icon of the most recent channel beside the title.
+- **Chat list**: if session `channels` is nonempty, show a small icon of the most recent channel beside the title. A chat an extension opened (`origin` `lark_agent` / `extension`) shows its source's mark there instead, and its first message gets "From Lark /agent" / "From an extension" (iOS / iPadOS and the web; Android #4203; `docs/protocol/protocol.md` "Origin of assistant chats", #3758).
 
 ## 8. Steps
 

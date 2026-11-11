@@ -36,7 +36,7 @@ Terminology rules (enforced by the copy guard tests in section 8.1):
 
 | Step | What users must do today | Where they get stuck | Evidence |
 | --- | --- | --- | --- |
-| Get the app | iOS is TestFlight-only and requires iOS 26+; Android requires sideloading an APK; the website FAQ says "Write to us if you'd like to try it" | The first step excludes most people | `site/public/index.html`, README "Platforms" |
+| Get the app | iOS is TestFlight-only and requires iOS 26+; Android requires sideloading an APK; the website links the public TestFlight beta and its demo mode (#3842; it used to say "Write to us if you'd like to try it") | The first step excludes most people | `site/public/index.html`, README "Platforms" |
 | Install hub | `install.sh --hub` only installs a binary; it does not create Postgres, install a service, or start it. It ends with the English instruction `personad hub run … then personad hub pair` | Starting in an empty directory exits immediately: `database_url is empty (run scripts/deploy/deploy.sh …)`, pointing to a repository script the user does not have | `scripts/deploy/install.sh:421`, `server/internal/db/db.go:37` |
 | First pairing code | All four platforms' first screens say "Run `personad hub pair`"; the web login page also teaches `jq -r .token ~/.persona/hub.json` | Users without a terminal stop here. `/admin` can generate a code, but setting its password locally requires a one-time setup code from the logs | `web/src/views/Login.tsx:45-48`, `server/internal/hub/admin_setupcode.go:51-52,75-79` |
 | Address in the QR code | The default `public_url` is `http://<full-hostname>:18660` | Phones often cannot resolve the hostname; changing the port does not update it either | `server/internal/hub/config.go:215` |
@@ -177,7 +177,7 @@ P1: **computer initiates, phone allows**. Persona Link's first screen shows a QR
 
 #### No dependency on zsh
 
-- Do not mention "~/.zshrc" in onboarding. Move "Import from ~/.zshrc" to "Advanced" in **Settings › Model providers**; disable it with an explanation when there are no computers (today it spins forever).
+- Do not mention "~/.zshrc" in onboarding. In **Settings › Model providers** the import is a plain **Import** button beside **Add provider** (#5024, earlier under "Advanced"): the shell files are named only inside its dialog, which explains what to do when there is no computer yet instead of spinning.
 - Existing developer aliases / functions are still discovered and selectable (`mergeLaunchers` in `node/launchers.go`); the onboarding wizard does not depend on them.
 - The default `claude` launcher currently always starts through `zsh -ic` (`assistantCLICommand` in `node/assistant_start.go`), causing `command not found` for users whose PATH is in `.zprofile`. Prefer the absolute path found by `claudeExecutable()` (`node/managed.go:104`), then fall back to the shell. This overlaps with #2854 (bash launchers / bundled claude, claimed by someone else); coordinate in #2854 first rather than duplicating the work.
 

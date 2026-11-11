@@ -1,11 +1,38 @@
 # Lessons: Android
 
+## A design-system signature change compiles every caller (#4145)
+
+#4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
+
+## Receipt navigation inside task details (#3841)
+
+A receipt reused inside task details must not invoke the same task-sheet destination again: assigning the same Compose state produces no visible change. Resolve the task's existing lead binding and open its Agent page after dismissing the sheet. Keep missing-target feedback inside that sheet; generic operation feedback discards arbitrary exception messages and a snackbar behind a modal does not prove the explanation is visible. Exercise the receipt button independently of the footer and verify the real navigation stack in addition to callback tests.
+
+## Reuse only fully started tunnels and never probe a replacement through the old connection (#3844)
+
+A local proxy listener can report `listening` before `HubWays` has passed the start's final epoch and identity checks. A reconnect could reuse that half-started handle, after which the cancelled start closed its listener and the health probe fell back to a direct route. Mark a `Running` handle ready only after those checks. Independently, a replacement tunnel can bind the same loopback address: a pooled HTTP connection still points at the old listener, so SSH and proxy health probes must use a fresh connection pool. Do not hide either race by weakening the Always assertion or disabling the intentional direct fallback.
+
 ## Late receipts must settle manual review (#3748)
 
 The review timeout does not invalidate the hub's later operation receipt. Include the manual-review state in the
 compare-and-set sources for a confirmed successful receipt, without resending the message or accepting an unknown
 outcome. Keep discarded messages outside that source set so a lookup that finishes later cannot undo the user's choice.
 
+## Reply-draft dismissal is a card decision, not task completion (#3743)
+
+Use the feed card's id and its exact original `body.draft` for dismissal; edited text belongs only to Send. Never mark the
+Inbox item done, remove the task or close its Agent to hide a draft. Later is local and card-scoped too, so new progress on
+the same source item remains visible. Apply the hub's complete returned item, rather than merging body fields: Undo removes
+`dismissed_at` and `dismissal_id`. Fence reads captured before a mutation, and reject a late Undo receipt when newer progress
+already changed that card. Retain its captured assistant manager across selection changes. Use the shell's existing Undo
+snackbar, with only Send primary; large-text and narrow action groups stack primary-first through `DraftDecisionButtons`.
+Exclude persistently dismissed cards from the oldest-unsent read anchor, but retain dynamically filed cards. Undo catch-up
+uses the retained `dismissal_updated_at`. Stable pagination starts with `paginate=1` and continues with only the opaque
+`cursor`, never a newer `since`; a captured-owner reader pins the whole range. `next_cursor` alone decides completion
+(missing means an older hub, empty means EOF), not the number of items. Bound the range to 64 pages and reject repeated
+cursors. Publish only a complete range under its original mutation fence, and restart incomplete reads without advancing.
+A snackbar action can pass semantic visibility assertions while its text is invisible. `JAppSnackbarHost` uses the inverse
+message-text role for its action, not the accent; inspect light/dark images and test contrast on the actual inverse surface.
 
 ## Large-font screenshots need Compose density, not just configuration (#3588)
 
@@ -106,6 +133,10 @@ stream fixtures. Fixture screenshots do not establish live transport routing; ve
 
 A bounded, filtered session list cannot establish that a task has no agent. Keep navigation from the durable todo binding even when its session is outside the window; request exact metadata only for watched task agents and never add those rows to the paged list. Refresh that metadata on list invalidations and reconnect. Serialize todo reads so an older unbound or completed snapshot cannot overwrite a later linked or reopened snapshot in memory or on disk. A metadata failure falls back to the binding and never starts another agent.
 
+## Every list of sessions takes the subtask rule, not only the Agents list (#4769)
+
+#4686 made an agent another Paseo agent created a subtask, folded under its creator and left out of the Agents list's counts, but the floating capsule and the main chat's dock each filtered the session list by state on their own: an orchestrator with five working reviewers was six dock rows, and every finished Codex subagent an unread capsule entry with its own notice. A new place that lists or counts sessions by state takes the same rule from `CodexTaskForest.kt`: `isNestedSubtask` for a count, `foldedSubtasks` for a flat list that draws rows of its own (left out only while the list shows the session above it). Do not write a second parent lookup; the forest's (parent session, then the Codex thread, then the root, on the same computer) is the one the Agents list uses. Test with a runtime subtask, a Codex subagent and a subtask that needs the user, beside a list without subtasks that must stay as it was.
+
 ## Completion edges must retain evidence of the current run (#2124)
 
 Comparing only adjacent Working → Unread snapshots misses Working → NeedsYou → Unread; a turn can finish directly after waiting for a question or permission midway through work. Retain a current-run marker through NeedsYou and consume it at completion; clear it on Idle, removal, or disconnect. A rev-only change is not a new completion, and old unread versions must not replay when unmuted.
@@ -118,6 +149,12 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- **A big page must not read a state that changes on every scroll frame** (#4039). `ChatListState.position` holds the
+  reading anchor's pixel offset, written each frame; `ChatPage` read `position.expanded`, so a scroll re-ran the whole
+  page (about 1,000 lines, chat-length lists rebuilt) once per frame. Read such parts through `derivedStateOf`
+  (`ChatListState.expanded`, `followsEnd`) and count recompositions in a real composition (Robolectric, `Recomposer` +
+  `BroadcastFrameClock`, `ChatListStateTest`): `SnapshotStateObserver` handles derived states differently from
+  composition, and a plain JVM test cannot compose (Compose calls `android.os.Trace`).
 - **A control meant to "look like the chips" must be the chip** (#2956). #2920 rebuilt the Assistant entries as a new row
   (44 dp, control radius, its own padding) next to `JChip` (36 dp, chip radius), and they visibly grew. Draw such controls
   with `JChip` / `JChipTokens`, add an optional parameter for what is missing (`dot`), and assert the rendered height
@@ -163,6 +200,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Pages' own `PersonaTheme` wrappers default to `isSystemInDarkTheme()`; passing `darkTheme` only at the root does not override them. DEBUG-fixed light / dark mode must change `LocalConfiguration` uiMode (`MainActivity.AppearanceOverride`), or dark screenshots mix in light pages.
 - Kotlin trailing lambdas match only the final function parameter. After adding an optional function parameter to `AppNavigator`, existing `AppNavigator(...) { group tabs by session }` calls silently bound to the new parameter. Put new function parameters last, and name parameters at call sites.
 - Do not use `Modifier.alpha` for changing opacity in Compose. At 1 it adds no layer, so switching adds / removes a graphicsLayer in the modifier chain. After `clip` + `background`, removing the layer in Compose UI 1.12.1 stops drawing that background (Android `JButton` lost everything but text when enabled). The design system uses `Modifier.stableAlpha` (`docs/android/android.md`, "Lessons").
+- `Modifier.clip` on a frame also clips touches (2026-11-10, DS-06). Compose gives any control smaller than 48 dp a 48 dp touch target, even past its own clip, but a clipping parent at least 48 dp across rejects every touch outside itself first: the 36 dp segments inside `JSegmented`'s clipped Glass capsule and Board frame lost the taps just above them, while unclipped buttons, chips and switches kept the full 48 dp. A frame that only needs to keep its children's drawing inside its shape uses `clipDrawing`. Test touch targets with real text metrics (`@GraphicsMode(NATIVE)`): Robolectric's legacy text measurement drew the segments 53-61 dp tall and hid the miss (`TouchTargetTest`, which also checks that a tap just past 48 dp misses).
 - material3-adaptive `ListDetailSceneStrategy.detailPane()` returns new metadata without `equals` every time, so equality comparisons always fail (Android two-column left selection never highlighted). Identify detail pages by route type (`ShellPanes.kt`).
 - A container with `height(IntrinsicSize.Min)` (to stretch a left color block) crashes as soon as it contains a lazy list or `BoxWithConstraints`
   ("Asking for intrinsic measurements of SubcomposeLayout layouts is not supported," seen in board-style Lark chats). Draw edge color blocks with `drawBehind` (`Modifier.holder`).
@@ -260,6 +298,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Foreground-service `onStartCommand` runs more than once: the App starts it each time it returns to the foreground, and each call needs `startForeground`. Use the notification currently displayed (`HubService.shown`), not one recomputed from current data. Recomputing omits "after 5 minutes with only Unread remaining, fall back to the connection row," so a collapsed "1 finished" reappears. The collector sees no state change, cannot correct it, and it persists until the next fleet change (reproduced on an emulator 2026-11-02).
 - Do not update a foreground-service notification when stopping it. During unpairing, connection state and notification preferences change first (the App posted "Waiting for network" twice), then the service stops and `stopForeground(REMOVE)` removes the notification. System notification handling is async (emulator call stacks confirmed both posts before onDestroy); the final update lands after removal and becomes an ordinary persistent notification that cannot be swiped away and has no owner left (reproduced twice, remained twice). `HubService.show` no longer updates while unpaired.
 - For notification buttons requiring unlock (`setAuthenticationRequired(true)`), tapping on the lock screen and entering a PIN makes SystemUI send the PendingIntent immediately while `KeyguardManager.isDeviceLocked` remains true (one Android 15 emulator observation; false about 0.8 seconds later). Checking immediately rejects lock-screen Allow / Approve every time with "Unlock first." Persistent-service Resume is silently swallowed too; phone-tool confirmation Allow is dropped and returned to Claude as denial after 90 seconds. Allow unlock to settle before checking (`lockedAfterUnlockSettles`, one copy each in `:platform:notify` and `:platform:phonetools`, waits up to 3 seconds; still locked then means locked).
+- A notification that waits for an answer needs a delete intent, or a swipe / "Clear all" reaches nobody: the phone-tool write confirmation had none, so a dismissed one kept the call (and, the registry being serial, every other phone call) waiting the full 90 seconds and then reported "nobody answered" (#3861). The system also sends the delete intent when its own `setTimeoutAfter` fires (an app's `cancel` sends none), so make the system timeout a little longer than the in-app one, or a timeout reads as a dismissal (`PhoneConfirmations.NOTIFICATION_GRACE_MILLIS`).
 - Phone tools: hub merges same-named tools from phones into one definition (the longer description wins), but may route calls to any phone declaring the tool (`phoneClient`). If Android definitions differ from iOS, Claude invokes Android with iOS arguments (a new version rejected out-of-range `limit` as an error). Match iOS definitions verbatim, guarded by exported fixtures (`PhoneToolCatalogTest`).
 
 - Stopping a service started by `startForegroundService` before it calls `startForeground` (its own `stopSelf` or external `stopService`) crashes the App with `ForegroundServiceDidNotStartInTimeException`. Under load the gap grows, and a brief "Unpaired" during pairing hits it. `HubService` always enters the foreground before deciding whether to stay, and stops only after foreground entry (`ForegroundStarts`, `docs/android/android.md`).
@@ -275,6 +314,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Contracts and wiring
 
+- A `@WireEnum` value missing from its list decodes as `"unknown"`, silently (#4035). Android handled the hub's `notify` kind `reply` (Awaiting reply) in every policy and test, but the tests built `NotifyEvent("reply", …)` by constructor, so none went through the decoder, and the reminder never posted. When a new kind or state reaches the wire, add it to the `@WireEnum` and test it from the raw JSON (`ServerEvent.decode`), not from a constructed event.
 - When adding interface methods with default implementations (`ChatActions.editQueue` / `info`, `AgentOperations.attachSession`), `by delegate` wrappers forward automatically, but handwritten forwarding objects do not. `trackActions` in `core:data` and the anonymous `AgentOperations` in App `AgentsWiringModule` forward method by method; missing a new method silently uses its default ("Not integrated yet") without compilation errors. When adding methods, use `git grep ': ChatActions\b\|object : AgentOperations'` to update all handwritten forwarding.
 - Claude Code transcripts do not retain `client_msg_id` (2026-11-03, #895). A user item's ID is Claude's own UUID; neither hub nor node rewrites it. With hub `client_ops`, Android previously matched "already in the transcript" only by ID, leaving every Claude Code message at "Delivered, waiting for transcript." Match pending messages to transcript entries by text (`MessageEcho`, same rules as iOS `PendingMessage.arrived`: normalization, computer clock up to 2 minutes behind, prefix match for truncation), only for sent / uncertain messages, and one pending message per transcript entry. Every new item (events, paging, gap repair) is reconciled with the outbox (`HubChatRepository` `transcript`).
 - Delivery does not guarantee an identical user message in the transcript (2026-11-03, #950). Phone `/compact` appears only as a compaction notice; Codex writes queued messages only at turn end. Waiting only for an echo leaves bubbles forever. iOS (`settleSend`) and web dismiss 60 seconds after delivery once the session is not working (wait at most another 15 minutes); Android does the same (`OutboxMessageSender.sentGraceMillis`, `connectActivity`). Do not add constructor parameters after `now`: callers pass the clock as a trailing lambda.
@@ -362,6 +402,7 @@ Stable task-card upserts are identity hints, not newer than live to-dos by defin
 
 - Pixel-by-pixel screenshots (`SHOTS_*` in `android.sh shots`; `docs/android/android.md`, "Pixel-exact before/after comparison"): after SystemUI demo mode hides mobile networking on Android 15, a satellite icon appears about 5 seconds later. Neither demo commands nor `icon_blacklist` removes it; wait for it before every capture. `adb root` restarts adbd and loses existing `adb reverse`; root before forwarding. macOS `sips -Z` changes the original image; copy first before viewing. macOS bash 3.2 with `set -u` errors on empty-array expansion; use `${arr[@]+"${arr[@]}"}`.
 - Homebrew Android SDK is at `/opt/homebrew/share/android-commandlinetools`, not `~/Library/Android/sdk`, and default Java is JDK 8. Before `android.sh`, set `ANDROID_HOME` to it and `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`. Custom AVDs need a separate `ANDROID_AVD_HOME`; do not touch other running emulators. If the first-launch readiness checklist blocks access, run `android.sh shots` once to clear data, pair, and skip readiness, then switch to your mock with `DebugEntryActivity --es debug.mockAddress …`.
+- On a host with little free disk, Android 36 can replace a smaller `disk.dataPartition.size` or `-partition-size` with its 6 GB default at every launch. The SDK's own tools can prepare a bounded sparse data image instead: `emulator/qemu-img create -f raw <owned AVD>/userdata-qemu.img 1536M`, then `emulator/bin64/mkfs.ext4 -F <same image>`, and boot without `-wipe-data` (which would delete it). A blank qcow2 only gets past the host-space check and then leaves `/data` read-only because it has no ext4 filesystem; kernel logs showing `invalid magic` and encryption-key failures identify this case. Use an even ADB port in the supported 5554–5584 range. Stopping the local SSH wrapper does not necessarily stop a remote mock hub: find its PID by listening port, verify its cwd, and kill only that PID.
 
 - Multiple hubs (#634): when integrating a service invoked by machine ID, do not use the current-pairing connection (`ConnectionRuntime.scopedData` / `connectionFor`). Page machine IDs come from the merged list; other groups carry `~<group id>`. Sending to the selected group's hub merely yields "Machine not found," or worse, changes another machine if both groups have the same ID.
   Find the group through `GroupStacks.use(GroupKeys.namespaceOf(id))`, strip suffixes there with `inGroup(names)`, and add them back to returned machines. Only one-per-hub services (model configuration, voice, Inbox) follow the selected group.
@@ -528,3 +569,13 @@ Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where 
 ## Wait for local listener shutdown before reusing its port
 
 On the JVM, closing a server socket with a blocked accept can defer the actual descriptor close until that I/O exits. A preferred-port restart immediately after close can then collide with its own old listener and choose a fallback. Register the accept worker under the same lifecycle lock as close, close the socket first, then wait for the worker with a bounded deadline. Preserve interruption and report a shutdown deadline without adding a new exception to synchronous close callers; keep independently occupied-port fallback distinct from listener shutdown.
+
+## Keep streaming Markdown geometry stable (#3843)
+
+Keep a message's last rendered parse while its next parse runs; switching to raw text for every delta changes list and code-block geometry twice. Reset that retained state when the message identity or cache changes, and include stream completion in the parse effect keys. The Markdown renderer also defaults to a text-size spring: chat text should use its measured size immediately, without animating every line wrap.
+
+Measure pending and parsed frames with the real chat row and reverse list. A fixed scroll index and offset can still accompany visible height oscillation. Replay both Assistant and Agent styles, completion, rapid deltas, history reading and return-to-latest. Check selection and exact copied text in the APK as well. Write a PASS evidence file only after every assertion has completed; cleanup must not turn an earlier failure into a successful verdict.
+
+## Pairing fixtures must follow the default sign-in page (#4623)
+
+Skipping onboarding does not skip password sign-in. Tests of manual or scan pairing must select the localized pairing alternative from that default page before using the existing controls. Keep initial-link fixtures on their direct confirmation path, and retain back-stack, field-retention, invalid-input and screenshot assertions rather than changing the product default to fit older fixtures.

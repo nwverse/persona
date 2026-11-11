@@ -1,14 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { Item, Subagent } from "../../lib/types";
+import type { Item } from "../../lib/types";
 import type { Step } from "../../lib/turns";
 import { planProgress, type ToolStep, type WorkGroupNode } from "../../lib/work-groups";
-import { ActionRow, DIFF_FOLD_LINES, diffStats, editDiffs, foldDiffs, lineDiff, presentAction, truncateParam } from "./ActionRow";
-import { ChatContext } from "./chat-context";
-import { emptyTaskIndex } from "../../lib/tasks";
+import { ActionRow, argumentLines, DIFF_FOLD_LINES, diffStats, editDiffs, foldDiffs, inlineInput, lineDiff, presentAction, truncateParam } from "./ActionRow";
 import { latestPlan, PlanCard, PlanList, PlanPill, planSummary } from "./PlanCard";
 import { Answer, bubbleLines, SegmentView, UserBubble } from "./SegmentView";
-import { reportOf, SubagentCard, subagentLine } from "./SubagentCard";
+import { SubagentCard } from "./SubagentCard";
 import { ThinkingCard } from "./ThinkingCard";
 import { WorkGroup, type WorkProps } from "./WorkGroup";
 
@@ -89,8 +87,30 @@ describe("ActionRow", () => {
   it("verbs follow cindy's table", () => {
     const verb = (name: string, input: Record<string, unknown> = {}) => presentAction(use("v", name, input)).verb;
     expect([verb("Edit", { file_path: "/a" }), verb("Write", { file_path: "/a" }), verb("Grep", { pattern: "x" }), verb("WebFetch", { url: "u" }), verb("mcp__github__create_issue")]).toEqual(["编辑", "创建", "搜索", "访问", "调用"]);
-    expect(presentAction(use("v", "mcp__github__create_issue", {})).param!.text).toBe("github · create issue");
+    expect(presentAction(use("v", "mcp__github__create_issue", {})).param!.text).toBe("GitHub · Create issue");
+    expect(presentAction(use("v", "mcp__github__create_issue", { title: "Crash" })).param!.text).toBe("GitHub · Create issue · Crash");
     expect(presentAction(use("v", "mcp__persona__unknown_tool", {})).param).toEqual({ text: "Persona · unknown tool", title: "mcp__persona__unknown_tool" });
+  });
+
+  it("Claude Code's newer tools say what they did, then what about (#2986)", () => {
+    expect(presentAction(use("n", "TaskCreate", { subject: "Write tests", description: "…" }))).toEqual({ verb: "加待办", param: { text: "Write tests", title: "Write tests" } });
+    expect(presentAction(use("n", "ListAgents", {}))).toEqual({ verb: "看 Agent 列表" });
+    expect(presentAction(use("n", "Monitor", { command: "tail -f x", description: "errors in x" })).verb).toBe("监视");
+    expect(presentAction(use("n", "PowerShell", { command: "Get-ChildItem" }))).toEqual({ verb: "运行命令", raw: "Get-ChildItem" });
+    expect(inlineInput(use("n", "Monitor", { command: "tail -f x", description: "d" }))).toBe("tail -f x");
+  });
+
+  it("a tool named like one of Object's methods reads as any other unknown tool", () => {
+    expect(presentAction(use("n", "constructor", {}))).toEqual({ verb: "调用", param: { text: "constructor", title: undefined } });
+    expect(presentAction(use("n", "hasOwnProperty", { title: "T" })).param!.text).toBe("hasOwnProperty · T");
+    expect(presentAction(use("n", "mcp__foundry__constructor_args", {})).param!.text).toBe("Foundry · Constructor args");
+  });
+
+  it("any other call opens to its arguments as key: value lines, not JSON", () => {
+    expect(argumentLines({ repo: "persona", title: "Crash", labels: ["bug", "ios"], meta: { a: 1 }, blank: " ", none: [] })).toBe(
+      "title: Crash\nlabels: bug, ios\nmeta: {\"a\":1}\nrepo: persona",
+    );
+    expect(inlineInput(use("n", "mcp__github__create_issue", { title: "Crash", body: "Steps" }))).toBe("title: Crash\nbody: Steps");
   });
 
   it("Persona's own tools read as their verb, then what they were given", () => {
@@ -153,44 +173,6 @@ describe("ThinkingCard", () => {
     expect(html.match(/size-1 rounded-full/g)).toHaveLength(3);
     expect(renderToStaticMarkup(<ThinkingCard live={{ thinking: false }} />)).toBe("");
     expect(renderToStaticMarkup(<ThinkingCard live={null} />)).toBe("");
-  });
-});
-
-describe("SubagentCard", () => {
-  const sub: Subagent = { id: "sa1", session_id: "s@sa1", type: "general-purpose", tool_use_id: "c-a1", running: true };
-  const card = (status: "running" | "completed" | "failed") =>
-    renderToStaticMarkup(
-      <ChatContext.Provider value={{ tasks: emptyTaskIndex(), subagents: [sub, { id: "sa2", session_id: "s@sa2", parent_id: "sa1" }], scope: "" }}>
-        <SubagentCard step={tool("a1", "Agent", { description: "回归：结算", prompt: "跑结算回归", subagent_type: "general-purpose" })} status={status} mid="m" />
-      </ChatContext.Provider>,
-    );
-
-  it("says what it is and how it is going, folded", () => {
-    const html = card("running");
-    expect(html).toContain('data-subagent-card="running"');
-    expect(html).toContain(">回归：结算<");
-    // running with no call yet: starting (#5602); with one: what it does now
-    expect(html).toContain("启动中…");
-    expect(html).toContain(">general-purpose<");
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain("查看完整过程");
-    expect(card("failed")).toContain(">失败");
-  });
-
-  it("says what it does now while it runs, its outcome and steps once it ended (#5602)", () => {
-    const meta = { id: "sa1", session_id: "s@sa1", running: true, steps: 4, last_tool: { id: "t9", name: "Bash", summary: "跑结算回归" } };
-    expect(subagentLine("running", meta)).toEqual({ text: "跑结算回归", live: true });
-    expect(subagentLine("running", { ...meta, last_tool: undefined })).toEqual({ text: "启动中…", live: true });
-    expect(subagentLine("completed", meta)).toEqual({ text: "已完成 · 4 步", live: false });
-    expect(subagentLine("failed", { ...meta, steps: 0 })).toEqual({ text: "失败", live: false });
-  });
-
-  it("takes a background subagent's report from its notice, not its launch receipt", () => {
-    const receipt: Item = { id: "r#0", seq: 2, role: "user", kind: "tool_result", tool_use_id: "c", text: "Async agent launched successfully." };
-    const notes = [{ kind: "agent", status: "completed", detail: "120 个用例都过了。" }];
-    expect(reportOf(receipt, notes)).toBe("120 个用例都过了。");
-    expect(reportOf({ ...receipt, text: "done" }, notes)).toBe("");
-    expect(reportOf(receipt, [])).toBe("");
   });
 });
 

@@ -65,6 +65,10 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 	switch {
 	case decideAsk(a) && a.ByDefault:
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
+	case decideAsk(a) && a.Chosen != "":
+		return i18n.T(l, "assistant-reports.decision_chosen_noted", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && a.Response != "":
+		return i18n.T(l, "assistant-reports.decision_response_noted", i18n.Args{"response": i18n.T(l, "assistant-reports.decision_response_"+a.Response)})
 	case decideAsk(a):
 		return i18n.T(l, "assistant-reports.verdict_taken")
 	case a.BySupervisor:
@@ -97,8 +101,18 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 	if r := recommendText(l, &a); r != "" {
 		c.Markdown(feishubot.EscapeMarkdown(r))
 	}
+	// What was asked, criterion by criterion (#3822): only once the work ended against its brief, never on a decision.
+	if a.Outcome != outcomeDecide {
+		if against := briefResultMarkdown(l, s.briefResultOfTodo(t)); against != "" {
+			c.Markdown(against)
+		}
+	}
 	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && decideAsk(&a) && a.AcceptedAt.IsZero() {
 		c.Markdown(feishubot.EscapeMarkdown(d))
+	}
+	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
+	for _, line := range decisionLines(l, s.location(ctx), &a) {
+		c.Markdown(feishubot.EscapeMarkdown(line))
 	}
 	if a.Link != "" {
 		c.Markdown(i18n.T(l, "assistant-reports.verdict_link", i18n.Args{"link": "[" + feishubot.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"}))
@@ -122,6 +136,24 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 	}
 	if len(bs) > 0 {
 		c.Buttons(bs...)
+	}
+	if decideAsk(&a) {
+		// The other options, then the fixed answers for a decision they cannot answer as it is (decision.go).
+		var more []feishubot.Button
+		for i, o := range a.Options {
+			if i > 0 {
+				more = append(more, feishubot.Btn(clip(o.Label, 20), feishubot.Default, map[string]any{"a": "accept", "id": t.ID, "opt": o.Label}))
+			}
+		}
+		if len(more) > 0 {
+			c.Buttons(more...)
+		}
+		var cannot []feishubot.Button
+		for _, r := range ownerResponses {
+			cannot = append(cannot, feishubot.Btn(i18n.T(l, "assistant-reports.decision_response_"+r), feishubot.Default,
+				map[string]any{"a": "accept", "id": t.ID, "resp": r}))
+		}
+		c.Buttons(cannot...)
 	}
 	return c.Note(i18n.T(l, hint))
 }
@@ -162,6 +194,10 @@ type conclusionInput struct {
 	// Deadline and Reversible: a decision's deadline and whether it can be undone (#3127, decision_deadline.go).
 	Deadline   time.Time
 	Reversible bool
+	// Decision: a decision's why_owner, options and cost of waiting (#3804, decision.go); the zero value for the rest.
+	Decision reviewDecision
+	// ForBriefing: the decision can wait and is held for the next briefing: no card now (#4930, decision_wait.go).
+	ForBriefing bool
 	// Verified: the supervisor checked the evidence (supervisorVerified): a done or cannot conclusion tells the owner and
 	// is not left for them to acknowledge (#3240).
 	Verified bool
@@ -181,8 +217,9 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 	}
 	var earlier []string
 	if old := b.asks[t.ID]; old != nil {
-		if old.AskedAt.IsZero() || !old.Conclusion && !acceptAskStale(old, t) && in.Outcome != outcomeDecide {
-			// A "Please verify" card is going out, or is up for this round: it is this conclusion.
+		if in.Outcome != outcomeDecide && (old.AskedAt.IsZero() || !old.Conclusion && !acceptAskStale(old, t)) {
+			// A "Please verify" card is going out, or is up for this round: it is this conclusion. A decision is not: it
+			// stands in for a "Please verify" still being written, which then gives way (postAsk, #3804).
 			b.mu.Unlock()
 			return false
 		}
@@ -196,6 +233,11 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 		Recommend: clip(oneLine(in.Recommend), 120), Link: s.conclusionLink(ctx, t, in), AskedAt: time.Now().UTC(), Earlier: earlier}
 	if in.Outcome == outcomeDecide && a.Recommend != "" {
 		a.Deadline, a.Reversible = in.Deadline, in.Reversible
+	}
+	if in.Outcome == outcomeDecide {
+		a.WhyOwner, a.Options, a.CostOfWaiting = in.Decision.WhyOwner, in.Decision.Options, in.Decision.CostOfWaiting
+		a.From, a.Stands = s.decisionBackground(ctx, t) // the hub's, not the model's: where it came from, where it stands
+		a.ForBriefing = in.ForBriefing
 	}
 	if a.Reason == "" && in.Outcome == outcomeDone {
 		a.Reason = i18n.T(l, "assistant-reports.verdict_done_default")
@@ -292,7 +334,7 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		// The hub's call at the deadline, not the owner's: an agent's source, with the reason saying so.
 		row.Reason, row.Source = defaultReason(l, s.location(ctx), a.Deadline), db.DecisionAgent
 	}
-	if _, err := s.routeToTaskChecked(ctx, t.Origin, id, msg, func(cur Todo) bool {
+	if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
 		return cur.DoneAt == nil && !acceptAskStale(&a, cur)
 	}); err != nil {
 		s.logf("task %s: conclusion to agent: %v", id, err)
@@ -304,6 +346,9 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		if ok, err := s.insertDecision(ctx, st, row); err != nil {
 			s.logf("task %s: conclusion decision: %v", id, err)
 		} else if ok {
+			if !a.ByDefault {
+				s.ownerDecided(id, row.ID, a.WhyOwner)
+			}
 			s.decisionsChanged(ctx, id, at)
 		}
 	}

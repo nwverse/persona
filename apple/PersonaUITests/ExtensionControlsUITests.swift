@@ -58,8 +58,10 @@ final class ExtensionControlsUITests: XCTestCase {
             // A slider sends when the finger lifts, a stepper after its taps pause; both keep the new value.
             let brightness = app.sliders["plugin-ui-slider-brightness"]
             XCTAssertTrue(brightness.waitForExistence(timeout: 5), app.debugDescription)
+            let was = brightness.value as? String
             brightness.adjust(toNormalizedSliderPosition: 0.8)
-            contains("80", of: brightness)
+            // Where the drag lands is the system's (iOS 27 puts 0.8 of the track at 87 %): whatever it is, it stays.
+            let set = changed(brightness, from: was)
             let temperature = app.steppers["plugin-ui-stepper-temperature"]
             if !temperature.isHittable { app.swipeUp() }
             XCTAssertTrue(temperature.waitForExistence(timeout: 5), app.debugDescription)
@@ -67,7 +69,7 @@ final class ExtensionControlsUITests: XCTestCase {
             contains("23", of: temperature)
             sleep(2) // sent 0.6 s after the tap, then drawn again from the answer
             contains("23", of: temperature)
-            contains("80", of: brightness)
+            contains(set, of: brightness)
             shot(app, "changed-" + look)
             app.terminate()
         } }
@@ -79,15 +81,24 @@ final class ExtensionControlsUITests: XCTestCase {
         (s.switches.firstMatch.exists ? s.switches.firstMatch : s).tap()
     }
 
+    /// An alert's button by its identifier, else its label. The first match: iOS 27 nests the button in one with the
+    /// same identifier.
     @MainActor private func button(_ alert: XCUIElement, _ id: String, _ label: String) -> XCUIElement {
-        let byID = alert.buttons[id]
-        return byID.exists ? byID : alert.buttons[label]
+        let byID = alert.buttons.matching(identifier: id).firstMatch
+        return byID.exists ? byID : alert.buttons.matching(identifier: label).firstMatch
     }
 
     @MainActor private func value(_ expected: String, of element: XCUIElement) {
         let wait = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [wait], timeout: 5), .completed,
                        "expected \(expected), is \(String(describing: element.value))")
+    }
+
+    /// The element's value once it is no longer `old`.
+    @MainActor private func changed(_ element: XCUIElement, from old: String?) -> String {
+        let wait = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", old ?? ""), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [wait], timeout: 5), .completed, "still \(String(describing: old))")
+        return element.value as? String ?? ""
     }
 
     @MainActor private func contains(_ expected: String, of element: XCUIElement) {

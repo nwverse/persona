@@ -17,11 +17,15 @@ import {
 import { modelIdRule, TYPED_MODELS_FEATURE, typedModelProblem } from "../../lib/model-id";
 import { runtimeFallbackText } from "../../lib/model-config";
 import { personaState } from "../../lib/persona";
+import { conversationPage } from "../../lib/conversation-page";
+import { CLEAR_MAIN_FEATURE, clearMainContext } from "../../lib/main-clear";
+import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import { hubHas, refreshAssistant, useStore } from "../../lib/store";
 import type { Item, Session } from "../../lib/types";
 import { Button, copyText, Dialog, IconButton, Menu, Spinner, toast, useMenu, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { ModelFallbackCard } from "../chat/ModelFallbackCard";
 import { Chip } from "../chat/SessionDialogs";
 import { Switch } from "./parts";
 import { PersonaDot, usePersona } from "./Persona";
@@ -240,7 +244,7 @@ export function StarterLauncherChip() {
   const label = defaultLabel(def ?? { provider: assistant.launcher });
   return (
     <>
-      <Chip label={picked ? `${current} · ${oneOff()}` : label} onClick={menu.open} active={Boolean(menu.anchor)} title={t("assistant-assistantchat.new_chat_launcher_title")} />
+      <Chip label={t("main-runtime.new_launcher", { launcher: picked ? `${current} · ${oneOff()}` : label })} onClick={menu.open} active={Boolean(menu.anchor)} title={t("assistant-assistantchat.new_chat_launcher_title")} />
       {menu.anchor && (
         <Menu
           anchor={menu.anchor}
@@ -271,13 +275,14 @@ export function AssistantFace({ session, last }: { session?: Session; last?: Pic
   return <PersonaDot size={30} state={state} fallback={null} className="-my-1" />;
 }
 
-/** The header menu's Persona part: "Details" (the profile), "Knowledge", "Back to main chat", the main conversation's "Compact context" and
- *  "New main chat" (when the hub can), "Copy info"; `dialogs` goes with them. Empty for an agent. */
+/** The header menu's Persona part: "Details" (the profile), "Knowledge", "Back to main chat", the main conversation's "Compact context",
+ *  "Clear context" and "New main chat" (when the hub can), "Copy info"; `dialogs` goes with them. Empty for an agent. */
 export function useAssistantMenu(session: Session | undefined): { items: MenuItem[]; dialogs: React.ReactNode } {
   const assistant = useStore((s) => s.assistant);
   const machine = useStore((s) => (session ? s.machines.find((m) => m.id === session.machine_id)?.name ?? "" : ""));
   const canCompact = useStore((s) => hubHas(s.features, COMPACT_FEATURE));
   const canNewMain = useStore((s) => hubHas(s.features, NEW_MAIN_FEATURE));
+  const canClear = useStore((s) => hubHas(s.features, CLEAR_MAIN_FEATURE));
   const picked = usePickedLauncher(session ? conversationKey(session.machine_id, session.session_id) : "");
   const [newMain, setNewMain] = useState(false);
   if (!session) return { items: [], dialogs: null };
@@ -289,10 +294,12 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
   const items: MenuItem[] = [
     { key: "profile", label: t("assistant-assistantchat.details"), icon: "info", onSelect: () => navigate({ name: "profile" }) },
     { key: "kb", label: t("assistant-assistantchat.knowledge"), icon: "book", onSelect: () => navigate({ name: "kb" }) },
-    ...(assistant?.main && !isMain ? [{ key: "main", label: t("assistant-assistantchat.back_to_main"), icon: "home" as const, onSelect: () => navigate({ name: "persona", sid: assistant.main }) }] : []),
+    ...(assistant?.main && !isMain ? [{ key: "main", label: t("assistant-assistantchat.back_to_main"), icon: "home" as const, onSelect: () => navigate(conversationPage(assistant.main!, assistant.machine_id, shownManager())) }] : []),
     ...(isMain && canCompact
       ? [{ key: "compact", label: compacting ? t("assistant-assistantchat.compacting") : t("assistant-assistantchat.compact"), icon: "layers" as const, disabled: compacting, onSelect: () => void startCompaction(session) }]
       : []),
+    // as /clear (#5095): no confirmation, the old conversation is archived, not deleted
+    ...(isMain && canClear ? [{ key: "clear", label: t("assistant-assistantchat.clear"), icon: "retry" as const, onSelect: () => void clearMainContext(session.session_id) }] : []),
     ...(isMain && canNewMain ? [{ key: "newmain", label: t("assistant-assistantchat.new_main_ellipsis"), icon: "compose" as const, onSelect: () => setNewMain(true) }] : []),
     {
       key: "copyinfo",
@@ -331,7 +338,23 @@ export function CompactionStrip({ session }: { session: Session }) {
   return (
     <>
       {session.runtime_fallback && <RuntimeFallbackNote reason={session.runtime_fallback} />}
+      {session.model_fallback && <AssistantModelFallback session={session} />}
       <Compaction session={session} />
+    </>
+  );
+}
+
+/** The refusal fallback's card in a Persona conversation (#2528): "Back to the configured model", and in the main
+ *  conversation the existing "New main chat" too (the same dialog as the menu's). */
+function AssistantModelFallback({ session }: { session: Session }) {
+  const isMain = useStore((s) => s.assistant?.main === session.session_id);
+  const canNewMain = useStore((s) => hubHas(s.features, NEW_MAIN_FEATURE));
+  const [open, setOpen] = useState(false);
+  const offer = isMain && canNewMain;
+  return (
+    <>
+      <ModelFallbackCard session={session} headless onNewMain={offer ? () => setOpen(true) : undefined} />
+      {offer && <NewMainDialog open={open} onClose={() => setOpen(false)} session={session} />}
     </>
   );
 }

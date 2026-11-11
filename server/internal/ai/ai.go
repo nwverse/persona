@@ -4,6 +4,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -94,7 +95,10 @@ type Message struct {
 type Request struct {
 	System    string
 	Messages  []Message
-	MaxTokens int // output limit for Messages and Chat Completions; Responses is sent none (some relays reject it)
+	MaxTokens int // output limit for Messages and Chat Completions
+	// BoundOutput also enforces MaxTokens on Responses. Cost-sensitive background calls
+	// fail closed when a relay refuses the bound; legacy callers keep their existing behavior.
+	BoundOutput bool
 }
 
 // Usage is what one request spent, as the upstream counted it (zero where it did not say).
@@ -177,17 +181,39 @@ func apiEndpoint(base, path string) string {
 
 // messages calls the Messages API; answered is whether the upstream said 200, Truncated whether the reply stopped at
 // MaxTokens. A model that thinks spends its thinking from the same MaxTokens, so a long answer can stop half written.
+// It streams (#4245): a gateway's cap on a non-streamed request's total time (often 120 s) otherwise fails every
+// answer a slow model needs longer for. A server that ignores "stream" and answers one JSON message is read as before.
 func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Request) (reply Reply, answered bool, err error) {
 	turns := make([]any, 0, len(r.Messages))
 	for _, m := range r.Messages {
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
-	body, _ := json.Marshal(map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns})
+	bodyMap := map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns, "stream": true}
+	if c.cfg.ReasoningEffort != "" {
+		switch strings.ToLower(strings.TrimSpace(c.cfg.ReasoningEffort)) {
+		case "off", "none", "disabled":
+			switch {
+			case strings.Contains(strings.ToLower(c.cfg.Model), "sonnet-5-5"):
+				// Sonnet 5.5 disables up-front thinking with between_tools; low also limits any between-tool work.
+				bodyMap["thinking"] = map[string]any{"type": "between_tools"}
+				bodyMap["output_config"] = map[string]any{"effort": "low"}
+			case messagesThinkingDisabledUnsupported(c.cfg.Model):
+				// These models reject thinking.disabled; the issue's off-or-lowest contract uses low effort instead.
+				bodyMap["output_config"] = map[string]any{"effort": "low"}
+			default:
+				bodyMap["thinking"] = map[string]any{"type": "disabled"}
+			}
+		case "low", "medium", "high", "xhigh", "max":
+			bodyMap["output_config"] = map[string]any{"effort": c.cfg.ReasoningEffort}
+		}
+	}
+	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}
 	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "text/event-stream")
 	if c.cfg.Bearer {
 		req.Header.Set("authorization", "Bearer "+key)
 	} else {
@@ -199,24 +225,123 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		return reply, false, fmt.Errorf("ai: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != 200 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return reply, false, newHTTPError(resp, raw)
 	}
-	if readErr != nil {
-		return reply, true, fmt.Errorf("ai: read response: %w", readErr)
+	in := bufio.NewReader(resp.Body)
+	if wholeMessage(in) {
+		return readMessage(in)
+	}
+	return readMessageStream(in)
+}
+
+// wholeMessage says the answer is one JSON message rather than an event stream: its first byte past any white space
+// opens an object (an event stream starts with a field or a comment). A body that can't be read is left to the stream
+// reader, which reports it.
+func wholeMessage(in *bufio.Reader) bool {
+	for {
+		b, err := in.Peek(1)
+		if err != nil {
+			return false
+		}
+		switch b[0] {
+		case ' ', '\t', '\r', '\n':
+			_, _ = in.ReadByte()
+		default:
+			return b[0] == '{'
+		}
+	}
+}
+
+// messageUsage is a Messages API usage object, whose fields come in parts across a stream.
+type messageUsage struct {
+	InputTokens              *int `json:"input_tokens"`
+	OutputTokens             *int `json:"output_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+}
+
+// into sets the fields u has on to: message_delta's usage carries the totals so far, of only some fields. A zero
+// is not taken: some relays send input_tokens 0 in message_delta, which would wipe message_start's real count.
+func (u *messageUsage) into(to *Usage) {
+	if u == nil {
+		return
+	}
+	for _, f := range []struct {
+		from *int
+		to   *int
+	}{{u.InputTokens, &to.InputTokens}, {u.OutputTokens, &to.OutputTokens},
+		{u.CacheReadInputTokens, &to.CacheReadInputTokens}, {u.CacheCreationInputTokens, &to.CacheCreationInputTokens}} {
+		if f.from != nil && *f.from != 0 {
+			*f.to = *f.from
+		}
+	}
+}
+
+// errorOf reads a Messages error: an object with its type and message (type falling back to a code), or only a
+// message string. ok is false when raw holds no error at all.
+func errorOf(raw json.RawMessage) (kind, msg string, ok bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "", false
+	}
+	if json.Unmarshal(raw, &msg) == nil {
+		return "error", msg, true
+	}
+	var o struct {
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &o) != nil {
+		return "", "", false
+	}
+	return cmp.Or(o.Type, o.Code, "error"), o.Message, true
+}
+
+// messageFailure is the error a Messages error reported after the 200 stands for, and whether it counts as an
+// answer: a limit (overloaded_error, rate_limit_error) holds the gate like HTTP 529 / 429 and is no answer; any
+// other is a streamFailure, Transient as its type's HTTP status would be (api_error 500, timeout_error 504).
+func messageFailure(kind, msg string) (bool, error) {
+	if limit := streamLimitFor("error", kind, msg); limit != nil {
+		return false, limit
+	}
+	return true, &streamFailure{status: messageErrorStatus[strings.ToLower(kind)], kind: kind, msg: msg}
+}
+
+// streamCut is the error of a stream that ended before its end event: the connection was cut, and whatever text
+// came is only part of the answer (io.ErrUnexpectedEOF, so Transient), not a short reply. what names the end missed.
+func streamCut(gotText bool, what string) error {
+	if !gotText {
+		return fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
+	}
+	return fmt.Errorf("ai: stream ended before the %s completed: %w", what, io.ErrUnexpectedEOF)
+}
+
+// readMessage reads a whole Messages API answer (a server that didn't stream).
+func readMessage(body io.Reader) (Reply, bool, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, 4<<20))
+	if err != nil {
+		return Reply{}, true, fmt.Errorf("ai: read response: %w", err)
 	}
 	var out struct {
+		Type    string `json:"type"`
 		Model   string `json:"model"`
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		StopReason string `json:"stop_reason"`
-		Usage      Usage  `json:"usage"`
+		StopReason string          `json:"stop_reason"`
+		Usage      Usage           `json:"usage"`
+		Error      json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return reply, true, fmt.Errorf("ai: decode: %w", err)
+		return Reply{}, true, fmt.Errorf("ai: decode: %w", err)
+	}
+	// An error body sent with 200 (a gateway that ignored "stream" and failed) is the failure it reports.
+	if kind, msg, ok := errorOf(out.Error); out.Type == "error" || (out.Type == "" && ok && len(out.Content) == 0) {
+		answered, err := messageFailure(cmp.Or(kind, "error"), msg)
+		return Reply{}, answered, err
 	}
 	var b strings.Builder
 	for _, part := range out.Content {
@@ -224,10 +349,111 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 			b.WriteString(part.Text)
 		}
 	}
-	if out.StopReason == "refusal" { // declined, usually with no text at all: not a reply that lacks its JSON
-		return Reply{Model: out.Model, Usage: out.Usage}, true, &RefusalError{StopReason: out.StopReason}
+	return messageReply(b.String(), out.StopReason, out.Model, out.Usage)
+}
+
+// messageReply is the reply of a finished message, or the refusal it was.
+func messageReply(text, stopReason, model string, usage Usage) (Reply, bool, error) {
+	if stopReason == "refusal" { // declined, usually with no text at all: not a reply that lacks its JSON
+		return Reply{Model: model, Usage: usage}, true, &RefusalError{StopReason: stopReason}
 	}
-	return Reply{Text: b.String(), Truncated: out.StopReason == "max_tokens", Model: out.Model, Usage: out.Usage}, true, nil
+	return Reply{Text: text, Truncated: stopReason == "max_tokens", Model: model, Usage: usage}, true, nil
+}
+
+// readMessageStream reads a Messages API event stream, framed by SSEEvents: the model and usage from message_start,
+// the text of the text blocks (content_block_start, text_delta; thinking and tool input are skipped), the stop reason
+// and the usage totals from message_delta. message_stop ends it. A stream that ends with neither message_stop nor a
+// stop reason was cut (streamCut). An error event, read leniently (errorOf: an object or a string, with or without
+// the event's own type), is the failure it reports (messageFailure). Data that isn't JSON is skipped.
+func readMessageStream(body io.Reader) (Reply, bool, error) {
+	var (
+		b              strings.Builder
+		model          string
+		stop           string
+		usage          Usage
+		failed         error
+		failedAnswered bool
+		stopped        bool
+	)
+	err := SSEEvents(body, func(data string) bool {
+		var ev struct {
+			Type string `json:"type"`
+			// Message is message_start's message, or an error's text where a relay puts it at the top.
+			Message      json.RawMessage `json:"message"`
+			ContentBlock struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content_block"`
+			Delta struct {
+				Type       string `json:"type"`
+				Text       string `json:"text"`
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage *messageUsage   `json:"usage"`
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			return false
+		}
+		kind, msg, isError := errorOf(ev.Error)
+		if ev.Type == "" && isError { // an error event without its type: the error is what it carries
+			ev.Type = "error"
+		}
+		switch ev.Type {
+		case "message_start":
+			var m struct {
+				Model string        `json:"model"`
+				Usage *messageUsage `json:"usage"`
+			}
+			if json.Unmarshal(ev.Message, &m) == nil {
+				model = m.Model
+				m.Usage.into(&usage)
+			}
+		case "content_block_start":
+			if ev.ContentBlock.Type == "text" {
+				b.WriteString(ev.ContentBlock.Text)
+			}
+		case "content_block_delta":
+			if ev.Delta.Type == "text_delta" {
+				b.WriteString(ev.Delta.Text)
+			}
+		case "message_delta":
+			stop = cmp.Or(ev.Delta.StopReason, stop)
+			ev.Usage.into(&usage)
+		case "message_stop":
+			stopped = true
+			return true
+		case "error":
+			if msg == "" {
+				_ = json.Unmarshal(ev.Message, &msg) // a relay's {"type":"error","message":"..."}
+			}
+			failedAnswered, failed = messageFailure(cmp.Or(kind, "error"), msg)
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		return Reply{}, true, fmt.Errorf("ai: read stream: %w", err)
+	}
+	if failed != nil {
+		return Reply{}, failedAnswered, failed
+	}
+	if !stopped && stop == "" {
+		return Reply{}, true, streamCut(b.Len() > 0, "message")
+	}
+	return messageReply(b.String(), stop, model, usage)
+}
+
+// messagesThinkingDisabledUnsupported reports models whose Messages API rejects thinking.disabled. Match the ID
+// anywhere so provider-prefixed and dated variants follow the same rule; Fable/Mythos 5.x always require thinking.
+func messagesThinkingDisabledUnsupported(model string) bool {
+	model = strings.ToLower(model)
+	for _, id := range []string{"opus-5-5", "sonnet-5-5", "fable-5", "mythos-5", "mythos-preview"} {
+		if strings.Contains(model, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
@@ -241,8 +467,16 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		input = append(input, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	req := map[string]any{"model": c.cfg.Model, "store": false, "stream": true, "input": input}
+	if r.BoundOutput && r.MaxTokens > 0 {
+		req["max_output_tokens"] = r.MaxTokens
+	}
 	if c.cfg.ReasoningEffort != "" {
-		req["reasoning"] = map[string]any{"effort": c.cfg.ReasoningEffort}
+		effort := c.cfg.ReasoningEffort
+		switch strings.ToLower(strings.TrimSpace(effort)) {
+		case "off", "none", "disabled":
+			effort = "none"
+		}
+		req["reasoning"] = map[string]any{"effort": effort}
 	}
 	body, _ := json.Marshal(req)
 	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
@@ -366,11 +600,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	if stopped {
 		return ended(got, gotErr)
 	}
-	// No terminal event: the connection was cut, and whatever text came is only part of the answer.
-	if b.Len() == 0 {
-		return reply, true, fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
-	}
-	return reply, true, fmt.Errorf("ai: stream ended before the response completed: %w", io.ErrUnexpectedEOF)
+	return reply, true, streamCut(b.Len() > 0, "response") // no terminal event
 }
 
 // JSON asks for a JSON object and decodes the first one in the reply into out.

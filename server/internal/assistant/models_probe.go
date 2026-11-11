@@ -54,8 +54,11 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 			return t, i18n.Err("assistant-models_probe.err_no_provider", i18n.Args{"name": in.Name})
 		}
 		l := list[i]
-		key, err := s.openKey(l.KeySealed)
+		key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 		if err != nil {
+			if _, ref := s.keyReference(l.KeySealed); ref {
+				return t, err // the provider extension's words
+			}
 			return t, i18n.Err("assistant-models_probe.err_open_key")
 		}
 		headers, err := s.openKey(l.HeadersSealed)
@@ -69,7 +72,8 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	}
 	if b := strings.TrimSpace(in.BaseURL); b != "" {
 		// The stored key and headers only go to the stored gateway: another address gets just what the request brings.
-		if in.Name != "" && strings.TrimRight(b, "/") != strings.TrimRight(strings.TrimSpace(t.base), "/") {
+		// A trailing /v1 is the same gateway (saving drops it from a Messages base); the host never differs.
+		if in.Name != "" && proto.MessagesBaseURL(b) != proto.MessagesBaseURL(t.base) {
 			t.key, t.headers = "", ""
 		}
 		t.base = b
@@ -130,8 +134,12 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	return t, nil
 }
 
-// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled.
+// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled. A Messages base is read as the node hands it
+// to Claude Code (proto.MessagesBaseURL), so a test passes for the address Agents will call.
 func (t probeTarget) endpoint(path string) string {
+	if messagesAPI(t.api) {
+		return proto.MessagesBaseURL(t.base) + "/v1/" + path
+	}
 	if strings.HasSuffix(t.base, "/v1") {
 		return t.base + "/" + path
 	}

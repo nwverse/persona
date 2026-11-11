@@ -4,13 +4,16 @@ import { ago } from "../../lib/format";
 import { extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type ExtensionUpgrade, type HubExtensionDetail } from "../../lib/extensions";
 import { getCatalog, marketOf, type CatalogItem } from "../../lib/extension-market";
 import { toolText } from "../../lib/extension-auth";
-import { t } from "../../i18n";
+import { formatNumber, t } from "../../i18n";
+import { packageDownloads } from "../../ui/ExtensionDownloads";
 import { Button } from "../../ui/atoms";
 import { Group, Row, Switch, SettingsHint, SettingsSection } from "./SettingsParts";
 
 /** Host-owned lifecycle UI for every extension. Only the configuration slot contains extension-supplied fields/pages. */
-export function ExtensionSettingsPage({ detail: d, manager, busy, offline = false, configuration, information, saveBar, onEnabled, onAutoUpgrade, onUpgrade, onUninstall, onChecked }: {
+export function ExtensionSettingsPage({ detail: d, manager, busy, offline = false, configuration, information, saveBar, memberNames, onEnabled, onAutoUpgrade, onUpgrade, onUninstall, onChecked }: {
   detail: HubExtensionDetail;
+  /** A pack's members by their installed names (#4122). */
+  memberNames?: Record<string, string>;
   manager?: string;
   busy: boolean;
   offline?: boolean;
@@ -36,7 +39,7 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
   return (
     <div data-extension-settings={d.id}>
       <section data-extension-section="enabled" aria-label={t("settings-extensions.enable")}>
-        <Group footer={offline ? t("settings-extensions.manager_offline") : editable ? enableFooter(d) : t(d.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
+        <Group footer={offline ? t("settings-extensions.manager_offline") : editable ? enableFooter(d, memberNames) : t(d.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
           <Row label={t("settings-extensions.enable")}>
             <Switch on={d.enabled ?? true} onChange={onEnabled} disabled={blocked || !editable} label={t("settings-extensions.enable")} />
           </Row>
@@ -65,11 +68,11 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
 }
 
 /** What the Enabled switch does. A pack's takes its members along only on a hub that says so (#1830). */
-export function enableFooter(d: HubExtensionDetail): string {
+export function enableFooter(d: HubExtensionDetail, names: Record<string, string> = {}): string {
   if (!d.extension_pack?.length) return t("settings-extensions.enable_footer");
   if (!d.pack_members_follow) return t("settings-extensions.enable_footer_pack_alone");
   if (d.enabled === false && d.pack_off?.length) {
-    return t("settings-extensions.enable_footer_pack_off", { names: d.pack_off.join(t("settings-extensionmarket.list_separator")) });
+    return t("settings-extensions.enable_footer_pack_off", { names: d.pack_off.map((id) => names[id] || id).join(t("settings-extensionmarket.list_separator")) });
   }
   return t("settings-extensions.enable_footer_pack");
 }
@@ -141,8 +144,10 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
           {action && <Button tone="secondary" disabled={busy || checking || !canCheck} onClick={() => onUpgrade(u.market, u.rename_to || u.id)}>{action}</Button>}
         </Row>
       )}
+      {/* While the manager's master switch is off, the extension's own switch keeps its value but can't be flipped: it applies
+          again once the master switch is back on (#1828). */}
       <Row label={t("settings-extensions.auto_upgrade")}>
-        <Switch on={d.auto_upgrade ?? false} onChange={onToggle} disabled={busy || checking || !automatic || !!paused} label={t("settings-extensions.auto_upgrade")} describedBy={descriptionId} />
+        <Switch on={d.auto_upgrade ?? false} onChange={onToggle} disabled={busy || checking || !automatic || !!paused || globalAuto === false} label={t("settings-extensions.auto_upgrade")} describedBy={descriptionId} />
       </Row>
       <SettingsHint id={descriptionId} caution={globalAuto === false}>
         {globalAuto === false ? t("settings-extensions.global_upgrade_off") : footer}
@@ -167,6 +172,7 @@ function Information({ d }: { d: HubExtensionDetail }) {
       <Row label={t("settings-extensions.source")} wrapValue>{source}</Row>
       <Row label={t("settings-extensions.runtime")} mono wrapValue>{d.kind || missing}</Row>
       <Row label={t("settings-extensions.installed_from")} mono wrapValue><span data-extension-provenance className="min-w-0 break-all select-text">{provenance}</span></Row>
+      {packageDownloads(d.downloads) !== null && <Row label={t("settings-extensions.package_downloads_label")} hint={t("settings-extensions.package_downloads_definition")} wrapHint><span data-extension-downloads>{formatNumber(d.downloads!)}</span></Row>}
       {d.publisher && <Row label={t("settings-extensions.publisher")} wrapValue>{d.publisher}</Row>}
       {(d.tools ?? []).map((x) => <Row key={x.name} label={x.title || x.name} hint={t("settings-extensions.tool_title")}>{toolText(x)}</Row>)}
       {home && <Row label={t("settings-extensions.homepage")}><Button tone="quiet" href={home}>{new URL(home).host}</Button></Row>}

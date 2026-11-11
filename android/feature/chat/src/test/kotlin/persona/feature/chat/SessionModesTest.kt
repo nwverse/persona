@@ -17,13 +17,15 @@ import org.junit.Test
 @Config(sdk = [35])
 class SessionModesTest {
     private val res = ApplicationProvider.getApplicationContext<Context>().resources
+    private fun claude(mode: String?) = Session(sessionId = "s", agent = "claude", permissionMode = mode)
+
     @Test fun runningSessionsCannotPickBypassButShowItWhenOn() {
-        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable("default").map { it.id })
-        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable(null).map { it.id })
-        assertEquals("bypassPermissions", SessionModes.switchable("bypassPermissions").last().id)
-        assertEquals("全部放行", SessionModes.switchable("bypassPermissions").last().title(res))
+        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable(claude("default")).map { it.id })
+        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable(claude(null)).map { it.id })
+        assertEquals("bypassPermissions", SessionModes.switchable(claude("bypassPermissions")).last().id)
+        assertEquals("全部放行", SessionModes.switchable(claude("bypassPermissions")).last().title(res))
         // A newer Claude Code's mode is listed by its raw name, so the current one still shows as picked.
-        assertEquals("future", SessionModes.switchable("future").last().title(res))
+        assertEquals("future", SessionModes.switchable(claude("future")).last().title(res))
         assertEquals("手动确认", SessionModes.modeLabel("default", res))
         assertEquals("很高", SessionModes.effortLabel("xhigh", res))
         assertEquals("future", SessionModes.modeLabel("future", res))
@@ -119,5 +121,35 @@ class SessionModesTest {
         assertEquals("自动改文件，思考很高", chatModeHint(session.copy(permissionMode = "acceptEdits", effort = "xhigh"), res))
         assertEquals("全部放行", chatModeHint(session.copy(permissionMode = "bypassPermissions"), res))
         assertEquals("future", chatModeHint(session.copy(permissionMode = "future"), res))
+    }
+
+    /** #582: the after-resume notice shows while it was on before a resume and nothing turned it back on. */
+    @Test fun theAfterResumeNoticeShowsUntilItIsOnAgain() {
+        val lost = persona.core.contracts.Session(machineId = "m", sessionId = "s", agent = "claude", status = "idle",
+            ultracode = false, ultracodeLostAt = "2026-11-11T12:00:00Z")
+        val features = setOf(Ultracode.FEATURE)
+        org.junit.Assert.assertTrue(Ultracode.lostShown(lost, features))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost.copy(ultracode = true), features))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost.copy(ultracodeLostAt = null), features))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost, emptySet()))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost.copy(assistant = true), features))
+    }
+
+    /** #582: the quota under the switch (iOS `quotaLine`, `quotaAge`, `quotaWarnShown`). */
+    @Test fun theQuotaLineSaysEachWindowAndWarnsOnlyUnderASwitchThatCanBeOn() {
+        val now = java.time.Instant.parse("2026-11-11T12:00:00Z")
+        val q = persona.core.domain.usage.UltracodeQuota("Claude", listOf(
+            persona.core.domain.usage.UltracodeQuota.Window(persona.core.domain.usage.UltracodeQuota.Kind.FiveHours, 86.6),
+            persona.core.domain.usage.UltracodeQuota.Window(persona.core.domain.usage.UltracodeQuota.Kind.Week, 41.0)), warn = true, stale = false, sampledAt = null)
+        assertEquals("Claude 额度：5 小时 86% · 每周 41%", quotaLine(q, res))
+        assertNull("current numbers: no age", quotaAge(q, now, res))
+        assertEquals("已过期 · 2 小时前", quotaAge(q.copy(stale = true, sampledAt = now.minusSeconds(7200)), now, res))
+        val off = Session(sessionId = "s", status = "idle", ultracode = false)
+        assertTrue("off and can be turned on", Ultracode.quotaWarnShown(off, null, enabled = true))
+        assertTrue("on", Ultracode.quotaWarnShown(off.copy(ultracode = true), null, enabled = false))
+        assertFalse("can't be changed", Ultracode.quotaWarnShown(off, null, enabled = false))
+        val turningOff = off.copy(ultracode = true, ultracodePending = true)
+        assertFalse("turning it off waits", Ultracode.quotaWarnShown(turningOff, Ultracode.Ask(false, sending = false, answered = turningOff), enabled = true))
+        assertFalse("under the node's reason", Ultracode.quotaWarnShown(off.copy(ultracodeNote = "模型不支持"), null, enabled = true))
     }
 }

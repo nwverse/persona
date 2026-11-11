@@ -87,7 +87,7 @@ export function Loading({ label = t("common.loading") }: { label?: string }) {
 }
 
 /** A state as a word in a pill; `awaiting`: seen and awaiting the user's reply, a quiet pending mark (#5096). */
-export function StatePill({ state, awaiting = false, waiting = false }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean }) {
+export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
   const tone: Record<AgentState, string> = {
     needs_you: "bg-field text-attention",
     working: "bg-field text-orange",
@@ -99,8 +99,8 @@ export function StatePill({ state, awaiting = false, waiting = false }: { state:
   const reply = awaiting && state === "idle";
   const bg = waiting && state === "working";
   return (
-    <span className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium ${reply ? "bg-field text-green" : bg ? "bg-field text-ink-2" : tone[state]}`} data-bg-waiting={bg || undefined}>
-      {(state === "working" || state === "needs_you") && <StatusMark state={state} size="sm" label={false} waiting={bg} />}
+    <span className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium ${reply ? "bg-field text-green" : bg ? "bg-field text-ink-2" : tone[state]}`} data-bg-waiting={bg || undefined} data-state-pill="">
+      {dot && (state === "working" || state === "needs_you") && <StatusMark state={state} size="sm" label={false} waiting={bg} />}
       {reply ? stateName("awaits_reply") : bg ? stateName("bg_waiting") : STATE_LABEL[state]}
     </span>
   );
@@ -341,6 +341,7 @@ export function Menu({
   side = "bottom",
   width = 208,
   header,
+  container,
 }: {
   items: MenuItem[];
   anchor: HTMLElement | null;
@@ -351,6 +352,9 @@ export function Menu({
   side?: "top" | "bottom";
   width?: number;
   header?: string;
+  /** Where the menu is put instead of the page's body: a full-screen layer above the menus' own (the image editor),
+   *  whose look (its `dark`) the menu then takes. */
+  container?: Element | null;
 }) {
   const id = useId();
   const [subs, setSubs] = useState<Sub[]>([]); // the open submenus: depth d (d ≥ 1) is subs[d - 1]
@@ -572,7 +576,7 @@ export function Menu({
         <MenuPanel key={`${s.from}-${i}`} {...panelProps(i + 1)} place={{ rect: s.rect, width }} loading={s.loading} loadError={s.error} />
       ))}
     </>,
-    document.body,
+    container ?? document.body,
   );
 }
 
@@ -1014,7 +1018,8 @@ export function Dialog({
 // ── toasts ──────────────────────────────────────────────
 
 /** A button on a toast ("Undo"): it runs, and the toast goes. */
-export type ToastAction = { label: string; run: () => void };
+/** `sticky`: stays until it is closed or its button is used (a new version waiting, lib/new-version.ts). */
+export type ToastAction = { label: string; run: () => void; sticky?: boolean };
 /** `leaving`: timed out or closed, playing its exit before it is gone (the stack removes it when that ends). */
 type Toast = { id: number; text: string; tone: "info" | "error" | "ok"; action?: ToastAction; leaving?: boolean };
 let toasts: Toast[] = [];
@@ -1074,7 +1079,7 @@ export function toast(text: string, tone: Toast["tone"] = "info", action?: Toast
   toasts = [...toasts, { id, text: shown.text, tone: shown.tone, action }];
   // One with a button stays long enough to reach it.
   const ms = action ? 6000 : shown.tone === "error" ? 5200 : 2800;
-  toastTimers.set(id, { left: ms, since: Date.now(), handle: toastsPaused ? undefined : setTimeout(() => dropToast(id), ms) });
+  if (!action?.sticky) toastTimers.set(id, { left: ms, since: Date.now(), handle: toastsPaused ? undefined : setTimeout(() => dropToast(id), ms) });
   toastsChanged();
 }
 

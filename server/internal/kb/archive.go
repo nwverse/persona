@@ -57,7 +57,7 @@ type Engine struct {
 	Sources      []Source
 	Model        Model
 	ModelFor     func(string) Model
-	Owner        string // how the owner is called (the AI writes the Chinese "I" for them)
+	Owner        string // how the owner is called (the AI writes the Chinese "I" for them); SetOwner changes it later
 	Logf         func(string, ...any)
 	// ExtraDirs are directories outside the data dir that Search also reads (Markdown files, read only): notes the
 	// user keeps elsewhere, e.g. a git repository of facts. Absolute paths.
@@ -68,15 +68,42 @@ type Engine struct {
 	Unindex func(kind string, ids []string)
 	// RecordingDaysFunc is how many days recordings are kept (the assistant's recording_days; nil or <= 0: 14).
 	RecordingDaysFunc func() int
+	// MinutesDaysFunc is how many days a meeting's minutes are kept once its transcript went (the assistant's
+	// minutes_days; nil or <= 0: forever); finite windows are never fewer than RecordingDaysFunc's (MinutesDays).
+	MinutesDaysFunc func() int
+	// EarlierMeetingsInAnswers lets the material of an answer (MeetingMaterial) and the room's meeting_earlier hold
+	// earlier meetings: only those marked not private (meeting.go, "The private mark"). The manager turns it on.
+	EarlierMeetingsInAnswers bool
+	// MeetingChanged is told of recording id's meeting parts that changed (PartRoom, PartAsks, PartPrivate,
+	// PartFollowup, PartPhotos): the manager's meeting_live event. Called outside the store's locks; optional.
+	MeetingChanged func(id string, parts []string)
 	// MinutesWritten is told when a recording's minutes for its current revision are written (minutes.go): the
-	// assistant pushes them. Called from the loop, outside the store's locks.
+	// assistant pushes them. Not for minutes made again only because a photo was added or deleted. Called from the
+	// loop, outside the store's locks.
 	MinutesWritten func(ctx context.Context, r Recording, m Minutes)
 	// LiveChanged is told of recording id when what the attending feeder does may have changed (live.go): a stored
 	// upload of a recording that attends or attended until then, and sentences LiveAppend stored. Called outside the
 	// store's locks; optional.
 	LiveChanged func(id string)
+	// DayRecapWritten is told once a day (Recording.Day, across the day's parts) of the recap the day's push goes with
+	// (day_recap_write.go "The push"): one ready at the recap time, else the day's first recap after it, or the final
+	// recap of a day that had none; never one asked for before the recap time. The assistant pushes it, to the
+	// destinations not in r.RecapPushTook, and returns those that took it now. Called from the recap lane
+	// (WriteDayRecaps), outside the store's locks; the push is persisted as due before, so it is told again after a
+	// restart, and after an error (the push not taken by all: the next round tells it again, after a short wait that
+	// grows with each one failed, with those that took it kept in RecapPushTook), until a call returned nil or a day
+	// went by since it became due. Optional: without it the push stays due, told once it is set.
+	DayRecapWritten func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)
+	// DayRecapClock is the evening routine's time of day (whether or not the routine is on); the recap time is 30
+	// minutes before it, in the owner's zone (Store.Zone, the routine's). Nil, or a time that is not one: 21:30.
+	DayRecapClock func() (hour, minute int)
+	// DayRecordingName is a day recording's name in the owner's language for its day (YYYY-MM-DD), unless the user
+	// titled it; nil or "": the knowledge base's own.
+	DayRecordingName func(day string) string
 	// HandleKey is the hub's key for the senders' identity hints (handles.go); without it none are kept.
 	HandleKey []byte
+	// TopicsOn says whether the knowledge points curation runs (topics.go; assistant.kb_topics). nil: it does.
+	TopicsOn func() bool
 
 	// Limits (zero: defaults).
 	ChatsPerRun  int // how many recently active chats an archive run looks at (100)
@@ -102,7 +129,45 @@ type Engine struct {
 
 	find findCache // what Find read last time, kept while the files are unchanged (find_cache.go)
 
-	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
+	// Retries are the steps' backoffs, shared by the engines a caller builds over the same store one after another (the
+	// hub's settings changed), so they carry over (#4247); nil: the engine's own.
+	Retries    *Retries
+	ownRetries Retries
+
+	// ownerNow is how the owner is called as the knowledge base loop last read it (SetOwner); its lanes read it while
+	// it is set (#4247), so it is not the Owner field. Nil: Owner.
+	ownerNow atomic.Pointer[string]
+
+	// clock is what the day recordings take for now (tests); nil: time.Now.
+	clock func() time.Time
+	// jobLeft is how long a recap job has left (tests); nil: until its context's deadline.
+	jobLeft func(ctx context.Context) time.Duration
+}
+
+// Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
+type Retries struct {
+	projects   retrySet // projects whose rewrite failed, by slug (RefreshProjects)
+	topics     retrySet // sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>")
+	recordings retrySet // recordings whose summary failed, by id (SummarizeRecordings)
+	items      retrySet // documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems)
+}
+
+func (e *Engine) retries() *Retries {
+	if e.Retries != nil {
+		return e.Retries
+	}
+	return &e.ownRetries
+}
+
+// SetOwner sets how the owner is called in the models' prompts from now on; safe while the lanes run.
+func (e *Engine) SetOwner(owner string) { e.ownerNow.Store(&owner) }
+
+// ownerName is how the owner is called: what SetOwner set last, else Owner.
+func (e *Engine) ownerName() string {
+	if o := e.ownerNow.Load(); o != nil {
+		return *o
+	}
+	return e.Owner
 }
 
 func (e *Engine) modelFor(id string) Model {
@@ -514,7 +579,7 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		return &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
 	}
 	p, written, err := e.Store.updatePerson(pid, false, create, func(p *Person) bool {
-		if p.Connector != "" && p.Connector != c.Connector {
+		if p.Status == "ignored" || (p.Connector != "" && p.Connector != c.Connector) {
 			return false
 		}
 		linked = true

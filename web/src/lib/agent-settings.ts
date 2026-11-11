@@ -74,6 +74,7 @@ function codexOptions(prefix: string, options: string[]): Record<string, string>
 // An option value's name: effort levels as the session menu calls them, the update channels and Codex's
 // config.toml values (#3855) by name.
 const OPTION_KEYS: Record<string, Record<string, string>> = {
+  service_tier: { default: "chat-sessiondialogs.speed_standard", fast: "chat-sessiondialogs.speed_fast", priority: "chat-sessiondialogs.speed_fast" },
   effortLevel: { low: "lib-session-actions.effort_low", medium: "lib-session-actions.effort_medium", high: "lib-session-actions.effort_high", xhigh: "lib-session-actions.effort_xhigh", max: "lib-session-actions.effort_max" },
   autoUpdatesChannel: { latest: "lib-agent-settings.channel_latest", stable: "lib-agent-settings.channel_stable" },
   // Claude Code's default mode (#3026), named as the session menu names the modes.
@@ -302,7 +303,7 @@ export function mailRequest(f: MailForm, gmailAppPassword = false): AddMailAccou
     if (f.smtpHost.trim()) {
       req.smtp_host = f.smtpHost.trim();
       req.smtp_port = port(f.smtpPort);
-      req.smtp_security = f.smtpPort.trim() === "587" ? "starttls" : "tls";
+      req.smtp_security = req.smtp_port === 587 ? "starttls" : "tls";
     }
   }
   return req;

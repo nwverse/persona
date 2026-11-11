@@ -1,5 +1,31 @@
 # Lessons: testing and validation
 
+- A test that calls an entry point which sets the process environment must `t.Setenv` that variable first, so the
+  test puts it back (#4581). `nodeclient.RunHook` with `--persona-home <dir>` sets `PERSONA_HOME`; one test left it
+  pointing at its removed `t.TempDir()`, and every later `internal/node` test put `node.sock` there. On macOS that path
+  passed the 104-byte Unix socket limit, so `TestStandbyOnTheSocket` failed with `bind: invalid argument` only in
+  full-package runs, and a test that refuses to dial anything outside its own home skipped silently. Linux's shorter
+  `/tmp` paths still bind: reproduce such leaks on macOS by running the two tests together, in order.
+
+- Async node-start fixtures must cancel and join `n.starts` before closing fake terminal sockets, restoring globals
+  or removing their temporary files (#3345). Waiting only for `pane.send_input` leaves a background start polling a
+  dead host for three minutes, with its diagnostics appearing under a later test. Expected start failures use the
+  node's logger, so tests can capture diagnostics without changing production logging.
+
+- Bulk Postgres fixtures need physical isolation, not just row deletion (#3743). Deleting 500 feed rows left a larger
+  unsent B-tree than the sent index; a controlled statistics refresh then changed a later index-choice assertion even
+  though no fixture rows remained. Use the existing migrated-database clone for bulk fixtures so table, index and
+  catalog state stay private. Preserve the original planner assertion; an isolated passing test alone does not prove
+  that the complete package is unaffected. The controlled reproducer shows the mechanism, not which background
+  statistics event happened in a particular failed run.
+
+- An index-choice assertion needs a table of its own, shaped like production (#4191). On the few rows earlier tests
+  leave behind, with `enable_seqscan = off`, two indexes cost about the same, and the leftovers decide which one wins:
+  `TestMarkFeedSentUsesUnsentIndex` passed alone and failed from the third `-count=10` iteration on, before and after
+  #3787. Check the plan in a migrated clone, on a few thousand synthetic rows, after `ANALYZE` and at default costs.
+  Check the generic plan too (`PREPARE` + `EXPLAIN EXECUTE` under `plan_cache_mode`), since cached statements can
+  switch to it. Then prove the test by mutation: drop the index, or the query's matching predicate, and it must fail.
+
 - Bound cold simulator compilation separately from test execution (#2671). A combined `xcodebuild test` can spend
   most of its deadline compiling before the first test starts. Build for testing, then test without building against
   the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle
@@ -30,6 +56,8 @@
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
 - Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
+
+- To keep a fake hub answer out (a press past `cardAnswerWait`), block it on a channel the test closes, not a fixed sleep (2026-11-11, #4274). The assistant's `fakeHub` runs app answers under its lock, so a held answer blocks every other fake call: close the channel before the test touches the hub again, and register the close with `t.Cleanup` so a failed assertion cannot leave it blocked (`heldAnswer` in `server/internal/assistant/feishu_answer_ended_test.go`). Then wait for the last effect of the late path (its note), not for a fixed time.
 
 - `synctest.Wait` is not a general goroutine barrier (#1836): mutex contention and real socket I/O, including an `httptest` server's accept loop, do not count as durably blocked. A test waiting for quiescence can hang even though its target operation is waiting as intended. For these integration tests, use explicit entered/release/completed channels and bounded waits; reserve `synctest` for fixtures whose blocking operations it can track.
 
@@ -72,12 +100,15 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Goroutines that outlive a test must not call `t.Logf` or read global switches changed after the test ends (2026-11-06, #4822). `computer.nolock` / `computer.cursor` send in their own goroutines; late logging panics (`Log in goroutine after ... has completed`). A fake Mac node reading global `fakeNodesBuiltin` per request sees changes from the preceding test's cleanup, letting late requests fail an already-finished test. Guard logging with a lock and `over` flag set by `t.Cleanup`; fake nodes capture the switch once at creation.
 
+- Assistant tests swap a service's hub with `setHub`, never `s.hub = h` (2026-11-11, #4006). The inbox's "Needs you" teller (`tellInboxNeedsYou`) reads `s.hub` on a goroutine of its own, and a test's service starts one at its first inbox read, so a plain assignment raced with it under `-race`. The teller reads the hub only under `needsYouMu`, and `setHub` swaps it under that lock. The teller is not the only reader: a timer armed while the service is set up (`directionsSoon`, which reads `s.hub` through `hello`) can fire during the test, on a `synctest` bubble's clock too, and nothing orders it after a swap. Where a test only needs a fake behavior, the fake hub does it under `f.mu` (`hangChannel`) and the hub is never swapped. A test with two racing readers can report one in a combined run and the other when run alone, so check each test in separate processes of its own. In the same run, two leader retry tests ended before their retry ran because `sendsTo` also counts sends the fake refused; the retry goroutine then read a package timing their cleanup restored. Such timings belong on the `Service` (`leaderResume`, like `taskRetry`), and a wait must see the effect it names (`deliveredTo`, the sends the fake took).
+
 - The assistant bus writes `m.sessions` and `h.clients`; tests modifying them need the same lock (2026-11-06, #4822). `takeFleetSessions` writes `fleet.sessions` under `m.mu`. Direct test assignment to `n.m.sessions` produces DATA RACE with `-race -count=30` and can be overwritten by an old list still in transit. Use `editSessions` (first `settleAssistant`, then edit under `m.mu`) and `appClient(h)`, not direct assignment.
 
 - When multiple goroutines independently generate and send the same state, generation and sending need one lock (2026-11-06, #4822). On assistant connection, `FleetUp` sends each machine's list, while `Resync` snapshots also resend lists. Previously each called `decorated()` before leaving its lock, then `Tell` afterward; a stale list lacking the snapshot's "Persona" title sometimes reached hub last and stayed, failing `TestTheMainConversationIsAlwaysPersona` about 3% of the time. `publishList` now generates, deduplicates, and sends under `sentMu`. Waiting in tests for "the new list arrived" is insufficient: it may be that stale list.
 
 - Waiting for one effect does not wait for another made on a different goroutine (2026-11-09, #2152). A source page's tree changes first and its frame is sent later by the delivery goroutine (`ui_page_delivery.go`), so `TestPageNativeFiniteLoadStillStartsWithLoading`, which waited for the tree to say `loaded` and then counted delivered frames, failed only on busy CI. Wait for each effect you assert on (`pageAwait` for the frames too). To reproduce such a gap, slow the receiving side in a scratch copy (a fake `Notify` that sleeps 20 ms failed 10 of 10 runs), or run `go test -cpu 1 -count=60` with every core busy (4 of 60 failed); an idle machine passed 40 of 40.
 - A cancel on a fixed deadline counted from the start races the fake's own startup (2026-11-10, #2674). `TestToolCheckTimeoutStopsItsHelpers` gave the call 300 ms, but its fake had to start a shell and write its helper's pid first; on a busy machine the cancel came before there was a helper, and the test failed (1 of 30 runs with every core busy) without checking what it was about. Cancel once the fake shows it started (the pid file), and time the return from the cancel. Do not lengthen the deadline instead: it only makes the race rarer.
+- A recovering assistant conversation's `busy` alone does not mark the end of its turn (2026-11-10, #3815). When recovery moves to the next model, `assistantSend` registers the replacement process (`spawnAssistant`) before it marks it busy and sends the retry, with the context snapshot and the mode sync in between. `sdkFixture.idle` waited for the registered process's `!busy`, so `TestAssistantRecoveryStopsAfterBothModelsAndTheirRetries` counted 2 of its 4 requests (9 of 400 runs on a busy Mac). The node publishes that gap as working (`busy || recovering` in `assistantSessions`); a wait for the end of a turn must use the same rule. To find such a gap, log the internal state at the moment the wait returns in a scratch test: slowing the fake CLI's `initialize`, the first guess, did not widen it.
 
 - Fixtures must use real response shapes (2026-11-06, #2938 / #2017). Assistant-feed `view_actions` is an object indexed by card key, empty as `{}` too. When both web and acceptance drivers mistook it for an array, array fixtures kept unit tests green while the real model lost answered state after reload. Use protocol objects covering empty objects, answered snapshots, and pagination; in a real browser also reload and check latest version, answered state, and no repeat sends.
 
@@ -93,6 +124,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 
 - `-race` reports reads/writes without a happens-before relationship; a test's own lock can hide a race (2026-11-05, #2955). `startAsync` reads the launch record's session after `go func()`; a fast background failure changes it in `finish` under a lock. Existing tests read, then wait through the `startLog` lock; `finish` acquires that lock next, so the detector sees the read before the write. It reports only if the caller is preempted just after `go` (one occasional full-suite `-race` failure). Regression `TestStartAsyncAnswersBeforeAFastFailure` waits only on the record's `done` channel and reports every time before the fix. Race-test result waiting must not share a lock with the code under test.
+
+- A fixture goroutine that reads a shared field when it runs races a test that swaps the field, and a socket orders nothing for the race detector (2026-11-11, #3918). `withFakeHub` started `go func() { _ = n.peer.Serve(…) }()`, which reads `n.peer` whenever the goroutine gets to it; `TestCodexRemoteTurnBegunBeforeJoining` then put its own hub in front with `n.peer = …`. `TestOutsideClaudeSendNotTaken` set the fake inbox's `mode` without its lock after the accept loop had started; the node connecting over the Unix socket afterwards gave the connection's goroutine no happens-before edge to that write. Both failed only under `-race`, which the CI node shard does not use. Have a goroutine serve the value the fixture created (a local variable), and change state a running fake reads through a setter under the fake's own lock (`fakeInbox.setMode`).
 
 - When testing fixed interactive-shell scripts, isolate `HOME`, `USERPROFILE`, and `ZDOTDIR` first (2026-11-05, #3120). Replacing only the update command still reads the user's shell startup files, mixing toolchain notices into `CombinedOutput` and failing exact-output assertions. Point all three directories at a test temp directory; retain success, failure, and unknown-action rejection assertions without changing production shell behavior or user configuration.
 
@@ -175,6 +208,9 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - `xcrun simctl launch` only foregrounds an already-running app; new launch arguments do not apply. Use `--terminate-running-process` before screenshots.
 - `MOCK_EXTENSIONS=1` keeps plugin settings, secrets, and switches in process memory (2026-11-04, #1711). After light-mode `ExtensionSettingsTests`, "Example Notes" is configured;
   an immediate dark run fails at the start of `testSetUpAnExtension` because "Needs setup" is absent, looking like broken code. Restart the mock by port between modes/reruns (like `MOCK_WECHAT`).
+- Resetting a mock does not reset the app's outbox or drafts (2026-11-12, #4475). `/mock/reset` is a **GET**; a POST can return a generic success without restoring the fixture.
+  Use the GET and `-openDraftsFresh YES`, and make messages whose pending copy is matched run-unique: a previous test's same-text outbox otherwise supplies its photo count or sending bubble again.
+  A pristine screenshot after such mutations needs a fresh app container, not just another mock reset. An empty XCUI composer can also return its placeholder as `value`; when checking that automatic stand-in words were not restored, assert their absence (or the model's empty draft), not `value == ""`.
 - All UI tests launch with `app.launchPinned()` (`UITestStyle`). The app remembers prior test styles; BeautifulUI looks different, so unspecified tests inherit someone else's appearance
   (LongSessionTests failed after BeautifulStyleTests). Default is Liquid Glass; `TEST_RUNNER_PERSONA_UI_STYLE=beautiful` runs the whole suite in BeautifulUI.
   Style-specific tests pass `-ui.style` themselves. It launches through `launchPersona()`, which only performs a clean Demo Mode start and never overrides navigation. `UITestStyleTests` scans source (`launch()` and `launchPersona()` both count as omissions).
@@ -313,6 +349,14 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - `TRUNCATE` gives every table it names new files, whether it had a row or not, so clearing two dozen mostly empty tables before each test cost more than many of the tests. Check the tables the cascade reaches in one statement and truncate only those with a row (`db.truncateNonEmpty`). Don't replace it with `DELETE`: it does not cascade, and `devices` has a `BEFORE DELETE` trigger (`devices_guarded_delete`, hub 0435) that refuses an unguarded delete with "push retirement requires a guarded writer".
 - A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
 - Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
+
+## The mock hub does not enforce device roles (2026-11-12, #4869)
+
+`scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
+
+## Live-only Go tests need their own compile pass (2026-11-11, #4654)
+
+Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helper signature change can leave live-only callers uncompilable while every default test stays green. After changing such a signature, compile the whole node test package with `go test -c -tags herdrlive -o /tmp/node-live.test ./internal/node`; `-run` selects which test executes but does not reduce which source files must compile. Run the live tests themselves only on demand in an isolated herdr session, never against the working one.
 
 ## Dead-code reports depend on the selected build (2026-11-07, #5856)
 
@@ -476,6 +520,10 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
   Since 2026-11-02 the invisible layer is absent from the tree, leaving only the onscreen Back (`ChatHeaderTests`). The collapsed strip stays below the status bar in both styles;
   "title bar is in the status bar" was actually the invisible Back frame.
   In BeautifulUI's new shell, use `probe.chat` (page `agents`) to detect open chats, not Back.
+- A list row scrolled up under the navigation bar's blur still reports `isHittable`, and a tap on it lands on the bar (2026-11-11, #4062):
+  `MeetingRecordingUITests` scrolled "until Regenerate is hittable", did no swipe because it already was, and its tap never reached the hub
+  (the mock's log had no `POST …/minutes`). Check that the element's frame is below `app.navigationBars.firstMatch.frame.maxY` and above the
+  window's bottom before tapping (`onScreen` in that test), and assert it, so a missed tap fails where it happens, not ten seconds later.
 - Chat-content UI tests always use `-openChatsFresh YES` (clear disk chat caches). Every mock reset starts chats at the same seq; prior churn-generated steps
   stay cached at this round's `/mock/say` seq, hiding new replies as "already present", leaving previous "Tool 21 · Reply 5" onscreen.
   On 2026-11-02 `ChatFollowTests.testPersonaChatFollows` failed after `ScrollUnderPushTests` / `ScreenTruthTests`, resembling missing Persona replies in the new shell but actually environmental. Real hub seq positions in transcripts increase without reuse.
@@ -642,6 +690,32 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 - **Fake extensions installed through `dir:` in e2e are sandboxed by default** (bwrap, writes only to own data/runtime directories). A fake channel plugin writing received messages to a test directory throws and exits;
   hub restarts it, replayed input is deduplicated, and it looks like lost messages. Store files in `extension.data_dir` from `initialize` (tests read `~/.persona/extensions/data/<id>/`), retaining sandboxing.
 
+## XCUITest cannot tap while a list glides (2026-11-10, #3027)
+
+- **Every XCUITest gesture waits for the app to be idle, before and after**, and a scroll view gliding after a flick
+  is not idle. `press(forDuration:thenDragTo:…)` returns only once the glide has stopped, and a tap after it, even
+  through SpringBoard's coordinates, came 2 s later on a stopped list: a "tap ↓ during the glide" test passed without
+  testing anything.
+- **One synthesized record of the flick and the tap** (`XCSynthesizedEventRecord` with two `XCPointerEventPath`s, the
+  classes XCUITest's gestures are made of) did not keep its timing: the moves came in a burst, the finger sat still,
+  the list never glided.
+- **What works** (`apple/PersonaUITests/TouchScript.swift`): the flick stays XCUITest's own, and the tap is a
+  one-path record played through `XCUIDevice.shared`'s `eventSynthesizer` from a background queue while the main thread
+  waits the glide out. These are not public API: the helper throws `XCTSkip` if this Xcode lacks them.
+- **Time the tap from the app**: when the flick starts depends on XCUITest's wait for the app to be idle, which a running
+  turn (a step a second) stretches. A fixed delay after the drag call came before the flick (↓ not up yet) or into it
+  (the synthesizer refuses: "only one gesture can be performed at a time"). Polling the synthesizer with empty records
+  does not work either: its answers do not come while XCUITest's gesture call waits. The chat posts a Darwin
+  notification as a user's flick starts to glide (`ChatView.glideNote`, `notify_post`, DEBUG with `-probes YES`); the
+  helper waits for it with `notify_register_dispatch` on its own queue and taps 0.1 s later.
+- **Retry while the daemon still holds the flick**: XCTest's daemon counts the flick as its gesture for about 0.2 s after
+  the finger lifts, and refuses any tap until then (`XCTDaemonErrorDomain` 21). Played once, the tap never reached the
+  app. The helper plays it again every 20 ms while the answer is 21 (for up to 3 s), and logs each try. On iOS 27.0 it
+  was taken 0.19–0.22 s into a glide of about 3 s.
+- **Prove the timing in the app, not the test**: a test cannot read the list during the glide without waiting for it.
+  The app counts ↓ taps made while its scroll view `isDecelerating` (probe `glideTaps`), and the test asserts the count
+  went up; `-scrollTrace YES` shows the frames.
+
 ## Local port discovery probes fake model servers in tests (2026-11-04)
 
 `TestInboxTriageWaitsOutAnExhaustedQuota` occasionally reports "20 items used 21 requests". The extra request is `GET /`, `User-Agent: persona-ports`,
@@ -706,6 +780,10 @@ When a built-in extension's `runtime.command` is `personad`, the manager launche
 The test binary does not recognize `voice`, reruns the whole package recursively, and times out. `extmgr` `TestMain` therefore checks `os.Args[1]`: if `voice`, run as `personad voice`
 (`voice.Run`). Future built-in executable extensions (not declarations only) need the same `TestMain` dispatch, so tests actually run them through hub forwarding.
 
+## Stop test programs before their temporary directories go (2026-11-11, #4104)
+
+`t.TempDir` removes all of a test's temporary directories in one cleanup, added at its first call, and cleanups run last added, first called. A test that first calls it after starting extension programs (`extensionTestHub` adds the cleanup that stops them) has its directories removed while the programs still run. A program the test's last change restarted (a provider switched back on restarts the extensions holding its references) then writes into a directory being removed, and the run fails with only `TempDir RemoveAll cleanup: … directory not empty`, about one run in three. `startTestExtensions` therefore calls `t.TempDir` before adding its cleanup. Anything else that starts processes writing into a test's directories must also add its stop cleanup after the first `t.TempDir` call.
+
 ## Web screenshots on Linux unsupported by Playwright (2026-11-06, #3140)
 
 - Symptom: `npx playwright install chromium` on Debian 11 says "does not support chromium on debian11-x64"; ubuntu20.04 packages also fail. Playwright MCP looks for `/opt/google/chrome/chrome` and cannot launch either.
@@ -736,6 +814,15 @@ On a Linux development machine without the Android SDK or Xcode, pure-logic clie
 - **Swift**: Foundation-only files (such as `AgentRepoTree.swift`) build with the swift.org Linux toolchain (the Debian 12 package also works on related distributions) inside a temporary SwiftPM package running Swift Testing.
   Copy the needed types verbatim from `Models.swift` and write minimal stand-ins for the rest; match the App's settings: Swift 6, `defaultIsolation(MainActor.self)`, plus the `NonisolatedNonsendingByDefault` and `InferIsolatedConformances` upcoming features (`SWIFT_APPROACHABLE_CONCURRENCY`).
   This catches syntax, type and isolation errors and really runs the tests, but it is not an Xcode build: say "not compiled with Xcode" in the PR; Xcode 26.0 is not verified either.
+  A list's logic that sits in a SwiftUI file builds too when only its `nonisolated` top-level declarations are taken, each from its first line to the
+  next line that is only `}` (`SpaceGroup` and `AgentFilter` from `ChatsView.swift`, `AppGroups` from `AgentAppGroups.swift`): the real `AgentListProjection.swift`
+  and its tests ran so with about 90 lines of stand-ins (#4767). Tests that reach `AppModel`, `AgentListRows` or the projection's cache still need Xcode.
+- **iOS screenshots**: a throwaway branch (never a PR) whose `apple-test.yml` runs a UI test against `scripts/mock/mock_hub.py` on the hosted runner and uploads
+  the PNGs as an artifact, started with `gh workflow run` (#4767). Create the simulator as `scripts/ci/apple.sh` does (`sim-boot.sh --create-only`) and let
+  `xcodebuild test-without-building` boot it: a `sim-boot.sh` boot on the runner waited out its 15-minute `bootstatus` deadline, while the iOS lane's
+  Xcode-owned boot was ready in under 5 minutes. `simctl ui` needs a booted device, so set the look with launch arguments (`-ui.scheme dark`,
+  `-UIPreferredContentSizeCategoryName`, `-AppleLanguages (en)`), one test per screen and look. Scroll by dragging from the window and read only the
+  row you wait for: reading the frame of a row that scrolled out of the hierarchy fails and ends the test.
 
 ## 后台测量停滞时，先区分未完成测量与残留管道（2026-11-06，#5766）
 
@@ -837,3 +924,23 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 ## Warm allocation measurements need one processor (2026-11-10, #3390)
 
 - Disabling GC preserves `sync.Pool` contents but does not keep a goroutine on the processor whose private pool was warmed. A switch during a byte-allocation measurement can charge a cold JSON encoder's buffer growth to the operation. Measure an explicitly warmed steady state with `GOMAXPROCS(1)` during the window and restore it afterward, as `testing.AllocsPerRun` does. Check warm-up errors and retain the original byte limit; a historical extra-copy implementation measured by the same helper must still fail that limit. This isolates the measurement from processor migration, not from unrelated allocating goroutines: do not run these process-wide measurements in parallel.
+
+## Measuring latency on the shared Mac (2026-11-10, #3067)
+
+- The Mac other lanes build on runs at a load average of 100–260 on 20 cores. The same path's small-message round
+  trip moved between 6 and 47 ms (p50) within minutes, and a hub redeploy by another lane can land mid-run (check the
+  hub processes' `etime`). Compare by interleaving the variants, several rounds, medians, with the load average logged.
+- A result from a loaded machine can reverse once it is quiet: at a load of ~400, asking for VNC updates early looked
+  239 ms faster for typing (3 of 6 pairs); at 25–80 it was slower in all 5 pairs (median +81 ms). Decide on runs made at
+  a low load, interleaved (ABBA), and say the load next to the numbers.
+- Driving the real desktop (`server/cmd/vncbench run`): other lanes' windows and dialogs open on top of yours at any
+  time. Send a click, a wheel notch or a drag only where your own page is seen on the screen (vncbench's target
+  checker), type only while your page says it has the keyboard, and bring your browser forward with `open -a`, never
+  by clicking. A window's rounded corner clips a marker drawn in it: keep markers inset.
+- An agent's shell is not the login session: the login keychain is locked there and `security … -w` exits 36 (no user
+  interaction allowed). A secret the user stored in the keychain can't be read; use a 0600 file outside the repository.
+
+## A test binary that is a container's PID 1 never reaps orphans (2026-11-11, #4363)
+
+- `docker run --entrypoint <test binary>` without `--init` makes the test binary PID 1, and every orphan is reparented to it. Go waits only for the children its `exec.Cmd`s started, so a background child killed after its shell exited stays a zombie, `kill(-pgid, 0)` still finds its group, and process-group tests fail. On `main`, `TestSecretRunTimeoutKillsTheGroup` and `TestSecretRunTimeoutEndsWhatIgnoresSIGTERM` failed in a `postgres:18-alpine` container this way and passed with `--init`.
+- Run such tests with `docker run --init` (Docker's own init, no image to pull), and compare with `main` in the same container before blaming a change.
