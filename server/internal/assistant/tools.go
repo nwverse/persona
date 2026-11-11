@@ -348,6 +348,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Ultracode bool `json:"ultracode"`
 			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
 			Attachments []string `json:"attachments"`
+			// SecretEnv: environment variables the Agent gets from secret providers, by reference, after the user
+			// approves on the phone (secret_handoff.go).
+			SecretEnv map[string]string `json:"secret_env"`
 		}
 		_ = json.Unmarshal(args, &a)
 		am, ok := s.machineByName(ctx, a.Machine)
@@ -452,6 +455,24 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if note != "" {
 			note = " Note: " + note + "."
 		}
+		// Secrets for this run (secret_handoff.go): checked, then asked on the card, for the computer and launcher it
+		// starts with; resolved and staged right before the start.
+		var hand *secretHandoff
+		approvedBy := ""
+		if len(a.SecretEnv) > 0 {
+			if hand, err = s.handoffPrepare(ctx, am.ID, am.Name, params, a.SecretEnv); err != nil {
+				return "", fmt.Errorf("%w; no agent was started", err)
+			}
+			tab, _ := params["tab_name"].(string)
+			by, answer, err := s.handoffApprove(ctx, machine, self, hand, tab)
+			if err != nil {
+				return "", err
+			}
+			if by == "" {
+				return answer, nil
+			}
+			approvedBy = by
+		}
 		if runs != "" {
 			note = " Preset " + tier + ": runs on " + runs + "." + note
 		}
@@ -481,12 +502,31 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		knownIDs := s.knownSessionIDs(lctx, am.ID)
 		lcancel()
 		s.setPlanThen(ctx, am.ID, params)
+		var values *handoffValues
+		if hand != nil {
+			var answer string
+			if values, answer = s.handoffResolve(sctx, hand, approvedBy); values == nil {
+				return answer, nil
+			}
+			defer values.wipe()
+			if params["secret_ticket"], err = values.stage(sctx); err != nil {
+				return "", fmt.Errorf("the secrets could not be staged on %s: %v; no agent was started", am.Name, err)
+			}
+			note += hand.granted(approvedBy)
+		}
 		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
 			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
 			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
+			// The refused start dropped its ticket: a new one for this start.
+			if values != nil {
+				if params["secret_ticket"], err = values.stage(sctx); err != nil {
+					return "", fmt.Errorf("the secrets could not be staged on %s again: %v; no agent was started", am.Name, err)
+				}
+			}
 			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		}
+		values.wipe()
 		if err != nil {
 			s.recordStartFailure(ctx, am.ID, launcher, err)
 			if startResultUnknown(err) {
