@@ -149,7 +149,7 @@ func TestAssistantLarkUsesManagedProfile(t *testing.T) {
 
 func TestLarkCLIBrand(t *testing.T) {
 	for _, tc := range []struct{ domain, want string }{
-		{"", "feishu"}, {"feishu", "feishu"}, {"lark", "lark"}, {"larksuite", "lark"}, {"https://open.larksuite.com", "lark"},
+		{"", "feishu"}, {"feishu", "feishu"}, {"lark", "lark"}, {"larksuite", "lark"}, {"https://platform.larksuite.com", "lark"},
 	} {
 		if got := larkCLIBrand(tc.domain); got != tc.want {
 			t.Errorf("domain %q = %q, want %q", tc.domain, got, tc.want)
