@@ -185,9 +185,7 @@ describe("New agent's recent setups (#2134)", () => {
     expect(launched).toHaveLength(0);
   });
 
-  // Known bug (#5104): a computer switch carries the launcher the one before merely restored, so this computer's own is
-  // never brought back. `it.fails` pins it until that is fixed; make it `it` then.
-  it.fails("picking a computer brings back its model with the launcher it restores; another launcher starts from the default", async () => {
+  it("picking a computer brings back its model with the launcher it restores; another launcher starts from the default", async () => {
     localStorage.setItem("new.launcher.studio", "claude");
     seed([
       setup({ machine: "studio", launcher: "codex", model: "gpt-5.5", agent_type: "codex" }),

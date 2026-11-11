@@ -133,9 +133,7 @@ describe("New agent: presets (#2225)", () => {
     expect(launched[0]?.effort).toBeUndefined();
   });
 
-  // Known bug (#5104): the preset's row leaves the panel once its locked launcher's list is read (the row points at a
-  // model the list lacks), so it can't be picked. `it.fails` pins it until that is fixed; make it `it` then.
-  it.fails("says what a launcher fixing its own model can't take, and sends none of it", async () => {
+  it("says what a launcher fixing its own model can't take, and sends none of it", async () => {
     fastList = { agent: "claude", models: [], locked: "启动器固定了模型参数" };
     await open();
     await pick("preset:review");
