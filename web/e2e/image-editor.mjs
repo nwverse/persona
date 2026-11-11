@@ -199,8 +199,8 @@ async function drag(page, dialog, from, to, { hold = 0, steps = 12 } = {}) {
 }
 
 const button = (dialog, name) => dialog.getByRole("button", { name, exact: true });
-/** A menu's button: its name is the menu's and the choice shown ("Line width: Medium"). */
-const menuButton = (dialog, name) => dialog.getByRole("button", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: `) });
+/** A menu's button: its name is the menu's and the choice shown ("Line width: Medium", "粗细：中"). */
+const menuButton = (dialog, name) => dialog.getByRole("button", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[:：]`) });
 /** The made-up picture's size, and the room the editor leaves round it while cropping (IMAGE_EDIT.cropInset). */
 const PICTURE = { width: 1600, height: 1000 };
 const CROP_INSET = 28;
@@ -276,7 +276,7 @@ async function runAfter(browser, combo) {
   await button(dialog, w.rotate).click();
   await pause(page, slow);
   await shot(page, `after-${tag}-turned`);
-  if (!(await menuButton(dialog, w.aspect_ratio).getAttribute("aria-label")).endsWith(": 9:16")) fail(`${tag}: a turn did not take 16:9 to 9:16`);
+  if (!(await menuButton(dialog, w.aspect_ratio).getAttribute("aria-label")).endsWith("9:16")) fail(`${tag}: a turn did not take 16:9 to 9:16`);
 
   // Undo back over the turn and the shape, Redo once
   await button(dialog, w.undo).click();
@@ -286,7 +286,7 @@ async function runAfter(browser, combo) {
   await button(dialog, w.redo).click();
   await pause(page, slow);
   await shot(page, `after-${tag}-undo-redo`);
-  if (!(await menuButton(dialog, w.aspect_ratio).getAttribute("aria-label")).endsWith(": 16:9")) fail(`${tag}: Undo, Undo, Redo did not land on 16:9 unturned`);
+  if (!(await menuButton(dialog, w.aspect_ratio).getAttribute("aria-label")).endsWith("16:9")) fail(`${tag}: Undo, Undo, Redo did not land on 16:9 unturned`);
 
   await button(dialog, w.box).click();
   await pause(page, slow);

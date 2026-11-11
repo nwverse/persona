@@ -25,5 +25,6 @@
   "line_width": "Line width",
   "width_thin": "Thin",
   "width_medium": "Medium",
-  "width_thick": "Thick"
+  "width_thick": "Thick",
+  "named_value": "{label}: {value}"
 }
