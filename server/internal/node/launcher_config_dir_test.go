@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -52,7 +53,7 @@ esac
 					`target() { CLAUDE_CONFIG_DIR=`+shellQuote(wantDir)+` ANTHROPIC_BASE_URL=`+shellQuote(wantURL)+` claude "$@"; }`)
 			case "managed-default", "managed-machine", "managed-own":
 				launcher, wantURL = "gateway", "https://gateway.example.com"
-				l := proto.ManagedLauncher{Name: launcher, Kind: "api", BaseURL: wantURL}
+				l := proto.ManagedLauncher{Name: launcher, Kind: "api", BaseURL: wantURL, NoProxy: "gateway.example.com"}
 				if target != "managed-default" {
 					machine := filepath.Join(home, "machine-profile")
 					n.claudeStartDir.Store(&machine)
@@ -61,6 +62,12 @@ esac
 					wantDir = filepath.Join(home, "launcher-profile")
 					l.Env = "CLAUDE_CONFIG_DIR=" + wantDir
 				}
+				writeFile(t, filepath.Join(service, "settings.json"), `{"env":{"NO_PROXY":"service.example.com"}}`)
+				settingsDir := wantDir
+				if settingsDir == "" {
+					settingsDir = filepath.Join(home, ".claude")
+				}
+				writeFile(t, filepath.Join(settingsDir, "settings.json"), `{"env":{"NO_PROXY":"selected.example.com"}}`)
 				n.setManaged([]proto.ManagedLauncher{l})
 				n.bin, _ = os.Executable()
 				t.Setenv("NODE_TEST_LAUNCH", "1")
@@ -84,6 +91,19 @@ esac
 				t.Fatalf("headless check must run despite missing onboarding: %+v", r)
 			}
 			checkEnv()
+			if strings.HasPrefix(target, "managed-") {
+				path := n.launcherProbeSettings(context.Background(), launcher, "", home)
+				b, err := os.ReadFile(path)
+				var settings struct {
+					Env map[string]string `json:"env"`
+				}
+				if err != nil || json.Unmarshal(b, &settings) != nil {
+					t.Fatalf("read probe settings: %v, %s", err, b)
+				}
+				if got := settings.Env["NO_PROXY"]; !strings.Contains(got, "selected.example.com") || strings.Contains(got, "service.example.com") {
+					t.Fatalf("probe settings came from the wrong profile: NO_PROXY=%q", got)
+				}
+			}
 			models, err := n.listAgentModels(context.Background(), launcher, "claude")
 			if err != nil || len(models) == 0 {
 				t.Fatalf("headless model list: %v, %v", models, err)

@@ -240,7 +240,11 @@ func (n *Node) launcherShellEnv(ctx context.Context) []string {
 func (n *Node) launcherProbeSettings(ctx context.Context, name, ours, cwd string) string {
 	env := n.launcherShellEnv(ctx)
 	dir := envValue(env, "CLAUDE_CONFIG_DIR")
-	if name == "claude" {
+	if l, managed := n.managedLauncher(name); managed {
+		if own, set := providerEnv(l, "", "", false)["CLAUDE_CONFIG_DIR"]; set {
+			dir = proto.ExpandHome(own, n.home)
+		}
+	} else if name == "claude" {
 		if d := n.claudeStartDir.Load(); d != nil && *d != "" {
 			dir = proto.ExpandHome(*d, n.home)
 		}
