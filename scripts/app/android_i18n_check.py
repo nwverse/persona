@@ -10,8 +10,9 @@
   no more than its module's i18n-baseline.json records (one file per module, so modules move in parallel). A literal that is not UI text (a hub token it matches, a prompt
   sent to the model) says why on its line with `// i18n-ignore: <reason>`.
 - The same Kotlin files also lose hardcoded English text where Compose shows it: a literal passed as `Text("…")`, as a
-  `contentDescription`, or as a String parameter named text / title / label / placeholder / name … of a composable
-  declared in android/ (`JButton("…")`, `JTextField(v, f, label = "…")`; an animation's `label` is not one).
+  `contentDescription`, or as a String parameter named text / title / label / placeholder / name … of most composables
+  declared in android/ (`JButton("…")`, `JTextField(v, f, label = "…")`; an animation's `label` is not one). Calls are
+  matched by name, so a class or function named like a composable can be flagged too: mark that line `// i18n-ignore`.
   Only literals that read as words count (no identifiers, keys, URLs, hosts, formats, acronyms or product names such as
   Persona); `// i18n-ignore` works the same way. Counts live in each module's i18n-english-baseline.json and every
   recorded line is listed, so it can be moved into strings.xml later.
@@ -233,6 +234,8 @@ SHOWN_NAMED = {'Text': {'text'}, 'BasicText': {'text'}}
 BRANDS = re.compile(r"\b(?:Persona Link|Persona|Agents|Claude Code|Claude|Codex|GitHub|Gmail|Google|Feishu|Lark|WeChat|"
                     r"Discord|Android|Apple|Orca|Paseo|Markdown|Git)\b")
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+# A `$name` template: Kotlin names may use any Unicode letter (`"合计 $金额"`).
+TEMPLATE_NAME = re.compile(r'[^\W\d]\w*')
 
 
 def _template(source, i):
@@ -263,9 +266,9 @@ def _string(source, i):
         elif source.startswith('${', i):
             out.append(' ')
             i = _template(source, i)
-        elif c == '$' and i + 1 < n and (source[i + 1].isalpha() or source[i + 1] == '_'):
+        elif c == '$' and TEMPLATE_NAME.match(source, i + 1):
             out.append(' ')
-            i += 1 + len(IDENTIFIER.match(source, i + 1).group())
+            i += 1 + len(TEMPLATE_NAME.match(source, i + 1).group())
         else:
             out.append(c)
             i += 1
@@ -332,7 +335,7 @@ def ui_literals(source):
     return found
 
 
-COMPOSABLE = re.compile(r'@Composable\s+(?:(?:private|internal|public|inline)\s+)*fun\s+(?:<[^>]*>\s*)?([A-Za-z_]\w*)\s*\(')
+COMPOSABLE = re.compile(r'@Composable\s+(?:(?:private|internal|public|inline)\s+)*fun\s+(?:<(?:[^<>]|<[^<>]*>)*>\s*)?([A-Za-z_]\w*)\s*\(')
 
 
 def parameters(source, i):

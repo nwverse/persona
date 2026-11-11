@@ -195,6 +195,25 @@ class I18nCheckTest(unittest.TestCase):
             'Text("需要你")',
         ))
 
+    def test_unicode_template_names_do_not_break_either_check(self):
+        write(self.module, 'src/main/kotlin/A.kt', '\n'.join([
+            'val price = "合计 $金额"',
+            'val tail = "$"',
+            'val x = "a $_b $1"',
+            'Text("Total $金额 left")',
+        ]))
+        # The Chinese / Japanese count is the same as before the English check: lines 1 and 4.
+        self.assertEqual({'feature/demo/src/main/kotlin/A.kt': 2}, count(self.root))
+        self.assertEqual([4], [line for line, _ in english_hits_by_file(self.root)['feature/demo/src/main/kotlin/A.kt']])
+
+    def test_generic_composables_are_registered(self):
+        write(self.root, 'core/designsystem/build.gradle.kts', '')
+        write(self.root, 'core/designsystem/src/main/kotlin/J.kt', '\n'.join([
+            '@Composable fun <T : Comparable<T>> JPicker(items: List<T>, title: String) {}',
+            '@Composable internal fun <K, V> JTable(rows: Map<K, V>, caption: String? = null) {}',
+        ]))
+        self.assertEqual([1, 2], self.english_lines('JPicker(xs, "Pick a model")', 'JTable(rows, caption = "Recent runs")'))
+
     def test_english_check_skips_shared_test_source_sets(self):
         write(self.module, 'src/sharedTest/kotlin/T.kt', 'Text("Pick one")')
         write(self.module, 'src/test/kotlin/T.kt', 'Text("Pick one")')
