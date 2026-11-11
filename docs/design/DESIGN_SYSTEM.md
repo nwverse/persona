@@ -43,7 +43,7 @@ Scope: tokens, components, interaction patterns, content, dark mode, Dynamic Typ
 | --- | --- | --- | --- |
 | Tokens | `apple/Shared/Design/Theme.swift`, `apple/Shared/Design/ColorSpec.swift`, `apple/Shared/Design/StyleSpec.swift`, `apple/Shared/Design/Palette.swift`, `apple/Shared/StatusPalette.swift` | `web/src/styles.css`, `web/src/ui/look.ts` | `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` (generated), hand-written siblings in the same folder |
 | Components | `apple/Persona/DesignSystem/` | `web/src/ui/atoms.tsx`, `web/src/ui/` | the same Android folder |
-| Cross-platform token source | none (Swift is read-only for the generator) | generated tokens | `spec/tokens/README.md`, `scripts/assets/gen_tokens.py` |
+| Cross-platform token source | none: `spec/tokens` records the Swift values, and `scripts/assets/test_gen_tokens.py` fails when they drift | none: `web/src/styles.css` is hand-written, and nothing reads the generated CSS | `Tokens.kt` is generated from `spec/tokens` (`spec/tokens/README.md`) by `scripts/assets/gen_tokens.py`; Android CI and the pre-commit hook fail when it is stale |
 | Written rules | `docs/apple/ios.md`, `docs/apple/icons.md`, `docs/apple/shell.md`, `docs/apple/sidebar.md` | `docs/web/web.md` | `docs/android/android-design.md` |
 
 Relationship to other docs:
@@ -122,7 +122,7 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Waiting in the background | working dot at 0.6 | secondary | clock mark |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
-Web uses amber for Needs you (`web/src/styles.css:233`). Android's generated token is red but its live value is blue. See DS-01.
+Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01.
 
 #### Fills, diff, hues, shell neutrals
 
@@ -244,7 +244,7 @@ Apple has no shadow tokens. Shadows are inline literals:
 | Soft button | black 0.12 (0.25 tinted), r6, y3 | `apple/Persona/DesignSystem/Styling.swift:183` |
 | Composer | black 0.08, r12, y4 | `apple/Persona/DesignSystem/ShellComposerBar.swift:477` |
 | Message action bar | black 0.25, r10, y4 | `apple/Persona/Views/Chat/MessageMenu.swift:461` |
-| Drawer card | black 0.18, r24 | `apple/Persona/Views/Assistant/AssistantSidebar.swift:350` |
+| Drawer card (under iPhone Duo's side bars, the sidebar over the page) | black 0.18, r24 | `apple/Persona/Views/Assistant/AssistantSidebar.swift:219` |
 
 The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`) plus `--shadow-knob` for the switch knob. Android has four literals. See DS-08.
 
@@ -262,6 +262,7 @@ The Glass style relies on Liquid Glass and has no shadow. The vendored Beautiful
 | `springBack` | spring 0.3 s, bounce 0.25 (`:654`) | |
 | `keyboard` | interpolating spring (`:662`) | |
 | Needs-you breath | 1 s, scale 1.2 | the only attention loop |
+| `Theme.Motion.recordingLevelFrame` | a 1/30 s clock | the live recording's level meter only (`RecordingLevelMeter`); fixed-height bars scaled vertically, one still frame with Reduce Motion or Low Power Mode. Reason: the level changes many times a second, and a 30 fps clock read inside the meter redraws only the meter (#4240) |
 
 The composer and attach panel own about 40 more one-off tokens (Telegram-derived). Web: 150 ms state, 220 ms glide, 300 ms collapse, one easing curve, no springs. Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. Android live values are 160/320 ms and differ from the generated 250/300 (DS-11).
 
@@ -334,6 +335,16 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 `.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
 
+The web task plan's workspace row (#3659) reuses the assistant form `fieldClass`, native labelled selects/inputs, and
+the existing plan Edit dialog. The compact policy choice stays on the plan card because it authorizes where a task
+will write; the optional branch and existing checkout picker are contextual fields. A server-backed, live-announced
+path preview uses no browser path convention. Settings › Assistant reuses `Group`/`Row` and the manager-scoped
+save-confirmation pattern for the default. Task details reuse the same read-only policy/path line. The workspace
+controls and the plan Edit dialog load on demand with `lazyPage`, keeping the policy/path summary while the controls'
+chunk arrives and the existing loading indicator for Edit. Neither editor adds controls to the cold first-screen
+bundle. No new look,
+theme, motion, primary navigation, or destructive action is introduced.
+
 The closeout card (web, #3612; `web/src/views/chat/CloseoutCard.tsx`) is a stopped Agent session's own account of its work, drawn above the transcript and never inside a message: the card surface (`rounded-card`, `bg-surface`, `shadow-card`) at the chat column's width, a head that folds the details (`Collapse`), and label / value rows. It says it is the Agent's own report. A claim the hub checked shows the finding beside it in one of three states that differ in words, mark and color: confirmed (`--green` with the check), contradicted (`--orange` on `--orange-tint` with the warning mark) and not checked (`--ink-3`). Why a new card: no existing surface sets a claim against a finding, and a status tint over the whole card would read as an error, which a closeout is not (`docs/web/web.md`, "Color hierarchy and quiet surfaces"). Other clients that draw it keep the three states and the "own report" line.
 
 The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a task is held to: on the plan card before **Start**, and on the to-do's page above its criteria. It adds no surface: it is the inset well the review checklist already uses (`rounded-control`, `bg-inset`, `shadow-hairline`), with the closeout card's label / value rows. Whose words a line holds is never left to styling: the owner's own are introduced as theirs with the date, work they did not ask for names who started it, and a brief made later says it was reconstructed and labels the hand-over prompt as that. Long text is held to a few lines with **Show all** in place (principle 2). On the plan card the whole brief is folded to who asked and one line that counts the rest, behind that one control, and the card's buttons stay at the bottom edge of the tray it scrolls in: added detail never puts a pending request's answer out of reach (section 4.8). The criteria keep one list, the review checklist's own (met, missing, open, not checked); under it a finished task adds only the criteria a scope change dropped (`--ink-3`, the undo mark, the criterion struck through, the word and the change that dropped it) and what was done beyond the brief. Overdue is a caution chip (`--orange` on `--orange-tint` with the clock) plus a sentence, not a tint over the box. Other clients that draw a brief keep the same first lines and add the dropped state to their one list of criteria.
@@ -346,6 +357,7 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
 - Row actions: swipe actions and a context menu with the same actions. Agents rows on iOS have no swipe (context menu only, #1244).
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
+- Web sidebar groups share visible disclosure chevrons and sticky, interactive headings in every grouping (to-do, computer, repository, project and state). Nested group headings stack below their parents and the measured Persona row; the next sibling replaces the current heading as it scrolls past. The Agents title, grouping segments and quick filters form one sticky toolbar below Persona (at the viewport top on the phone Agents page). One inward-chevron button toggles between Collapse all when any visible group is open and Expand all when they are all folded; its spoken label and tooltip name the next action. The toolbar stays above the section headings on an opaque theme background, with no fog over the first heading. The existing menu retains both explicit actions, affecting its groups and nested disclosures while keeping the block and grouping controls open. Individual folds remain independently reversible; flat conversation lists have no invented group headings.
 - Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
 
 #### Sessions that need the user
@@ -384,13 +396,14 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping the selected segment opens its menu.
 - Regular width: system tab view and split navigation; the same sidebar in a column.
 - Page titles: `.pageTitle`, `.detailTitle` (`apple/Persona/DesignSystem/PageTitle.swift`).
-- Side rail for iPhone Duo (`apple/Persona/DesignSystem/ShellSideRail.swift:50`).
+- Side rail for iPhone Duo (`apple/Persona/DesignSystem/ShellSideRail.swift:50`). Under its side bars the shell's pages never move sideways: they cross-fade instead of sliding, and the drawer's sidebar slides in over the page, which stays (`docs/apple/ios.md`, "iPhone Duo").
 - Platforms: web phone shell matches (drawer plus top-bar switch); Android `HomeNavigation` has a 36 dp segment height versus Apple's 44 (DS-18).
 - Assistant identity appears in navigation and conversation chrome only with at least two installed assistants (offline assistants count; pending installs do not). With one, keep the earlier product header and controls, without the assistant name, avatar, status/computer line or roster dropdown. Web keeps AppMark, Persona, connection/computer status and its appearance menu; `ASSISTANT_MENU_WIDTH` in `web/src/ui/menu-model.ts` preserves the product menu's 220 px and the roster's 264 px widths. Android keeps its product sidebar header. Settings › Assistants still provides New assistant. Conversation titles remain their existing product/session titles and messages add no roster identity with one assistant; the user's chosen Persona look stays unchanged. This requested correction applies to all clients; the Apple implementation is tracked separately.
 - Assistant switcher (two or more installed assistants): the head of the sidebar is the current assistant (avatar, name, status line, a chevron) and opens the roster: installed assistants as a single-choice list (the default tagged, the current one checked, a count on the others, an offline one's whole row faded to 55% and still selectable), the ones still installing, then New assistant and Manage assistants… (`docs/assistant/managers.md`, "The current assistant"). Web: `web/src/views/AssistantSwitcher.tsx`, a `Menu` whose rows take a lead mark, a tag, a count (with the words a screen reader says for it, `badgeLabel`) and a faded state (`dim`); the row's earlier entries (appearance's three rows under a heading, other hubs, Settings, Disconnect) follow under a divider. The menu scrolls, and no submenu opens over its last rows, so every row stays reachable at 200% zoom and the largest text size. Settings' first group ("<name>'s settings") titles itself with the same avatar and name, and its **Switch**, a text button at the title's end, opens the same rows (web: `AssistantSwitchButton`, `views/settings/SettingsGroups.tsx`); the rows of that group read and write the current assistant only. Why a new pattern: the assistant is a scope for the whole app, not a page, so it sits above the pages rather than in the assistant page's top bar where the segmented switcher was. Android: `AssistantSwitcher` opens the roster in `JMenu` (its content slot holds the rows above New assistant and Manage assistants…), as wide as the sidebar and over its rows, closed by a tap outside, scrolled when it does not fit.
 
 ### 3.6 Sheets
 
+- **Live recording sheet** (#4240, `RecordingLiveSheet`): a large-detent sheet with its own navigation stack for something that keeps running when it is dismissed. It opens by itself when the activity starts, **Hide** or a swipe leaves it, and a one-row card on the page is the way back. After the activity ends the same sheet cross-fades to a wrap-up of what happens next, so the user is not dropped on a list. Reason: a recording is the one task whose controls must stay under the thumb while the user looks at what is being heard, and whose end needs visible follow-through (saved, transcribed, synced, minutes) instead of a word in a list row.
 - System `.sheet` with detents for most things (43 detent sites). Settings is a near-full sheet with a close button.
 - Link card: detents 0.6 and large, background stays interactive down to 0.6 (`apple/Persona/Views/Link/LinkSheet.swift:142-146`).
 - Edit sheets: `sheetCancel` asks to discard on Mac only; on iOS it discards at once (`apple/Persona/DesignSystem/SheetActions.swift:44`).
@@ -594,6 +607,16 @@ The link is shown once with a copy action and is never listed again. The public 
 separate, read-only document with the same palette tokens, plain text only and work details collapsed (section 4.7).
 Web: `web/src/sharing/`, `web/public-share/`; Android: `AgentShareSheet`; server contract in #3604.
 
+### 4.10 Web workspace selection and management
+
+In Agents' repository tree, the workspace title and its leading disclosure button toggle the same remembered fold at every depth. A title also selects the exact workspace, including an empty one; opening an Agent uses that Agent’s own row, never the workspace title or a descendant chosen by proximity. A visible overflow button offers the same actions as the context menu, including on touch devices. The desktop sidebar and phone Agents page share these rows and actions rather than adding a management destination.
+
+The existing `Dialog`, `Button`, `Menu`, `Collapse` and status components carry workspace management. Creation shows its source and starting branch, keeps additional choices in the advanced group, and starts no Agent automatically. An optional Agent start names the exact existing workspace. Creation acknowledgment shows the actual resulting path and branch; an interrupted request offers reconciliation of that same intent.
+
+The workspace catalog, selection and management actions follow the current assistant. Switching assistants retires outstanding catalog reads, clears the selection and invalidates pending mutation previews, including a switch away and back. Management loads on the first workspace action; its loading menu keeps the same dismissal and phone Back behavior, and operation receipts survive menu reopening.
+
+Removal uses the confirmation sheet pattern in section 4.4 because it needs branch and uncommitted-file choices. The dialog identifies the workspace and explains which files and running sessions will be lost. Keep the branch by default; require an explicit discard choice for uncommitted files. Confirmation stays unavailable until the computer supplies a valid preview. A changed target requires another preview, and an uncertain dispatched removal offers status reconciliation rather than another destructive submission. Renaming uses the existing text-entry dialog pattern and preserves workspace, branch and Agent identities.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
@@ -706,7 +729,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Styles | 5 | 1 | 3 (Glass shared) | different sets |
 | Accent presets | 5 | same hex | same set | consistent |
 | Roles (danger, positive, ai) | reference | different hex | same hex | web differs |
-| Needs-you color | blue | amber | blue live, red generated | inconsistent (DS-01) |
+| Needs-you color | blue | amber | blue | web differs (DS-01) |
 | Type scale | Dynamic Type, 28/22/17/17/15/13/12 | px literals | sizes match, no in-app size setting | web has no tokens |
 | Spacing | 0-32 with `sm` 6 | Tailwind default | `xl` 20, `xxl` 24 | Android differs (DS-05) |
 | Radius | 6/10/14/20/22 | 6/8/10 plus literals | 6/10/14/20/22, per-style variants | web and Android differ |
@@ -717,13 +740,13 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Haptics | 4 kinds, 393 sites | none | 4 kinds, 35 sites | thin on Android |
 | Icons | SF Symbols | custom strokes | Phosphor | no shared map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
-| Tokens source | hand-written | hand-written | generated from stale JSON | drift is silent |
+| Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## 8. Inconsistencies and duplicate definitions
 
 | ID | What | Where | Impact | Recommended unification |
 | --- | --- | --- | --- | --- |
-| DS-01 | Needs-you color: docs say red; code is blue on Apple; amber on web; Android generated token red, live value blue | `docs/apple/ios.md:124` (records red as kept at the user's request on 2026-11-06), `docs/apple/ios.md:920`, `docs/apple/icons.md:81`, `docs/protocol/agent-states.md:10`, `docs/web/web.md:1429`; `apple/Shared/StatusPalette.swift:20`; `web/src/styles.css:233`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` (generated needs-you) and `android/core/designsystem/src/main/kotlin/persona/core/designsystem/StatusPalette.kt` (hard-coded blue) | Users see different colors for the same state on three platforms; docs mislead | Product owner decides once (code today: Apple blue; ios.md:124 records a user request for red), fix the JSON and regenerate Android, fix the four docs, change web or record it as a deliberate exception |
+| DS-01 | Needs-you color: blue on Apple and Android (decided 11-11); amber on the web | `apple/Shared/StatusPalette.swift:20`; `spec/tokens/color.status.json`; `web/src/styles.css:233` | The web shows another color for the same state | Move the web to the same blue (its own issue) |
 | DS-02 | Weights documented as bold; code is semibold | `docs/apple/ios.md` (heading, sectionHeader) vs `apple/Shared/Design/Theme.swift:338`, `:346` | Doc misleads new styles | Fix the doc |
 | DS-03 | Docs list five radii; code has seven plus `appIcon` | `apple/Shared/Design/Theme.swift:181-198` | `thumbnail` and `page` undocumented | Document all, or fold `thumbnail` into `badge` |
 | DS-04 | Duplicate hex values under different names (`#1D7A4C`/`#4CC38A` in Diff.add, Hue.green, unread text; `#2E6FD0`/`#5B9BFF` in loop and Hue.blue; `#B35400`/`#FF9F0A` in cautionText and Hue.orange; system blue literal written twice) | `apple/Shared/Design/Theme.swift:151,171,173,813-815`; `apple/Shared/StatusPalette.swift:24`; `apple/Shared/Design/Styles/Glass.swift:23`; `apple/Shared/Design/Palette.swift:8` | A change in one silently misses the others | Alias to one source; make the blue accent read `Palette.systemBlue` |

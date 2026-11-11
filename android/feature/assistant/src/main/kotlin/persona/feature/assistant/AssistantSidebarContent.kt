@@ -99,6 +99,8 @@ fun AssistantSidebarContent(
                 } },
                 onNew = { onAction(AssistantSidebarAction.NewConversation) },
                 onHome = { onAction(AssistantSidebarAction.Home) },
+                // The health space (docs/assistant/health.md): the Assistant page opens its newest chat or its new-chat page.
+                onHealth = if (demo) null else ({ onAction(AssistantSidebarAction.Health) }),
                 onSettings = onSettings,
                 onInbox = onInbox, inboxCount = inboxCount,
                 onPin = { toggle(listOf(it.key)) },

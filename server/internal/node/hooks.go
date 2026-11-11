@@ -568,6 +568,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 				"behavior": "allow", "destination": "session",
 			}}
 		}
+		if !assistant { // Claude may not take it: its safety checks keep their dialog (allowwatch.go, #3752)
+			n.watchAllow(in.SessionID, n.allowPane(req, in.SessionID))
+		}
 		return permissionDecision(d), nil
 	}
 	return nil, nil
