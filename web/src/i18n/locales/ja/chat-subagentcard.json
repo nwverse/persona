@@ -5,7 +5,6 @@
   "collapse_details": "サブエージェントの詳細を折りたたむ",
   "show_full_result": "結果をすべて表示",
   "hide_full_result": "結果を折りたたむ",
-  "harness_claude": "Claude Code",
   "harness_workflow": "Workflow",
   "status_running": "実行中",
   "status_completed": "完了",

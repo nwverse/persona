@@ -154,16 +154,30 @@ describe("associated subagent reports", () => {
     expect(summary).not.toContain("hand-back");
   });
 
-  it("folds a long result to four lines until Show full result (#5030)", async () => {
+  it("folds a result to four lines, with Show full result only when that cut it (#5030)", async () => {
+    // jsdom lays nothing out: the clamped paragraph says it is taller than its box
+    const tall = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(120);
+    const box = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(80);
     const long = item(3, "tool_result", { tool_use_id: "launch", text: ["## Findings", "one", "two", "three", "four", "five"].join("\n") });
     await draw([...initial.slice(0, 2), long], false);
     await click("[data-work-group] > button");
     await click("[data-subagent-card] button");
     const text = () => host.querySelector("[data-subagent-summary] p");
     expect(text()?.className).toContain("line-clamp-4");
+    expect(host.querySelector("[data-subagent-summary] button")?.textContent).toBe("展开完整结果");
     await click("[data-subagent-summary] button");
     expect(text()?.className).not.toContain("line-clamp-4");
     expect(host.querySelector("[data-subagent-summary] button")?.textContent).toBe("收起结果");
+    tall.mockRestore();
+    box.mockRestore();
+  });
+
+  it("offers no Show full result when four lines hold all of it", async () => {
+    await draw([...initial.slice(0, 2), item(3, "tool_result", { tool_use_id: "launch", text: "Short and done." })], false);
+    await click("[data-work-group] > button");
+    await click("[data-subagent-card] button");
+    expect(host.querySelector("[data-subagent-summary]")?.textContent).toBe("Short and done.");
+    expect(host.querySelector("[data-subagent-summary] button")).toBeNull();
   });
 
   it("fetches full text by the report item's parent-session identity, not the task's 4KB preview", async () => {

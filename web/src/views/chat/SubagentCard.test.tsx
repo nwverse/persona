@@ -13,7 +13,7 @@ import type { Item, Subagent, TaskNote } from "../../lib/types";
 import type { AgentStatus, ToolStep } from "../../lib/work-groups";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { forgetExpanded } from "./expanded";
-import { compactText, isLongResult, SubagentCard, subagentCardKey, subagentMeta } from "./SubagentCard";
+import { compactText, SubagentCard, subagentCardKey, subagentMeta } from "./SubagentCard";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -86,6 +86,8 @@ describe("SubagentCard: the two lines", () => {
     expect(html(call({ prompt: "x".repeat(200) }), "running", { subagents: [] })).toContain(`>${"x".repeat(95)}…<`);
     expect(html(call({}), "running", { subagents: [] })).toContain(">子 Agent 任务<");
     expect(compactText("  a\n\n b  ", 10)).toBe("a b");
+    // never half of a character
+    expect(compactText("😀😀😀", 2)).toBe("😀…");
   });
 
   it("subagentMeta: the pieces in cindy's order, each only when known", () => {
@@ -93,12 +95,6 @@ describe("SubagentCard: the two lines", () => {
     expect(subagentMeta(undefined, "", false)).toEqual({ model: "" });
   });
 
-  it("isLongResult: over 320 characters or 4 lines", () => {
-    expect(isLongResult("a".repeat(320))).toBe(false);
-    expect(isLongResult("a".repeat(321))).toBe(true);
-    expect(isLongResult("1\n2\n3\n4")).toBe(false);
-    expect(isLongResult("1\n2\n3\n4\n5")).toBe(true);
-  });
 });
 
 describe("SubagentCard: opened in place", () => {

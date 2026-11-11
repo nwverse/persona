@@ -1,7 +1,7 @@
 // A chat's Background dialog (views/chat/Activity.tsx ActivityChips) opened from elsewhere in that chat: a workflow
 // run's card opens it at its run (#5030, after cindy, whose workflow card opens its background tasks panel). Each chat
 // on screen with the dialog says so, with the runs the dialog lists; a card whose chat has none that lists its run (the
-// assistant's chat, a read-only panel, a run older than the dialog keeps) opens in place instead, so a click is never dead.
+// assistant's chat, a run older than the dialog keeps) opens in place instead, so a click is never dead.
 
 /** One chat's dialog: the runs it lists (by task_id), and how to open it (at a run). */
 interface Opener {

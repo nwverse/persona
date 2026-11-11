@@ -196,10 +196,10 @@ type subagentEdge struct {
 // toolSeed hashes the tool_use ids an agent's calls are told apart by.
 var toolSeed = maphash.MakeSeed()
 
-// subagentEdgesCached is path's metadata; full for a workflow agent. Both get all of subagentEdge and differ only in
-// pacing: a growing subagent's is re-read at most every metaMinInterval, a workflow agent's whenever it changed (the
-// workflow cache paces those, workflowReadInterval). Either way only the lines gained since the last read are read.
-func subagentEdgesCached(path string, st os.FileInfo, full bool) subagentEdge {
+// subagentEdgesCached is path's metadata, a subagent's and a workflow agent's alike; they differ only in pacing. A
+// growing subagent's is re-read at most every metaMinInterval; with everyChange (a workflow agent's) whenever it changed
+// (the workflow cache paces those, workflowReadInterval). Either way only the lines gained since the last read are read.
+func subagentEdgesCached(path string, st os.FileInfo, everyChange bool) subagentEdge {
 	edgeCache.Lock()
 	ent, ok := edgeCache.m.get(path)
 	if !ok {
@@ -210,7 +210,7 @@ func subagentEdgesCached(path string, st os.FileInfo, full bool) subagentEdge {
 	ent.mu.Lock()
 	defer ent.mu.Unlock()
 	e := &ent.edgeMemo
-	if e.current(st, full) {
+	if e.current(st, everyChange) {
 		return e.edges
 	}
 	readAt := time.Now()
@@ -222,7 +222,7 @@ func subagentEdgesCached(path string, st os.FileInfo, full bool) subagentEdge {
 	if now, err := f.Stat(); err == nil {
 		st = now // another request may have read a later state of the file while this one waited
 	}
-	if e.current(st, full) {
+	if e.current(st, everyChange) {
 		return e.edges
 	}
 	var buf [256]byte
@@ -239,9 +239,9 @@ func subagentEdgesCached(path string, st os.FileInfo, full bool) subagentEdge {
 }
 
 // current says whether e is what a request for the file as st has it gets: the file is as e read it, or, for a
-// subagent's (not full), e was read less than metaMinInterval ago.
-func (e *edgeMemo) current(st os.FileInfo, full bool) bool {
-	return e.info != nil && (e.size == st.Size() && e.mtime.Equal(st.ModTime()) || !full && time.Since(e.readAt) < metaMinInterval)
+// paced request (not everyChange), e was read less than metaMinInterval ago.
+func (e *edgeMemo) current(st os.FileInfo, everyChange bool) bool {
+	return e.info != nil && (e.size == st.Size() && e.mtime.Equal(st.ModTime()) || !everyChange && time.Since(e.readAt) < metaMinInterval)
 }
 
 // read reads the complete lines the file gained past e.off, up to size, forward: all of them the first time, as tool

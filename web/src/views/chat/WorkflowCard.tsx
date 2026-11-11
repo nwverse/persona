@@ -3,7 +3,7 @@
 // shared task card (TaskCard.tsx), its title the run's name, its status word, "Workflow · tokens · tool uses · time"
 // ("Running for …" while it runs), "{phase} · done/started agents" and a strip of one square per agent. It opens the
 // chat's Background dialog at its run (lib/background-dialog.ts); where the chat has no such dialog (the assistant's
-// chat, a read-only panel) it opens in place to the run's phases instead.
+// chat) it opens in place to the run's phases instead. Like every tool call it sits in the folded work (super rule 2).
 // In the background dialog (WorkflowCard), always open:
 // - a head: the mark, its name, its status, "169/185+" agents done of those started (the "+" while it runs: the script
 //   starts more as it goes), how long it has run;
@@ -119,7 +119,7 @@ export const WorkflowCallCard = memo(function WorkflowCallCard({ step, mid, sid,
           <div className="@container flex flex-col pt-2" data-workflow-inline>
             <div className="flex flex-col px-3 pb-2 empty:hidden">
               {/* a run without a name has its summary for a title already */}
-              <About run={run} open summary={Boolean(run.name?.trim())} />
+              <About run={run} summary={Boolean(run.name?.trim())} />
             </div>
             <Body run={run} scope={scope} now={now} />
           </div>
@@ -187,7 +187,7 @@ export function WorkflowCard({ run, scope, onJump }: { run: Workflow; scope: str
       </div>
       <div className="flex min-w-0 items-start gap-2 pr-3 pb-2 pl-10">
         <div className="flex min-w-0 flex-1 flex-col">
-          <Sub run={run} open />
+          <Sub run={run} />
         </div>
         {onJump && run.tool_use_id && (
           <button
@@ -244,9 +244,9 @@ function Head({ run, now }: { run: Workflow; now: number }) {
 }
 
 /** The line under the head: where it is now while it runs; once ended, what it was for and why it stopped. */
-function Sub({ run, open }: { run: Workflow; open: boolean }) {
+function Sub({ run }: { run: Workflow }) {
   const now = workflowCurrent(run);
-  if (!now) return <About run={run} open={open} />;
+  if (!now) return <About run={run} />;
   const text = now.phase && now.agent
     ? t("lib-workflows.now_phase_agent", { phase: now.phase, agent: now.agent })
     : now.phase
@@ -259,14 +259,14 @@ function Sub({ run, open }: { run: Workflow; open: boolean }) {
   );
 }
 
-/** What the run is for (unless `summary` is false), and once it has ended without completing why it stopped. One line
- *  each when `open` is unset; whole when it is (a touch screen has no hover for the title). */
-function About({ run, open, summary = true }: { run: Workflow; open: boolean; summary?: boolean }) {
+/** What the run is for (unless `summary` is false), and once it has ended without completing why it stopped, whole (a
+ *  touch screen has no hover for a title). */
+function About({ run, summary = true }: { run: Workflow; summary?: boolean }) {
   const status = workflowStatus(run);
   const error = status !== "completed" && status !== "running" ? (run.error ?? "") : "";
   const about = summary ? (run.summary ?? "") : "";
   if (!about && !error) return null;
-  const fit = open ? "break-words whitespace-pre-line" : "truncate";
+  const fit = "break-words whitespace-pre-line";
   return (
     <>
       {about && (

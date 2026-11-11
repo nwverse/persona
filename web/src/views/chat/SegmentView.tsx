@@ -2,7 +2,7 @@ import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayo
 import { clock } from "../../lib/format";
 import { stripCloseout } from "../../lib/closeout";
 import { getSession, getState } from "../../lib/store";
-import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, subagentFor, withNestedSubagents } from "../../lib/tasks";
+import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
 import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Context, type Segment, type UserMessage } from "../../lib/turns";
@@ -271,8 +271,12 @@ export const SegmentView = memo(function SegmentView({
   offscreen?: (section: HTMLElement) => () => void;
 }) {
   const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment } = useChatContext();
-  // the subagents its subagents launched, each a card of its own by when it started (#5030); a trace shows the calls only
-  const steps = useMemo(() => (trace ? exchangeSteps(seg) : withNestedSubagents(exchangeSteps(seg), subagents)), [seg, trace, subagents]);
+  const own = useMemo(() => exchangeSteps(seg), [seg]);
+  // the subagents its subagents launched, each a card of its own by when it started (#5030); a trace shows the calls only.
+  // Keyed by what places them, not the list: that changes with every subagent's tokens and steps.
+  const nesting = trace ? "" : nestingKey(subagents);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const steps = useMemo(() => (nesting ? withNestedSubagents(own, subagents) : own), [own, nesting]);
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {

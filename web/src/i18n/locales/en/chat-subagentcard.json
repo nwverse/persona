@@ -5,7 +5,6 @@
   "collapse_details": "Hide subagent details",
   "show_full_result": "Show full result",
   "hide_full_result": "Collapse result",
-  "harness_claude": "Claude Code",
   "harness_workflow": "Workflow",
   "status_running": "Running",
   "status_completed": "Completed",

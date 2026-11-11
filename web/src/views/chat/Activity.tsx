@@ -20,9 +20,10 @@ import { Icon } from "../../ui/icons";
  *  `onJumpToCall`: a workflow card's "Show in chat" brings the call that launched it into view. */
 export function ActivityChips({ session, onStopLoop, onJumpToCall }: { session: Session; onStopLoop: () => void; onJumpToCall?: (call: string) => void }) {
   const [open, setOpen] = useState(false);
-  // the run a card in the chat opened the dialog at (n: the same run asked for again lights again), and the last one lit
-  const [focus, setFocus] = useState<{ run: string; n: number } | null>(null);
-  const lit = useRef<{ run: string; n: number } | null>(null);
+  // the run a card in the chat opened the dialog at (a new object each time: the same run asked for again lights again),
+  // and the last one lit
+  const [focus, setFocus] = useState<{ run: string } | null>(null);
+  const lit = useRef<{ run: string } | null>(null);
   const body = useRef<HTMLDivElement>(null);
   const loop = session.loop;
   // Workflow runs have their own cards (WorkflowCard); an older hub lists a run only as a background task (#2935). An
@@ -39,7 +40,7 @@ export function ActivityChips({ session, onStopLoop, onJumpToCall }: { session: 
     if (!shown) return;
     return listenBackgroundDialog(mid, sid, listed ? listed.split("\n") : [], (run) => {
       setOpen(true);
-      if (run) setFocus((f) => ({ run, n: (f?.n ?? 0) + 1 }));
+      if (run) setFocus({ run });
     });
   }, [mid, sid, shown, listed]);
   useEffect(() => {

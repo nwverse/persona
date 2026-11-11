@@ -10,7 +10,6 @@ import { cx, EASE, Loading } from "../ui/atoms";
 import { ResizeHandle } from "../ui/ResizeHandle";
 import { AgentPanel, TaskPanel } from "./assistant/TaskPanel";
 import { PlanPanel } from "./chat/PlanPanel";
-import { subagentParent } from "../lib/tasks";
 import { useCloseOnBack } from "../lib/back-close";
 import { mediaMatches, NARROW, PHONE, useMedia } from "../lib/viewport";
 import { t } from "../i18n";
@@ -152,11 +151,9 @@ function body(p: Panel) {
       return <LinkPanel key={`${p.manager ?? ""} ${p.url}`} url={p.url} title={p.title} manager={p.manager} onClose={closePanel} />;
     case "task":
       return <TaskPanel key={p.todo} todoId={p.todo} onClose={closePanel} />;
-    case "agent": {
-      // never a subagent's own conversation ("<parent>@<agent>", #5030): openPanel opens its parent's at its card
-      const sid = subagentParent(p.sid);
-      return <AgentPanel key={`${p.mid}/${sid}`} mid={p.mid} sid={sid} onClose={closePanel} />;
-    }
+    case "agent":
+      // never a subagent's own conversation: openPanel opens its parent's instead (#5030, lib/subagent-link.ts)
+      return <AgentPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} onClose={closePanel} />;
     case "plan":
       return <PlanPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} onClose={closePanel} />;
     case "preview":

@@ -24,13 +24,13 @@ import { useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { FADE_OUT_MS, LINGER_MS, useBreath, useCountUp } from "../../ui/motion";
 import { Rolling } from "../../ui/Rolling";
+import { compactTokens } from "../../lib/tokens";
 import "../../ui/stream/stream.css";
 import { t } from "../../i18n";
 
-/** 22.8k, 1.2k, 950: thousands with one decimal (the reference client's formatRunningTokenCount; not lib/compaction's ten-thousand units). */
-export function tokenCount(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n)}`;
-}
+/** 22.8k, 1.2k, 950, 1.2M: one decimal with k / M / B (the reference client's formatRunningTokenCount, the subagent
+ *  cards' tokens too; not lib/compaction's ten-thousand units). */
+export const tokenCount = compactTokens;
 
 /** Tokens a second over the turn so far; nothing before it has run long enough to divide by (#2518). */
 export function tokenRate(tokens: number | undefined, elapsed: number): number | undefined {
@@ -133,10 +133,10 @@ export function RunningStatusView({ live, working, startedAt, clock = true, agen
   const lastSubtasks = useRef(subtasks);
   if (working) lastSubtasks.current = subtasks;
   // the turn is over and background subagents run on: neither the turn's time nor its tokens say anything of them
-  const usage = !behind && Boolean(working ? subtasks : lastSubtasks.current);
+  const usage = Boolean(working ? subtasks : lastSubtasks.current);
   // The workflow has a clock of its own, which no work line shows (the hub says the turn is over: it is drawn finished)
   const showClock = behind || (ownClock && !usage);
-  const now = useNow(1000, phase === "on" && !offline);
+  const now = useNow(1000, phase === "on" && !offline && !usage);
   // from the run's start; a run that does not say when it started, from the turn's (not from when the bar appeared)
   const elapsed = useElapsed(behind ? null : shown, behind ? (bg.since ?? startedAt) : startedAt, now);
   const tokens = useCountUp(shown?.tokens_down ?? 0);
@@ -155,13 +155,9 @@ export function RunningStatusView({ live, working, startedAt, clock = true, agen
         {offline && <Disconnected />}
         {behind ? (
           <BackgroundWords line={bg} />
-        ) : usage ? (
-          <span className="truncate" data-running-verb>
-            {t("chat-runningstatusbar.background_subtasks")}
-          </span>
         ) : (
           <span className="truncate" data-running-verb>
-            {statusText(shown, working ? agents : null)}
+            {usage ? t("chat-runningstatusbar.background_subtasks") : statusText(shown, working ? agents : null)}
           </span>
         )}
       </div>

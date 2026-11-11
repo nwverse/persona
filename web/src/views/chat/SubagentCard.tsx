@@ -11,24 +11,20 @@ import { agentSummary, isLaunchReceipt, modelChipLabel, subagentEnded, subagentF
 import { compactTokens } from "../../lib/tokens";
 import type { Item, Subagent, TaskNote } from "../../lib/types";
 import { tsMs, workDuration, type AgentStatus, type ToolStep } from "../../lib/work-groups";
+import { agentName } from "../../lib/agent-kind";
 import { Collapse, cx } from "../../ui/atoms";
+import { useClamped } from "../../ui/use-clamped";
 import { useChatContext } from "./chat-context";
 import { useExpanded } from "./expanded";
 import { isHandbackText } from "./FoldedReport";
 import { useFullText } from "./FullText";
 import { ModelChip, RunningFor, TaskCard } from "./TaskCard";
 
-/** A one-line piece of a call's input: whitespace runs as one space, at most `max` characters. */
+/** A one-line piece of a call's input: whitespace runs as one space, at most `max` characters (never half of one). */
 export function compactText(text: string | undefined, max: number): string {
-  const line = (text ?? "").replace(/\s+/g, " ").trim();
-  return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
+  const chars = Array.from((text ?? "").replace(/\s+/g, " ").trim());
+  return chars.length <= max ? chars.join("") : `${chars.slice(0, max - 1).join("")}…`;
 }
-
-/** A result longer than this (characters or lines) shows four lines until "Show full result". */
-const LONG_RESULT_CHARS = 320;
-const LONG_RESULT_LINES = 4;
-
-export const isLongResult = (text: string) => text.length > LONG_RESULT_CHARS || text.split(/\r?\n/).length > LONG_RESULT_LINES;
 
 /** The key a card's open / closed state is kept under: by its call, so a link to the subagent can open it. */
 export const subagentCardKey = (scope: string, call: string) => `${scope}task:${call}`;
@@ -36,7 +32,7 @@ export const subagentCardKey = (scope: string, call: string) => `${scope}task:${
 /** What a background subagent reported: its notice's words (the call's own result is only the launch receipt). */
 export function reportOf(result: Item | undefined, notes: TaskNote[] | undefined): string {
   if (!isLaunchReceipt(result)) return "";
-  const done = [...(notes ?? [])].reverse().find((n) => n.kind === "agent" && n.detail?.trim());
+  const done = notes?.findLast((n) => n.kind === "agent" && n.detail?.trim());
   return done?.detail?.trim() ?? "";
 }
 
@@ -50,7 +46,7 @@ function resultItem(result: Item | undefined, reports: Item[]): Item | undefined
  *  "Running for …" ticks there instead). */
 export function subagentMeta(meta: Subagent | undefined, took: string, harness: boolean): { harness?: string; model: string; tokens?: string; uses?: string; took?: string } {
   return {
-    ...(harness ? { harness: t("chat-subagentcard.harness_claude") } : {}),
+    ...(harness ? { harness: agentName("claude") } : {}),
     model: modelChipLabel(meta?.model),
     ...(meta?.tokens ? { tokens: t("chat-subagentcard.tokens", { value: compactTokens(meta.tokens) }) } : {}),
     ...(meta?.steps ? { uses: t("chat-subagentcard.tool_uses", { count: meta.steps }) } : {}),
@@ -84,7 +80,7 @@ export const SubagentCard = memo(function SubagentCard({ step, status, mid, sid,
     m.took && <span key="took">{m.took}</span>,
     running && start !== undefined && <RunningFor key="running" since={start} />,
   ].filter(Boolean);
-  const output = [...(notes ?? [])].reverse().find((n) => n.output_file)?.output_file;
+  const output = notes?.findLast((n) => n.output_file)?.output_file;
   return (
     <TaskCard
       icon="agent"
@@ -109,8 +105,8 @@ export const SubagentCard = memo(function SubagentCard({ step, status, mid, sid,
   );
 });
 
-/** What it reported, as plain text: four lines of a long one until "Show full result"; a report the hub cut has its
- *  "View full text" too. */
+/** What it reported, as plain text: four lines until "Show full result" when it is longer (measured, `useClamped`); a
+ *  report the hub cut has its "View full text" too. */
 function SubagentResult({ item, fallback, mid, sid }: { item: Item | undefined; fallback: string; mid: string; sid?: string }) {
   const full = useFullText(item?.kind === "tool_result" ? item : undefined, mid, sid);
   // a report the call returned ends with Claude Code's "agentId: …" line, and may start with its hand-back frame: both
@@ -118,12 +114,12 @@ function SubagentResult({ item, fallback, mid, sid }: { item: Item | undefined; 
   const said = item?.kind === "tool_result" ? agentSummary({ ...item, text: full.text }, undefined) : (item ? item.task?.detail ?? "" : fallback).trim();
   const text = isHandbackText(said) ? said.split("\n").slice(1).join("\n").trim() : said;
   const [whole, setWhole] = useState(false);
+  const clamp = useClamped<HTMLParagraphElement>(whole);
   if (!text) return null;
-  const long = isLongResult(text);
   return (
     <div className="mb-1" data-subagent-summary data-items={item?.id}>
-      <p className={cx("whitespace-pre-wrap [overflow-wrap:anywhere]", long && !whole && "line-clamp-4")}>{text}</p>
-      {long && (
+      <p ref={clamp.ref} className={cx("whitespace-pre-wrap [overflow-wrap:anywhere]", !whole && "line-clamp-4")}>{text}</p>
+      {(clamp.cut || whole) && (
         <button type="button" aria-expanded={whole} onClick={() => setWhole((w) => !w)} className="rounded-full text-[12px] text-accent-ink hover:underline">
           {whole ? t("chat-subagentcard.hide_full_result") : t("chat-subagentcard.show_full_result")}
         </button>

@@ -244,15 +244,9 @@ const LAUNCH_RECEIPT = /^\s*(?:Async agent launched|This is an internal ID for y
 /** The "agentId: …" line Claude Code appends to a subagent's report. */
 const AGENT_ID_LINE = /^\s*agentId:.*$/gm;
 
-/** The subagent an Agent / Task call launched, by the call's tool_use_id; a nested subagent's card by its own id. */
+/** The subagent an Agent / Task call launched, by the call's tool_use_id (a nested subagent's card: `subagentCall`). */
 export function subagentFor(all: Subagent[], use: Item): Subagent | undefined {
-  if (use.id.startsWith(NESTED)) return all.find((a) => a.id === use.id.slice(NESTED.length));
-  return use.tool_use_id ? all.find((a) => a.tool_use_id === use.tool_use_id) : undefined;
-}
-
-/** The session a subagent's conversation belongs to: its id is "<parent>@<agent>" (the parent's own id otherwise). */
-export function subagentParent(sid: string): string {
-  return sid.split("@")[0];
+  return use.tool_use_id ? all.find((a) => subagentCall(a) === use.tool_use_id) : undefined;
 }
 
 export function isLaunchReceipt(result?: Item): boolean {
@@ -371,18 +365,6 @@ export function modelChipLabel(model: string | undefined): string {
   return id.split("-").filter(Boolean).map(word).join(" ");
 }
 
-/** The subagents a subagent launched, and theirs, one level deeper each (`depth` 0: launched by `id`). */
-export function nestedSubagents(all: Subagent[] | undefined, id: string): SubagentRow[] {
-  const rows = subagentTree(all);
-  const at = rows.findIndex((r) => r.agent.id === id);
-  if (at < 0) return [];
-  const base = rows[at].depth;
-  const out: SubagentRow[] = [];
-  for (let i = at + 1; i < rows.length && rows[i].depth > base; i++) out.push({ agent: rows[i].agent, depth: rows[i].depth - base - 1 });
-  return out;
-}
-
-
 /** A card for a subagent another subagent launched: its call is in that subagent's transcript, not in the chat's. */
 export const isNestedSubagentStep = (s: Step): boolean => s.kind === "tool" && s.use.id.startsWith(NESTED);
 
@@ -391,65 +373,44 @@ export const nestedSubagentStatus = (a: Subagent | undefined): AgentStatus => (a
 
 /** An exchange's steps with the subagents its subagents launched (and theirs), each a card of its own (#5030, cindy:
  *  no tree), among the steps by when it started: after the last step that started before it, never before the call
- *  of the subagent it descends from. */
+ *  of the subagent it descends from. A launcher naming itself or a loop of them adds nothing. */
 export function withNestedSubagents(steps: Step[], all: Subagent[]): Step[] {
-  if (!all.length) return steps;
+  if (!all.some((a) => a.parent_id)) return steps;
+  const kids = new Map<string, Subagent[]>();
+  for (const a of all) if (a.parent_id && a.parent_id !== a.id) kids.set(a.parent_id, [...(kids.get(a.parent_id) ?? []), a]);
   const out = [...steps];
   const seen = new Set<string>();
   for (const s of steps) {
     if (s.kind !== "tool" || (s.use.tool_name !== "Agent" && s.use.tool_name !== "Task")) continue;
     const root = subagentFor(all, s.use);
     if (!root) continue;
-    for (const { agent: a } of nestedSubagents(all, root.id)) {
+    seen.add(root.id);
+    const from = out.indexOf(s);
+    const queue = [...(kids.get(root.id) ?? [])];
+    for (let a = queue.shift(); a; a = queue.shift()) {
       if (seen.has(a.id)) continue;
       seen.add(a.id);
-      const from = out.findIndex((x) => x === s);
+      queue.push(...(kids.get(a.id) ?? []));
       const at = Date.parse(a.started_at ?? "");
       let i = from + 1;
       while (i < out.length && (Date.parse(stepTs(out[i]) ?? "") || Infinity) <= at) i++;
       const before = out[i - 1];
       const seq = before.kind === "tool" ? before.use.seq : before.item.seq;
-      const use: Item = { id: `${NESTED}${a.id}`, seq, ts: a.started_at, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: subagentCall(a), tool_input: { description: a.description ?? "", ...(a.type ? { subagent_type: a.type } : {}) } };
+      const use: Item = { id: `${NESTED}${a.id}`, seq, ts: a.started_at, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: subagentCall(a), tool_input: { description: a.description ?? "" } };
       out.splice(i, 0, { kind: "tool", id: use.id, use, images: [] });
     }
   }
-  return seen.size ? out : steps;
+  return out.length > steps.length ? out : steps;
+}
+
+/** What decides where `withNestedSubagents` puts its cards (who launched whom, when, and the call and words a card is
+ *  drawn from); "" when no subagent was launched by another. */
+export function nestingKey(all: Subagent[]): string {
+  if (!all.some((a) => a.parent_id)) return "";
+  return all.map((a) => [a.id, a.parent_id, a.tool_use_id, a.started_at, a.description].join("\u0000")).join("\u0001");
 }
 
 const stepTs = (s: Step) => (s.kind === "tool" ? s.use.ts : s.item.ts);
 /** The call a subagent's card is known by (its key, `data-tool-use`): the call that launched it, or for a fork the node
  *  names no call of, one of its own. */
 export const subagentCall = (a: Subagent): string => a.tool_use_id || `${NESTED}${a.id}`;
-
-export interface SubagentRow {
-  agent: Subagent;
-  /** 0: the session launched it (or its launcher is not listed); 1: a subagent did; … */
-  depth: number;
-}
-
-/** Every subagent by who launched whom (`parent_id`), flattened for a list: each right under its launcher, one level
- *  deeper; one whose launcher is not listed (it ended before the node's one-day cutoff) at the top level. Within a
- *  level running ones first, then the newest first (as the node lists them). */
-export function subagentTree(all: Subagent[] | undefined): SubagentRow[] {
-  const list = all ?? [];
-  const listed = new Set(list.map((a) => a.id));
-  const newest = (a: Subagent) => Date.parse(a.started_at ?? "") || 0;
-  const order = (a: Subagent, b: Subagent) => Number(Boolean(b.running)) - Number(Boolean(a.running)) || newest(b) - newest(a);
-  const kids = new Map<string, Subagent[]>();
-  for (const a of [...list].sort(order)) {
-    const p = a.parent_id && a.parent_id !== a.id && listed.has(a.parent_id) ? a.parent_id : "";
-    kids.set(p, [...(kids.get(p) ?? []), a]);
-  }
-  const out: SubagentRow[] = [];
-  const placed = new Set<string>();
-  const place = (a: Subagent, depth: number) => {
-    if (placed.has(a.id)) return;
-    placed.add(a.id);
-    out.push({ agent: a, depth });
-    for (const k of kids.get(a.id) ?? []) place(k, depth + 1);
-  };
-  for (const a of kids.get("") ?? []) place(a, 0);
-  // launchers naming each other (only a runtime could write that) are reached from nowhere: list them at the top
-  for (const a of [...list].sort(order)) place(a, 0);
-  return out;
-}

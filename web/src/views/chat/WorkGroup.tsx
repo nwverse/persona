@@ -153,7 +153,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
 });
 
 /** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments; each subagent
- *  is a card of its own, in the order it was launched (#5030: no grid). `fade`: the agent's words among them that just
+ *  is a card of its own, in the order it was launched (#5030). `fade`: the agent's words among them that just
  *  came in fade in (fresh-words.ts); not inside a group. */
 export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean }) {
   const runs: (WorkNode | ToolStep[])[] = [];

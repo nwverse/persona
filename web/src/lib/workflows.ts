@@ -359,7 +359,7 @@ export function workflowStrip(w: Workflow, max = STRIP_CELLS): { cells: StripCel
 }
 
 /** The Workflow calls of a chat with a run the hub lists (#3434), by tool_use_id, with when each run started (ms, NaN when
- *  the hub does not say): those draw the run's card, which stays out of the agent's folded work, running or ended. */
+ *  the hub does not say): those draw the run's card, inside the turn's folded work like every tool call (super rule 2). */
 export interface WorkflowCalls {
   known: ReadonlySet<string>;
   startedAt: ReadonlyMap<string, number>;
