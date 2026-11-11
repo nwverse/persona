@@ -153,7 +153,7 @@ The browser check opens Overview, permission/plan cards, green/orange/AI workflo
   Engine host sets (#2576: the machine page's checklist, Make default, none enabled, Revert, Save sending `{hosts, default}`, New Agent's "Open in",
   "Also open in …"): start the mock hub with `MOCK_ENGINE_SETS=1`, then run
   `python3 scripts/test/web_engine_hosts_e2e.py <web URL> --hub <mock hub URL> [--shots <dir>]` (wide / narrow × light / dark).
-  New agent's recent setups (#2134: two starts remembered, the cards with an offline and an Allow everything one, a tap filling every field without starting, the ⋯ removing one and clearing them): start the mock hub and `npx vite`, then run
+  New agent's recent setups (#2134: two starts remembered, the cards with an offline and an Allow everything one, a tap filling every field without starting, the ⋯ removing one and clearing them): start the mock hub with `MOCK_MANAGERS=1` (else the MacBook is another manager's) and `npx vite`, then run
   `node web/e2e/recent-setups.mjs <web URL> --hub <mock hub URL> [--shots <dir>] [--channel msedge]` (wide / phone width × light / dark).
   A to-do's due date, reminder and priority (#1683: the Tasks list's line, the detail's editor, changes reaching the hub): start the mock hub and `npx vite`, then run
   `python3 scripts/test/web_todo_plan_e2e.py <web URL> --hub <mock hub URL> [--shots <dir>] [--channel chrome]` (wide / narrow × light / dark).
@@ -1644,7 +1644,9 @@ and Android follow in #5117.
 - **Tests**: `lib/new-agent-panel.test.ts`, `ui/model-panel/ModelPanel.new-agent.test.tsx`,
   `ui/model-panel/EffortSlider.test.tsx` (no level set), `views/NewAgent.*.test.tsx`; end to end, `web/e2e/new-agent-model.mjs`
   against the mock hub with `MOCK_MODEL_DEFAULTS=1 MOCK_LAUNCHER_HEALTH=1 MOCK_CUSTOM_MODELS=1 MOCK_PROVIDERS=1
-  MOCK_NEW_AGENT_PANEL=1` (codex also lists glm-5.3; the Mac Studio has no codex launcher).
+  MOCK_NEW_AGENT_PANEL=1 MOCK_ULTRACODE=1` (codex also lists glm-5.3; the Mac Studio has no codex launcher; the
+  ultracode feature for the switch): `node web/e2e/new-agent-model.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`
+  (wide / 390 × light / dark in Chinese, and wide light in English).
 
 ## Attention signals (tab title, icon badge, alert sound, system notifications, #2332, #2971)
 
