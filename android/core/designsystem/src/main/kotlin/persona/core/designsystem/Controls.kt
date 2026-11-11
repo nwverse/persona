@@ -525,7 +525,7 @@ fun JChip(
         Text(text, style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         count?.let {
             Spacer(Modifier.width(JChipTokens.countGap))
-            Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3)
+            Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3, maxLines = 1, softWrap = false)
         }
         trailingIcon?.let {
             Spacer(Modifier.width(JChipTokens.iconGap))
