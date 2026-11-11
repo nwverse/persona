@@ -230,6 +230,7 @@ Outside the scale: composer 32 (`Shell.composerRadius`, `apple/Shared/Design/The
 - Hit target: `tapTarget` 44 (`:507`), drawn through `tapTargetFrame()` (a square for a small control) or `tapTargetHeight()` (a row or a heading that is a button and draws less, as wide as it is; #3753). Same number under other names: `searchField`, `switchHeight`, `Watch.minRowHeight`, `Sidebar.row` (iOS), `voiceThreadRoom`. Android uses 48 as its platform floor (`Tokens.MinTouch`).
 - Dots 6-10, marks 12-18, icons 20-26, wells 28-38, avatars 40-48. Neighbors differ by 1 to 2 pt (DS-10).
 - Named by value: `box50` to `box380` (DS-10).
+- The Mac's pointer over its picture in the app's VNC: at least `pointer` 22 tall, about macOS's own size (`VNCPointerArt`, #3075).
 - Widths: `readable` 560 (web chat column 880, pages 760), sidebar 340/400/480, drawer `min(0.82 x width, 380)` (Android the same).
 - Sidebar rows: `Theme.Sidebar` (`apple/Shared/Design/SidebarMetrics.swift`), 44 on iOS; 24/28/32 on Mac; web 32 (touch 44 via a hit-area expander).
 - Mac-only sizes: `apple/Mac/Design/MacTokens.swift`.
@@ -725,6 +726,26 @@ The existing `Dialog`, `Button`, `Menu`, `Collapse` and status components carry 
 The workspace catalog, selection and management actions follow the current assistant. Switching assistants retires outstanding catalog reads, clears the selection and invalidates pending mutation previews, including a switch away and back. Management loads on the first workspace action; its loading menu keeps the same dismissal and phone Back behavior, and operation receipts survive menu reopening.
 
 Removal uses the confirmation sheet pattern in section 4.4 because it needs branch and uncommitted-file choices. The dialog identifies the workspace and explains which files and running sessions will be lost. Keep the branch by default; require an explicit discard choice for uncommitted files. Confirmation stays unavailable until the computer supplies a valid preview. A changed target requires another preview, and an uncertain dispatched removal offers status reconciliation rather than another destructive submission. Renaming uses the existing text-entry dialog pattern and preserves workspace, branch and Agent identities.
+
+### 4.11 Questions of several
+
+A card that asks several questions at once shows where it is and lets the answers be checked before they go (a pending
+request, section 4.8). On iPhone and iPad (#2970) that is a terminal dialog of several, and a hook question of several:
+Claude Code's AskUserQuestion, the assistant's ask_user and Codex's questions.
+
+- **Step capsules** (`ScreenSteps`, `BUIScreenSteps` in `apple/Persona/Views/Interactions/InteractionViews.swift`): one per
+  question, ticked once answered, the current one in the accent. They show progress only and are not buttons. When the
+  row is wider than the card (the largest text sizes) it scrolls, opening with the current one in sight; the card's title
+  then wraps to up to three lines.
+- **Previous / Next** move one question at a time. A question gone back to shows the answer it had.
+- **The review** (`ScreenReview`, `apple/Persona/Views/Interactions/ScreenReview.swift`): a row per question, Previous and
+  **Submit N Answers**. A question left reads **Not answered** in the caution color; the main button then goes to it,
+  and **Submit Without Them** sends the rest. At the largest text sizes the buttons stack, the main one first, and so
+  does the card's last row (Reply in Chat Instead, Cancel, View Terminal); a label that still does not fit then shrinks
+  a little (section 6.2's last resort).
+- **BeautifulUI's hook card** keeps its own ↑ n / N ↓ counter instead of capsules; a question skipped with ↓ shows in the
+  review as not answered, and its main button opens the card at that question with every answer kept.
+- **The plan pill folds** while a card asks something, so it never sits over the card's buttons.
 
 ## 5. Content
 

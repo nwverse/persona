@@ -516,6 +516,9 @@ nonisolated enum Theme {
         static let iconS: CGFloat = 22
         static let icon: CGFloat = 24
         static let iconL: CGFloat = 26
+        /// The least height the Mac's pointer is drawn at over its picture in the app's VNC (VNCPointerArt, #3075):
+        /// about the size macOS draws it on its own screen, so it reads however small the picture is.
+        static let pointer: CGFloat = 22
         static let wellXS: CGFloat = 28
         static let wellS: CGFloat = 30
         static let well: CGFloat = 32
