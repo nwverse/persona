@@ -25,8 +25,9 @@ func TestHandoffRules(t *testing.T) {
 		t.Fatalf("install: %d %v", c, body)
 	}
 	waitLong(t, "the provider found", func() bool { _, ok := h.SecretProviderOf(ref); return ok })
-	if err := h.AddHandoffRules(ctx, []HandoffRule{{Reference: ref, Launcher: "claude", Machine: "box", By: "device:d1", At: time.Now()},
-		{Reference: "nope://x/y", Launcher: "claude", Machine: "box"}}); err != nil {
+	if err := h.AddHandoffRules(ctx, []HandoffRule{{Reference: ref, Launcher: "claude", Machine: "box", Provider: "example-vault", By: "device:d1", At: time.Now()},
+		{Reference: ref, Launcher: "claude", Machine: "other", Provider: "another-vault", At: time.Now()}, // not the provider now
+		{Reference: "nope://x/y", Launcher: "claude", Machine: "box", Provider: "example-vault"}}); err != nil {
 		t.Fatal(err)
 	}
 	if !h.HandoffRuleCovers(ctx, ref, "claude", "box") || h.HandoffRuleCovers(ctx, ref, "claude", "other") ||
@@ -51,7 +52,25 @@ func TestHandoffRules(t *testing.T) {
 	if h.HandoffRuleCovers(ctx, ref, "claude", "box") {
 		t.Fatal("a removed rule still covers")
 	}
-	if err := h.AddHandoffRules(ctx, []HandoffRule{{Reference: ref, Launcher: "claude", Machine: "box"}}); err != nil {
+	// A rule older than the provider's install (one a removal left behind, an id taken again) covers nothing.
+	if err := h.AddHandoffRules(ctx, []HandoffRule{{Reference: ref, Launcher: "claude", Machine: "box", Provider: "example-vault",
+		At: time.Now().Add(-24 * time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	if h.HandoffRuleCovers(ctx, ref, "claude", "box") {
+		t.Fatal("a rule from before the install covers")
+	}
+	// A provider whose id changes takes its rules along.
+	if err := h.moveHandoffRules(ctx, "example-vault", "example-vault-2"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := h.handoffRules(ctx); len(list) != 1 || list[0].Provider != "example-vault-2" {
+		t.Fatalf("moved: %+v", list)
+	}
+	if err := h.moveHandoffRules(ctx, "example-vault-2", "example-vault"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.AddHandoffRules(ctx, []HandoffRule{{Reference: ref, Launcher: "claude", Machine: "box", Provider: "example-vault", At: time.Now()}}); err != nil {
 		t.Fatal(err)
 	}
 	if code, _ := call(t, mux, "DELETE", "/api/v1/extensions/example-vault/-/", master, ""); code != 200 {

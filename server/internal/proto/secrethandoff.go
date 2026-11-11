@@ -30,6 +30,13 @@ type SecretHandoffVariable struct {
 	Title    string `json:"title,omitempty"`
 }
 
+// SecretHandoffApproves reports whether r says yes to a hand-off card: allow, and neither dismiss nor cancel. Only such an
+// answer, from a device the hub vouched for, hands anything over; every other answer, a no with extra fields included
+// ("deny, don't ask again"), declines.
+func SecretHandoffApproves(r Resolution) bool {
+	return r.Allow != nil && *r.Allow && !r.Dismiss && !r.Cancel
+}
+
 // SecretHandoffDeclines reports whether r only says no to a hand-off card: deny (with or without a message), dismiss or
 // cancel, and nothing else set. The hub and the manager take every other answer as an approval, which only a device
 // that may approve gives. What is left once the no is taken out must encode as {} (every Resolution field is

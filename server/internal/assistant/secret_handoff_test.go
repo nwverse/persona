@@ -34,6 +34,7 @@ type handoffSecretsFake struct {
 	resolved []string // "reference by approvedBy for purpose"
 	rules    []extmgr.HandoffRule
 	fail     map[string]string // reference → its error code
+	provider string            // the extension that claims op:// ("": example-vault)
 }
 
 func (f *handoffSecretsFake) LauncherSecret(context.Context, string, string, string) (string, error) {
@@ -47,9 +48,17 @@ func (f *handoffSecretsFake) SecretProviderOf(ref string) (extension.SecretProvi
 	if !strings.HasPrefix(ref, "op://") {
 		return extension.SecretProvider{}, false
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.provider != "" {
+		return extension.SecretProvider{Extension: f.provider, Contribution: "vault", Name: "Other Vault"}, true
+	}
 	return extension.SecretProvider{Extension: "example-vault", Contribution: "vault", Name: "Example Vault"}, true
 }
 func (f *handoffSecretsFake) DescribeSecret(_ context.Context, ref string) (extmgr.SecretDescription, error) {
+	if strings.Contains(ref, "notitle") { // a provider that names nothing: the reference itself, as extmgr falls back
+		return extmgr.SecretDescription{Provider: "example-vault", ProviderName: "Example Vault", Title: ref}, nil
+	}
 	return extmgr.SecretDescription{Provider: "example-vault", ProviderName: "Example Vault", Title: "GitHub token", Detail: "credential"}, nil
 }
 func (f *handoffSecretsFake) ResolveSecret(_ context.Context, ref string, purpose wire.SecretPurpose, approvedBy string) (string, error) {
@@ -135,6 +144,9 @@ func newHandoffRig(t *testing.T) *handoffRig {
 	mem := newFleetMem()
 	r.s = withSettings(t, r.f, New(Options{Hub: r.f, Store: func() Store { return mem }, Logf: r.logf, Devices: r.devs}))
 	r.s.refs = r.secrets
+	// The main conversation the user opened, asking from the app.
+	r.s.originSet(context.Background(), "server", "s1", OriginUser, "", "")
+	r.f.items = []proto.Item{{ID: "u1", Role: "user", Kind: proto.KindText, Text: "fix CI with my token", ClientMsgID: "c1"}}
 	return r
 }
 
@@ -425,17 +437,161 @@ func TestHandoffFailuresAfterTheApproval(t *testing.T) {
 	}
 	r.leaks(answer)
 
+	// Refused for ultracode before the node took the ticket: the same ticket starts it without.
 	r.secrets.fail = nil
+	ultra := strings.Replace(handoffArgs, `"prompt":"fix CI"`, `"prompt":"fix CI","ultracode":true`, 1)
 	r.f.refuseUltra = &rpc.Error{Code: "ultracode_unsupported", Message: "ultracode is for Claude Code agents only"}
-	answer, errText = r.answer(r.start(strings.Replace(handoffArgs, `"prompt":"fix CI"`, `"prompt":"fix CI","ultracode":true`, 1)))
+	answer, errText = r.answer(r.start(ultra))
 	if errText != "" || !strings.Contains(answer, "without ultracode") || !strings.Contains(answer, `"status":"granted"`) {
 		t.Fatalf("answer %q, error %q", answer, errText)
 	}
 	r.f.mu.Lock()
-	starts := r.f.starts
+	starts := append([]map[string]any(nil), r.f.starts...)
+	r.f.starts = nil
 	r.f.mu.Unlock()
-	if len(starts) != 2 || starts[0]["secret_ticket"] != "tk-1" || starts[1]["secret_ticket"] != "tk-2" || r.stages != 2 {
+	if len(starts) != 2 || starts[0]["secret_ticket"] != "tk-1" || starts[1]["secret_ticket"] != "tk-1" || r.stages != 1 {
 		t.Fatalf("starts %v, stages %d", starts, r.stages)
 	}
+	// One the refused start took and dropped: staged again for the start without ultracode.
+	r.f.onStart = func(f *fakeHub, a map[string]any) {
+		f.failStart = nil
+		if a["secret_ticket"] == "tk-2" {
+			f.failStart = &rpc.Error{Code: proto.CodeSecretEnvGone, Message: "this hand-off's ticket is used or expired"}
+		}
+	}
+	answer, errText = r.answer(r.start(ultra))
+	r.f.mu.Lock()
+	starts = r.f.starts
+	r.f.mu.Unlock()
+	if errText != "" || len(starts) != 3 || starts[1]["secret_ticket"] != "tk-2" || starts[2]["secret_ticket"] != "tk-3" || r.stages != 3 {
+		t.Fatalf("answer %q, error %q, starts %v, stages %d", answer, errText, starts, r.stages)
+	}
 	r.leaks(answer)
+}
+
+// An Always rule spares the card only for what the user asked themselves: a conversation they opened, whose turn comes
+// from messages they sent from an app. Every other origin or author, and whatever cannot be told, gets the card.
+func TestHandoffRulesOnlyForTheUsersOwnTurn(t *testing.T) {
+	app := proto.Item{ID: "u1", Role: "user", Kind: proto.KindText, Text: "fix CI", ClientMsgID: "c1"}
+	with := func(f func(*proto.Item)) []proto.Item {
+		it := app
+		f(&it)
+		return []proto.Item{it}
+	}
+	for _, c := range []struct {
+		name   string
+		origin func(r *handoffRig)
+		items  []proto.Item
+		card   bool
+	}{
+		{"the user's own", nil, []proto.Item{app, {ID: "t1", Role: "user", Kind: proto.KindToolResult}}, false},
+		{"an inbox conversation", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginInbox, "item1", "") }, nil, true},
+		{"a channel's /new", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginChannel, "feishu", "") }, nil, true},
+		{"a scheduled task", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginTask, "task1", "") }, nil, true},
+		{"opened by another conversation", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginSpawned, "s0", "") }, nil, true},
+		{"opened by an extension", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginUser, "", "helper") }, nil, true},
+		{"an origin the backfill guessed", func(r *handoffRig) {
+			r.s.origins.mu.Lock()
+			r.s.origins.m["s1"].By = originByBackfill
+			r.s.origins.mu.Unlock()
+		}, nil, true},
+		{"no origin", func(r *handoffRig) {
+			r.s.origins.mu.Lock()
+			delete(r.s.origins.m, "s1")
+			r.s.origins.mu.Unlock()
+		}, nil, true},
+		{"another conversation's message", nil, with(func(it *proto.Item) {
+			it.Source = &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: "s9"}
+		}), true},
+		{"a task's input", nil, with(func(it *proto.Item) { it.Source = &proto.MessageSource{Kind: proto.SourceFollowup} }), true},
+		{"a message with no app behind it (a channel's)", nil, with(func(it *proto.Item) { it.ClientMsgID = "" }), true},
+		{"a background notice", nil, with(func(it *proto.Item) { it.Task = &proto.TaskNote{} }), true},
+		{"a wake-up", nil, with(func(it *proto.Item) { it.Wake = true }), true},
+		{"another session's message", nil, with(func(it *proto.Item) { it.From = "other" }), true},
+		{"an app message, then another author's", nil, []proto.Item{app, {ID: "u2", Role: "user", Kind: proto.KindText, Text: "x",
+			Source: &proto.MessageSource{Kind: proto.SourcePatrol}}}, true},
+		{"no message to tell by", nil, []proto.Item{}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newHandoffRig(t)
+			r.secrets.rules = []extmgr.HandoffRule{{Reference: "op://Dev/GitHub/credential1", Launcher: "claude", Machine: "box"},
+				{Reference: "op://Dev/npm/credential2", Launcher: "claude", Machine: "box"}}
+			if c.origin != nil {
+				c.origin(r)
+			}
+			if c.items != nil {
+				r.f.items = c.items
+			}
+			done := r.start(handoffArgs)
+			if !c.card {
+				answer, errText := r.answer(done)
+				if errText != "" || !strings.Contains(answer, "Always rule") {
+					t.Fatalf("answer %q, error %q", answer, errText)
+				}
+				return
+			}
+			ix := r.card()
+			if w := r.post(ix.ID, `{"allow":false}`, nil); w.Code != http.StatusOK {
+				t.Fatalf("the no: %d", w.Code)
+			}
+			if answer, _ := r.answer(done); !strings.Contains(answer, `"status":"declined"`) {
+				t.Fatalf("answer %q", answer)
+			}
+		})
+	}
+}
+
+// A no with anything beside it, even from a device the hub vouched for, is a no: nothing resolved, no rule kept.
+func TestHandoffAMixedNoDeclines(t *testing.T) {
+	for _, body := range []string{`{"allow":false,"always":true}`, `{"dismiss":true,"always":true}`, `{"allow":false,"text":"no"}`, `{}`} {
+		t.Run(body, func(t *testing.T) {
+			r := newHandoffRig(t)
+			done := r.start(handoffArgs)
+			ix := r.card()
+			if w := r.post(ix.ID, body, &assistantwire.HandoffApprover{DeviceID: "d1"}); w.Code != http.StatusOK {
+				t.Fatalf("the answer: %d %s", w.Code, w.Body)
+			}
+			answer, errText := r.answer(done)
+			if errText != "" || !strings.Contains(answer, `"status":"declined"`) {
+				t.Fatalf("answer %q, error %q", answer, errText)
+			}
+			if len(r.f.starts) != 0 || len(r.secrets.resolved) != 0 || len(r.secrets.rules) != 0 {
+				t.Fatalf("started %d, resolved %v, rules %v", len(r.f.starts), r.secrets.resolved, r.secrets.rules)
+			}
+		})
+	}
+}
+
+// The card shows where the Agent runs and what it is asked, and never a reference, even when the provider names the
+// item by its reference only. A provider that changed after the card is not the one approved: nothing is resolved.
+func TestHandoffCardWordsAndTheProviderApproved(t *testing.T) {
+	r := newHandoffRig(t)
+	done := r.start(`{"machine":"box","cwd":"/code/app","prompt":"fix the release CI","secret_env":{"GITHUB_TOKEN":"op://Dev/notitle/credential1"}}`)
+	ix := r.card()
+	card, _ := json.Marshal(ix)
+	if strings.Contains(string(card), "op://") || !strings.Contains(ix.Summary, "/code/app") || !strings.Contains(ix.Summary, "fix the release CI") {
+		t.Fatalf("card %s", card)
+	}
+	r.secrets.mu.Lock()
+	r.secrets.provider = "other-vault" // switched while the card waited
+	r.secrets.mu.Unlock()
+	if w := r.post(ix.ID, `{"allow":true,"always":true}`, &assistantwire.HandoffApprover{DeviceID: "d1"}); w.Code != http.StatusOK {
+		t.Fatalf("approve: %d", w.Code)
+	}
+	answer, errText := r.answer(done)
+	if errText != "" || !strings.Contains(answer, `"code":"provider_changed"`) || len(r.f.starts) != 0 || len(r.secrets.resolved) != 0 {
+		t.Fatalf("answer %q, error %q, starts %d, resolved %v", answer, errText, len(r.f.starts), r.secrets.resolved)
+	}
+}
+
+// secret_env must be an object of strings: a number among them is refused, not dropped.
+func TestHandoffSecretEnvMustBeStrings(t *testing.T) {
+	r := newHandoffRig(t)
+	_, errText := r.answer(r.start(`{"machine":"box","cwd":"/code/app","prompt":"x","secret_env":{"A_TOKEN":"op://Dev/a/b1","B_TOKEN":5}}`))
+	if !strings.Contains(errText, "secret_env must be an object") || len(r.f.starts) != 0 {
+		t.Fatalf("error %q, starts %d", errText, len(r.f.starts))
+	}
+	if got := string(withoutSecretEnv(json.RawMessage(`{"prompt":"x","secret_env":{"A":"op://a/b/c"}}`))); strings.Contains(got, "op://") {
+		t.Fatalf("the confirmation card's arguments: %s", got)
+	}
 }

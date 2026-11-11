@@ -14,7 +14,9 @@ import (
 // Always rules for hand-offs (docs/extensions/secret-providers.md "Always rules"): "Always for this launcher on this
 // computer" on a hand-off card keeps one rule per reference × launcher × computer, and a later hand-off that every rule
 // covers asks nothing (its uses are recorded with approved_by "rule"). A rule holds for the provider that claimed the
-// reference's scheme when it was made, and goes with that provider's uninstall. The provider's details list its rules,
+// reference's scheme when it was made, and only while that install lasts: it goes with the provider's uninstall, and a
+// rule older than the provider's install (a removal that failed, an id taken again) covers nothing. A provider whose id
+// changes takes its rules along. The provider's details list its rules,
 // and each can be removed there. They are the manager's setting handoffRulesKey, written whole (as the chat rules are,
 // chat_rules_store.go): no table, nothing in manager.json.
 const (
@@ -82,24 +84,39 @@ func (h *Manager) handoffRules(ctx context.Context) ([]HandoffRule, error) {
 }
 
 // HandoffRuleCovers reports whether an Always rule covers handing reference's value to launcher on machine: one made
-// for this reference, launcher and computer, by the provider that claims the reference now.
+// for this reference, launcher and computer, for the provider that claims the reference now, since its install.
 func (h *Manager) HandoffRuleCovers(ctx context.Context, reference, launcher, machine string) bool {
 	prov, ok := h.SecretProviderOf(reference)
 	if !ok {
 		return false
 	}
+	installed := h.providerInstalled(prov.Extension)
 	h.handoffRulesMu.Lock()
 	defer h.handoffRulesMu.Unlock()
 	list, err := h.handoffRules(ctx)
 	if err != nil {
 		return false
 	}
-	want := HandoffRule{Reference: reference, Launcher: launcher, Machine: machine}.ID()
-	return slices.ContainsFunc(list, func(r HandoffRule) bool { return r.ID() == want && r.Provider == prov.Extension })
+	return slices.ContainsFunc(list, func(r HandoffRule) bool {
+		return r.Reference == reference && r.Launcher == launcher && r.Machine == machine && r.Provider == prov.Extension &&
+			!r.At.Before(installed)
+	})
 }
 
-// AddHandoffRules keeps rules (a card's "Always", one per variable): each for the provider that claims its reference
-// now; one kept already is made again. Past handoffRulesMost the rest are refused (errHandoffRulesFull).
+// providerInstalled is when extension id was installed (zero: not known).
+func (h *Manager) providerInstalled(id string) time.Time {
+	if h.extensions == nil || h.extensions.reg == nil {
+		return time.Time{}
+	}
+	if p := h.extensions.reg.Snapshot(id); p != nil {
+		return p.Record.InstalledAt
+	}
+	return time.Time{}
+}
+
+// AddHandoffRules keeps rules (a card's "Always", one per variable): each for the provider its card named, which must
+// still claim its reference (else it is left out); one kept already is made again. Past handoffRulesMost the rest are
+// refused (errHandoffRulesFull).
 func (h *Manager) AddHandoffRules(ctx context.Context, rules []HandoffRule) error {
 	h.handoffRulesMu.Lock()
 	defer h.handoffRulesMu.Unlock()
@@ -109,10 +126,9 @@ func (h *Manager) AddHandoffRules(ctx context.Context, rules []HandoffRule) erro
 	}
 	for _, r := range rules {
 		prov, ok := h.SecretProviderOf(r.Reference)
-		if !ok || r.Launcher == "" || r.Machine == "" {
+		if !ok || prov.Extension != r.Provider || r.Launcher == "" || r.Machine == "" {
 			continue
 		}
-		r.Provider = prov.Extension
 		id := r.ID()
 		list = slices.DeleteFunc(list, func(o HandoffRule) bool { return o.ID() == id })
 		if len(list) >= handoffRulesMost {
@@ -139,6 +155,29 @@ func (h *Manager) handoffRulesOf(ctx context.Context, provider string) []Handoff
 	}
 	slices.SortFunc(out, func(a, b HandoffRuleView) int { return b.At.Compare(a.At) })
 	return out
+}
+
+// moveHandoffRules gives provider from's rules to to: its id changed, it is the same install.
+func (h *Manager) moveHandoffRules(ctx context.Context, from, to string) error {
+	h.handoffRulesMu.Lock()
+	defer h.handoffRulesMu.Unlock()
+	list, err := h.handoffRules(ctx)
+	if errors.Is(err, errNoDatabase) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	moved := false
+	for i := range list {
+		if list[i].Provider == from {
+			list[i].Provider, moved = to, true
+		}
+	}
+	if !moved {
+		return nil
+	}
+	return h.store.PutSetting(ctx, handoffRulesKey, list)
 }
 
 // removeHandoffRules drops provider's rules with id ("" for all of them, as its uninstall does), and says how many went.

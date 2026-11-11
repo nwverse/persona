@@ -69,15 +69,20 @@ environment variable with the reference its value comes from (`{"GITHUB_TOKEN": 
   Claude Code's (a Claude-type provider Persona manages, or plain `claude`; no runtime); each reference's provider must be
   installed and on. Any of these failing is the tool's error: no card is shown and nothing starts.
 - **The card**: under the reserved tool name `secret_handoff`, after the start's computer and launcher are settled (a launcher's
-  health detour included). It names each item as its provider describes it (`secrets.describe`), the variable, the Agent (the
-  tab's name) and the computer, and says to approve on iPhone or the web; it offers **Always for this launcher on this computer**.
-  It waits 10 minutes.
-- **After the approval**: the manager resolves each value (purpose `{kind: "agent_run", id: <launcher>, machine}`, approved by
-  `device:<id>` or `rule`, recorded on the provider as every resolution is), stages them (below) right before the start (after a
-  new worktree is made), and the start carries the ticket alone; a start the computer refuses for ultracode stages them again
-  for the start without it. The answer lists each variable as `granted`, `declined`, `expired` or `failed` (with the provider's
-  code, such as `not_signed_in`): one that fails stops the start. Values are never in the answer, the card, the model's
-  context, a log or an error; the manager zeroes its copies once the start is sent.
+  health detour included). It names each item as its provider describes it (`secrets.describe`; a provider that names nothing
+  is shown by its name alone, never the reference), the variable, the Agent (the tab's name), the computer, the directory and
+  the start of the prompt, and says to approve on iPhone or the web; it offers **Always for this launcher on this computer**.
+  It waits 10 minutes. Only an explicit allow approves: a no with anything beside it (`{"allow":false,"always":true}`) is a no
+  and keeps no rule.
+- **After the approval**: the manager resolves each value from the provider the card named (another that claims the scheme now
+  fails with `provider_changed`; purpose `{kind: "agent_run", id: <launcher>, machine}`, approved by `device:<id>` or `rule`,
+  recorded on the provider as every resolution is), stages them (below) right before the start (after a new worktree is made),
+  and the start carries the ticket alone. A start the computer refuses for ultracode is sent again without it on the same
+  ticket, and only a ticket the refused start used up is staged again. The answer lists each variable as `granted`,
+  `declined`, `expired` or `failed` (with the provider's code, such as `not_signed_in`): one that fails stops the start.
+  Values are never in the answer, the card, the model's context, a log or an error. The manager zeroes the byte copies it
+  holds once the start is sent (at once after staging when no ultracode retry can need them); as on the node, other copies
+  (the provider's answer as a string, encoder buffers) may stay in its memory until reused.
 
 - **Staged on the computer, sealed on the way**: after the approval the manager that connects the computer resolves the
   references (purpose `agent_run`), asks the node for a one-time key (`secret.stage {check}`), seals the values to it (HPKE)
@@ -126,11 +131,19 @@ environment variable with the reference its value comes from (`{"GITHUB_TOKEN": 
 ## Always rules
 
 **Always for this launcher on this computer** on a hand-off card keeps one rule per variable: reference × launcher × computer, for
-the provider that claims the reference then (`server/internal/extmgr/secret_handoff_rules.go`, the manager's setting
-`secret_handoff_rules`, at most 200). A later hand-off whose every variable a rule covers asks nothing, and its uses are recorded
-with `approved_by: "rule"`. A provider's details answer `handoff_rules: [{id, reference, launcher, machine, by, at}]`, newest
-first; `DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}` removes one (404 for none), and the provider's uninstall removes
-all of its rules.
+the provider the card named (`server/internal/extmgr/secret_handoff_rules.go`, the manager's setting `secret_handoff_rules`, at
+most 200). A rule holds only while that provider's install lasts: its uninstall removes its rules, one older than its install
+covers nothing, and a provider whose id changes takes them along. A provider's details answer
+`handoff_rules: [{id, reference, launcher, machine, by, at}]`, newest first, for a read-only provider too;
+`DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}` (full credentials only) removes one (404 for none).
+
+A rule spares the card only when the user asked for the start themselves (the decision on #3962; `handoffUserTurn`): the
+conversation calling `agent_start` is one the user opened (its origin, noted when it was started, is `user`, and no extension's
+token opened it), and every message of the turn is one the user sent from an app (the node ties it to the app's
+`client_msg_id`), with no other author on it. Conversations an inbox item, a channel (Feishu and others, `/new` included), a
+scheduled task, another conversation or an extension opened, and turns another conversation's, a task's or a channel's message
+started, always get the card; so does whatever cannot be told (an origin the backfill guessed or none, a transcript that cannot
+be read, an older node that ties no message to the app). A start a rule spared the card is recorded with `approved_by: "rule"`.
 
 ## Who may approve a hand-off
 

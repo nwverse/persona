@@ -135,9 +135,9 @@ func (ps *extensions) detail(ctx context.Context, p *extension.Extension) Extens
 			d.Secrets = append(d.Secrets, view)
 		}
 		d.SecretUsers = ps.secretUsers(ctx, p, l)
-		if p.Full != nil && len(p.Full.SecretProviders()) > 0 {
-			d.HandoffRules = ps.h.handoffRulesOf(ctx, p.Record.ID)
-		}
+	}
+	if p.Full != nil && len(p.Full.SecretProviders()) > 0 { // a read-only provider's rules apply all the same
+		d.HandoffRules = ps.h.handoffRulesOf(ctx, p.Record.ID)
 	}
 	return d
 }

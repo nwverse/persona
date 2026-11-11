@@ -531,6 +531,9 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.apply(ctx, c.Old.Record.ID)
 		ps.forgetAuth(c.Old.Record.ID)
 		ps.nodes.drop(ps.root, c.Old.Record.ID, "")
+		if err := ps.h.moveHandoffRules(ctx, c.Old.Record.ID, c.ID); err != nil { // its Always rules for hand-offs follow it
+			ps.logf("plugin %s is %s now: its hand-off rules were not moved: %v", c.Old.Record.ID, c.ID, err)
+		}
 	}
 	ps.apply(ctx, c.ID)
 	if ps.voiceID != "" && c.ID != ps.voiceID {

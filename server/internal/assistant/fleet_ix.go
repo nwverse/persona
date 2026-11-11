@@ -572,14 +572,7 @@ func (s *Service) resolveAnswer(id string, r proto.Resolution, remember bool, au
 		}
 	}
 	if p != nil && handoff {
-		if s.fleet.handoffBy == nil {
-			s.fleet.handoffBy = map[string]assistantwire.HandoffApprover{}
-		}
-		if approver != nil && !proto.SecretHandoffDeclines(r) { // claimed with this answer: who approved it
-			s.fleet.handoffBy[id] = *approver
-		} else {
-			delete(s.fleet.handoffBy, id)
-		}
+		s.claimHandoffLocked(id, r, approver) // claimed with this answer: an approval, and who gave it
 	}
 	if p != nil {
 		p.answeredBy, p.answeredReason = r.AnsweredBy, r.Reason // read by finished(), under this lock

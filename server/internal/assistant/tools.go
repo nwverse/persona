@@ -353,6 +353,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			SecretEnv map[string]string `json:"secret_env"`
 		}
 		_ = json.Unmarshal(args, &a)
+		if err := checkSecretEnvArg(args); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		am, ok := s.machineByName(ctx, a.Machine)
 		if !ok {
 			return "", fmt.Errorf("unknown machine %q (machines: %s)", a.Machine, s.machineIDs(ctx))
@@ -422,7 +425,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Ultracode {
 			where += " · ultracode"
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, args); err != nil {
+		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: no agent was started.", nil
@@ -464,7 +467,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 			tab, _ := params["tab_name"].(string)
-			by, answer, err := s.handoffApprove(ctx, machine, self, hand, tab)
+			by, answer, err := s.handoffApprove(ctx, machine, self, hand, tab, a.Cwd, a.Prompt)
 			if err != nil {
 				return "", err
 			}
@@ -512,19 +515,24 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if params["secret_ticket"], err = values.stage(sctx); err != nil {
 				return "", fmt.Errorf("the secrets could not be staged on %s: %v; no agent was started", am.Name, err)
 			}
+			if params["ultracode"] != true {
+				values.wipe() // no retry can need them again
+			}
 			note += hand.granted(approvedBy)
 		}
 		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
 			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
 			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
-			// The refused start dropped its ticket: a new one for this start.
-			if values != nil {
+			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+			// Refused before the node took the ticket, the same ticket starts it; one the refused start took and
+			// dropped is gone, and the values are staged once more for this start.
+			if values != nil && refusedWith(err, proto.CodeSecretEnvGone) {
 				if params["secret_ticket"], err = values.stage(sctx); err != nil {
 					return "", fmt.Errorf("the secrets could not be staged on %s again: %v; no agent was started", am.Name, err)
 				}
+				err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 			}
-			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		}
 		values.wipe()
 		if err != nil {

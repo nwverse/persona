@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The hand-off of secret values to one Agent run (docs/extensions/secret-providers.md "The hand-off to one Agent run",
@@ -156,7 +157,11 @@ func (s *Service) handoffPrepare(ctx context.Context, machine, machineName strin
 		}
 		v.Provider = prov
 		if d, err := hs.DescribeSecret(ctx, v.Reference); err == nil {
+			// Words only: a provider that names nothing gets the reference itself as its title, which the card never shows.
 			v.Title = clip(oneLine(strings.TrimSpace(strings.Join(handoffWords(d.Title, d.Detail), " › "))), 120)
+			if strings.Contains(v.Title, "://") || strings.Contains(v.Title, v.Reference) {
+				v.Title = ""
+			}
 		}
 	}
 	return h, nil
@@ -164,10 +169,13 @@ func (s *Service) handoffPrepare(ctx context.Context, machine, machineName strin
 
 // handoffApprove has the hand-off approved: by Always rules that cover every variable, else on its card. approvedBy is
 // "rule" or "device:<id>"; "" when it was not approved, with the tool's answer saying why.
-func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, h *secretHandoff, agent string) (approvedBy, answer string, err error) {
+func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, h *secretHandoff, agent, cwd, prompt string) (approvedBy, answer string, err error) {
 	hs := s.handoffSecrets()
-	covered := true
+	covered := s.handoffUserTurn(ctx, convMachine, self) // rules only for what the user asked themselves
 	for _, v := range h.vars {
+		if !covered {
+			break
+		}
 		if !hs.HandoffRuleCovers(ctx, v.Reference, h.launcher, h.machine) {
 			covered = false
 			break
@@ -194,11 +202,12 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: convMachine, SessionID: self, SessionTitle: "Persona",
 		Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolInput: raw, ToolTitle: i18n.T(l, "assistant-secret_handoff.title"),
 		Summary: i18n.T(l, "assistant-secret_handoff.summary", i18n.Args{"items": strings.Join(items, "; "), "agent": agent,
-			"machine": h.machineName}),
+			"machine": h.machineName}) + "\n" + i18n.T(l, "assistant-secret_handoff.where", i18n.Args{"cwd": cwd,
+			"prompt": clip(oneLine(prompt), 200)}),
 		AlwaysLabel: i18n.T(l, "assistant-secret_handoff.always", i18n.Args{"launcher": h.launcher, "machine": h.machineName}),
 		CreatedAt:   now, ExpiresAt: expires}
-	defer s.forgetHandoffApprover(ix.ID)
 	r, err := s.ask(ctx, ix)
+	claim, vouched := s.takeHandoffClaim(ix.ID)
 	if err != nil {
 		return "", "", err
 	}
@@ -209,21 +218,23 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 		}
 		return out
 	}
+	// The approval that claimed the card is the answer (whatever else reached the question): an explicit allow from a
+	// device the hub vouched for. Anything else declines, a no with "always" or other fields beside it included.
 	switch {
+	case vouched:
 	case r.Dismiss && !time.Now().Before(expires.Add(-time.Second)):
 		return "", handoffAnswer(results(handoffExpired), "The hand-off card expired unanswered."), nil
-	case proto.SecretHandoffDeclines(r):
+	case proto.SecretHandoffApproves(r): // not through the hub's gate: refused, as the hub would
+		return "", handoffAnswer(results(handoffDeclined), "The hand-off was not approved on iPhone or the web."), nil
+	default:
 		return "", handoffAnswer(results(handoffDeclined), "The user declined handing over the secrets."), nil
 	}
-	by, ok := s.handoffApprover(ix.ID)
-	if !ok || r.AnsweredBy != "" || r.Remembered { // not an approval the hub vouched for: refused, as on the hub
-		return "", handoffAnswer(results(handoffDeclined), "The hand-off was not approved on iPhone or the web."), nil
-	}
-	approvedBy = "device:" + by.DeviceID
-	if r.Always {
+	approvedBy = "device:" + claim.approver.DeviceID
+	if claim.r.Always {
 		rules := make([]extmgr.HandoffRule, 0, len(h.vars))
 		for _, v := range h.vars {
-			rules = append(rules, extmgr.HandoffRule{Reference: v.Reference, Launcher: h.launcher, Machine: h.machine, By: approvedBy, At: now})
+			rules = append(rules, extmgr.HandoffRule{Reference: v.Reference, Launcher: h.launcher, Machine: h.machine,
+				Provider: v.Provider.Extension, By: approvedBy, At: now})
 		}
 		if err := hs.AddHandoffRules(context.WithoutCancel(ctx), rules); err != nil {
 			s.logf("assistant: hand-off card %s: its Always was not kept: %v", ix.ID, err)
@@ -232,18 +243,82 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	return approvedBy, "", nil
 }
 
-// handoffApprover is the device whose approval claimed hand-off card id (resolveAnswer).
-func (s *Service) handoffApprover(id string) (assistantwire.HandoffApprover, bool) {
-	s.fleet.mu.Lock()
-	defer s.fleet.mu.Unlock()
-	a, ok := s.fleet.handoffBy[id]
-	return a, ok && a.DeviceID != ""
+// handoffUserTurn reports whether the user asked for this start themselves, the only case an Always rule may spare the
+// card (the decision on #3962): conversation self on machine is one the user opened (its origin, noted when it was
+// started, is "user", and no extension's token opened it), and every message of the turn calling the tool is one the
+// user sent from an app (the node ties it to the app's client_msg_id) with no other author on it (an inbox item's,
+// a task's or another conversation's input, a channel's message, a background notice). Whatever it cannot tell (an
+// origin the backfill guessed or none, the transcript unreadable, an older node that ties no message) is no: the card.
+func (s *Service) handoffUserTurn(ctx context.Context, machine, self string) bool {
+	if !s.userOpened(ctx, self) {
+		return false
+	}
+	var res struct {
+		Items []proto.Item `json:"items"`
+	}
+	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{"session_id": self, "turns": 1}, &res); err != nil {
+		return false
+	}
+	asked := false
+	for _, it := range res.Items {
+		if it.Role != "user" || it.Kind == proto.KindToolResult {
+			continue
+		}
+		if it.ClientMsgID == "" || it.Source != nil || it.Injected != nil || it.From != "" || it.Task != nil || it.Wake {
+			return false
+		}
+		asked = true
+	}
+	return asked
 }
 
-func (s *Service) forgetHandoffApprover(id string) {
+// userOpened: conversation id is one the user opened, as noted when it was started (never a backfill's guess), and no
+// extension's token opened it.
+func (s *Service) userOpened(ctx context.Context, id string) bool {
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return false
+	}
+	o := b.m[id]
+	return o != nil && o.Origin == OriginUser && o.By == originByStart && o.Ext == ""
+}
+
+// handoffClaim is the approval that claimed a hand-off card, with the device the hub vouched for: the answer the
+// card's tool goes by, whatever else reaches its question.
+type handoffClaim struct {
+	approver assistantwire.HandoffApprover
+	r        proto.Resolution
+	at       time.Time
+}
+
+// claimHandoffLocked records, under s.fleet.mu as hand-off card id is claimed with r, whether r is an approval from a
+// device the hub vouched for. Claims left behind by a tool that stopped waiting go after an hour.
+func (s *Service) claimHandoffLocked(id string, r proto.Resolution, approver *assistantwire.HandoffApprover) {
+	if approver == nil || approver.DeviceID == "" || !proto.SecretHandoffApproves(r) || r.AnsweredBy != "" || r.Remembered {
+		delete(s.fleet.handoffBy, id)
+		return
+	}
+	now := time.Now()
+	if s.fleet.handoffBy == nil {
+		s.fleet.handoffBy = map[string]handoffClaim{}
+	}
+	for k, c := range s.fleet.handoffBy {
+		if now.Sub(c.at) > time.Hour {
+			delete(s.fleet.handoffBy, k)
+		}
+	}
+	s.fleet.handoffBy[id] = handoffClaim{approver: *approver, r: r, at: now}
+}
+
+// takeHandoffClaim is the approval that claimed hand-off card id, and forgets it.
+func (s *Service) takeHandoffClaim(id string) (handoffClaim, bool) {
 	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	c, ok := s.fleet.handoffBy[id]
 	delete(s.fleet.handoffBy, id)
-	s.fleet.mu.Unlock()
+	return c, ok
 }
 
 // handoffValues are a hand-off's resolved values, in memory until the start is sent: stage seals them for one start,
@@ -262,6 +337,12 @@ func (s *Service) handoffResolve(ctx context.Context, h *secretHandoff, approved
 	results := make([]handoffResult, 0, len(h.vars))
 	failed := false
 	for _, v := range h.vars {
+		if p, ok := hs.SecretProviderOf(v.Reference); !ok || p.Extension != v.Provider.Extension {
+			// The provider the card named was switched off or another claims the scheme now: not the one approved.
+			failed = true
+			results = append(results, handoffResult{Name: v.Name, Status: handoffFailed, Code: "provider_changed"})
+			continue
+		}
 		val, err := hs.ResolveSecret(ctx, v.Reference, wire.SecretPurpose{Kind: "agent_run", ID: h.launcher, Machine: h.machine}, approvedBy)
 		code := ""
 		switch {
@@ -337,6 +418,46 @@ func (h *secretHandoff) granted(approvedBy string) string {
 		by = "by the user's Always rule"
 	}
 	return fmt.Sprintf(" Its environment has the secrets for this run only (%s); never print or log them. secret_env: %s", by, b)
+}
+
+// checkSecretEnvArg refuses agent_start arguments whose secret_env is not an object of strings (decoding it loosely
+// would start the Agent with fewer variables than asked).
+func checkSecretEnvArg(args json.RawMessage) error {
+	var a struct {
+		SecretEnv json.RawMessage `json:"secret_env"`
+	}
+	if json.Unmarshal(args, &a) != nil || len(a.SecretEnv) == 0 || string(a.SecretEnv) == "null" {
+		return nil
+	}
+	var env map[string]string
+	if err := json.Unmarshal(a.SecretEnv, &env); err != nil {
+		return errors.New("secret_env must be an object of variable names to references (strings)")
+	}
+	return nil
+}
+
+// withoutSecretEnv is agent_start's arguments without secret_env, for a card that shows them (the health space's
+// confirmation): the references stay off every card.
+func withoutSecretEnv(args json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return args
+	}
+	if _, ok := m["secret_env"]; !ok {
+		return args
+	}
+	delete(m, "secret_env")
+	out, err := json.Marshal(m)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return out
+}
+
+// refusedWith: err is a node's or the devices' refusal with code.
+func refusedWith(err error, code string) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == code
 }
 
 // handoffWords are the parts that say something.
