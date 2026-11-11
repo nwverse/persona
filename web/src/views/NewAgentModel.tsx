@@ -63,10 +63,11 @@ export function NewAgentModel({ mid, launchers, ready, choice, runs, configured,
     opened.current = mid;
   }, [mid]);
 
-  const { providers, state, presets } = useMemo(
-    () => newAgentPanel({ launchers, listOf: (name) => modelList(mid, name), choice, configured, runs, tiers }),
+  // built only while the panel is open (the pill needs one list, not every launcher's rows)
+  const panel = useMemo(
+    () => (shown ? newAgentPanel({ launchers, listOf: (name) => modelList(mid, name), choice, configured, runs, tiers }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
-    [launchers, mid, choice.launcher, choice.model, choice.effort, configured, runs, tiers, version],
+    [shown, launchers, mid, choice.launcher, choice.model, choice.effort, configured, runs, tiers, version],
   );
   const pill = newAgentPill({ launchers, runs, list: runs ? modelList(mid, runs) : {}, choice, configured, fallback });
 
@@ -94,12 +95,12 @@ export function NewAgentModel({ mid, launchers, ready, choice, runs, configured,
         onOpen={(el) => setAnchor((a) => (a ? null : el))}
         workflow={ultracodeOn ? {} : undefined}
       />
-      {shown && anchor && (
+      {panel && anchor && (
         <ModelPanel
           anchor={anchor}
           onClose={close}
-          providers={providers}
-          state={state}
+          providers={panel.providers}
+          state={panel.state}
           scope="agent"
           onPick={onPick}
           onApplyCurrent={onApplyCurrent}
@@ -107,7 +108,7 @@ export function NewAgentModel({ mid, launchers, ready, choice, runs, configured,
           onForget={onForget}
           currentExtra={ultracode}
           follow={follow && { ...follow, onFollow: () => (onFollow(), true) }}
-          presets={presets}
+          presets={panel.presets}
           onPreset={(key) => (onPreset(key), true)}
           engines
           onHelp={(launcher) => {

@@ -20,7 +20,7 @@ import {
   effortChoices, fitEffort, followedBinding, launcherAgent, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
 } from "../lib/launcher-models";
 import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
-import { modelList, readModels, useModelLists } from "../lib/session-models";
+import { readModels, useModelList } from "../lib/session-models";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
   clearRecentSetups, forgetSetup, formHolds, loadRecentSetups, machineModel, recentCards, rememberSetup, setupKey, setupTime, type RecentCard, type RecentSetup,
@@ -104,7 +104,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const [tier, setTier] = useState<PickerTier | null>(null);
   // a launcher picked on the computer chosen before that this one can't run (#5104): the form went back to the default
   const [dropped, setDropped] = useState<{ name: string; computer: string } | null>(null);
-  const listsVersion = useModelLists();
+  // the lists read again in this opening (once each: a list read since stays as it is)
+  const readThisTime = useRef(new Set<string>());
   // ultracode for this start: off whenever the sheet opens, never saved (the server's rule: no choice carries over)
   const [ultracode, setUltracode] = useState(false);
   const features = useStore((s) => s.features);
@@ -167,6 +168,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setForward(null); // a forward goes with the sheet it came in, not into the next one
       shownMid.current = "";
       touched.current = false;
+      readThisTime.current.clear();
       return;
     }
     submitted.current = false;
@@ -364,44 +366,30 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const followed = followedBinding(launcher, unified ? configured : null);
   const listLauncher = launchersOf === mid ? pickerLauncher(launcher, followed) : "";
   useEffect(() => {
-    if (open && mid && listLauncher) void readModels(mid, listLauncher, { again: true, first: true });
+    if (!open || !mid || !listLauncher) return;
+    const key = `${mid}/${listLauncher}`;
+    void readModels(mid, listLauncher, { again: !readThisTime.current.has(key), first: true });
+    readThisTime.current.add(key);
   }, [open, mid, listLauncher]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `listsVersion` stands for what was read
-  const models = useMemo(() => (open && mid && listLauncher ? modelList(mid, listLauncher) : {}), [open, mid, listLauncher, listsVersion]);
+  const models = useModelList(open ? mid : "", listLauncher);
   // an older hub has no list (null): no model is picked
   useEffect(() => {
     if (models.list === null) setModel("");
   }, [models.list]);
-  // a preset picked: the launcher, model and effort it fills in (the model is checked once the list is in)
-  const pickTier = (x: PickerTier) => {
+  // A choice made by hand (a model or the follow row picked in the panel, a preset, Try anyway): the launcher, model and
+  // effort it runs on. A preset is marked until something else is picked (picking its own setup again keeps it).
+  const pickModel = (c: ModelChoice, preset: PickerTier | null = null) => {
     touched.current = true;
     setHelpFor("");
     setDropped(null);
-    setTier(x);
-    setLauncher(x.launcher);
-    setModel(x.model ?? "");
-    setEffort(x.effort ?? "");
-  };
-  // a model picked in the panel: the launcher and model it runs on, the effort its row stands for
-  const pickModel = (c: ModelChoice) => {
-    touched.current = true;
-    setHelpFor("");
-    setDropped(null);
-    if (c.launcher !== launcher || c.model !== model) setTier(null);
-    else if (tier && c.effort !== effort) setTier(null);
+    if (preset || c.launcher !== launcher || c.model !== model || c.effort !== effort) setTier(preset);
     setLauncher(c.launcher);
     setModel(c.model);
     setEffort(c.effort);
   };
-  const followDefault = () => {
-    touched.current = true;
-    setHelpFor("");
-    setDropped(null);
-    setTier(null);
-    setLauncher("");
-    setModel("");
-    setEffort("");
-  };
+  // a preset: the launcher, model and effort it fills in (the model is checked once the list is in)
+  const pickTier = (x: PickerTier) => pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
+  const followDefault = () => pickModel({ launcher: "", model: "", effort: "" });
 
   // Where it opens, when the machine enables more than one engine (#2576).
   const picked = online.find((m) => m.id === mid);
@@ -427,7 +415,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // what of the picked preset this launcher can't take, said once its list is in
   const tierMissed = tier && listLauncher === tier.launcher && models.list !== undefined ? tierLeftOut(tier, { agent, list: models.list, followed }) : [];
   // the follow row's second line: what Model settings › New agent runs (the hub's default, by display names)
-  const defaultList = defaultRuns ? modelList(mid, defaultRuns).list : undefined;
+  const defaultList = useModelList(open ? mid : "", defaultRuns).list;
   const followDetail = hubDefault
     ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort)].filter(Boolean).join(" · ")
     : modelDefault;
@@ -801,7 +789,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               {runs && models.list === undefined && models.error && !models.loading && (
                 <Note data-testid="new-agent-models-failed" icon="warning" tone="orange">{t("newagent.models_failed")}</Note>
               )}
-              {runs && runsBlock && (
+              {runsBlock && (
                 // what runs this time can't start here (#1643): one flow of words that wraps (a phone has no hover), the link a unit
                 <Note data-testid="new-agent-blocked" icon="warning" tone="orange">
                   <Pill tone="orange">{t("newagent.runs_this_time")}</Pill>{" "}
@@ -830,10 +818,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               <LauncherBlockedHelp
                 launcher={helpLauncher}
                 block={helpBlock}
-                onTryAnyway={() => {
-                  pickModel({ launcher: helpLauncher.name, model: "", effort: "" });
-                  setHelpFor("");
-                }}
+                onTryAnyway={() => pickModel({ launcher: helpLauncher.name, model: "", effort: "" })}
                 onAddProvider={() => {
                   onClose();
                   navigate("/settings?tab=models&add=1"); // the provider wizard, as readiness's connect_model
@@ -957,22 +942,18 @@ function tierRuns(x: PickerTier, names: Named[]): string {
   return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
 }
 
-function Choice({ selected, onClick, title, mono, radio, blocked, children }: { selected: boolean; onClick: () => void; title?: string; mono?: boolean; /** One of a radiogroup. */ radio?: boolean; /** Grayed out: this computer can't start it now (#1643); a click explains instead of picking. */ blocked?: boolean; children: React.ReactNode }) {
+function Choice({ selected, onClick, title, radio, children }: { selected: boolean; onClick: () => void; title?: string; /** One of a radiogroup. */ radio?: boolean; children: React.ReactNode }) {
   return (
     <button
       type="button"
       role={radio ? "radio" : undefined}
       aria-checked={radio ? selected : undefined}
       aria-pressed={radio ? undefined : selected}
-      aria-disabled={blocked || undefined}
       onClick={onClick}
       title={title}
       className={cx(
         "h-7 rounded-control px-2.5 text-[12px] whitespace-nowrap transition-colors",
-        mono && "font-mono",
         selected ? "bg-ink text-surface" : "bg-surface text-ink-2 shadow-btn hover:bg-hover hover:text-ink",
-        // dimmed like an offline computer's chip, and a little less so under the pointer: it still explains itself
-        blocked && (selected ? "opacity-60" : "opacity-45 hover:opacity-70"),
       )}
     >
       {children}
@@ -980,7 +961,7 @@ function Choice({ selected, onClick, title, mono, radio, blocked, children }: { 
   );
 }
 
-// The model for this start: a row showing the pick, opening into a searchable list (80–110 models through a gateway).
+// A folder to start in: picked with a click, opened with a double click or its chevron.
 function DirRow({ name, path, sub, git, selected, onPick, onOpen }: { name: string; path: string; sub?: string; git?: boolean; selected: boolean; onPick: () => void; onOpen?: () => void }) {
   return (
     <div className={cx("group/dir flex h-8 items-center gap-2 rounded-[6px] px-2 transition-colors pointer-coarse:min-h-11", selected ? "bg-accent-tint" : "hover:bg-hover")}>

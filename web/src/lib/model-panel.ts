@@ -52,9 +52,6 @@ export interface PanelProvider {
   /** The startup ID under a display name (#5029, lib/provider-names.ts providerIdNote): the group's header shows it small
    *  in monospace, the rail's tooltip after the name. */
   idNote?: string;
-  /** Its `unavailable` reason has a fix to show (New Agent's launcher that failed its check, #1643): the group's note
-   *  offers "How to fix" (the panel's `onHelp`). */
-  help?: boolean;
 }
 
 /** A setup: what a pick applies, what a favorite or a recent entry keeps. */

@@ -11,10 +11,10 @@ import {
 import { launcherBlock } from "./launcher-health";
 import type { ModelBinding } from "./model-config";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelPreset, type PanelProvider, type PanelState } from "./model-panel";
-import { isCurrentModel } from "./model-switch";
 import { providerIdNote, providerTitle } from "./provider-names";
 import { effortTitle } from "./session-actions";
-import { modelLabel, type ModelList, type PillSetup } from "./session-models";
+import { isCurrentModel } from "./model-switch";
+import { currentModelRow, modelLabel, type ModelList, type PillSetup } from "./session-models";
 import type { Launcher } from "./types";
 
 /** What the form holds for the model: `launcher` "" follows Model settings › New agent; `model` "" is the launcher's
@@ -29,12 +29,9 @@ export interface ModelChoice {
  *  sends no model. */
 export const defaultRowId = (list: LauncherModels | null | undefined): string => (list?.models ? defaultModel(list.models)?.id : undefined) ?? "default";
 
-/** The model settings' binding where `launcher` is the launcher they run, else nothing. */
-const bindingFor = (launcher: string, configured: ModelBinding | null) => followedBinding(launcher, configured);
-
-/** A list's model by an id it may stand for (its own id, or what an alias resolves to). */
-const listed = (list: LauncherModels | null | undefined, id: string): AgentModel | undefined =>
-  list?.models.find((m) => m.id === id) ?? list?.models.find((m) => isCurrentModel(m, id));
+/** A list's model by an id it may stand for (its own id, or what an alias resolves to; a named model before the default
+ *  entry standing for the same one). */
+const listed = (list: LauncherModels | null | undefined, id: string): AgentModel | undefined => (id && list ? currentModelRow(list.models, id) : undefined);
 
 /** A model's name for people: its list's name, else a short form of the id (a gateway's path without its vendor). */
 export function modelTitle(list: LauncherModels | null | undefined, id: string): string {
@@ -45,8 +42,19 @@ export function modelTitle(list: LauncherModels | null | undefined, id: string):
 /** The model a default entry stands for, by the name the list gives it elsewhere (Claude Code's "Opus 5.5"), else a short
  *  form of its id. */
 function resolvedTitle(models: AgentModel[], d: AgentModel): string {
-  const twin = models.find((m) => m !== d && isCurrentModel(m, d.resolved));
-  return twin ? modelName(twin) : modelLabel(d.resolved ?? d.id);
+  const twin = currentModelRow(models, d.resolved ?? d.id);
+  return twin && twin !== d ? modelName(twin) : modelLabel(d.resolved ?? d.id);
+}
+
+/** What a launcher's Default row runs, by name ("" when nothing says): the launcher's own `--model` when it fixes it,
+ *  else Model settings' model on their launcher, else what the default entry stands for, else the launcher's model when
+ *  its list has no default entry. The Default row and the pill both say it. */
+function defaultRuns(l: Launcher | undefined, list: LauncherModels | null | undefined, followed: ModelBinding): string {
+  const d = list ? defaultModel(list.models) : undefined;
+  if (list?.locked) return l?.model ? modelLabel(l.model) : "";
+  if (followed.model) return modelTitle(list, followed.model);
+  if (d?.resolved && list) return resolvedTitle(list.models, d);
+  return !d && l?.model ? modelLabel(l.model) : "";
 }
 
 export interface NewAgentPanelInput {
@@ -78,15 +86,12 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     const e = listOf(l.name);
     const list = e.list;
     const agent = launcherAgent(l.name, launchers, list);
-    const followed = bindingFor(l.name, configured);
+    const followed = followedBinding(l.name, configured);
     const p: PanelProvider = { id: l.name, name: providerTitle(l), engine: agentId(agent), models: null };
     const idNote = providerIdNote(l);
     if (idNote) p.idNote = idNote;
     const block = launcherBlock(l);
-    if (block) {
-      p.unavailable = block.reason;
-      p.help = true;
-    }
+    if (block) p.unavailable = block.reason;
     if (list === undefined && !e.error) {
       p.loading = true;
       return p;
@@ -100,7 +105,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     const locked = list?.locked;
     // the Default row: what runs with no model sent, in its name (the model settings' model, the model the default entry
     // stands for, the launcher's own --model when it fixes it); a launcher that fixes it says why under it
-    const runsModel = locked ? (l.model ? modelLabel(l.model) : "") : followed.model ? modelTitle(list, followed.model) : d?.resolved ? resolvedTitle(all, d) : !d && l.model ? modelLabel(l.model) : "";
+    const runsModel = defaultRuns(l, list, followed);
     const first: PanelModel = {
       id: defaultRowId(list),
       name: runsModel ? t("lib-launcher-models.default_named", { name: runsModel }) : t("lib-launcher-models.default"),
@@ -124,11 +129,11 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
         if (m.custom) row.custom = true;
         models.push(row);
       }
+      if (typedModelOffered(agent, list) && list !== null) p.typable = true;
       // the ID typed for this start, when the list doesn't name it (yet): its own row, so it is lit
-      if (l.name === choice.launcher && choice.model && choice.model !== first.id && !listed(list, choice.model) && typedModelOffered(agent, list) && list !== null) {
+      if (p.typable && l.name === choice.launcher && choice.model && choice.model !== first.id && !listed(list, choice.model)) {
         models.push({ id: choice.model, name: choice.model, efforts: effortsOf(undefined), custom: true });
       }
-      if (typedModelOffered(agent, list) && list !== null) p.typable = true;
     }
     p.models = models;
     return p;
@@ -136,7 +141,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
 
   // the row lit: the model picked, else the launcher's Default row (which says what it runs)
   const runsList = runs ? listOf(runs).list : undefined;
-  const followed = bindingFor(runs, configured);
+  const followed = followedBinding(runs, configured);
   const state: PanelState = {
     current: runs ? cleanSetup({ provider: runs, model: choice.model || defaultRowId(runsList), effort: choice.effort || followed.effort }) : null,
     recommended: [],
@@ -145,11 +150,13 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
 
   const presets = tiers.map((x): PanelPreset => {
     const list = listOf(x.launcher).list;
-    // the row the preset stands on: its model where its launcher's group has it (or takes it typed), else the launcher's
-    // Default row; picking it still hands the whole preset over, so what this launcher can't take is said under the box
-    const takes = x.model && (list === undefined || (!list?.locked && (listed(list, x.model) || (typedModelOffered(launcherAgent(x.launcher, launchers, list), list) && list !== null))));
-    const setup = cleanSetup({ provider: x.launcher, model: (takes ? x.model : "") || defaultRowId(list), effort: x.effort });
     const runsOn = providers.find((p) => p.id === x.launcher);
+    // the row the preset stands on: its model where its launcher's group has it or takes it typed (a group not read yet
+    // is not judged), else the launcher's Default row; picking it still hands the whole preset over, so what this
+    // launcher can't take is said under the box
+    const own = runsOn?.models;
+    const takes = x.model && (!own || runsOn?.typable || own.some((m) => !m.providerDefault && isCurrentModel(m, x.model)));
+    const setup = cleanSetup({ provider: x.launcher, model: (takes ? x.model : "") || defaultRowId(list), effort: x.effort });
     const description = x.description || [runsOn?.name ?? x.launcher, x.model && modelTitle(list, x.model), x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
     return { key: x.name, name: x.name, ...(description ? { description } : {}), setup };
   });
@@ -168,21 +175,13 @@ export function newAgentPill(o: { launchers: Launcher[]; runs: string; list: Mod
   const { runs, list: e, choice } = o;
   const list = e.list;
   const agent = launcherAgent(runs, o.launchers, list);
-  const followed = bindingFor(runs, o.configured);
+  const followed = followedBinding(runs, o.configured);
   const l = o.launchers.find((x) => x.name === runs);
-  const id = choice.model || followed.model;
   const d = list ? defaultModel(list.models) : undefined;
-  const model = !runs
-    ? o.fallback
-    : list?.locked && l?.model
-      ? modelLabel(l.model)
-      : id
-        ? modelTitle(list, id)
-        : d?.resolved && list
-          ? resolvedTitle(list.models, d)
-          : list !== undefined
-            ? (d ? modelName(d) : l?.model ? modelLabel(l.model) : t("chat-modelpill.default_model"))
-            : undefined;
+  // the model picked, else what the launcher's Default row runs; with nothing to say once the list is in, its default
+  // entry's name or "Default model"
+  const named = !list?.locked && choice.model ? modelTitle(list, choice.model) : defaultRuns(l, list, followed);
+  const model = !runs ? o.fallback : named || (list !== undefined ? (d ? modelName(d) : t("chat-modelpill.default_model")) : undefined);
   const out: PillSetup & { loading: boolean; failed: boolean } = {
     engine: agentId(agent),
     provider: l ? providerTitle(l) : runs,

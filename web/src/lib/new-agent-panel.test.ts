@@ -76,7 +76,6 @@ describe("the panel's providers", () => {
   it("a launcher that failed its check here is listed, its rows off with why and a fix to show (#1643)", () => {
     const blocked = provider(panel(), "work_gw");
     expect(blocked.unavailable).toBeTruthy();
-    expect(blocked.help).toBe(true);
     // no list: its Default row alone, named by the model the launcher runs
     expect(blocked.models?.map((m) => m.name)).toEqual(["默认：glm-5.3"]);
   });

@@ -114,7 +114,7 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
         <span className="flex size-[18px] shrink-0 items-center justify-center text-ink-2">
           <ProviderMark name={provider.name} />
         </span>
-        <span title={row.kind === "typed" ? model.id : name} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && row.kind !== "typed" && row.kind !== "preset" && "font-mono")}>{name}</span>
+        <span title={row.kind === "typed" ? model.id : name} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && stars && "font-mono")}>{name}</span>
         {stars && (
           <RowButton
             icon="star"

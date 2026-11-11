@@ -38,7 +38,7 @@ const claude: PanelProvider = {
   ],
 };
 const codex: PanelProvider = { id: "codex", name: "Codex", engine: "codex", models: [{ id: "gpt-5.5", name: "5.5", efforts: [] }, { id: "gateway/glm-5.3", name: "glm-5.3", efforts: [] }] };
-const blocked: PanelProvider = { id: "work_gw", name: "work_gw", engine: "claude", models: [{ id: "default", name: "默认", efforts: [], providerDefault: true }], unavailable: "这台电脑的终端里用不了", help: true };
+const blocked: PanelProvider = { id: "work_gw", name: "work_gw", engine: "claude", models: [{ id: "default", name: "默认", efforts: [], providerDefault: true }], unavailable: "这台电脑的终端里用不了" };
 const state: PanelState = { current: { provider: "claude", model: "default" }, recommended: [], starting: true };
 const presets: PanelPreset[] = [{ key: "review", name: "review", description: "Code review", setup: { provider: "claude", model: "opus", effort: "high" } }];
 

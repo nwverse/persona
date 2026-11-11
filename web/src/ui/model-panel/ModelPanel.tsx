@@ -68,11 +68,14 @@ export interface ModelPanelProps {
   onPreset?: (key: string) => boolean | Promise<boolean>;
   /** The flyout lists the other engines its model runs with here (other providers listing it) and picks one on a click. */
   engines?: boolean;
-  /** "How to fix" under a provider whose `help` is set (New Agent's launcher that failed its check). */
+  /** "How to fix" after the reason under a provider that can't take a pick (New Agent's launcher that failed its check). */
   onHelp?: (provider: string) => void;
   /** "Configure models" instead of opening Settings › Model providers from here (a dialog that closes first). */
   onConfigure?: () => void;
 }
+
+/** The headers of the groups that are not a provider's. */
+const GROUP_LABELS = { favorites: "ui-modelpanel.favorites", recent: "ui-modelpanel.recent", recommended: "ui-modelpanel.recommended", presets: "ui-modelpanel.presets" } as const;
 
 /** The body's height (rail and list) when the window has room; the panel's own cap (Cindy's max-h). */
 const BODY = 428;
@@ -414,16 +417,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
     setView(v);
   };
 
-  const label = (s: PanelSection) =>
-    s.kind === "favorites"
-      ? t("ui-modelpanel.favorites")
-      : s.kind === "recent"
-        ? t("ui-modelpanel.recent")
-        : s.kind === "recommended"
-          ? t("ui-modelpanel.recommended")
-          : s.kind === "presets"
-            ? t("ui-modelpanel.presets")
-            : (s.provider?.name ?? "");
+  const label = (s: PanelSection) => (s.kind === "provider" ? (s.provider?.name ?? "") : t(GROUP_LABELS[s.kind]));
 
   const second = (row: PanelRow): { text: string; describes?: boolean } => {
     if (row.kind === "typed") return { text: t("ui-modelpanel.use_typed_note") };
@@ -586,7 +580,10 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
           reposition={sections}
           extra={flyRow.kind === "model" && flyRow.current ? currentExtra : undefined}
           engines={engines ? engineChoices(providers, flyRow, state) : undefined}
-          onEngine={(choice) => void apply(() => onPick(engineSetup(choice, flyRow.setup)), engineSetup(choice, flyRow.setup))}
+          onEngine={(choice) => {
+            const setup = engineSetup(choice, flyRow.setup);
+            void apply(() => onPick(setup), setup);
+          }}
           onEffort={(effort) => void edit(flyRow, { effort })}
           onFast={(on) => void edit(flyRow, { fast: on })}
           onReset={() => void reset(flyRow)}
@@ -603,7 +600,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
  *  list couldn't be read, with Retry. */
 function GroupNotes({ provider, onReload, onHelp }: { provider: PanelProvider; onReload?: (provider: string) => void; onHelp?: (provider: string) => void }) {
   const why = provider.unavailable || provider.locked;
-  const help = provider.help && provider.unavailable && onHelp;
+  const help = provider.unavailable && onHelp;
   return (
     <>
       {why && (
