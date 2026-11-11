@@ -1,5 +1,17 @@
 # Lessons: hub / node and networking
 
+## A shared package that imports a manager's drags it into the hub (2026-11-11, #4371, #4446)
+
+`persona-hub` links every package a shared one (`depguard.Shared`) imports, so one import of a manager-side package in
+a shared package, even for a small pure function, puts that package in the hub's program and
+`TestPersonaHubDoesNotLinkTheManager` fails. `transcript.AskOf` called `closeout.WaitsOnNobody` that way. A rule that
+only the node and the manager apply goes in their package, which imports the shared one (`closeout.AskOf` over
+`transcript.AskOf`), not the other way round. Listing the manager's package in `depguard.Shared` (as #4395 did for a
+while) only hides it. A new package the hub links and the manager does not, such as what the hub and a helper of its
+own say to each other (`relayproto` with the push relay, `shareproof` with the sharing ingress, #4446), goes in
+`depguard.HubOwn`, which also keeps it out of the manager; `Shared` is for what both programs link. After adding an
+import to a shared package or a new package the hub links, run `go test ./cmd/persona-hub` (a few seconds).
+
 ## Receipt integration fixtures need independent identities (#4433)
 
 A registered manager bus connection is not the same as its normal device-state
