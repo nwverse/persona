@@ -390,6 +390,7 @@ final class ScrollToBottomTests: XCTestCase {
         sleep(2)
         XCTAssertTrue(waitFor(seconds: 2) { $0.frozen == true && $0.arrow == true }, "held back while reading, ↓ showing")
         XCTAssertTrue(arrowButton.waitForExistence(timeout: 2) && arrowButton.isHittable, "↓ to tap")
+        print(String(format: "MARK 13 tap %.3f", Date.now.timeIntervalSince1970)) // for cutting a recording to it
         arrowButton.tap()
         let s = record("13 after ↓", seconds: 6, shots: 4)
         let end = try XCTUnwrap(s.last?.r)
