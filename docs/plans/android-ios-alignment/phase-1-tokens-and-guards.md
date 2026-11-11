@@ -86,7 +86,7 @@ All in-app feedback on Android goes through one component modeled on the iOS toa
 1. Fix the default package and regenerate `Tokens.kt`. Nothing on screen changes, because nothing reads the regenerated needs-you values or tints yet.
 2. Add a test that the committed `Tokens.kt` equals the generator's output, so the Python tests catch staleness wherever they run.
 3. Run `gen_tokens.py --check` from `scripts/ci/android.sh` and from the pre-commit hook when `spec/tokens`, `Tokens.kt` or `apple/Shared/Design` change, and map those paths in `scripts/test/check-fast.sh`.
-4. Extend `RepositoryTests` to read `Theme.Space`, `Theme.Radius`, `Theme.Font` and `Theme.Motion` from `apple/Shared/Design/Theme.swift` and compare them with `dimension.json`, `type.json` and `motion.json`.
+4. Extend `RepositoryTests` to read `Theme.Space`, `Theme.Radius`, `Theme.Font` and `Theme.Motion` from `apple/Shared/Design/Theme.swift` and compare them with `dimension.json`, `type.json` and `motion.json`. Radii, spacing and the shared motions land with T1, the differences known today pinned in a table (`KNOWN_DRIFT`) that T2 and T3 empty; type lands with T4, once `type.json` names the iOS levels.
 5. Correct `DESIGN_SYSTEM.md` section 1.1 about the web.
 
 ### T2. Spacing
@@ -133,7 +133,7 @@ Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; A
 
 **Today.** iOS `Theme.Font`: display 28 bold, title 22 semibold, heading 17 semibold, body 17, secondary 15, caption 13, section header 13 semibold, label 12, code 13 monospaced, with line heights per level. Android's `Tokens.Type` still carries retired iOS names (panel title, card body, greeting, micro 11); `Typography.kt` reads only their sizes, the 28 and 22 are literals, and line heights, weights and families are never read.
 
-**Change.** Rewrite `type.json` as the nine iOS levels with size, weight and line height. Glass's typography reads them, and `GlassTokenContractTest` checks against the tokens instead of its own numbers.
+**Change.** Rewrite `type.json` as the nine iOS levels with size, weight and line height. Glass's typography reads them, and `GlassTokenContractTest` checks against the tokens instead of its own numbers. `RepositoryTests` compares the levels with `Theme.Font`.
 
 Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`), there is a 12 sp floor, and Brief and Board are pinned by hash in the contract test.
 

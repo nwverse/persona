@@ -43,7 +43,7 @@ Scope: tokens, components, interaction patterns, content, dark mode, Dynamic Typ
 | --- | --- | --- | --- |
 | Tokens | `apple/Shared/Design/Theme.swift`, `apple/Shared/Design/ColorSpec.swift`, `apple/Shared/Design/StyleSpec.swift`, `apple/Shared/Design/Palette.swift`, `apple/Shared/StatusPalette.swift` | `web/src/styles.css`, `web/src/ui/look.ts` | `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` (generated), hand-written siblings in the same folder |
 | Components | `apple/Persona/DesignSystem/` | `web/src/ui/atoms.tsx`, `web/src/ui/` | the same Android folder |
-| Cross-platform token source | none (Swift is read-only for the generator) | generated tokens | `spec/tokens/README.md`, `scripts/assets/gen_tokens.py` |
+| Cross-platform token source | none: `spec/tokens` records the Swift values, and `scripts/assets/test_gen_tokens.py` fails when they drift | none: `web/src/styles.css` is hand-written, and nothing reads the generated CSS | `Tokens.kt` is generated from `spec/tokens` (`spec/tokens/README.md`) by `scripts/assets/gen_tokens.py`; Android CI and the pre-commit hook fail when it is stale |
 | Written rules | `docs/apple/ios.md`, `docs/apple/icons.md`, `docs/apple/shell.md`, `docs/apple/sidebar.md` | `docs/web/web.md` | `docs/android/android-design.md` |
 
 Relationship to other docs:
@@ -122,7 +122,7 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Waiting in the background | working dot at 0.6 | secondary | clock mark |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
-Web uses amber for Needs you (`web/src/styles.css:233`). Android's generated token is red but its live value is blue. See DS-01.
+Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01.
 
 #### Fills, diff, hues, shell neutrals
 
@@ -729,7 +729,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Styles | 5 | 1 | 3 (Glass shared) | different sets |
 | Accent presets | 5 | same hex | same set | consistent |
 | Roles (danger, positive, ai) | reference | different hex | same hex | web differs |
-| Needs-you color | blue | amber | blue live, red generated | inconsistent (DS-01) |
+| Needs-you color | blue | amber | blue | web differs (DS-01) |
 | Type scale | Dynamic Type, 28/22/17/17/15/13/12 | px literals | sizes match, no in-app size setting | web has no tokens |
 | Spacing | 0-32 with `sm` 6 | Tailwind default | `xl` 20, `xxl` 24 | Android differs (DS-05) |
 | Radius | 6/10/14/20/22 | 6/8/10 plus literals | 6/10/14/20/22, per-style variants | web and Android differ |
@@ -740,13 +740,13 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Haptics | 4 kinds, 393 sites | none | 4 kinds, 35 sites | thin on Android |
 | Icons | SF Symbols | custom strokes | Phosphor | no shared map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
-| Tokens source | hand-written | hand-written | generated from stale JSON | drift is silent |
+| Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## 8. Inconsistencies and duplicate definitions
 
 | ID | What | Where | Impact | Recommended unification |
 | --- | --- | --- | --- | --- |
-| DS-01 | Needs-you color: docs say red; code is blue on Apple; amber on web; Android generated token red, live value blue | `docs/apple/ios.md:124` (records red as kept at the user's request on 2026-11-06), `docs/apple/ios.md:920`, `docs/apple/icons.md:81`, `docs/protocol/agent-states.md:10`, `docs/web/web.md:1429`; `apple/Shared/StatusPalette.swift:20`; `web/src/styles.css:233`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` (generated needs-you) and `android/core/designsystem/src/main/kotlin/persona/core/designsystem/StatusPalette.kt` (hard-coded blue) | Users see different colors for the same state on three platforms; docs mislead | Product owner decides once (code today: Apple blue; ios.md:124 records a user request for red), fix the JSON and regenerate Android, fix the four docs, change web or record it as a deliberate exception |
+| DS-01 | Needs-you color: blue on Apple and Android (decided 11-11); amber on the web | `apple/Shared/StatusPalette.swift:20`; `spec/tokens/color.status.json`; `web/src/styles.css:233` | The web shows another color for the same state | Move the web to the same blue (its own issue) |
 | DS-02 | Weights documented as bold; code is semibold | `docs/apple/ios.md` (heading, sectionHeader) vs `apple/Shared/Design/Theme.swift:338`, `:346` | Doc misleads new styles | Fix the doc |
 | DS-03 | Docs list five radii; code has seven plus `appIcon` | `apple/Shared/Design/Theme.swift:181-198` | `thumbnail` and `page` undocumented | Document all, or fold `thumbnail` into `badge` |
 | DS-04 | Duplicate hex values under different names (`#1D7A4C`/`#4CC38A` in Diff.add, Hue.green, unread text; `#2E6FD0`/`#5B9BFF` in loop and Hue.blue; `#B35400`/`#FF9F0A` in cautionText and Hue.orange; system blue literal written twice) | `apple/Shared/Design/Theme.swift:151,171,173,813-815`; `apple/Shared/StatusPalette.swift:24`; `apple/Shared/Design/Styles/Glass.swift:23`; `apple/Shared/Design/Palette.swift:8` | A change in one silently misses the others | Alias to one source; make the blue accent read `Palette.systemBlue` |

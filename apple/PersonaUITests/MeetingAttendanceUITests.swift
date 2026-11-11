@@ -102,7 +102,8 @@ final class MeetingAttendanceUITests: XCTestCase {
         scrollTo(answer, in: app)
         XCTAssertTrue(answer.waitForExistence(timeout: 20), app.debugDescription)
         XCTAssertFalse(app.buttons["meeting-stop-speaking"].exists, "listening in, nothing is said aloud")
-        XCTAssertEqual(try meeting(hub).asks(live).first?["question_source"] as? String, "typed")
+        // The newest question: the mock keeps a recording's questions from earlier tests.
+        XCTAssertEqual(try meeting(hub).asks(live).last?["question_source"] as? String, "typed")
         try shot(app, "answered-on-screen")
     }
 
@@ -128,8 +129,7 @@ final class MeetingAttendanceUITests: XCTestCase {
         let sources = app.descendants(matching: .any)["meeting-answer-sources"].firstMatch
         XCTAssertTrue(sources.exists, "what the answer drew on")
         scrollTo(sources, in: app)
-        // The newest: the hub keeps an earlier test's ask on the same sample recording.
-        let asked = try XCTUnwrap(try meeting(hub).asks(live).last)
+        let asked = try XCTUnwrap(try meeting(hub).asks(live).last, "the newest question (the mock keeps earlier tests' too)")
         XCTAssertEqual(asked["question_source"] as? String, "heard")
         XCTAssertEqual(asked["speak"] as? Bool, true)
         try shot(app, "answered-aloud")
