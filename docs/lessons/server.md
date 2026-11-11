@@ -900,6 +900,14 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- An ascending GitHub search cursor cannot use `updated_at` alone when a page ends inside one second (#4461). Keep the
+  completed thread identities at that boundary, resume an unfinished thread across restarts, and rescan a tied boundary
+  instead of trusting a page number across reordered results. Checkpoint matching-generation scans across quota windows,
+  verify every ID again immediately before moving on, and retry a changing search. More than 1,000 threads in one second,
+  or repeatedly lacking enough quota for that final check, is an explicit retryable limit. Search has no atomic snapshot:
+  a result indexed only after the final check cannot be guaranteed. Test the actual connector against synthetic HTTP,
+  including insertions, reordering, cancellation, repeated limited quota windows and retries.
+
 - A Messages ROWID can be associated with more than one chat (#4440). Deduplicate by canonical conversation and ROWID,
   before page and search limits, and count unread messages by that same identity. A numeric changes cursor can only
   advance after every selected ROWID's associations are read; select the boundary and expand it in one SQLite snapshot,
@@ -910,7 +918,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - Deleting a connector is broader than deleting an archive namespace (#1836): include its alternate chat sources, posts and items, plus indexes and project references. Record the connector at ingestion, separately from a chat's namespace, and stamp item ownership before the unchanged-item fast path. Never infer legacy ownership from an item ID, title or a shared archive alias; use explicit provenance or a known source chat, leaving ambiguous records intact. Deletion tests need another connector's records, shared aliases and unowned legacy data, not only a single source.
 - A connector's knowledge-base switch must gate every ingestion path (#1835): conversations, items (documents, meetings and events), document-title lookups and program-initiated posts. Filtering the source list alone leaves direct calls open after a switch changes. Check both the feed and the main switch at the call boundary too; a shared extension process may keep running after its connector is disabled. `Registry.Feeds` does not include `Registry.Enabled`. Test both switches independently, with a connector that still answers calls, and assert that neither source reads nor post forwarding occur while off.
-- An archive switch must fence the commit as well as the source read (#4500). A response can already have crossed the manager boundary when the user turns the source off. Admit each page under a source generation, reserve the write and cursor together, retire the generation on off, and wait for already reserved commits before reporting success. A failed write can leave a journal that publishes data during recovery: settle it before releasing the reservation. Treat a lost reservation acknowledgement and an unreadable reservation record as uncertain, preserve them across source-manager restart, and test off/on, failure, cancellation, multiple pages and both local and bus adapters. The guarantee needs one authoritative source manager and cannot cover legacy work that never used the protocol.
+- An archive switch must fence the commit as well as the source read (#4500). A response can already have crossed the manager boundary when the user turns the source off. Admit each page under a source generation, reserve the write and cursor together, retire the generation on off, and wait for already reserved commits before reporting success. A failed write can leave a journal that publishes data during recovery: settle it before releasing the reservation. Treat a lost reservation acknowledgement and an unreadable reservation record as uncertain, preserve them across source-manager restart, and test off/on, failure, cancellation, multiple pages and both local and bus adapters. The assistant also needs its own durable begin/settle/end journal with the token, generation and exact source/chat pairs: a replacement must recover it before new reads, never clear unrelated reservations, and fail closed when it cannot be loaded (#4732). The guarantee needs one authoritative source manager and cannot cover legacy work that never used the protocol.
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
 - A checkpoint after append is a replay window (#1343): connector pages can repeat after a cursor failure, a later batch failure or a process interruption.
   Preserve stable message IDs scoped by exact source and chat, including IDs such as `body` reused across threads. Formatted-text matching loses distinct messages;
@@ -1462,6 +1470,10 @@ Some apps still recognize a timeout by the summary's words, not its code: iOS `A
   `launch` calls the `stop` from `signal.NotifyContext` first: with no channel left for the signal, Go puts back the handling the process inherited at start (normally terminate; ignored stays ignored), then waits.
 - Socket reads on the local node get a deadline (`launchNodeWait`, 10 s for `launch`): a node that accepts and never answers (restarting, stuck, a stale socket held by another process) otherwise blocks forever. Say which socket timed out and point at `personad node doctor`.
 - Test a signal while the child is actually waiting: signal only after the fake node has read the request, not after a fixed sleep. A child inherits an ignored SIGINT (tests run in the background), so skip when `signal.Ignored` reports it (`cmd/personad/launch_test.go`).
+
+## Deadline cancellation can still exit zero (#2841)
+
+A shell may handle SIGTERM and exit 0. Keep the recorded cancellation when classifying its timeout so the command list stops, while ordinary success before cancellation remains successful. A public `secret.run` regression can block on a FIFO, observe ready/TERM markers and check that no next command runs, without sleeps or busy waiting.
 
 ## An empty Git file list is still authoritative (#6056)
 

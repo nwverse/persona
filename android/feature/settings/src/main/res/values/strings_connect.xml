@@ -44,7 +44,6 @@
     <string name="settings_pairing_next">Next</string>
     <string name="settings_pairing_paste">Paste link</string>
     <string name="settings_pairing_back_to_scan">Back to scanning</string>
-    <string name="settings_pairing_connect_title">Connect your hub</string>
     <string name="settings_pairing_connect_body">When the hub is installed it shows a QR code on screen. You can also open Settings › Devices › Connect a new device on a device that\'s already connected, and scan the code there.</string>
     <string name="settings_pairing_scan">Scan to pair</string>
     <string name="settings_pairing_connect_push">Notifications work without Google services: they come over a persistent connection to the hub.</string>
