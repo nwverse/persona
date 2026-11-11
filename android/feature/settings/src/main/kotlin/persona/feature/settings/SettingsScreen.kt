@@ -514,7 +514,7 @@ private fun SettingsContent(
                 row(SettingsPage.About, R.string.settings_section_about, PhIcons.Info, R.string.settings_row_about_subtitle),
                 custom { position ->
                     JGroupItem(position) {
-                        JRow(stringResource(R.string.settings_update_check), value = when {
+                        JRow(stringResource(R.string.settings_update_check), leadingIcon = PhIcons.ArrowClockwise, value = when {
                             busy -> stringResource(R.string.settings_update_checking)
                             installing -> stringResource(R.string.settings_update_installing)
                             update != null -> stringResource(R.string.settings_update_found)

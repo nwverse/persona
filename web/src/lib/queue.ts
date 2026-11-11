@@ -81,11 +81,12 @@ const IMAGES_BLOCK = /<attached_images>([\s\S]*?)<\/attached_images>/g;
  *
  *     Please check these two screens
  *     <attached_images>
- *     path: /Users/me/.persona/uploads/2026-11-10/aaaa1111.jpg
+ *     path:/Users/me/.persona/uploads/2026-11-10/aaaa1111.jpg
  *     </attached_images>
  *
- * The node writes each photo's path twice, the second time after `path: ` (node keepImagePaths); Claude's paste turns
- * the bare one into an `[Image #n]` and keeps the other. Older queues have only the bare lines, or an empty block.
+ * The node writes each photo's path twice, the second time after `path:` (node keepImagePaths); Claude's paste turns
+ * the bare one into an `[Image #n]` and keeps the other. Nodes before #4361 wrote `path: ` with a space; older queues
+ * have only the bare lines, or an empty block.
  */
 export function parseQueued(raw: string): QueuedParts {
   const contexts: QueuedContext[] = [];
@@ -94,7 +95,7 @@ export function parseQueued(raw: string): QueuedParts {
     contexts.push({ kind, title, url, text: body.trim(), ...(Object.keys(extra).length ? { attrs: extra } : {}) });
     return "";
   });
-  rest = rest.replace(IMAGES_BLOCK, (_, body: string) => `<attached_images>${body.replace(/^\s*path: /gm, "")}</attached_images>`);
+  rest = rest.replace(IMAGES_BLOCK, (_, body: string) => `<attached_images>${body.replace(/^\s*path: ?/gm, "")}</attached_images>`);
   const { text, files, photos } = parseUserText(rest);
   const carried = photos.length + files.length + contexts.length > 0;
   return { text: carried && isStandIn(text) ? "" : text, photos, files, contexts };
