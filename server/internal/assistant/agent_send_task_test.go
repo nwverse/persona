@@ -48,6 +48,26 @@ func TestAgentSendTaskMakesATask(t *testing.T) {
 	if got := feedKinds(s, "conv1"); got != "task,routed" {
 		t.Fatalf("feed: %s", got)
 	}
+	// the agent was running before the task: its card says so (#5096, the clients' Already active)
+	if got := taskCardWake(s, "conv1", todo.ID); got != wakeActive {
+		t.Fatalf("card wake %q", got)
+	}
+}
+
+// taskCardWake is the wake on task todoID's card in conversation conv ("" without one, or without a body).
+func taskCardWake(s *Service, conv, todoID string) string {
+	items, _, _ := s.feed(context.Background(), conv, time.Time{})
+	for _, it := range items {
+		if it.Kind != feedTask || it.Ref != todoID {
+			continue
+		}
+		var body taskCardBody
+		if len(it.Body) > 0 && json.Unmarshal(it.Body, &body) != nil {
+			return "unreadable"
+		}
+		return body.Wake
+	}
+	return ""
 }
 
 // A task handed without a title is named as task_plan's are (#3020): the instruction cleaned now, not its first 40

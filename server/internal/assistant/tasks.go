@@ -155,7 +155,7 @@ type FeedItem struct {
 
 const (
 	feedPlan     = "plan"     // ref: the plan id
-	feedTask     = "task"     // ref: the todo id
+	feedTask     = "task"     // ref: the todo id; body: taskCardBody, wake "active" for a task that took over a running Agent
 	feedAnswered = "answered" // ref: the todo id; body: answeredBody (answered.go)
 	feedReceipt  = "receipt"  // ref: the todo id; body: title, state, summary, pr, machine
 	feedRouted   = "routed"   // ref: the todo id; body: text, interrupted (agent_interrupt stopped its turn first), from

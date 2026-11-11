@@ -152,7 +152,7 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 		return fmt.Sprintf("%s already works for your task %s (%q): you supervise it, done_when %s.", agentLabel(c), todo.ID, todo.Title,
 			criteriaWords(nil, todo.Supervision)), nil
 	}
-	s.taskCard(ctx, self, todo.ID)
+	s.taskCard(ctx, self, todo.ID, true)
 	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
 		"and close it with task_review. done_when %s. The agent was not told: if it should work to these criteria or report to you "+
 		"(report_to_supervisor), tell it with agent_send.", agentLabel(c), am.Name, todo.ID, todo.Title, criteriaWords(nil, todo.Supervision)), nil
@@ -396,7 +396,7 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	}
 	refused := ""
 	if h.made {
-		s.taskCard(ctx, h.self, h.todo.ID)
+		s.taskCard(ctx, h.self, h.todo.ID, true)
 	} else {
 		doneWhen, expect := cleanDoneWhen(h.task.DoneWhen), max(0, min(h.task.ExpectMinutes, 24*60))
 		s.releaseHold(ctx, h.todo.ID)                                            // the supervisor sent its agent on: follow-ups go again (decision.go)
@@ -428,7 +428,7 @@ func (h *handedTask) sendFailed(ctx context.Context, s *Service, err error) erro
 		return err
 	}
 	if startResultUnknown(err) {
-		s.taskCard(ctx, h.self, h.todo.ID)
+		s.taskCard(ctx, h.self, h.todo.ID, true)
 		return fmt.Errorf("%w (it may still arrive: task %s stays; check with agent_read before sending again)", err, h.todo.ID)
 	}
 	if rerr := s.removeTodo(context.WithoutCancel(ctx), h.todo.ID); rerr != nil {
@@ -439,11 +439,26 @@ func (h *handedTask) sendFailed(ctx context.Context, s *Service, err error) erro
 	return fmt.Errorf("%w (no task was made)", err)
 }
 
-// taskCard puts task id's card into conversation self.
-func (s *Service) taskCard(ctx context.Context, self, id string) {
-	if _, err := s.appendFeed(ctx, self, feedTask, id, nil); err != nil {
+// taskCard puts task id's card into conversation self. running: the task was made of an Agent that was running
+// before it (agent_supervise, agent_send with a task, an Agent that became a task at its turn's end, a task moved to
+// another conversation); its card says so (body wake "active", the clients' Already active badge). Without it the
+// task started its Agent, as task_plan and agent_start do.
+func (s *Service) taskCard(ctx context.Context, self, id string, running bool) {
+	var body any
+	if running {
+		body = taskCardBody{Wake: wakeActive}
+	}
+	if _, err := s.appendFeed(ctx, self, feedTask, id, body); err != nil {
 		s.logf("task %s: feed: %v", id, err)
 	}
+}
+
+// wakeActive is a task card's wake when the task took over an Agent that was running already (taskCard).
+const wakeActive = "active"
+
+// taskCardBody is a task card's body: none for a task that started its Agent.
+type taskCardBody struct {
+	Wake string `json:"wake,omitempty"`
 }
 
 // dropAdoption closes the todo an adoption made when the agent could not be put on it (why), so no empty task stays.
