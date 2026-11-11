@@ -51,9 +51,33 @@ struct ChatLines {
     /// away: every sentence of a running turn moved the chat up two lines and down three (2026-11-04).
     /// Supervision folding is independent of the optional conversation layout, and only enabled for Persona chats.
     var foldSupervision = false
+    /// Background rounds fold too (docs/apple/ios.md "Background rounds"): only the main conversation, with the hub's
+    /// `main_background_folded` on. Needs `foldSupervision`.
+    var foldBackground = false
     var openSupervision: Set<String> = []
     var openAllSupervision = false
     var active = false
+
+    /// Whether a chat folds background rounds: an assistant chat that is the main conversation, with the switch on.
+    static func foldsBackground(assistant: Bool, conversation: String, main: String?, on: Bool) -> Bool {
+        guard assistant, on, let main, !main.isEmpty else { return false }
+        return conversation == main
+    }
+
+    /// The sources whose rounds are background rounds: a supervising conversation's message, a follow-up, a scheduled run.
+    static let backgroundKinds: Set<String> = ["conversation", "followup", "patrol"]
+
+    /// The input's source when it starts a background round.
+    static func backgroundSource(_ item: Item) -> MessageSource? {
+        guard let source = MessageSource.of(item), backgroundKinds.contains(source.kind) else { return nil }
+        return source
+    }
+
+    /// A scheduled task's or a follow-up's input: its prompt is never shown while background rounds fold, only its line.
+    static func hidesPrompt(_ item: Item) -> Bool {
+        guard let kind = backgroundSource(item)?.kind else { return false }
+        return kind == "followup" || kind == "patrol"
+    }
 
     static func hidesLiveSupervision(_ lines: [ChatLine], open: Set<String>, openAll: Bool = false) -> Bool {
         // A cleared stream can remain pending until its transcript item arrives, even after the turn stops.
@@ -61,7 +85,7 @@ struct ChatLines {
         for line in lines.reversed() {
             switch line.content {
             case .feed, .quick, .day: continue
-            case .supervision(let id, _, _): return open.contains(id) == openAll
+            case .supervision(let id, _, _, _): return open.contains(id) == openAll
             default: return false
             }
         }
@@ -79,34 +103,102 @@ struct ChatLines {
         var round: [ChatLine]? = nil
         var evidence: [Item] = []
         var running = false
+        // A background round's source and its input's transcript entry; nil for a supervision round.
+        var source: MessageSource? = nil
+        var entry: String? = nil
         func flush() {
+            defer {
+                round = nil
+                evidence = []
+                running = false
+                source = nil
+                entry = nil
+            }
             guard let trace = round, let first = trace.first else { return }
             if Supervision.visible(evidence, results: results, live: running) {
                 out += trace
             } else {
-                out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running))
+                out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running, source: source))
             }
-            round = nil
-            evidence = []
-            running = false
         }
         for block in blocks {
             let items = Self.transcriptItems(block)
+            var lines = flatLines([block], live: liveID, streaming: streaming)
+            if foldBackground { lines = lines.map(Self.hidingPrompt) }
+            var isLive = false
+            if case .turn(let turn) = block { isLive = turn.id == liveID }
             if case .turn(let turn) = block, turn.ordered.contains(where: \.isUserInput) {
                 flush()
-                if items.contains(where: { Injected.of($0)?.isSupervision == true }) { round = [] }
+                if items.contains(where: { Injected.of($0)?.isSupervision == true }) {
+                    round = []
+                } else if foldBackground {
+                    // A turn can hold several inputs (a message queued while it ran joins it): each input decides
+                    // where its own lines go, so a queued message of the user's never joins a background round.
+                    for line in lines {
+                        if let input = Self.inputStart(line) {
+                            if source != nil, input.entry != entry { flush() }
+                            if round == nil, let item = input.item, let s = Self.backgroundSource(item) {
+                                round = []
+                                source = s
+                                entry = item.entry
+                            }
+                        }
+                        if round != nil {
+                            round!.append(line)
+                            evidence += Self.lineItems(line)
+                        } else {
+                            out.append(line)
+                        }
+                    }
+                    if round != nil, isLive { running = true }
+                    continue
+                }
             }
-            let lines = flatLines([block], live: liveID, streaming: streaming)
             if round != nil {
                 round! += lines
                 evidence += items
-                if case .turn(let turn) = block, turn.id == liveID { running = true }
+                if isLive { running = true }
             } else { out += lines }
         }
         // The run can resume after a recap before its first transcript item arrives.
         if round != nil, active { running = true }
         flush()
         return Self.foldRecaps(Self.foldAPIErrors(out))
+    }
+
+    /// Where a line starts an input: its transcript entry, and the input itself when the line is its text. A message's
+    /// photos come before its text; only the text tells a background input.
+    static func inputStart(_ line: ChatLine) -> (entry: String?, item: Item?)? {
+        switch line.content {
+        case .row(.user(let item)): return (item.entry, item)
+        case .userImages(_, let items): return (items.first?.entry, nil)
+        default: return nil
+        }
+    }
+
+    /// The transcript items a line was built from (what decides whether its round is shown).
+    static func lineItems(_ line: ChatLine) -> [Item] {
+        switch line.content {
+        case .row(let row): return transcriptItems(row)
+        case .userImages(_, let items), .recaps(_, let items): return items
+        case .apiError(let item, _, _): return [item]
+        case .work(_, let items, _, _, _):
+            return items.flatMap { work -> [Item] in
+                switch work {
+                case .step(let step): return transcriptItems(ChatRow.tools([step]))
+                case .text(let item): return [item]
+                }
+            }
+        default: return []
+        }
+    }
+
+    /// The line with its scheduled prompt hidden (`hidesPrompt`).
+    static func hidingPrompt(_ line: ChatLine) -> ChatLine {
+        guard case .row(.user(let item)) = line.content, hidesPrompt(item) else { return line }
+        var out = line
+        out.hidesPrompt = true
+        return out
     }
 
     static func transcriptItems(_ block: ChatBlock) -> [Item] {
@@ -266,10 +358,11 @@ struct ChatLines {
         out.reserveCapacity(lines.count)
         for line in lines {
             out.append(line)
-            if case .supervision(let id, let trace, _) = line.content {
+            if case .supervision(let id, let trace, _, let source) = line.content {
                 if openSupervision.contains(id) != openAllSupervision {
+                    // A supervision round shows its raw input; a background round its source block (`hidesPrompt`).
                     let raw = trace.map { child -> ChatLine in
-                        if case .row(.user(let item)) = child.content {
+                        if source == nil, case .row(.user(let item)) = child.content {
                             return .supervisionInput(item)
                         }
                         return child

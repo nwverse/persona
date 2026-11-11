@@ -1351,6 +1351,34 @@ page merges and cache serialization; the chat cache schema changes with these fi
 `ChatSupervisionTests` and `SupervisionRoundUITests`. Screenshots use `MOCK_TASKS=1 MOCK_SUPERVISION=1` on a fresh test device;
 `-showSupervisionOpen YES` opens the record, and `-openAllWork YES` exposes its internal work for inspection.
 
+## Background rounds (#4314)
+
+In the assistant's **main** conversation, a round whose first input comes from another conversation (source kind
+`conversation`), a follow-up (`followup`) or a scheduled task (`patrol`) folds like a quiet supervision round: one muted
+line, `@<source> · Background round` (`@<source> · Running in the background` while it runs), drawn by the same
+`SupervisionRecordLine`. `<source>` is the label the source mention uses (`MessageSource.name`). The source comes from
+`MessageSource.of`: `Item.source`, then the `message-source` metadata block, then the hub's `injected` mark. The round
+lasts until the next actual input; recaps and compactions inside stay inside. A message the user queued while it runs
+joins the same transcript turn, so `ChatLines.lines` cuts the turn at each input: the user's message and what follows it
+are never folded in. Other conversations and Agent sessions are unchanged.
+
+Opening the line shows the whole round, history included (super rule 2.4). Unlike a supervision record it shows the
+input as its source block, not as raw input: a supervising conversation's message shows its text; a scheduled task's or
+a follow-up's prompt (`injected.detail`, or the raw input) is never shown while folding is on, in a folded round or a
+visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
+the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
+accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
+
+While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
+to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
+other one under its name (the direction's name, else the conversation's title, else "Another conversation") in the
+tray's header style. Rows that are not tasks belong to the conversation's own group. Rows, their order within a group
+and the count are unchanged (`ActionTrayContent.grouped`); with one group the tray is a single list as before.
+
+The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless changed; an older hub that omits it
+counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
+and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
+
 ## Source mentions in the assistant conversation (#2130)
 
 Display provenance does not change model input roles. Relayed conversation messages and automated updates use the
