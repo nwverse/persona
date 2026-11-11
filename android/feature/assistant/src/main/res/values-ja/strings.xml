@@ -33,6 +33,7 @@
     <string name="assistant_compact">コンテキストを圧縮</string>
     <string name="assistant_new_main">新しいメインチャット</string>
     <string name="assistant_archive">アーカイブ</string>
+    <string name="assistant_archived">アーカイブ済み</string>
     <string name="assistant_copy_session_id">セッションIDをコピー</string>
     <string name="assistant_new_main_title">新しいメインチャットを開始しますか？</string>
     <string name="assistant_new_main_text">現在のメインチャットは「旧メインチャット・%1$sまで」としてアーカイブされ、後から見つけられます。次に送るメッセージから新しいメインチャットが始まります。</string>
@@ -78,6 +79,8 @@
     <string name="assistant_search_chats">チャットを検索</string>
     <string name="assistant_start_main">メインチャットを開始</string>
     <string name="assistant_main_chat">メインチャット</string>
+    <!-- The drawer's newest own chats, between 常驻 and All chats (#4922) -->
+    <string name="assistant_recent">最近</string>
     <string name="assistant_directions">常駐</string>
     <string name="assistant_origin_inbox">受信箱</string>
     <string name="assistant_empty_title">チャットはまだありません</string>

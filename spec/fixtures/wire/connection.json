@@ -85,6 +85,7 @@
         "runtime_cli",
         "conversation_origin",
         "builtin_presets",
+        "launcher_auto_name",
         "upload_dir",
         "file_edit",
         "launcher_scope",
@@ -98,6 +99,7 @@
         "sessions_lookup",
         "sessions_pane_source",
         "sessions_manager",
+        "sessions_page_counts",
         "machine_rename"
       ],
       "fp": "",
@@ -196,6 +198,7 @@
           "runtime_cli",
           "conversation_origin",
           "builtin_presets",
+          "launcher_auto_name",
           "upload_dir",
           "file_edit",
           "launcher_scope",
@@ -209,6 +212,7 @@
           "sessions_lookup",
           "sessions_pane_source",
           "sessions_manager",
+          "sessions_page_counts",
           "machine_rename"
         ],
         "/type": "hello"
@@ -299,6 +303,7 @@
         "runtime_cli",
         "conversation_origin",
         "builtin_presets",
+        "launcher_auto_name",
         "upload_dir",
         "file_edit",
         "launcher_scope",
@@ -312,6 +317,7 @@
         "sessions_lookup",
         "sessions_pane_source",
         "sessions_manager",
+        "sessions_page_counts",
         "machine_rename"
       ],
       "fp": "",
@@ -400,6 +406,7 @@
           "runtime_cli",
           "conversation_origin",
           "builtin_presets",
+          "launcher_auto_name",
           "upload_dir",
           "file_edit",
           "launcher_scope",
@@ -413,6 +420,7 @@
           "sessions_lookup",
           "sessions_pane_source",
           "sessions_manager",
+          "sessions_page_counts",
           "machine_rename"
         ],
         "/ok": true,
