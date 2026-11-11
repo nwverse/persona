@@ -1115,6 +1115,8 @@ struct StarterComposer: View {
         #endif
         #if os(iOS)
         .modifier(attachHost)
+        // The Photos library warmed off the main thread, as a conversation's composer does (#4250).
+        .task { if attachOpener != nil { AttachLibrary.prewarm() } }
         .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses) { add($0) })
         // The hub's extensions' prompts for the shell's + list, as a conversation's composer reads them.
         .tabActiveTask(id: ExtensionTextSource(group: model.hubGroup, features: model.features(model.hubGroup),
