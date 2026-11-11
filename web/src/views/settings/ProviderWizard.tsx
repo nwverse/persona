@@ -8,7 +8,7 @@
 // same form. The logic is lib/providers.ts, lib/provider-tiers.ts and lib/launcher-presets.ts. It reads the main conversation's readiness (4.3 B.3 / B.4): with a
 // Claude Code that already answers, "Use it for the main conversation and new Agents" starts off; a key saved for a computer with no Claude Code
 // says so (the main conversation still starts claude there) with how to install it.
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import {
   assignByDefault,
@@ -52,7 +52,7 @@ import {
   type ProviderView,
   type TestResult,
 } from "../../lib/providers";
-import { applyTiers, hasTiers, setTier, tierAdvice, tierLines, withAutoTiers, type TierRow, type Tiers, type TierSlot } from "../../lib/provider-tiers";
+import { applyTiers, checkedIds, hasTiers, setTier, tierAdvice, tierLines, tiersSplit, withAutoTiers, type TierAdvice, type TierRow, type Tiers, type TierSlot } from "../../lib/provider-tiers";
 import { formScope, newScope, scopeBody, scopeFromView, scopeProblem, scopeShown, scopeSummary, type ScopeForm } from "../../lib/provider-scope";
 import { claudeMissing, claudeWorks, currentReadiness, readinessChanged, readinessSettled, useReadiness, type Readiness } from "../../lib/readiness";
 import { effortLabel } from "../../lib/routines";
@@ -98,7 +98,12 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const isNew = existing === "new";
   const old = existing && existing !== "new" ? existing : null;
   const [step, setStep] = useState<Step>("pick");
-  const [f, setF] = useState<ProviderForm>(() => newForm());
+  const [f, setForm] = useState<ProviderForm>(() => newForm());
+  // Every change goes through the tiers' fill-in (#4975): a new Claude Code provider's tiers follow the checked models
+  // and the default until the user picks one, in the same render; a saved provider's never change by themselves.
+  const setF = useCallback<React.Dispatch<React.SetStateAction<ProviderForm>>>((u) => setForm((x) => withAutoTiers(typeof u === "function" ? u(x) : u)), []);
+  // one per opening: an answer for an earlier one is dropped (Settings keeps the wizard mounted)
+  const opening = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
@@ -175,6 +180,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
 
   useEffect(() => {
     if (existing === null) return;
+    ++opening.current;
     setError("");
     setAdvanced(false);
     setTiersOpen(false);
@@ -227,9 +233,6 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   };
 
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
-  // A new Claude Code provider's tiers follow the checked models and the default until the user picks one (#4975); a
-  // saved provider's are its own and never change by themselves.
-  useEffect(() => setF((x) => withAutoTiers(x)), [f.models, f.model, f.kind, f.agent]);
   const problems = formProblems(f, isNew, !!old?.has_key);
   // models were found for this connection: choosing them is what comes next
   const foundModels = !!found && !found.error && found.n > 0;
@@ -560,7 +563,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
 
         {step === "models" && (
           <div className="flex flex-col gap-3">
-            <ModelList f={f} setF={setF} />
+            <ModelList f={f} setF={setF} opening={opening} />
             {hasTiers(f) && <ClaudeTiers f={f} setF={setF} saved={!!old} open={tiersOpen} onToggle={() => setTiersOpen((o) => !o)} />}
             <Disclosure title={t("settings-providerwizard.advanced")} open={advanced} onToggle={() => setAdvanced((o) => !o)}
               badge={advanced ? undefined : hasTiers(f) ? t("settings-providerwizard.advanced_badge_claude") : t("settings-providerwizard.advanced_badge")}>
@@ -861,7 +864,7 @@ function DoneStep({ added, readiness }: { added: Added; readiness: Readiness | n
 }
 
 /** ③: the models this provider offers. Checked ones are saved; the default is one of them. */
-function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.SetStateAction<ProviderForm>> }) {
+function ModelList({ f, setF, opening }: { f: ProviderForm; setF: React.Dispatch<React.SetStateAction<ProviderForm>>; opening: React.RefObject<number> }) {
   const [adding, setAdding] = useState("");
   const update = (i: number, patch: Partial<FormModel>) =>
     setF((x) => {
@@ -880,10 +883,11 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
   };
   // What the hub's catalog knows of a typed ID (#4975), as discovery fills a listed one: only what is still empty.
   const lookUp = async (id: string) => {
+    const at = opening.current;
     try {
       const r = await api<{ models?: ProviderModel[] }>("/launchers/catalog", { method: "POST", json: { ids: [id] } });
       const found = r.models ?? [];
-      if (found.length) setF((x) => ({ ...x, models: fillFromCatalog(x.models, found, x.kind === "api" && x.api === "chat") }));
+      if (found.length && at === opening.current) setF((x) => ({ ...x, models: fillFromCatalog(x.models, found, x.kind === "api" && x.api === "chat") }));
     } catch {
       // an older hub has no catalog: the row keeps what was typed
     }
@@ -982,7 +986,7 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
   hadEnv: boolean;
 }) {
   const list = useId();
-  const ids = useMemo(() => f.models.filter((m) => m.checked).map((m) => m.id), [f.models]);
+  const ids = useMemo(() => checkedIds(f), [f.models]);
   const launcher = f.kind !== "api";
   const chat = !launcher && f.api === "chat";
   if (chat) return <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.chat_advanced_hint")}</p>;
@@ -1100,11 +1104,12 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
   );
 }
 
-/** A tier's model: the default model (left empty) or one of the checked models; a stored one that is not checked stays
- *  on the list. "Auto" when it was filled in by itself (#4975). */
-function TierSelect({ label, hint, value, ids, def, auto, onChange }: { label: string; hint?: string; value: string; ids: string[]; def: string; auto: boolean; onChange: (v: string) => void }) {
+/** A tier's model: empty (the session's model, `def` unless the session picks another; `empty` names what else it
+ *  follows) or one of the checked models; a stored one that is not checked stays on the list. The default model is not
+ *  offered again by name: set by name the node runs it without its 1M marker. "Auto" when it filled itself in (#4975). */
+function TierSelect({ label, hint, value, ids, def, auto, empty, onChange }: { label: string; hint?: string; value: string; ids: string[]; def: string; auto: boolean; empty?: string; onChange: (v: string) => void }) {
   const id = useId();
-  const options = value && !ids.includes(value) ? [...ids, value] : ids;
+  const options = [...ids.filter((m) => m !== def || m === value), ...(value && !ids.includes(value) ? [value] : [])];
   return (
     <Labelled htmlFor={id} hint={hint} label={
       // one height with or without the pill, so fields side by side line up
@@ -1114,7 +1119,7 @@ function TierSelect({ label, hint, value, ids, def, auto, onChange }: { label: s
       </span>
     }>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className={cx(INPUT, "font-mono")}>
-        <option value="">{def ? t("settings-providerwizard.same_as_default_named", { model: def }) : t("settings-providerwizard.same_as_default")}</option>
+        <option value="">{empty ?? (def ? t("settings-providerwizard.same_as_default_named", { model: def }) : t("settings-providerwizard.same_as_default"))}</option>
         {options.map((m) => (
           <option key={m} value={m}>
             {m}
@@ -1152,6 +1157,15 @@ const tierList = (tiers: Tiers) =>
     .map((s) => t("settings-providerwizard.tier_pair", { tier: TIER_NAME[s](), model: tiers[s]! }))
     .join(t("settings-providerwizard.tier_separator"));
 
+/** The suggestion line's words: which of the Haiku tier and the background requests sit on the Opus model, if any. */
+function adviceText(a: TierAdvice): string {
+  const list = tierList(a.tiers);
+  if (!a.sameAsOpus) return t("settings-providerwizard.tiers_suggested", { list });
+  const v = { model: a.sameAsOpus, list };
+  if (a.haiku && a.small) return t("settings-providerwizard.tiers_same_as_opus", v);
+  return a.haiku ? t("settings-providerwizard.tiers_haiku_as_opus", v) : t("settings-providerwizard.tiers_small_as_opus", v);
+}
+
 /** ③ for a Claude Code provider (#4975): the model each tier, the background requests and subagents run, under the
  *  models, with "Auto" on what filled itself in; Adjust opens the editor in place. Below it, when the Haiku tier lands
  *  on the Opus model while a lighter one is checked, or a saved provider's empty tiers could use a checked model, one
@@ -1159,9 +1173,11 @@ const tierList = (tiers: Tiers) =>
 function ClaudeTiers({ f, setF, saved, open, onToggle }: { f: ProviderForm; setF: React.Dispatch<React.SetStateAction<ProviderForm>>; saved: boolean; open: boolean; onToggle: () => void }) {
   const titleId = useId();
   const bodyId = useId();
-  const ids = useMemo(() => f.models.filter((m) => m.checked && m.id.trim()).map((m) => m.id.trim()), [f.models]);
+  const ids = useMemo(() => checkedIds(f), [f.models]);
   const def = f.model.trim();
-  const lines = tierLines(f);
+  // apart or together as the step opened: a row never disappears under the user while they edit it
+  const [split] = useState(() => tiersSplit(f));
+  const lines = tierLines(f, split);
   const advice = tierAdvice(f, saved);
   const value = (row: TierRow) => ({ opus: f.opus_model, sonnet: f.sonnet_model, light: f.small_model, haiku: f.haiku_model, small: f.small_model, subagent: f.subagent_model })[row];
   const change = (row: TierRow) => (v: string) =>
@@ -1183,7 +1199,9 @@ function ClaudeTiers({ f, setF, saved, open, onToggle }: { f: ProviderForm; setF
         {open ? (
           <div className="grid gap-3 sm:grid-cols-2">
             {lines.map((l) => (
-              <TierSelect key={l.row} label={ROW_NAME[l.row]()} hint={ROW_HINT[l.row]?.()} value={value(l.row)} ids={ids} def={def} auto={l.auto} onChange={change(l.row)} />
+              <TierSelect key={l.row} label={ROW_NAME[l.row]()} hint={ROW_HINT[l.row]?.()} value={value(l.row)} ids={ids} def={def} auto={l.auto} onChange={change(l.row)}
+                // left empty, the Haiku tier runs the small model
+                empty={l.row === "haiku" && f.small_model.trim() ? t("settings-providerwizard.same_as_small", { model: f.small_model.trim() }) : undefined} />
             ))}
           </div>
         ) : (
@@ -1193,7 +1211,9 @@ function ClaudeTiers({ f, setF, saved, open, onToggle }: { f: ProviderForm; setF
                 <dt className="text-[11.5px] text-ink-3">{ROW_NAME[l.row]()}</dt>
                 <dd className="flex min-w-0 items-center gap-1.5">
                   <span className={cx("truncate font-mono text-[12px]", l.model ? "text-ink" : "text-ink-3")}>{l.model || t("settings-providerwizard.same_as_default")}</span>
-                  {l.auto ? <Pill>{t("settings-providerwizard.tier_auto")}</Pill> : l.fallback && l.model ? <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-3">{t("settings-providerwizard.tier_is_default")}</span> : null}
+                  {l.auto ? <Pill>{t("settings-providerwizard.tier_auto")}</Pill> : l.follows && l.model ? (
+                    <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-3">{l.follows === "small" ? t("settings-providerwizard.tier_follows_small") : t("settings-providerwizard.tier_is_default")}</span>
+                  ) : null}
                 </dd>
               </div>
             ))}
@@ -1205,9 +1225,7 @@ function ClaudeTiers({ f, setF, saved, open, onToggle }: { f: ProviderForm; setF
         <div role="status" className={cx("flex items-start gap-1.5 text-[12px] leading-relaxed", advice.sameAsOpus ? "text-orange" : "text-ink-2")}>
           <Icon name={advice.sameAsOpus ? "warning" : "sparkles"} size={12} stroke={2.2} className="mt-1 shrink-0" />
           <span className="min-w-0 flex-1 break-words">
-            {advice.sameAsOpus
-              ? t("settings-providerwizard.tiers_same_as_opus", { model: advice.sameAsOpus, list: tierList(advice.tiers) })
-              : t("settings-providerwizard.tiers_suggested", { list: tierList(advice.tiers) })}
+            {adviceText(advice)}
           </span>
           <LineAction onClick={() => setF((x) => applyTiers(x, advice.tiers))}>{t("settings-providerwizard.tiers_apply")}</LineAction>
         </div>

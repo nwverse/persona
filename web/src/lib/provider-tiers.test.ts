@@ -113,10 +113,10 @@ describe("tierLines", () => {
   it("says what each line runs, the default model when empty", () => {
     const f = withAutoTiers(gateway([OPUS, SONNET, HAIKU]));
     expect(tierLines(f)).toEqual([
-      { row: "opus", model: OPUS, fallback: true, auto: false },
-      { row: "sonnet", model: SONNET, fallback: false, auto: true },
-      { row: "light", model: HAIKU, fallback: false, auto: true },
-      { row: "subagent", model: OPUS, fallback: true, auto: false },
+      { row: "opus", model: OPUS, follows: "session", auto: false },
+      { row: "sonnet", model: SONNET, follows: null, auto: true },
+      { row: "light", model: HAIKU, follows: null, auto: true },
+      { row: "subagent", model: OPUS, follows: "session", auto: false },
     ]);
   });
 
@@ -128,6 +128,10 @@ describe("tierLines", () => {
     // setting the joint line moves the Haiku tier with it
     const joined = setTier({ ...saved, small_model: HAIKU }, "light", SONNET);
     expect(joined).toMatchObject({ small_model: SONNET, haiku_model: "" });
+    // kept apart as the step opened: an emptied Haiku tier follows the small model, and says so
+    const emptied = { ...saved, haiku_model: "", small_model: SONNET };
+    expect(tierLines(emptied, true).find((l) => l.row === "haiku")).toEqual({ row: "haiku", model: SONNET, follows: "small", auto: false });
+    expect(tierLines({ ...emptied, small_model: "" }, true).find((l) => l.row === "haiku")).toEqual({ row: "haiku", model: OPUS, follows: "session", auto: false });
   });
 });
 
@@ -139,7 +143,7 @@ describe("tierAdvice", () => {
 
   it("offers the lighter model when the Haiku tier lands on the Opus one", () => {
     const f = setTier(withAutoTiers(gateway([OPUS, SONNET, HAIKU])), "light", "");
-    expect(tierAdvice(f, false)).toEqual({ sameAsOpus: OPUS, tiers: { light: HAIKU } });
+    expect(tierAdvice(f, false)).toEqual({ sameAsOpus: OPUS, haiku: true, small: true, tiers: { light: HAIKU } });
     const fixed = applyTiers(f, { light: HAIKU });
     expect(fixed).toMatchObject({ small_model: HAIKU, haiku_model: "", tier_source: { light: "user" } });
     expect(tierAdvice(fixed, false)).toBeNull();
@@ -150,7 +154,7 @@ describe("tierAdvice", () => {
   it("offers a saved provider's empty tiers what the checked models suggest, and changes nothing until applied", () => {
     const view = { name: "gw", base_url: "https://gw.example.com", has_key: true, model: OPUS, models: [{ id: OPUS }, { id: SONNET }, { id: HAIKU }] };
     const saved = formFromView(view);
-    expect(tierAdvice(saved, true)).toEqual({ sameAsOpus: OPUS, tiers: { sonnet: SONNET, light: HAIKU } });
+    expect(tierAdvice(saved, true)).toEqual({ sameAsOpus: OPUS, haiku: true, small: true, tiers: { sonnet: SONNET, light: HAIKU } });
     const put = providerBody(saved, view);
     for (const k of ["opus_model", "sonnet_model", "haiku_model", "small_model"]) expect(put[k] ?? "").toBe("");
     const applied = applyTiers(saved, { sonnet: SONNET, light: HAIKU });
@@ -163,9 +167,18 @@ describe("tierAdvice", () => {
   it("joins the Haiku tier and the small model when the Haiku tier sat on the Opus model", () => {
     const saved = formFromView({ name: "gw", model: OPUS, haiku_model: OPUS, small_model: HAIKU, sonnet_model: SONNET, models: [{ id: OPUS }, { id: SONNET }, { id: HAIKU }] });
     const advice = tierAdvice(saved, true);
-    expect(advice).toEqual({ sameAsOpus: OPUS, tiers: { light: HAIKU } });
+    expect(advice).toEqual({ sameAsOpus: OPUS, haiku: true, small: false, tiers: { light: HAIKU } });
     const fixed = applyTiers(saved, advice!.tiers);
     expect(fixed).toMatchObject({ haiku_model: "", small_model: HAIKU });
+    expect(tierAdvice(fixed, true)).toBeNull();
+  });
+
+  it("keeps a Haiku tier the user set apart, and says only the background requests sit on Opus", () => {
+    const saved = formFromView({ name: "gw", model: OPUS, haiku_model: "claude-haiku-4-5", small_model: "", models: [{ id: OPUS }, { id: SONNET }, { id: HAIKU }] });
+    const advice = tierAdvice(saved, true);
+    expect(advice).toEqual({ sameAsOpus: OPUS, haiku: false, small: true, tiers: { sonnet: SONNET, light: HAIKU } });
+    const fixed = applyTiers(saved, advice!.tiers);
+    expect(fixed).toMatchObject({ haiku_model: "claude-haiku-4-5", small_model: HAIKU, sonnet_model: SONNET });
     expect(tierAdvice(fixed, true)).toBeNull();
   });
 

@@ -21,7 +21,8 @@ const FIELD: Record<TierSlot, TierField> = { opus: "opus_model", sonnet: "sonnet
 /** Only a Claude Code launcher has tiers (the node sets ANTHROPIC_DEFAULT_*_MODEL for claude). */
 export const hasTiers = (f: Pick<ProviderForm, "kind" | "agent">) => f.kind === "launcher" && f.agent === "claude";
 
-const checkedIds = (f: ProviderForm) => f.models.filter((m) => m.checked && m.id.trim()).map((m) => m.id.trim());
+/** The checked models' IDs, trimmed: what a tier can be set to. */
+export const checkedIds = (f: Pick<ProviderForm, "models">) => f.models.filter((m) => m.checked && m.id.trim()).map((m) => m.id.trim());
 
 // ── Reading a model ID ──────────────────────────────────────
 
@@ -167,61 +168,75 @@ export function setTier(f: ProviderForm, slot: TierSlot, value: string): Provide
   return { ...f, [FIELD[slot]]: value, ...extra, tier_source: { ...f.tier_source, [slot]: "user" } };
 }
 
-/** Several tiers set at once (a suggestion taken), each as if the user chose it; a lighter model for Haiku / small
- *  model goes to both of them. */
+/** Several tiers set at once (a suggestion taken), each as if the user chose it. A lighter model for Haiku / small
+ *  model goes to the small model, and to the Haiku tier too when that one was on the Opus tier's model; a Haiku tier the
+ *  user set to anything else stays. */
 export const applyTiers = (f: ProviderForm, tiers: Tiers) =>
   TIER_SLOTS.reduce((x, slot) => {
     const v = tiers[slot];
     if (!v) return x;
     const next = setTier(x, slot, v);
-    return slot === "light" ? { ...next, haiku_model: "" } : next;
+    const onOpus = !!x.haiku_model.trim() && x.haiku_model.trim() === (x.opus_model.trim() || x.model.trim());
+    return slot === "light" && onOpus ? { ...next, haiku_model: "" } : next;
   }, f);
 
 // ── What each tier ends up on ───────────────────────────────
 
 export type TierRow = "opus" | "sonnet" | "light" | "haiku" | "small" | "subagent";
 
-/** One line of the summary: the model it runs, whether that is the default model (left empty), whether it was filled
- *  in by itself. */
+/** One line of the summary: the model it runs in a session on the default model; what an empty one follows (the
+ *  session's model, or for the Haiku tier the small model); whether it was filled in by itself. */
 export interface TierLine {
   row: TierRow;
   model: string;
-  fallback: boolean;
+  follows: "session" | "small" | null;
   auto: boolean;
 }
 
-/** The summary's lines, as the node runs them with the provider's default model: Opus, Sonnet, Haiku / small model
- *  (Haiku and Small model when they are apart), Subagents. Fable stays in Advanced. */
-export function tierLines(f: ProviderForm): TierLine[] {
+/** The summary's lines as the node runs them (an empty tier is the session's model, the provider's default unless the
+ *  session picks another): Opus, Sonnet, Haiku / small model (Haiku and Small model apart when `split`), Subagents.
+ *  Fable stays in Advanced. */
+export function tierLines(f: ProviderForm, split = tiersSplit(f)): TierLine[] {
   const def = f.model.trim();
-  const line = (row: TierRow, value: string, auto = false): TierLine => ({ row, model: value.trim() || def, fallback: !value.trim(), auto: auto && !!value.trim() });
+  const line = (row: TierRow, value: string, auto = false): TierLine => ({ row, model: value.trim() || def, follows: value.trim() ? null : "session", auto: auto && !!value.trim() });
   const light = f.tier_source.light === "auto";
+  const small = f.small_model.trim();
+  const haiku: TierLine = f.haiku_model.trim() || !small ? line("haiku", f.haiku_model) : { row: "haiku", model: small, follows: "small", auto: false };
   return [
     line("opus", f.opus_model, f.tier_source.opus === "auto"),
     line("sonnet", f.sonnet_model, f.tier_source.sonnet === "auto"),
-    ...(tiersSplit(f) ? [line("haiku", f.haiku_model), line("small", f.small_model, light)] : [line("light", f.small_model, light)]),
+    ...(split ? [haiku, line("small", f.small_model, light)] : [line("light", f.small_model, light)]),
     line("subagent", f.subagent_model),
   ];
 }
 
 /** What the tiers step offers under the summary, or null.
  *  - `sameAsOpus`: the Haiku tier or the small model runs on the Opus tier's model while a lighter checked model fits
- *    them (the model they share).
+ *    them (the model they share); `haiku` / `small` say which of the two does.
  *  - `tiers`: what taking the offer sets. A new provider's tiers fill themselves in, so it offers only that lighter
  *    model; a saved one's never change by themselves, so it offers every empty tier a checked model fits, and the
  *    lighter model in place of the Opus one. */
-export function tierAdvice(f: ProviderForm, saved: boolean): { sameAsOpus: string; tiers: Tiers } | null {
+export interface TierAdvice {
+  sameAsOpus: string;
+  haiku: boolean;
+  small: boolean;
+  tiers: Tiers;
+}
+
+export function tierAdvice(f: ProviderForm, saved: boolean): TierAdvice | null {
   if (!hasTiers(f)) return null;
   const def = f.model.trim();
   const s = suggestTiers(checkedIds(f), def);
   const opus = f.opus_model.trim() || def;
   const haiku = f.haiku_model.trim() || f.small_model.trim() || def;
   const small = f.small_model.trim() || def;
-  const sameAsOpus = !!opus && !!s.light && s.light !== opus && (haiku === opus || small === opus) ? opus : "";
+  const lighter = !!opus && !!s.light && s.light !== opus;
+  const on = { haiku: lighter && haiku === opus, small: lighter && small === opus };
+  const sameAsOpus = on.haiku || on.small ? opus : "";
   const tiers: Tiers = {};
   if (saved) {
     for (const slot of TIER_SLOTS) if (s[slot] && !f[FIELD[slot]].trim()) tiers[slot] = s[slot];
   }
   if (sameAsOpus) tiers.light = s.light;
-  return Object.keys(tiers).length ? { sameAsOpus, tiers } : null;
+  return Object.keys(tiers).length ? { sameAsOpus, ...on, tiers } : null;
 }

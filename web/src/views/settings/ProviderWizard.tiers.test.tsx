@@ -23,6 +23,8 @@ const HAIKU = "claude-haiku-5-5";
 type Call = { method: string; path: string; body?: Record<string, unknown> };
 let calls: Call[];
 let catalog: Record<string, unknown>[] | null;
+// set: the catalog answers only when this is resolved
+let catalogGate: Promise<void> | null;
 let host: HTMLDivElement;
 let root: Root;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -86,6 +88,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   calls = [];
   catalog = [];
+  catalogGate = null;
   Object.assign(getState(), { features: ["builtin_presets"] });
   resetReadiness();
   vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
@@ -94,7 +97,7 @@ beforeEach(() => {
     if (call.path.endsWith("/launchers/presets")) return Promise.resolve(json({ presets: [] }));
     if (call.path.endsWith("/launchers/discover")) return Promise.resolve(json({ models: [{ id: OPUS }, { id: SONNET }, { id: HAIKU }] }));
     if (call.path.endsWith("/launchers/test")) return Promise.resolve(json({ ok: true, ms: 120, model: OPUS }));
-    if (call.path.endsWith("/launchers/catalog")) return Promise.resolve(catalog ? json({ models: catalog }) : json({ error: "not found" }, 404));
+    if (call.path.endsWith("/launchers/catalog")) return (catalogGate ?? Promise.resolve()).then(() => (catalog ? json({ models: catalog }) : json({ error: "not found" }, 404)));
     if (call.path.endsWith("/launchers") && call.method === "POST") return Promise.resolve(json({ launcher: { name: "gw" } }));
     return Promise.resolve(json({}));
   }));
@@ -120,6 +123,9 @@ describe("Claude Code tiers on Choose models", () => {
     // the Opus tier is the default model already: left empty, said so
     expect(summary()).toContain(t("settings-providerwizard.tier_is_default"));
     expect(hasButton(t("settings-providerwizard.tiers_apply"))).toBe(false);
+    // the default model is offered as "the session's model", not again by name (by name it would lose its 1M marker)
+    click(t("settings-providerwizard.tiers_adjust"));
+    expect([...tierSelect("Opus").querySelectorAll("option")].map((o) => o.value)).toEqual(["", SONNET, HAIKU]);
     await save();
     expect(posted()).toMatchObject({ model: OPUS, sonnet_model: SONNET, small_model: HAIKU });
     expect(posted()).not.toHaveProperty("opus_model");
@@ -130,12 +136,12 @@ describe("Claude Code tiers on Choose models", () => {
     click(t("settings-providerwizard.tiers_adjust"));
     expect(button(t("settings-providerwizard.tiers_close")).getAttribute("aria-expanded")).toBe("true");
     choose(t("settings-providerwizard.tier_light"), "");
-    choose("Sonnet", OPUS);
+    choose("Sonnet", HAIKU);
     // a change of default afterwards leaves both as picked
     const sonnetRow = document.body.querySelector(`[data-model="${SONNET}"]`)!;
     act(() => [...sonnetRow.querySelectorAll("button")].find((b) => b.textContent === t("settings-providerwizard.set_default"))!.click());
     await flush();
-    expect(tierSelect("Sonnet").value).toBe(OPUS);
+    expect(tierSelect("Sonnet").value).toBe(HAIKU);
     expect(tierSelect(t("settings-providerwizard.tier_light")).value).toBe("");
     // the Opus tier, still automatic, followed the new default
     expect(tierSelect("Opus").value).toBe(OPUS);
@@ -148,7 +154,7 @@ describe("Claude Code tiers on Choose models", () => {
     expect(tierSelect(t("settings-providerwizard.tier_light")).value).toBe(HAIKU);
     expect(hasButton(t("settings-providerwizard.tiers_apply"))).toBe(false);
     await save();
-    expect(posted()).toMatchObject({ model: OPUS, sonnet_model: OPUS, small_model: HAIKU });
+    expect(posted()).toMatchObject({ model: OPUS, sonnet_model: HAIKU, small_model: HAIKU });
   });
 
   it("looks a model typed by hand up in the hub's catalog, and a tier fills itself in from it", async () => {
@@ -164,6 +170,22 @@ describe("Claude Code tiers on Choose models", () => {
     const fable = (posted()!.models as Record<string, unknown>[]).find((m) => m.id === "claude-fable-5-1");
     expect(fable).toMatchObject({ context_window: 1000000, efforts: ["low", "medium", "high"], default_effort: "medium" });
     expect(posted()).toMatchObject({ fable_model: "claude-fable-5-1" });
+  });
+
+  it("drops a catalog answer that comes after the wizard was opened again", async () => {
+    let open!: () => void;
+    catalogGate = new Promise<void>((resolve) => { open = resolve; });
+    catalog = [{ id: "claude-fable-5-1", name: "Fable 5.1", context_window: 1000000 }];
+    await newGateway();
+    type(input(`[aria-label="${t("settings-providerwizard.add_model_id")}"]`), "claude-fable-5-1");
+    click(t("settings-providerwizard.add"));
+    await flush();
+    // reopened for a saved provider with the same model before the answer
+    await draw({ name: "gw", source: "persona", base_url: "https://gw.example.com", has_key: true, model: "claude-fable-5-1", models: [{ id: "claude-fable-5-1" }] } as ProviderView);
+    toStep(t("settings-providerwizard.step_models"));
+    await act(async () => open());
+    await flush();
+    expect(input(`input[aria-label="${t("settings-providerwizard.context_window", { id: "claude-fable-5-1" })}"]`).value).toBe("");
   });
 
   it("keeps a typed model as it is on a hub without the catalog", async () => {
