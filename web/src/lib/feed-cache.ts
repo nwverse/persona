@@ -1,7 +1,7 @@
 // One main conversation's newest page, for rendering before the hub answers. This is never a source of authority.
 import { BASE } from "./base";
 import { credentialEpoch } from "./credential-epoch";
-import type { Item } from "./types";
+import type { AssistantInfo, Item } from "./types";
 import { injectedOf } from "./injected";
 import { hasPrivateRefusal, publicRefusalItem } from "./refusal-public";
 import { taskCalls } from "./task-association";
@@ -232,4 +232,12 @@ export function writeMemoryPage(scope: string | null, value: FeedCache): void {
   if (!value.items.length) return;
   memory.set(key, newestTurns(value));
   if (memory.size > MEMORY_PAGES) memory.delete(memory.keys().next().value!);
+}
+
+/** A confirmed main stays on its routing node when the new-chat default changes. */
+export function mainConversationMachine(assistant: AssistantInfo | null | undefined): string | undefined {
+  if (!assistant?.main) return assistant?.machine_id;
+  return assistant.main_machine_id ||
+    assistant.conversations.find((c) => c.session_id === assistant.main)?.machine_id ||
+    assistant.machine_id;
 }
