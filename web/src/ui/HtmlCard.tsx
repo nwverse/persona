@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentLanguage, t } from "../i18n";
 import { htmlRequest, judge, mounted, newBridge, prompted, unmounted, type BridgeAsk, type HtmlInstance } from "../lib/assistant-html";
-import { conversationCards, postHtmlAction, useCards } from "../lib/assistant-views";
+import { conversationCards, useCards } from "../lib/assistant-views";
+import { postHtmlAction } from "../lib/html-actions";
 import type { UIItem } from "../lib/extension-ui";
 import { uuid } from "../lib/format";
 import { claimSlot, releaseSlot, runCard, type RunningCard } from "../lib/html-runtime/host";
