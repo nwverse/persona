@@ -164,6 +164,8 @@ data class AgentStartRequest(
     @SerialName("resume_session_id") val resumeSessionId: String? = null,
     /** The hub answers at once with a `starting` session and starts the agent in the background. */
     val async: Boolean? = null,
+    /** Start Claude Code with ultracode on (#582, docs/protocol/protocol.md "Claude Code ultracode"); null leaves it off. */
+    val ultracode: Boolean? = null,
     /** What the tab is named after when the first message goes as an ordinary message rather than [prompt]. */
     @SerialName("name_hint") val nameHint: String? = null,
     /** The model picked for this start (an id of [AgentCreationService.launcherModels]); null: the default one. */

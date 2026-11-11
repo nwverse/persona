@@ -528,6 +528,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.AgentSurface = m.surface
 				m.turnErr.set(&s)
 				setContext(&s, m)
+				s.Inventory = m.inventory
 				s.Title = threadTitle(src.home, src.thread)
 				untitled(&s, m)
 			}

@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.Machine
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import java.net.URI
 
@@ -193,7 +194,7 @@ private fun LazyListScope.newAgentItems(
         JSectionHeader(stringResource(R.string.agents_worktree_title))
         JGroupItem(GroupPosition.of(0, if (state.inWorktree) 2 else 1)) {
             JSwitchRow(stringResource(R.string.agents_worktree_switch), state.inWorktree, model::inWorktree,
-                leadingIcon = PhIcons.GitBranch, enabled = editable)
+                leadingIcon = PersonaIcons.gitBranch, enabled = editable)
         }
         if (state.inWorktree) JGroupItem(GroupPosition.of(1, 2)) {
             JTextField(state.worktreeBranch, model::worktreeBranch, placeholder = suggested,
@@ -264,6 +265,16 @@ private fun LazyListScope.newAgentItems(
         val efforts = state.modelEfforts
         if (efforts?.isEmpty() == true) JRow(stringResource(R.string.agents_new_effort), subtitle = stringResource(R.string.agents_new_no_effort), enabled = false)
         else ChoiceMenu(stringResource(R.string.agents_new_effort), state.selection.effort, effortChoices(efforts), editable) { model.selection(state.selection.copy(effort = it)) }
+        // Claude Code's ultracode for this start (#582, iOS UltracodeStartRow): off each time, never saved; a known CLI
+        // too old for it says so and can't be switched on.
+        val shown = NewAgentUltracode.offered(LocalHubFeatures.current, state.agentType, efforts)
+        val version = machines.firstOrNull { it.id == state.machineId }?.claudeVersion?.trim()
+        val blocked = version?.takeIf { shown && NewAgentUltracode.tooOld(it) }
+        LaunchedEffect(shown, blocked) { if (!shown || blocked != null) model.ultracode(false) }
+        if (shown) JSwitchRow("ultracode", state.ultracode && blocked == null, model::ultracode, // i18n-ignore: a proper name, never translated
+            subtitle = blocked?.let { stringResource(R.string.agents_new_ultracode_old, it, NewAgentUltracode.MIN_VERSION.joinToString(".")) }
+                ?: stringResource(R.string.agents_new_ultracode_subtitle),
+            enabled = editable && blocked == null, subtitleLines = Int.MAX_VALUE)
     }
     item("prompt") {
         JTextField(state.prompt, model::prompt, enabled = !state.locked,

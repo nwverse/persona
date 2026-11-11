@@ -473,7 +473,7 @@ func pollRepo(t *testing.T) string {
 	t.Helper()
 	cwd := t.TempDir()
 	writeGitFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
-	if got := awaitGitPlace(t, gitPlaces, cwd); got != (gitPlace{cwd, cwd, "main"}) {
+	if got := awaitGitPlace(t, gitPlaces, cwd); legacyGitPlace(got) != (gitPlace{root: cwd, worktree: cwd, branch: "main"}) {
 		t.Fatalf("poll repository: %+v", got)
 	}
 	return cwd

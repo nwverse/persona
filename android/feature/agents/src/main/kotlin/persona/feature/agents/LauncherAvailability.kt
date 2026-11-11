@@ -14,6 +14,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import persona.core.contracts.api.AgentLauncher
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 
 /**
@@ -98,7 +99,7 @@ internal fun LauncherBlockedSheet(
                     else listOf(R.string.agents_launcher_help_fix_other)
                 steps.forEach { step ->
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.Top) {
-                        JIcon(PhIcons.CheckCircle, null, size = 16.dp, tint = palette.accent, modifier = Modifier.padding(top = 3.dp))
+                        JIcon(PersonaIcons.success, null, size = 16.dp, tint = palette.accent, modifier = Modifier.padding(top = 3.dp))
                         Text(stringResource(step), style = PersonaTheme.type.body, color = palette.ink)
                     }
                 }
@@ -106,7 +107,7 @@ internal fun LauncherBlockedSheet(
             block.detail?.let { detail ->
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     JTextButton(stringResource(R.string.agents_launcher_help_details), { details = !details },
-                        icon = if (details) PhIcons.CaretUp else PhIcons.CaretDown)
+                        icon = if (details) PersonaIcons.collapse else PersonaIcons.expand)
                     if (details) SelectionContainer {
                         Text(detail, Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).background(palette.sunken).padding(Tokens.Space.s),
                             style = PersonaTheme.type.code, color = palette.ink2)

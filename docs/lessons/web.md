@@ -1,5 +1,15 @@
 # Lessons: web UI and interactions
 
+## Profile selections do not follow the catalog revision (#4528)
+
+The model-profile revision versions definitions, not the active selection or rollback. Retire earlier reads, errors,
+and authentication side effects when a newer read, action, manager generation, or credential generation takes over.
+An event received while a switch is pending needs a read after that write settles; its earlier snapshot cannot establish
+the final server state. Admit one profile write per manager across view and credential changes, because ignoring an old
+response cannot undo an already dispatched write. After it settles, refresh the current view and keep later selections
+and action errors intact. Exercise the mounted component and real API client with deferred synthetic responses, including
+old hubs without a revision and current versus retired authentication failures.
+
 ## Lazy features can add shared startup bookkeeping (#4597)
 
 The file-mutation UI loads lazily, while its credential-owner generation is shared with authentication at startup.

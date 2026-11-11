@@ -178,7 +178,17 @@ func (s *Service) answerRoomTurn(ctx context.Context, e *kb.Engine, id string, a
 		working := rowErr != nil || found && roomWorking(row)
 		switch {
 		case err != nil:
-		case reading.Found && !working && strings.TrimSpace(reading.Answer) != "":
+		case reading.Found && !working && strings.TrimSpace(reading.Answer) != "" &&
+			(!found || !row.UpdatedAt.Before(attempt.SentAt) || time.Since(attempt.SentAt) > 2*askRoomPoll):
+			// Its row says how the turn ended once it is from after the message (a moment later at most): Claude Code's
+			// own words for a failed request ("Not logged in · Please run /login") are no answer.
+			if failed := roomTurnError(row, found, attempt.SentAt, reading.Answer); failed != "" {
+				s.logf("recording %s: question %s: its room's turn failed: %s", short(id), a.ID, failed)
+				if te, _ := latestTurnError(row); te != "" && !turnErrorTransient(row) {
+					s.roomCannotAnswer(e, id)
+				}
+				return failAsk(a, askModelError)
+			}
 			return roomAnswered(a, reading.Answer, s.room.takeSources(id))
 		case reading.Found && !working && reading.Stopped != "":
 			return failAsk(a, askNoAnswer)
@@ -206,6 +216,32 @@ func (s *Service) answerRoomTurn(ctx context.Context, e *kb.Engine, id string, a
 		case <-t.C:
 		}
 	}
+}
+
+// roomTurnError is the error the room's turn that answered with answer ended in, as its row says it (found: there is
+// one), "" for none: the row's turn error when the row is from after sentAt or the error is the answer itself.
+func roomTurnError(row proto.Session, found bool, sentAt time.Time, answer string) string {
+	if !found {
+		return ""
+	}
+	te, _ := latestTurnError(row)
+	if te == "" || row.UpdatedAt.Before(sentAt) && te != strings.TrimSpace(answer) {
+		return ""
+	}
+	return te
+}
+
+// roomCannotAnswer makes recording id's ready room unavailable after a turn that failed on what the owner must fix
+// (the sign-in, a key, the model, a usage limit): the asks after it are answered from meeting material, and the room
+// is started again after roomRetry.
+func (s *Service) roomCannotAnswer(e *kb.Engine, id string) {
+	now := time.Now().UTC()
+	s.roomSet(e, id, func(rm *kb.MeetingRoom) {
+		if rm.State == kb.RoomReady {
+			rm.State, rm.Problem, rm.RetryAt = kb.RoomUnavailable, kb.RoomStartFailed, now.Add(roomRetry)
+		}
+	})
+	s.roomAsksFallBack(id)
 }
 
 // roomWaitFree waits while machine's room runs a turn (a batch): an ask goes after it. False when ctx ended.
