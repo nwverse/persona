@@ -37,7 +37,7 @@ describe("Header", () => {
     expect(html).toContain("data-switch");
     expect(html).toMatch(/class="flex min-w-0 flex-1 justify-center lg:hidden"><span data-switch/);
     expect(html).toMatch(/class="min-w-0 flex-1 max-lg:hidden"/);
-    // the buttons either side sit in slots of one width
+    // the buttons either side sit in slots of one least width, which grow to fit them (#5036)
     expect(html).toContain(`class="${HEADER_SLOT} ${HEADER_SLOT_START} lg:contents"`);
     expect(html).toContain(`class="${HEADER_SLOT} ${HEADER_SLOT_END} lg:contents"`);
   });
@@ -46,7 +46,7 @@ describe("Header", () => {
     const html = header();
     expect(html).not.toContain("justify-center lg:hidden");
     expect(html).not.toContain("max-lg:hidden");
-    expect(html).not.toContain("max-lg:w-20");
+    expect(html).not.toContain("max-lg:min-w-16");
   });
 
   it("leaves the title room on a phone: no state pill, 同空间 only from ⋯ (#3576)", () => {
@@ -326,7 +326,7 @@ describe("QueueStrip", () => {
     expect(relayedOnly).toContain("Nova 忙完会依次处理");
     // the relayed one says it arrives when the turn ends; the user's own don't
     expect(html.match(/data-queue-note/g)).toHaveLength(1);
-    expect(html).toContain('aria-label="排队的第 2 条：来自「日报」：今天的汇总 · 本轮结束后送达"');
+    expect(html).toContain('aria-label="排队的第 2 条：来自「日报」：今天的汇总 · 对话空闲后送达"');
   });
 
   it("marks the photos a Persona chat's queued message went with when this browser sent it (#4342)", () => {
