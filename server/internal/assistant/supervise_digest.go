@@ -190,10 +190,10 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 	}()
-	leader := to != here.Main
-	background := leader && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
+	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
+	leader := background || to != here.Main && s.isLeader(ctx, to)
 	render := func(list []prompts.SuperviseEntry) string {
-		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Escalated: escalatedIn(list),
+		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 			BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
 			LeaderStuck:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:             slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
@@ -230,8 +230,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	msg.Text = render(entries)
 	if background {
 		s.logf("supervise: %d signal(s) to the background supervisor %s", len(entries), short(to))
-	} else if leader {
-		s.logf("supervise: %d signal(s) to leader conversation %s", len(entries), short(to))
+	} else if to != here.Main {
+		s.logf("supervise: %d signal(s) to conversation %s", len(entries), short(to))
 	} else {
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	}

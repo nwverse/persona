@@ -394,6 +394,31 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.superviseTodo(ctx, led.ID, "lead1", []string{"做完"}, 30)
+	// A side conversation supervises what it hands out itself (#5002): the background supervisor takes the tasks whose
+	// ledger names the main conversation, not these.
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "side1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	sided, err := s.createTodo(ctx, "别的对话的任务", "", "side1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, sided.ID, "side1", []string{"做完"}, 30)
+	waits, err := s.createTodo(ctx, "别的对话等用户的任务", "", "side1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, waits.ID, "side1", []string{"做完"}, 30)
+	if _, _, err := s.updateSupervision(ctx, waits.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
+		t.Fatal(err)
+	}
+	for conv, want := range map[string]string{"side1": "side1", "bg1": "conv1", "gone": "conv1"} {
+		// What the background supervisor hands out keeps the main conversation on its ledger, as every task it follows up.
+		if got, ok := s.defaultPlanSupervisor(ctx, conv, ""); !ok || got != want {
+			t.Errorf("a task %s plans is supervised by %q %v, want %q", conv, got, ok, want)
+		}
+	}
 	cfg := s.settings(ctx)
 	for _, c := range []struct {
 		name string
@@ -419,6 +444,8 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 		{"an escalation", superviseSignal{Todo: todo.ID, Kind: sigEscalated}, "conv1"},
 		{"a leader stuck", superviseSignal{Todo: led.ID, Kind: sigLeaderStuck}, "conv1"},
 		{"a leader's review", superviseSignal{Todo: led.ID, Kind: sigReview}, "lead1"},
+		{"a side conversation's review", superviseSignal{Todo: sided.ID, Kind: sigReview}, "side1"},
+		{"a side conversation's task waiting for the user", superviseSignal{Todo: waits.ID, Kind: sigIdle}, "conv1"},
 		{"a card's rung", superviseSignal{Todo: led.ID, Kind: sigAsk, To: "lead1"}, "lead1"},
 		{"a card raised to the main conversation", superviseSignal{Todo: led.ID, Kind: sigAsk, To: "conv1"}, "conv1"},
 		{"a task leader's decision for the main conversation", superviseSignal{Todo: todo.ID, Kind: sigDecide, To: "conv1"}, "bg1"},

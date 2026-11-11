@@ -40,9 +40,12 @@ func (s *Service) supervises(ctx context.Context, id string) bool {
 }
 
 // defaultPlanSupervisor is who supervises a task conversation hands out with task_plan when conversation does not supervise
-// (supervises): the main conversation, so no task goes unwatched (#4669). None for a task leader's worker (parent set:
-// its leader's agent supervises it), a reporting conversation's task (its notices go back to it, #4101), a plan with
-// no conversation, or a hub with no main conversation (as before: the task is not supervised).
+// (supervises): that conversation itself, so a side conversation follows up and reviews the work it dispatched. None for
+// a task leader's worker (parent set: its leader's agent supervises it), a reporting conversation's task (its notices
+// go back to it, #4101) or a plan with no conversation. A planning conversation that is not a live assistant
+// conversation cannot be told anything, so its task stays the main conversation's (#4669), and so does what the
+// background supervisor hands out: nothing is written on a task for it (supervise_background.go). digestTo sends the
+// main conversation's own to the background supervisor while there is one.
 func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, parent string) (string, bool) {
 	if parent != "" || conversation == "" {
 		return "", false
@@ -50,14 +53,20 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	if _, reports := s.reporterOf(ctx, conversation); reports {
 		return "", false
 	}
+	if s.supervises(ctx, conversation) {
+		return "", false // the main conversation and leaders supervise their own (supervises)
+	}
+	if c, ok := s.session(ctx, s.settings(ctx).MachineID, conversation); ok && c.Assistant && !s.isBackground(ctx, conversation) {
+		return conversation, true
+	}
 	main := s.settings(ctx).Main
 	return main, main != "" && main != conversation
 }
 
 // digestTo is the conversation signal g goes to, with cfg the settings in effect: the one it names (To), else its task's
-// supervisor when that is a leader, unless the main conversation handles it (a leader's needs_user, a start to remedy, a task waiting for the
-// user); else, for a task no leader supervises, the background supervisor, or the main conversation while there is
-// none (ownSupervisor, supervise_background.go).
+// supervisor when that is a leader or another side conversation, unless the main conversation handles it (its needs_user,
+// a start to remedy, a task waiting for the user); else, for a task whose ledger names the main conversation, the
+// background supervisor, or the main conversation while there is none (ownSupervisor, supervise_background.go).
 func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
 	if g.To != "" {
@@ -78,7 +87,11 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 		return cfg.Main
 	}
 	lead := t.Supervision.Supervisor
-	if lead == "" || lead == cfg.Main || !slices.Contains(cfg.Leaders, lead) {
+	// A supervisor is the conversation that handed the task out: the main conversation, a leader, or any other
+	// conversation (sendDigest falls back to the main one when that conversation is gone). The main conversation's own
+	// go to the background supervisor while there is one. A task leader's agent never reaches this: leaderRoute takes
+	// its workers' signals first.
+	if lead == "" || lead == cfg.Main {
 		return own
 	}
 	if t.Supervision.state(t) == reviewNeedsUser {
