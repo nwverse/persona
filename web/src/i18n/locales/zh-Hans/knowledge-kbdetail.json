@@ -166,6 +166,7 @@
   "recap_part_so_far": "第 {part} 部分：截至 {time}",
   "recap_part_none": "第 {part} 部分：还没有回顾",
   "recap_part_jump": "第 {part} 部分 {time}：打开它的转写",
+  "recap_parts_failed": "未能读取这一天的其他部分。",
   "recap_partial": "这一天内容太多，没能全部读完，部分时段未包含在回顾中。",
   "recap_gaps": "未录到：{gaps}",
   "recap_gap": "{range}（{reason}）",

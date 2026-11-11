@@ -75,13 +75,14 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
   const recap = detail.recap;
   const state = detail.meta?.recap_state;
   // Before the requests: the parts are listed first, and a write is read back with them.
-  const { others, discover, reread } = useDayParts(detail, rec, auth, current);
-  const readAll = useCallback(async () => (await Promise.all([refresh(), reread()]))[0], [refresh, reread]);
-  const pollAll = useCallback(async () => (await Promise.all([refresh(), discover()]))[0], [refresh, discover]);
+  const { others, found, failed, discover, reread } = useDayParts(detail, rec, auth, current);
+  const readAll = useCallback(() => settled(refresh(), reread()), [refresh, reread]);
+  const pollAll = useCallback(() => settled(refresh(), discover()), [refresh, discover]);
   const parts: DayPartView[] = [{ detail, rec, part: rec.allDay?.part ?? 1, own: true }, ...others].sort((a, b) => a.part - b.part);
-  // Until every part's recap is final (or kept past its transcript), more can come without a request of this page's.
-  const open = !parts.every((p) => p.rec.trimmedAt || (p.detail.recap?.final === true && p.detail.meta?.recap_state !== "pending"));
-  const { busy, needsRefresh, run, confirm } = useMinutesRequests({
+  // Until the day's parts are found and every part's recap is final (or kept past its transcript), more can come
+  // without a request of this page's: a failed search for them is tried again with the reads.
+  const open = !found || !parts.every((p) => p.rec.trimmedAt || (p.detail.recap?.final === true && p.detail.meta?.recap_state !== "pending"));
+  const { busy, needsRefresh, run, confirm, pollNow } = useMinutesRequests({
     id: detail.id, version: recap?.version, pending: state === "pending", open, recap: true, auth, current, refresh: readAll, poll: pollAll, onSaved,
   });
   const minutesDays = useMinutesDays(rec.trimmedAt, auth, current);
@@ -120,10 +121,10 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
     }
     void confirm([...writes.values()]);
   };
-  const covers = !multi ? (!recap?.final ? t("knowledge-kbdetail.recap_so_far", { time: clock(recap?.covers?.to ?? 0) })
-    : recap.final_reason === "cutoff" ? t("knowledge-kbdetail.recap_final_cutoff") : t("knowledge-kbdetail.recap_final"))
-    // The day's recap is final only once every part's is; until then each part says how far it is.
-    : written.length === parts.length && written.every((p) => p.detail.recap!.final)
+  const covers = !multi && !recap?.final ? t("knowledge-kbdetail.recap_so_far", { time: clock(recap?.covers?.to ?? 0) })
+    // The day's recap is final only once its parts are found and every part's is; until then each part says how far
+    // it is.
+    : found && written.length === parts.length && written.every((p) => p.detail.recap!.final)
       ? t(written.some((p) => p.detail.recap!.final_reason === "cutoff") ? "knowledge-kbdetail.recap_final_cutoff" : "knowledge-kbdetail.recap_final")
       : parts.map((p, i) => {
         const r = p.detail.recap;
@@ -148,6 +149,13 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
         <Spinner />{t(recap ? "knowledge-kbdetail.recap_updating" : "knowledge-kbdetail.recap_writing")}
       </p>}
       {!rec.trimmedAt && state === "failed" && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.recap_failed")}</p>}
+      {failed && <p role="status" data-recap-parts-failed className="mb-2 flex flex-wrap items-baseline gap-x-1.5 px-1 text-[12.5px] leading-relaxed text-ink-3">
+        {t("knowledge-kbdetail.recap_parts_failed")}
+        <span aria-hidden>·</span>
+        <button type="button" disabled={busy} onClick={pollNow} className="rounded-control font-medium text-accent-ink hover:underline disabled:text-ink-3 disabled:no-underline">
+          {t("knowledge-kbdetail.recap_retry")}
+        </button>
+      </p>}
       {!written.length && !state && !rec.trimmedAt && <p className="px-1 text-[12.5px] leading-relaxed text-ink-3">
         {t(spoken ? "knowledge-kbdetail.recap_absent" : "knowledge-kbdetail.recap_no_text")}
       </p>}
@@ -180,47 +188,79 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
   );
 }
 
+/** Both reads, each to its end: the page's own result, or the first failure. */
+async function settled(own: Promise<boolean>, parts: Promise<void>): Promise<boolean> {
+  const [a, b] = await Promise.allSettled([own, parts]);
+  if (a.status === "rejected") throw a.reason;
+  if (b.status === "rejected") throw b.reason;
+  return a.value;
+}
+
 /** The day's other parts: the recordings listed (`GET /recordings`) with kind day, the same day and the same
  *  started_at, each read like this page (`GET /kb/recordings/{id}`, the same credential and assistant), without its
  *  transcript, which is on its own page. `discover` lists them again (a part may begin while the page shows), `reread`
- *  reads the known ones again (after a write). A failed read leaves what was shown, except a part gone since; answers
- *  after the page's route, credential or assistant changed, or after a newer read began, are dropped. */
+ *  reads the shown ones again (after a write). A failed read leaves what was shown, except a part gone since; `found`
+ *  says the last search listed the parts and read every one, `failed` that it did not (the page says so and tries again).
+ *  Answers after the page's route, credential or assistant changed, or after a newer read began, are dropped: the
+ *  page's requests are cancelled when it goes, and a late 401 is not the current page's to act on. */
 function useDayParts(detail: KBDetail, rec: RecordingView, auth: RecordingAuth, current: () => boolean) {
   const [others, setOthers] = useState<KBDetail[]>([]);
-  const known = useRef<string[]>([]);
+  const [search, setSearch] = useState<"searching" | "found" | "failed">("searching");
+  const shown = useRef<KBDetail[]>([]);
   const generation = useRef(0);
   const alive = useRef(true);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const lifetime = useRef<AbortController | null>(null);
+  useEffect(() => {
+    alive.current = true;
+    const page = new AbortController();
+    lifetime.current = page;
+    return () => { alive.current = false; page.abort(); };
+  }, []);
   const own = detail.id;
   const day = rec.allDay?.day ?? "";
   const start = Date.parse(rec.startedAt ?? "");
+  // Without its day or start a recording has no parts to find.
+  const searchable = !!day && Number.isFinite(start);
   const sameDay = useCallback((kind: unknown, d: unknown, startedAt: unknown) =>
     kind === "day" && d === day && typeof startedAt === "string" && Date.parse(startedAt) === start, [day, start]);
   const latest = useCallback((n: number) => alive.current && current() && n === generation.current, [current]);
+  const options = useCallback((n: number) => ({ ...auth, signal: lifetime.current?.signal, isAuthContextCurrent: () => latest(n) }), [auth, latest]);
 
   const read = useCallback(async (ids: string[], n: number) => {
-    const read = await Promise.all(ids.map((id) => api<KBDetailResponse>(`/kb/recordings/${enc(id)}`, auth).then((r) => r.detail, (err) => {
+    const read = await Promise.allSettled(ids.map((id) => api<KBDetailResponse>(`/kb/recordings/${enc(id)}`, options(n)).then((r) => r.detail, (err) => {
       if (err instanceof ApiError && err.status === 404) return null; // deleted since: the day goes on without it
       throw err;
     })));
     if (!latest(n)) return;
-    const parts = read.filter((d): d is KBDetail => !!d && d.kind === "recordings" && d.id !== own && sameDay(d.meta?.kind, d.meta?.day, d.meta?.started_at))
-      .map((d) => ({ ...d, segments: null }));
-    known.current = parts.map((d) => d.id);
+    // A part read is shown as it is now; one that failed as it was shown, if it was.
+    const parts = read.flatMap((r, i) => {
+      if (r.status === "rejected") return shown.current.filter((d) => d.id === ids[i]);
+      const d = r.value;
+      return d && d.kind === "recordings" && d.id !== own && sameDay(d.meta?.kind, d.meta?.day, d.meta?.started_at) ? [{ ...d, segments: null }] : [];
+    });
+    shown.current = parts;
     setOthers(parts);
-  }, [auth, own, sameDay, latest]);
+    const failure = read.find((r) => r.status === "rejected");
+    if (failure) throw failure.reason;
+  }, [own, sameDay, latest, options]);
 
   const discover = useCallback(async () => {
-    if (!day || !Number.isFinite(start)) return;
+    if (!searchable) return;
     const n = ++generation.current;
-    const list = await api<{ recordings?: { id?: unknown; kind?: unknown; day?: unknown; started_at?: unknown }[] | null }>("/recordings", auth);
-    if (!latest(n)) return;
-    const ids = (list.recordings ?? []).filter((r) => typeof r?.id === "string" && r.id !== own && sameDay(r.kind, r.day, r.started_at)).map((r) => r.id as string);
-    await read(ids, n);
-  }, [auth, own, day, start, sameDay, latest, read]);
+    try {
+      const list = await api<{ recordings?: { id?: unknown; kind?: unknown; day?: unknown; started_at?: unknown }[] | null }>("/recordings", options(n));
+      if (!latest(n)) return;
+      const ids = (list.recordings ?? []).filter((r) => typeof r?.id === "string" && r.id !== own && sameDay(r.kind, r.day, r.started_at)).map((r) => r.id as string);
+      await read(ids, n);
+      if (latest(n)) setSearch("found");
+    } catch (err) {
+      if (latest(n)) setSearch("failed");
+      throw err;
+    }
+  }, [searchable, own, sameDay, latest, options, read]);
 
   const reread = useCallback(async () => {
-    if (known.current.length) await read(known.current, ++generation.current);
+    if (shown.current.length) await read(shown.current.map((d) => d.id), ++generation.current);
   }, [read]);
 
   useEffect(() => { void discover().catch(() => {}); }, [discover]);
@@ -228,7 +268,7 @@ function useDayParts(detail: KBDetail, rec: RecordingView, auth: RecordingAuth, 
     const view = recordingView(d.kind, d.meta, null)!;
     return { detail: d, rec: view, part: view.allDay?.part ?? 1, own: false };
   }), [others]);
-  return { others: views, discover, reread };
+  return { others: views, found: !searchable || search === "found", failed: searchable && search === "failed", discover, reread };
 }
 
 /** The clock time an item of another part cites: its transcript is on that part's page, which this opens. */

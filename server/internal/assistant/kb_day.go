@@ -14,9 +14,11 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // All-day recordings and their daily recap (#4741; kb/recording_day.go, kb/day_recap.go): the phone's appends
@@ -155,11 +157,14 @@ func dayRecording(e *kb.Engine, rawID string) (*kb.Recording, bool) {
 // dayRecapWritten pushes the day's recap (kb.Engine.DayRecapWritten of engine e, told once a day across the day's
 // parts, and again until it returns nil): to the phone, with a stable id per day, so it shows one however often it
 // is sent, a tap opening the main conversation; and the same text with the recording's web page to the Lark bot and
-// the channels with pushes on, with that id as their key, so a copy sent again lands once where they can tell (at
-// least once). It returns once each was handed over or failed (dayPushWait each), nil only when every one took it
-// (or refused it for good: sending it again would get the same); the next call sends it to the others again, all of
-// them after a restart (dayPushBook is this process's). The counts are the day's, all of its parts' recaps.
-func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Recording, d kb.DayRecap) error {
+// the channels with pushes on, with that id as their key (with the channel's id for a plugin channel: channelPushTo),
+// so a copy sent again lands once where they can tell (at least once). It goes only to the destinations not in
+// r.RecapPushTook (those that took it before, kept with the recording, a restart included: the phone by
+// dayPushPhone, the others by channel id), and returns those that took it now: once each was handed over or failed
+// (dayPushWait each), with nil only when every one took it or refused it for good (the hub refusing the notification,
+// a channel with nowhere to send it or that answered with a refusal of its own: sending it again would get the same).
+// The counts are the day's, all of its parts' recaps.
+func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Recording, d kb.DayRecap) ([]string, error) {
 	l := s.lang(ctx)
 	day := cmp.Or(r.Day, d.Day)
 	meetings, actions := dayRecapCounts(e, day, r.ID, d)
@@ -171,21 +176,27 @@ func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Record
 	if link := recordingLink(s.webBase(ctx), r.ID); link != "" {
 		body += "\n" + link
 	}
-	b := &s.dayPushes
+	before := map[string]bool{} // never written once the sends start
+	for _, to := range r.RecapPushTook {
+		before[to] = true
+	}
 	var mu sync.Mutex
+	var took []string
 	var failed []error
 	sent := func(to string, err error) {
-		if err == nil {
-			b.took(id, to)
-			return
+		if err != nil {
+			s.logf("assistant: day recap push: %s: %v", to, err)
 		}
-		s.logf("assistant: day recap push: %s: %v", to, err)
 		mu.Lock()
-		failed = append(failed, fmt.Errorf("%s: %w", to, err))
-		mu.Unlock()
+		defer mu.Unlock()
+		if err != nil {
+			failed = append(failed, fmt.Errorf("%s: %w", to, err))
+		} else {
+			took = append(took, to)
+		}
 	}
 	var wg sync.WaitGroup
-	if !b.has(id, dayPushPhone) {
+	if !before[dayPushPhone] {
 		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(ctx, dayPushWait)
 			defer cancel()
@@ -197,7 +208,7 @@ func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Record
 			sent(dayPushPhone, err)
 		})
 	}
-	if !b.has(id, channel.Feishu) {
+	if !before[channel.Feishu] {
 		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(ctx, dayPushWait)
 			defer cancel()
@@ -205,63 +216,36 @@ func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Record
 		})
 	}
 	wg.Go(func() {
-		out, err := s.channelPushTo(ctx, "", "", title, body, id, func(ch string) bool { return b.has(id, ch) })
+		out, err := s.channelPushTo(ctx, "", "", title, body, id, func(ch string) bool { return before[ch] })
 		if err != nil {
 			sent("channels", err)
 		}
 		for ch, err := range out {
-			if errors.Is(err, errCannotSend) || errors.Is(err, errNoChannel) { // nowhere to send it: not again
+			if errors.Is(err, errCannotSend) || errors.Is(err, errNoChannel) || channelRefused(err) { // not again (logged)
 				err = nil
 			}
 			sent(ch, err)
 		}
 	})
 	wg.Wait()
-	if len(failed) > 0 {
-		return errors.Join(failed...)
-	}
-	b.forget(id)
-	return nil
+	return took, errors.Join(failed...)
+}
+
+// channelRefused: a channel answered a send with a refusal of its own (a coded error, after the hub's tries), which
+// sending it again would get too; not a send that got no answer (no code: a time-out, its program not running), the
+// hub's own (a link that dropped) or one the hub asks to be sent again.
+func channelRefused(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code != "" && re.Code != bus.CodeStaleConnection && re.Code != CodeTryAgain
 }
 
 // dayPushWait is how long the day's push waits for the phone's hand-over, and for the Lark bot's (the channels have
 // theirs, channelSendTimeout).
 const dayPushWait = 30 * time.Second
 
-// dayPushPhone is the phone among a day push's destinations (dayPushBook); the others are channel ids.
-const dayPushPhone = "phone"
-
-// dayPushBook is what took each day push not taken by all its destinations yet, by the push's id: so the push sent
-// again goes only to the others while this process runs.
-type dayPushBook struct {
-	mu   sync.Mutex
-	sent map[string]map[string]bool
-}
-
-func (b *dayPushBook) has(id, to string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.sent[id][to]
-}
-
-func (b *dayPushBook) took(id, to string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.sent == nil {
-		b.sent = map[string]map[string]bool{}
-	}
-	if b.sent[id] == nil {
-		b.sent[id] = map[string]bool{}
-	}
-	b.sent[id][to] = true
-}
-
-// forget: every destination took push id.
-func (b *dayPushBook) forget(id string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.sent, id)
-}
+// dayPushPhone is the phone among a day push's destinations (kb.Recording.RecapPushTook): a built-in channel's id,
+// which no plugin channel can have; the others are channel ids.
+const dayPushPhone = channel.App
 
 // dayRecapCounts are the meetings and the suggested to-dos of day, whose recording id's recap is d: across every part
 // of the day with a recap (one of e's day recordings of day), a meeting the hub knows of counted once whatever the

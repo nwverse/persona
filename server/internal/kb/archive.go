@@ -86,12 +86,13 @@ type Engine struct {
 	LiveChanged func(id string)
 	// DayRecapWritten is told once a day (Recording.Day, across the day's parts) of the recap the day's push goes with
 	// (day_recap_write.go "The push"): one ready at the recap time, else the day's first recap after it, or the final
-	// recap of a day that had none; never one asked for before the recap time. The assistant pushes it. Called from the
-	// recap lane (WriteDayRecaps), outside the store's locks; the push is persisted as due before, so it is told again
-	// after a restart, and after an error (the push not taken: the next round tells it again, after a short wait that
-	// grows with each one failed), until a call returned nil. Optional: without it the push stays due, told once it is
-	// set.
-	DayRecapWritten func(ctx context.Context, r Recording, d DayRecap) error
+	// recap of a day that had none; never one asked for before the recap time. The assistant pushes it, to the
+	// destinations not in r.RecapPushTook, and returns those that took it now. Called from the recap lane
+	// (WriteDayRecaps), outside the store's locks; the push is persisted as due before, so it is told again after a
+	// restart, and after an error (the push not taken by all: the next round tells it again, after a short wait that
+	// grows with each one failed, with those that took it kept in RecapPushTook), until a call returned nil or a day
+	// went by since it became due. Optional: without it the push stays due, told once it is set.
+	DayRecapWritten func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)
 	// DayRecapClock is the evening routine's time of day (whether or not the routine is on); the recap time is 30
 	// minutes before it, in the owner's zone (Store.Zone, the routine's). Nil, or a time that is not one: 21:30.
 	DayRecapClock func() (hour, minute int)

@@ -594,8 +594,9 @@ func TestEveningFactsDayIsBounded(t *testing.T) {
 }
 
 // The day's push is done only once the phone, the Lark bot and every channel with pushes on took it (day-recap.md
-// "The push"): one that failed leaves it due in the knowledge base, and telling it again sends it to those that did
-// not take it, with the same id and keys; a refusal that sending again cannot help counts as taken.
+// "The push"): one that failed leaves it due in the knowledge base, and telling it again (with those that took it,
+// which the knowledge base keeps) sends it to the others, with the same id and keys; a refusal that sending again
+// cannot help counts as taken: the hub's, a channel with nowhere to send it, a channel's own coded refusal.
 func TestDayRecapPushTakenByAll(t *testing.T) {
 	d := newDayFixture(t)
 	setEvening(t, d.s, "06:30", true)
@@ -637,13 +638,17 @@ func TestDayRecapPushTakenByAll(t *testing.T) {
 	e := d.engine()
 	r, _ := e.Store.Recording(dayRec)
 	posts, sends := d.f.appParams(AppFeishu, FeishuPost), d.f.appParams(AppChannels, ChannelsSend)
-	if !r.RecapPush || r.RecapPushed || r.RecapPushTries != 1 || len(d.f.pushed()) != 0 || len(posts) != 1 || len(sends) != 1 {
+	if !r.RecapPush || r.RecapPushed || r.RecapPushTries != 1 || r.RecapPushTook != nil || len(d.f.pushed()) != 0 || len(posts) != 1 || len(sends) != 1 {
 		t.Fatalf("a push nobody took: %d posts, %d sends, %+v", len(posts), len(sends), r)
 	}
+	took := r.RecapPushTook
 	tell := func() error {
 		t.Helper()
 		r, _ := e.Store.Recording(dayRec)
-		return e.DayRecapWritten(context.Background(), *r, *rc)
+		r.RecapPushTook = took // what the knowledge base keeps of the calls before (kb's tellDayRecap)
+		now, err := e.DayRecapWritten(context.Background(), *r, *rc)
+		took = append(took, now...)
+		return err
 	}
 	// Told again: the phone and the channel take it, the Lark bot not yet.
 	d.f.mu.Lock()
@@ -652,6 +657,9 @@ func TestDayRecapPushTakenByAll(t *testing.T) {
 	if err := tell(); err == nil {
 		t.Fatal("done before the Lark bot took it")
 	}
+	if slices.Sort(took); !slices.Equal(took, []string{channel.App, "examplechat"}) {
+		t.Fatalf("took it: %v", took)
+	}
 	// Once more: only the Lark bot gets it again, and takes it.
 	if err := tell(); err != nil {
 		t.Fatal(err)
@@ -659,8 +667,8 @@ func TestDayRecapPushTakenByAll(t *testing.T) {
 	id := "ntf_dayrecap_" + rc.Day
 	pushes := d.f.pushed()
 	posts, sends = d.f.appParams(AppFeishu, FeishuPost), d.f.appParams(AppChannels, ChannelsSend)
-	if len(pushes) != 1 || pushes[0].ID != id || len(posts) != 3 || len(sends) != 2 {
-		t.Fatalf("sent again to those that took it: %d pushes, %d posts, %d sends", len(pushes), len(posts), len(sends))
+	if len(pushes) != 1 || pushes[0].ID != id || len(posts) != 3 || len(sends) != 2 || len(took) != 3 || took[2] != channel.Feishu {
+		t.Fatalf("sent again to those that took it: %d pushes, %d posts, %d sends, took %v", len(pushes), len(posts), len(sends), took)
 	}
 	for _, p := range posts {
 		if p["uuid"] != id+"_0" {
@@ -668,21 +676,144 @@ func TestDayRecapPushTakenByAll(t *testing.T) {
 		}
 	}
 	for _, p := range sends {
-		if p["ref"] != id || p["kind"] != channel.OutPush || p["text"] != "🔔 "+pushes[0].Title+"\n\n"+pushes[0].Body {
+		if p["ref"] != id+":examplechat" || p["kind"] != channel.OutPush || p["text"] != "🔔 "+pushes[0].Title+"\n\n"+pushes[0].Body {
 			t.Errorf("the channel's copy %v", p)
 		}
 	}
-	// Told after it was done (as after a restart), everything goes again: the hub refusing the phone's and the channel
-	// having nowhere to send it are taken as they are, not sent again and again.
-	d.f.mu.Lock()
-	d.f.refuseNotify = &rpc.Error{Code: "no_device", Message: "another manager's"}
-	chanErr = &rpc.Error{Code: CodeCannotSend, Message: "no conversation yet"}
-	d.f.mu.Unlock()
-	if err := tell(); err != nil {
-		t.Fatalf("a refusal is sent again: %v", err)
+	// Told afresh, nothing taken yet, everything goes again: the hub refusing the phone's and the channel having
+	// nowhere to send it, or refusing it with a code of its own, are taken as they are, not sent again and again.
+	for _, refusal := range []error{&rpc.Error{Code: CodeCannotSend, Message: "no conversation yet"}, &rpc.Error{Code: "bot_blocked", Message: "the user blocked the bot"}} {
+		took = nil
+		d.f.mu.Lock()
+		d.f.refuseNotify = &rpc.Error{Code: "no_device", Message: "another manager's"}
+		chanErr = refusal
+		d.f.mu.Unlock()
+		if err := tell(); err != nil {
+			t.Fatalf("a refusal is sent again: %v", err)
+		}
+		if slices.Sort(took); !slices.Equal(took, []string{channel.App, "examplechat", channel.Feishu}) {
+			t.Errorf("refused, taken: %v", took)
+		}
 	}
-	if posts := d.f.appParams(AppFeishu, FeishuPost); len(posts) != 4 || posts[3]["uuid"] != id+"_0" {
+	if posts := d.f.appParams(AppFeishu, FeishuPost); len(posts) != 5 || posts[4]["uuid"] != id+"_0" {
 		t.Fatalf("the Lark bot's copy again: %v", posts)
+	}
+	// A send that got no answer (no code: a time-out, the program not running) is not a refusal: sent again.
+	took = nil
+	d.f.mu.Lock()
+	chanErr = errors.New("channels.send timed out")
+	d.f.mu.Unlock()
+	if err := tell(); err == nil || slices.Contains(took, "examplechat") {
+		t.Fatalf("a channel that did not answer took it: %v %v", err, took)
+	}
+}
+
+// After a restart the push goes only to the destinations that did not take it: the knowledge base keeps those that
+// did with the recording (the assistant keeps nothing), so the phone and a channel that took it get no second copy.
+func TestDayRecapPushAfterRestart(t *testing.T) {
+	d := newDayFixture(t)
+	setEvening(t, d.s, "06:30", true)
+	larkFails := 1
+	d.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_owner", PairedAt: time.Unix(100, 0), Features: FeishuFeatures{Pushes: true}}, nil
+	})
+	d.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+		if larkFails > 0 {
+			larkFails--
+			return nil, errors.New("Lark is busy")
+		}
+		return map[string]any{"message_id": "om_day"}, nil
+	})
+	d.f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
+		return map[string]any{"channels": []channel.View{{ID: "examplechat", Name: "examplechat", Source: channel.SourcePlugin, Kind: channel.KindIM,
+			Installed: true, Enabled: true, State: channel.StateConnected, Capabilities: channel.Capabilities{Push: true}}}}, nil
+	})
+	d.f.answerApp(AppChannels, ChannelsSend, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
+	d.s.chans.mu.Lock()
+	d.s.loadChannelsLocked(context.Background())
+	d.s.channelPrefLocked("examplechat").Features = map[string]bool{channel.FeaturePushes: true}
+	d.s.chans.mu.Unlock()
+
+	d.putDay(dayRec, 100, d.owner, nil)
+	d.do("POST", segmentsPath(dayRec), "", dayLines(100, 101), http.StatusOK)
+	rc := d.recap(dayRec)
+	e := d.engine()
+	r, _ := e.Store.Recording(dayRec)
+	if !r.RecapPush || !slices.Equal(r.RecapPushTook, []string{channel.App, "examplechat"}) || len(d.f.pushed()) != 1 {
+		t.Fatalf("the phone and the channel took it, the Lark bot not: %+v", r)
+	}
+	// Restarted: told with the recording as stored.
+	took, err := e.DayRecapWritten(context.Background(), *r, *rc)
+	if err != nil || !slices.Equal(took, []string{channel.Feishu}) {
+		t.Fatalf("after a restart: took %v, %v", took, err)
+	}
+	if p, s, posts := d.f.pushed(), d.f.appParams(AppChannels, ChannelsSend), d.f.appParams(AppFeishu, FeishuPost); len(p) != 1 || len(s) != 1 || len(posts) != 2 {
+		t.Fatalf("sent again to those that took it: %d pushes, %d sends, %d posts", len(p), len(s), len(posts))
+	}
+}
+
+// The phone's key among a push's destinations is a built-in channel's id, which no plugin channel has: a plugin
+// channel named "phone" that took it does not stand for the phone, nor the phone for it.
+func TestDayRecapPushPhoneKeyIsReserved(t *testing.T) {
+	if !slices.Contains(channel.Reserved, dayPushPhone) {
+		t.Fatalf("the phone's key %q can be a plugin channel's id", dayPushPhone)
+	}
+	d := newDayFixture(t)
+	d.f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
+		return map[string]any{"channels": []channel.View{{ID: "phone", Name: "phone", Source: channel.SourcePlugin, Kind: channel.KindIM,
+			Installed: true, Enabled: true, State: channel.StateConnected, Capabilities: channel.Capabilities{Push: true}}}}, nil
+	})
+	d.f.answerApp(AppChannels, ChannelsSend, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
+	d.s.chans.mu.Lock()
+	d.s.loadChannelsLocked(context.Background())
+	d.s.channelPrefLocked("phone").Features = map[string]bool{channel.FeaturePushes: true}
+	d.s.chans.mu.Unlock()
+	d.putDay(dayRec, 100, d.owner, nil)
+	d.do("POST", segmentsPath(dayRec), "", dayLines(100, 101), http.StatusOK)
+	d.do("POST", "/api/v1/recordings/"+dayRec+"/minutes", "", nil, http.StatusAccepted)
+	rc := d.recap(dayRec)
+	e := d.engine()
+	r, _ := e.Store.Recording(dayRec)
+	r.RecapPushTook = []string{"phone"} // the plugin channel took it, the phone not yet
+	took, err := e.DayRecapWritten(context.Background(), *r, *rc)
+	if err != nil || !slices.Contains(took, dayPushPhone) || slices.Contains(took, "phone") || len(d.f.pushed()) != 1 ||
+		len(d.f.appParams(AppChannels, ChannelsSend)) != 0 {
+		t.Fatalf("took %v, %v: %d pushes, %d sends", took, err, len(d.f.pushed()), len(d.f.appParams(AppChannels, ChannelsSend)))
+	}
+}
+
+// A channel's copy of a push sent again has a ref of its own (the push's id and the channel's): a program with
+// several channels and one cache of refs sends each its copy.
+func TestDayRecapPushRefPerChannel(t *testing.T) {
+	d := newDayFixture(t)
+	views := []channel.View{}
+	for _, id := range []string{"chata", "chatb"} {
+		views = append(views, channel.View{ID: id, Name: id, Source: channel.SourcePlugin, Kind: channel.KindIM, Installed: true, Enabled: true,
+			State: channel.StateConnected, Capabilities: channel.Capabilities{Push: true}})
+	}
+	d.f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) { return map[string]any{"channels": views}, nil })
+	d.f.answerApp(AppChannels, ChannelsSend, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
+	d.s.chans.mu.Lock()
+	d.s.loadChannelsLocked(context.Background())
+	for _, v := range views {
+		d.s.channelPrefLocked(v.ID).Features = map[string]bool{channel.FeaturePushes: true}
+	}
+	d.s.chans.mu.Unlock()
+	d.putDay(dayRec, 100, d.owner, nil)
+	d.do("POST", segmentsPath(dayRec), "", dayLines(100, 101), http.StatusOK)
+	d.do("POST", "/api/v1/recordings/"+dayRec+"/minutes", "", nil, http.StatusAccepted)
+	rc := d.recap(dayRec)
+	r, _ := d.engine().Store.Recording(dayRec)
+	if _, err := d.engine().DayRecapWritten(context.Background(), *r, *rc); err != nil {
+		t.Fatal(err)
+	}
+	refs := map[string]any{}
+	for _, p := range d.f.appParams(AppChannels, ChannelsSend) {
+		refs[p["channel"].(string)] = p["ref"]
+	}
+	id := "ntf_dayrecap_" + rc.Day
+	if len(refs) != 2 || refs["chata"] != id+":chata" || refs["chatb"] != id+":chatb" {
+		t.Fatalf("refs %v", refs)
 	}
 }
 

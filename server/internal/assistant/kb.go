@@ -225,7 +225,9 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		// All-day recordings (kb_day.go): the recap time from the evening routine's, their names; the day's push below
 		// (it counts the day's parts in e).
 		DayRecapClock: s.eveningClock, DayRecordingName: s.dayRecordingName}
-	e.DayRecapWritten = func(ctx context.Context, r kb.Recording, d kb.DayRecap) error { return s.dayRecapWritten(ctx, e, r, d) }
+	e.DayRecapWritten = func(ctx context.Context, r kb.Recording, d kb.DayRecap) ([]string, error) {
+		return s.dayRecapWritten(ctx, e, r, d)
+	}
 	e.ObserveChanges()
 	e.ExtraDirs = kbReadDirs(set.ExtraDirs)
 	if !k.passed {

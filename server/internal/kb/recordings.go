@@ -210,13 +210,18 @@ type Recording struct {
 	RecapNotedText int64 `json:"recap_noted_text,omitempty"`
 	// The day's one push (day_recap_write.go "The push"), across its parts: RecapWait, its recap time came with no
 	// recap ready, so the day's first recap pushes; RecapPush, the push is due from this recording's recap (set in the
-	// same write as that recap, or as its recap time) and DayRecapWritten has not taken it yet (RecapPushTries calls
-	// failed, the next not before RecapPushAt); RecapPushed, it has.
-	RecapWait      bool      `json:"recap_wait,omitempty"`
-	RecapPush      bool      `json:"recap_push,omitempty"`
-	RecapPushed    bool      `json:"recap_pushed,omitempty"`
-	RecapPushTries int       `json:"recap_push_tries,omitempty"`
-	RecapPushAt    time.Time `json:"recap_push_at,omitzero"`
+	// same write as that recap, or as its recap time, RecapPushSince) and DayRecapWritten has not taken it yet
+	// (RecapPushTries calls failed, the next not before RecapPushAt; RecapPushTook the destinations that took it so
+	// far, which it is not sent to again); RecapPushed, it has, or was given up on (RecapPushFailed: dayPushGiveUp
+	// after it became due, some destination never took it).
+	RecapWait       bool      `json:"recap_wait,omitempty"`
+	RecapPush       bool      `json:"recap_push,omitempty"`
+	RecapPushed     bool      `json:"recap_pushed,omitempty"`
+	RecapPushSince  time.Time `json:"recap_push_since,omitzero"`
+	RecapPushTries  int       `json:"recap_push_tries,omitempty"`
+	RecapPushAt     time.Time `json:"recap_push_at,omitzero"`
+	RecapPushTook   []string  `json:"recap_push_took,omitempty"`
+	RecapPushFailed bool      `json:"recap_push_failed,omitempty"`
 	// RecapTodos are the to-dos made of its recaps' actions, whatever the version (keepRecapTodos).
 	RecapTodos []RecapTodo `json:"recap_todos,omitempty"`
 	Tagging
@@ -308,6 +313,9 @@ func (s *Store) Recording(id string) (*Recording, bool) {
 	raw, err := s.recordingRead(id, "meta.json")
 	if err != nil || raw == nil || json.Unmarshal(raw, &r) != nil {
 		return nil, false
+	}
+	if r.Kind == RecordingDay && r.Chars > 0 && r.TextRev == 0 {
+		r.TextRev = 1 // a day recording's text stored without its count: what no recap or note read yet
 	}
 	r.persisted = true
 	s.recFilesMu.RLock()

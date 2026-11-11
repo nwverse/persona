@@ -138,7 +138,6 @@ type Service struct {
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
-	dayPushes  dayPushBook       // kb_day.go: the destinations each day push not taken by all yet went to
 	attend     attendState       // meeting_feed.go: feeding the meetings Persona attends, and their turns
 	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
 	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording

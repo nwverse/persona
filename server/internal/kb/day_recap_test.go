@@ -183,7 +183,10 @@ func TestDayRecapWritten(t *testing.T) {
 	m := &captureModel{reply: dayNotesReply}
 	e := dayEngine(t, m, &now)
 	var told []DayRecap
-	e.DayRecapWritten = func(_ context.Context, _ Recording, d DayRecap) error { told = append(told, d); return nil }
+	e.DayRecapWritten = func(_ context.Context, _ Recording, d DayRecap) ([]string, error) {
+		told = append(told, d)
+		return nil, nil
+	}
 	u := dayUpload(1, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "Bo 你周五前补上回归测试")
 	u.Coverage.To = 7200 // to 10:00: the 8 o'clock hour is finished
 	mustPut(t, e, dayID, u, now)
@@ -481,9 +484,9 @@ func TestDayRecapDue(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) error {
+	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
-		return nil
+		return nil, nil
 	}
 	const part2, empty = "2a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d", "5a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
 	u := dayUpload(1, "早上开会", "Bo 负责发布")
@@ -555,9 +558,9 @@ func TestDayRecapCutoff(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) error {
+	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
-		return nil
+		return nil, nil
 	}
 	mustPut(t, e, dayID, dayUpload(7, "昨天的事"), now.Add(-40*time.Minute))
 	e.WriteDayRecaps(context.Background(), 5)
@@ -589,9 +592,9 @@ func TestDayRecapCutoffWaitsForUploads(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) error {
+	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
-		return nil
+		return nil, nil
 	}
 	u := dayUpload(1)
 	u.Coverage.To = 6 * 3600
@@ -622,7 +625,10 @@ func TestDayRecapClockAndRetell(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	e.DayRecapClock = func() (int, int) { return 19, 45 }
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) error { told = append(told, r.ID); return nil }
+	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
+		told = append(told, r.ID)
+		return nil, nil
+	}
 	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
 	if err := e.AskMinutes(dayID); err != nil {
 		t.Fatal(err)
@@ -665,12 +671,12 @@ func TestDayRecapPushPersisted(t *testing.T) {
 		t.Fatalf("no hook yet: %+v", r)
 	}
 	var told []int
-	e.DayRecapWritten = func(_ context.Context, got Recording, d DayRecap) error {
+	e.DayRecapWritten = func(_ context.Context, got Recording, d DayRecap) ([]string, error) {
 		if cur := recordingNow(t, e, got.ID); !cur.RecapPush || cur.RecapVersion != d.Version || !got.RecapPush {
 			t.Errorf("told before the push was stored: %+v", cur)
 		}
 		told = append(told, d.Version)
-		return nil
+		return nil, nil
 	}
 	e.WriteDayRecaps(context.Background(), 1)
 	e.WriteDayRecaps(context.Background(), 1)
@@ -965,7 +971,10 @@ func TestDayRecapRepair(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) error { told = append(told, r.ID); return nil }
+	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
+		told = append(told, r.ID)
+		return nil, nil
+	}
 	u := dayUpload(1, "早上开会", "Bo 负责发布", "Ada 负责测试", "zebrapassword 说了不该说的")
 	u.Coverage.To = 3600
 	mustPut(t, e, dayID, u, now)
@@ -1502,7 +1511,7 @@ func TestDayRecapPushRetried(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	told := 0
 	var fail error = errors.New("the phone is unreachable")
-	e.DayRecapWritten = func(context.Context, Recording, DayRecap) error { told++; return fail }
+	e.DayRecapWritten = func(context.Context, Recording, DayRecap) ([]string, error) { told++; return nil, fail }
 	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
 	e.WriteDayRecaps(context.Background(), 1)
 	if r := recordingNow(t, e, dayID); told != 1 || !r.RecapPush || r.RecapPushed || r.RecapPushTries != 1 || !r.RecapPushAt.Equal(now.Add(dayPushRetry)) {
@@ -1523,5 +1532,215 @@ func TestDayRecapPushRetried(t *testing.T) {
 	e.WriteDayRecaps(context.Background(), 1)
 	if r := recordingNow(t, e, dayID); told != 3 || r.RecapPush || !r.RecapPushed || r.RecapPushTries != 0 {
 		t.Errorf("taken: told %d %+v", told, r)
+	}
+}
+
+// The destinations that took the day's push are kept with it from what each call says: the next call (after a
+// restart too: another engine on the same store) is told them, so it sends only to the others; done, they go.
+func TestDayRecapPushKeepsWhoTookIt(t *testing.T) {
+	now := dayClock.Add(13 * time.Hour) // 21:00, the recap time
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	var got [][]string
+	answers := []struct {
+		took []string
+		err  error
+	}{{[]string{"app"}, errors.New("feishu: Lark is busy")}, {[]string{"feishu", ""}, errors.New("chat: the program restarts")},
+		{[]string{"chat"}, nil}}
+	hook := func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
+		got = append(got, r.RecapPushTook)
+		a := answers[len(got)-1]
+		return a.took, a.err
+	}
+	e.DayRecapWritten = hook
+	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
+	e.WriteDayRecaps(context.Background(), 1)
+	if r := recordingNow(t, e, dayID); len(got) != 1 || got[0] != nil || !r.RecapPush || !slices.Equal(r.RecapPushTook, []string{"app"}) {
+		t.Fatalf("first call: told %v, %+v", got, r)
+	}
+	// A restart: another engine on the same knowledge base, nothing in memory.
+	st, err := NewStore(e.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Rezone(goldenZone); err != nil {
+		t.Fatal(err)
+	}
+	e = &Engine{Store: st, Model: f, Owner: e.Owner, Logf: e.Logf, clock: e.clock, DayRecapWritten: hook}
+	now = now.Add(dayPushRetry)
+	e.WriteDayRecaps(context.Background(), 1)
+	if r := recordingNow(t, e, dayID); len(got) != 2 || !slices.Equal(got[1], []string{"app"}) || !slices.Equal(r.RecapPushTook, []string{"app", "feishu"}) {
+		t.Fatalf("after a restart: told %v, %+v", got, r)
+	}
+	now = now.Add(2 * dayPushRetry)
+	e.WriteDayRecaps(context.Background(), 1)
+	if r := recordingNow(t, e, dayID); len(got) != 3 || !slices.Equal(got[2], []string{"app", "feishu"}) || r.RecapPush || !r.RecapPushed ||
+		r.RecapPushFailed || r.RecapPushTook != nil || !r.RecapPushSince.IsZero() {
+		t.Fatalf("taken by all: told %v, %+v", got, r)
+	}
+}
+
+// A push still not taken a day after it became due is given up on, logged once, and never told again; the wait
+// before the next try is from the end of the call (which may have waited on its destinations).
+func TestDayRecapPushGivenUp(t *testing.T) {
+	now := dayClock.Add(13 * time.Hour) // 21:00, the recap time
+	due := now
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	var logs []string
+	e.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	told := 0
+	e.DayRecapWritten = func(context.Context, Recording, DayRecap) ([]string, error) {
+		told++
+		now = now.Add(40 * time.Second) // a channel that does not answer
+		if told == 1 {
+			return []string{"app"}, errors.New("chat: no answer")
+		}
+		return nil, errors.New("chat: no answer")
+	}
+	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
+	e.WriteDayRecaps(context.Background(), 1)
+	r := recordingNow(t, e, dayID)
+	if told != 1 || !r.RecapPush || !r.RecapPushSince.Equal(due) || !r.RecapPushAt.Equal(due.Add(40*time.Second+dayPushRetry)) {
+		t.Fatalf("failed once: told %d, %+v", told, r)
+	}
+	for now.Sub(due) < dayPushGiveUp+time.Hour {
+		now = now.Add(17 * time.Minute)
+		e.WriteDayRecaps(context.Background(), 1)
+	}
+	r = recordingNow(t, e, dayID)
+	if r.RecapPush || !r.RecapPushed || !r.RecapPushFailed || !slices.Equal(r.RecapPushTook, []string{"app"}) || r.RecapPushTries != 0 {
+		t.Fatalf("not given up after a day: told %d, %+v", told, r)
+	}
+	if told < 80 || told > 90 {
+		t.Errorf("told %d times in a day", told)
+	}
+	gaveUp := 0
+	for _, l := range logs {
+		if strings.Contains(l, "given up") {
+			gaveUp++
+		}
+	}
+	n := told
+	now = now.Add(time.Hour)
+	e.WriteDayRecaps(context.Background(), 1)
+	if told != n || gaveUp != 1 {
+		t.Errorf("after giving up: told %d (was %d), %d logs of it", told, n, gaveUp)
+	}
+	// Given up, it is the day's push all the same: the day's other parts push nothing.
+	if p := e.Store.dayPushLocked(r.Day, ""); !p.pushed {
+		t.Errorf("a given-up push leaves the day without one: %+v", p)
+	}
+}
+
+// A round tells pushes for about dayPushBudget: slow ones leave the rest to the next round, which tells the one
+// waiting longest first, and the recaps are written meanwhile.
+func TestDayRecapPushBudget(t *testing.T) {
+	now := dayClock.Add(13 * time.Hour)
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
+	e.WriteDayRecaps(context.Background(), 1) // no hook yet: the push stays due
+	next := dayClock.AddDate(0, 0, 1)
+	now = next.Add(13 * time.Hour)
+	u := dayUpload(1, "第二天的事")
+	u.Day, u.StartedAt = "2026-11-12", next
+	mustPut(t, e, recIDDay2, u, now)
+	e.WriteDayRecaps(context.Background(), 1)
+	for _, id := range []string{dayID, recIDDay2} {
+		if r := recordingNow(t, e, id); !r.RecapPush || r.RecapVersion != 1 {
+			t.Fatalf("%s: %+v", id, r)
+		}
+		// As if the first day's became due now too (not given up on at its first failure).
+		if err := e.updateRecap(id, func(r *Recording) bool { r.RecapPushSince = now; return true }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var told []string
+	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
+		told = append(told, r.ID)
+		now = now.Add(time.Minute) // each waits a minute on a destination
+		return nil, errors.New("chat: no answer")
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	if len(told) != 1 {
+		t.Fatalf("one round told %v", told)
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	if len(told) != 2 || told[0] == told[1] {
+		t.Fatalf("the next round told %v", told)
+	}
+	// Both due again, each round tells the one whose try came longest ago.
+	for range 2 {
+		now = now.Add(10 * time.Minute)
+		e.WriteDayRecaps(context.Background(), 1)
+	}
+	if !slices.Equal(told[2:], told[:2]) {
+		t.Fatalf("then told %v", told)
+	}
+}
+
+// A PUT of a day recording whose recap notes are there but cannot be read fails with nothing stored (the phone sends
+// it again): notes quoting what it erased could not be dropped.
+func TestDayRecapPutFailsOnUnreadableNotes(t *testing.T) {
+	now := dayClock.Add(3 * time.Hour)
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	mustPut(t, e, dayID, dayUpload(1, "八点的事", "zebrasecret"), now)
+	path := e.Store.Path(KindRecording, dayID, recapNotesFile)
+	if err := os.Mkdir(path, 0o700); err != nil { // read, it fails, as an EIO would
+		t.Fatal(err)
+	}
+	erased := dayUpload(2, "八点的事", "")
+	if put, err := e.PutRecording(dayID, erased, now); err == nil {
+		t.Fatalf("stored with notes it could not read: %+v", put)
+	}
+	if r := recordingNow(t, e, dayID); r.Revision != 1 {
+		t.Fatalf("the failed PUT stored revision %d", r.Revision)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	mustPut(t, e, dayID, erased, now)
+}
+
+// A day recording stored with text but no text_rev (before it was counted) is text no note or recap read: noted, and
+// recapped again at the recap time.
+func TestDayRecapZeroTextRevIsUnread(t *testing.T) {
+	now := dayClock.Add(3 * time.Hour)
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	mustPut(t, e, dayID, dayUpload(1, "早上开会", "Bo 负责发布"), now)
+	if err := e.AskMinutes(dayID); err != nil {
+		t.Fatal(err)
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	if rc, err := e.ReadDayRecap(dayID); err != nil || rc.Version != 1 {
+		t.Fatalf("asked: %+v %v", rc, err)
+	}
+	meta := e.Store.Path(KindRecording, dayID, "meta.json")
+	raw, err := os.ReadFile(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"text_rev", "recap_text", "recap_noted_text"} {
+		delete(m, k)
+	}
+	raw, _ = json.Marshal(m)
+	if err := os.WriteFile(meta, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordingNow(t, e, dayID); r.TextRev != 1 || r.RecapText != 0 || r.RecapNotedText != 0 {
+		t.Errorf("read back: text %d, recapped %d, noted %d", r.TextRev, r.RecapText, r.RecapNotedText)
+	}
+	now = dayClock.Add(13 * time.Hour)
+	e.WriteDayRecaps(context.Background(), 1)
+	rc, err := e.ReadDayRecap(dayID)
+	if r := recordingNow(t, e, dayID); err != nil || rc.Version != 2 || r.RecapText != 1 || r.RecapNotedText != 1 {
+		t.Fatalf("at the recap time: version %d (%v), recapped %d, noted %d", rc.Version, err, r.RecapText, r.RecapNotedText)
 	}
 }

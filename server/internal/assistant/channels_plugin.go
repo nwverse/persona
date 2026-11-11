@@ -681,9 +681,10 @@ func (s *Service) channelPush(machine, session, title, body string) {
 }
 
 // channelPushTo is channelPush, each channel's send with its own channelSendTimeout from parent, for a push that may
-// be sent again when ref is set: it goes to every channel with that ref (which a channel takes once), and to none
-// that took is true of. It returns each channel's result, by id; the error is the list's when it could not be read
-// while the hub is away (nothing was sent then).
+// be sent again when ref is set: it goes to every channel with ref and the channel's id (ref:id, which that channel
+// takes once: a program of several channels tells their copies apart), and to none that took is true of. It returns
+// each channel's result, by id; the error is the list's when it could not be read while the hub is away (nothing was
+// sent then).
 func (s *Service) channelPushTo(parent context.Context, machine, session, title, body, ref string, took func(id string) bool) (map[string]error, error) {
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
@@ -703,7 +704,7 @@ func (s *Service) channelPushTo(parent context.Context, machine, session, title,
 		var err error
 		if ref == "" {
 			err = s.channelTell(ctx, id, "", text, channel.OutPush)
-		} else if err = s.channelSend(ctx, id, ref, text, channel.OutPush, ""); err != nil {
+		} else if err = s.channelSend(ctx, id, ref+":"+id, text, channel.OutPush, ""); err != nil {
 			s.logf("channels: %s: send: %v", id, err)
 		}
 		if err == nil {

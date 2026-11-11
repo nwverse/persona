@@ -49,6 +49,8 @@ const (
 	recapQuiet        = 30 * time.Minute // the cutoff waits until no upload came for this long
 	recapMeetingNear  = 15 * time.Minute // how far from an entry a calendar item the model named may start
 	dayPushRetry      = time.Minute      // the wait after a push DayRecapWritten did not take, doubled up to 16 minutes
+	dayPushGiveUp     = 24 * time.Hour   // after it became due, a push not taken yet is given up on
+	dayPushBudget     = time.Minute      // what a round spends on telling pushes: the rest wait for the next one
 )
 
 // errRecapStale: the day recording a recap job read was deleted, trimmed or given another base since; the job stops,
@@ -224,7 +226,7 @@ func (e *Engine) armDayRecaps(ids []string, now time.Time) {
 			at := cur.RecapEvening
 			if e.recapsArmed(cur, now, today, tonight(cur)) {
 				if at != cur.RecapEvening {
-					st.dayPushAtRecapTime(cur)
+					st.dayPushAtRecapTime(cur, now)
 				}
 				if err := st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false); err != nil {
 					e.logf("recording %s: recap due: %v", cur.ID, err)
@@ -439,18 +441,23 @@ func (n *recapNotes) chunk(hash string) *recapChunkNote {
 
 // readRecapNotes is recording id's recap_notes.json; empty without one (or one that cannot be read: noted again).
 func (s *Store) readRecapNotes(id string) recapNotes {
-	n, _ := s.recapNotesFile(id)
+	n, _, _ := s.recapNotesFile(id)
 	return n
 }
 
-// recapNotesFile is recording id's recap_notes.json, and whether there is one, read or not.
-func (s *Store) recapNotesFile(id string) (recapNotes, bool) {
+// recapNotesFile is recording id's recap_notes.json, and whether there is one: empty when it is not JSON, an error
+// when it is there but could not be read (what it holds is not known).
+func (s *Store) recapNotesFile(id string) (recapNotes, bool, error) {
 	var n recapNotes
 	raw, err := os.ReadFile(s.path(KindRecording, id, recapNotesFile))
-	if err == nil {
-		_ = json.Unmarshal(raw, &n)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return n, false, nil
+	case err != nil:
+		return n, true, err
 	}
-	return n, err == nil
+	_ = json.Unmarshal(raw, &n)
+	return n, true, nil
 }
 
 // putRecapNotes writes n as recording id's recap_notes.json (none when it has no chunk left), unless the recording
@@ -477,9 +484,13 @@ func (s *Store) putRecapNotes(id string, n recapNotes) error {
 
 // keepRecapNotes writes recording id's notes again with only the chunks of keep (its chunks now) when they hold
 // others: notes are kept per chunk while its lines are unchanged, and those of lines changed may quote what is gone
-// (an erase). The caller holds recMu.
+// (an erase). Notes that are there but cannot be read are an error: what they quote is not known, so whatever
+// changed the lines (a PUT) fails with them, and is sent again. The caller holds recMu.
 func (s *Store) keepRecapNotes(id string, keep []dayChunk) error {
-	n, there := s.recapNotesFile(id)
+	n, there, err := s.recapNotesFile(id)
+	if err != nil {
+		return fmt.Errorf("the recap's notes: %w", err)
+	}
 	if !there {
 		return nil
 	}
@@ -505,10 +516,7 @@ func (s *Store) pruneRecapNotes(r *Recording, segs []RecordingSegment) error {
 // retryRecapNotes forgets the tries of recording id's chunks not noted (asked again: they are tried afresh). The
 // caller holds recMu.
 func (s *Store) retryRecapNotes(id string) error {
-	n, there := s.recapNotesFile(id)
-	if !there {
-		return nil
-	}
+	n := s.readRecapNotes(id) // none that can be read: none to forget
 	k := len(n.Chunks)
 	if n.Chunks = slices.DeleteFunc(n.Chunks, func(c recapChunkNote) bool { return !c.Noted }); len(n.Chunks) == k {
 		return nil
@@ -1164,21 +1172,31 @@ func (e *Engine) storeDayRecap(ctx context.Context, r *Recording, target *RecapT
 // The day's push (docs/assistant/day-recap.md "The push"): one a day (Recording.Day), across its parts. At the recap
 // time it is due at once from a recording's ready recap, else the day waits for its first recap, which takes it in the
 // same write; a final recap of a day that had none takes it too. A recap asked for before the recap time never does.
-// Due is persisted (RecapPush) before DayRecapWritten is told, and done (RecapPushed) once it took it (returned nil),
-// so a restart in between tells it again (tellDayRecaps), and so does a later round after one it failed, dayPushRetry
-// after it (doubled for each one failed since, up to 16 minutes).
+// Due is persisted (RecapPush, from RecapPushSince) before DayRecapWritten is told, and done (RecapPushed) once it
+// took it (returned nil), so a restart in between tells it again (tellDayRecaps), and so does a later round after one
+// it failed, dayPushRetry after that call ended (doubled for each one failed since, up to 16 minutes). The
+// destinations that took it are kept with it (RecapPushTook, from what each call says), so it is told again with
+// them and goes only to the others, restarts included. dayPushGiveUp after it became due, one still failing is given
+// up on (RecapPushed and RecapPushFailed), logged once. A round tells the push waiting longest first, and starts no
+// more once it spent dayPushBudget on them, so pushes failing slowly never hold up the recaps.
 
-// dayPushAtRecapTime is the day's push at r's recap time, in the same write (the caller holds recMu): due from r's
+// dayPushAtRecapTime is the day's push at r's recap time now, in the same write (the caller holds recMu): due from r's
 // recap at once when it is ready, else the day waits; nothing once a part of the day has it.
-func (s *Store) dayPushAtRecapTime(r *Recording) {
+func (s *Store) dayPushAtRecapTime(r *Recording, now time.Time) {
 	if r.RecapPush || r.RecapPushed || s.dayPushLocked(r.Day, r.ID).pushed {
 		return
 	}
 	if r.RecapState == MinutesReady {
-		r.RecapPush, r.RecapWait = true, false
+		r.dayPushDue(now)
 		return
 	}
 	r.RecapWait = true
+}
+
+// dayPushDue marks the day's push due on r from now, sent to none yet.
+func (r *Recording) dayPushDue(now time.Time) {
+	r.RecapPush, r.RecapWait, r.RecapPushSince = true, false, now.UTC()
+	r.RecapPushTries, r.RecapPushAt, r.RecapPushTook = 0, time.Time{}, nil
 }
 
 // dayPushWithRecap marks on cur the day's push when it is due with cur's new recap rc, written for target (see above;
@@ -1192,7 +1210,7 @@ func (e *Engine) dayPushWithRecap(cur *Recording, target *RecapTarget, rc *DayRe
 	case day.pushed:
 		cur.RecapWait = false
 	case cur.RecapWait || day.waits || rc.Final && cur.RecapVersion == 0 && !day.recapped:
-		cur.RecapPush, cur.RecapWait = true, false
+		cur.dayPushDue(now)
 	}
 }
 
@@ -1214,45 +1232,68 @@ func (s *Store) dayPushLocked(day, except string) dayPush {
 	return p
 }
 
-// tellDayRecaps tells DayRecapWritten of every push of day recordings ids due and not told yet: marked this round, or
-// before a restart.
+// tellDayRecaps tells DayRecapWritten of the pushes of day recordings ids that are due and not told yet (marked this
+// round, or before a restart) or due again after one it failed, the one waiting longest first, until the round spent
+// dayPushBudget on them: the others are told at the next round.
 func (e *Engine) tellDayRecaps(ctx context.Context, ids []string) {
 	if e.DayRecapWritten == nil {
 		return
 	}
+	start := e.now()
+	type due struct {
+		id string
+		at time.Time
+	}
+	var todo []due
 	for _, id := range ids {
-		if ctx.Err() != nil {
+		if r, ok := e.Store.Recording(id); ok && r.RecapPush && !start.Before(r.RecapPushAt) {
+			todo = append(todo, due{id, r.RecapPushAt})
+		}
+	}
+	sort.SliceStable(todo, func(i, j int) bool { return todo[i].at.Before(todo[j].at) })
+	for _, d := range todo {
+		if ctx.Err() != nil || e.now().Sub(start) >= dayPushBudget {
 			return
 		}
-		e.tellDayRecap(ctx, id) // reads it, and tells only one whose push is due
+		e.tellDayRecap(ctx, d.id) // reads it again, and tells only one whose push is due
 	}
 }
 
 // tellDayRecap calls DayRecapWritten for day recording id, whose push is due (and not waiting after one it failed),
-// with its recap (outside the store's locks), then marks it told; one it failed stays due, tried again after a wait.
-// Without the hook it stays due, for when the assistant sets it.
+// with its recap (outside the store's locks), then marks it told, keeping the destinations the call says took it;
+// one it failed stays due, tried again after a wait, until dayPushGiveUp after it became due. Without the hook it
+// stays due, for when the assistant sets it.
 func (e *Engine) tellDayRecap(ctx context.Context, id string) {
 	if e.DayRecapWritten == nil {
 		return
 	}
 	st := e.Store
-	now := e.now()
 	r, ok := st.Recording(id)
-	if !ok || !r.RecapPush || now.Before(r.RecapPushAt) {
+	if !ok || !r.RecapPush || e.now().Before(r.RecapPushAt) {
 		return
 	}
 	rc, err := st.readRecap(id)
+	var took []string
 	var failed error
 	if err == nil {
-		failed = e.DayRecapWritten(ctx, *r, *rc)
+		took, failed = e.DayRecapWritten(ctx, *r, *rc)
 	}
+	now := e.now() // the wait is from the end of the call, which may have waited on its destinations
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	cur, ok := st.Recording(id)
 	if !ok || !cur.RecapPush {
 		return
 	}
+	cur.RecapPushTook = tookPush(cur.RecapPushTook, took)
+	if cur.RecapPushSince.IsZero() {
+		cur.RecapPushSince = now.UTC() // marked due before it was kept: due from its first call
+	}
 	switch {
+	case failed != nil && now.Sub(cur.RecapPushSince) >= dayPushGiveUp:
+		e.logf("recording %s: recap push: given up %s after it became due, %d tries: %v", id, dayPushGiveUp, cur.RecapPushTries+1, failed)
+		cur.RecapPush, cur.RecapPushed, cur.RecapPushFailed = false, true, true
+		cur.RecapPushTries, cur.RecapPushAt = 0, time.Time{}
 	case failed != nil:
 		cur.RecapPushTries++
 		wait := dayPushRetry << min(cur.RecapPushTries-1, 4)
@@ -1260,11 +1301,23 @@ func (e *Engine) tellDayRecap(ctx context.Context, id string) {
 		e.logf("recording %s: recap push: %v (again in %s)", id, failed, wait)
 	default:
 		cur.RecapPush, cur.RecapPushed = false, err == nil // a recap gone meanwhile pushes nothing: another part's may
-		cur.RecapPushTries, cur.RecapPushAt = 0, time.Time{}
+		cur.RecapPushTries, cur.RecapPushAt, cur.RecapPushSince, cur.RecapPushTook = 0, time.Time{}, time.Time{}, nil
 	}
 	if err := st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false); err != nil {
 		e.logf("recording %s: recap push: %v", id, err)
 	}
+}
+
+// tookPush is the destinations of a push that took it, kept, with those that took it now: each once, sorted.
+func tookPush(kept, now []string) []string {
+	out := slices.Clone(kept)
+	for _, to := range now {
+		if to != "" && !slices.Contains(out, to) {
+			out = append(out, to)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // recapFailed counts a try of target n of recording id that ran out of time (timedOut, and puts the next one off) or

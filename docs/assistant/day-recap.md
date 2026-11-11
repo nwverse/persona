@@ -446,7 +446,8 @@ is two.
 - Lines are numbered by position, so notes stay valid as text arrives. Notes are kept per chunk with a hash of its
   lines (positions, times and texts) in `recap_notes.json` in the recording's directory; a late sentence changes the
   hash and that chunk is read again. A `PUT` keeps the notes of every chunk whose hash it did not change (an erase
-  repair keeps positions, so only the erased hours are read again) and drops the others in the same request.
+  repair keeps positions, so only the erased hours are read again) and drops the others in the same request; notes
+  that are there but cannot be read fail the `PUT` (500, its upload not stored), and the phone sends it again.
 - Nothing reads the whole day at once: each chunk is read once. A merge takes the notes of at most 60 chunks; past
   that, chunks from the middle of the day are left out first (never the newest hours) and the recap is `partial`.
 
@@ -493,10 +494,16 @@ The push says "Your day recap is ready" with the number of meetings and suggeste
 part's), has a stable id per `day`, and a tap opens the main chat. It goes to the phone and to each channel (the Lark
 bot and channels with pushes on, which get the same text with the recording's web link, as minutes do), and is marked
 done only once the phone and every channel took it (or refused it for good: the hub refusing the notification, a
-channel with no conversation to send to). Until then it stays pending, restarts included, and is sent again after 1,
-2, 4, 8, then every 16 minutes: to those that did not take it, to all of them after a restart. The phone shows one
-(its stable id); the channels get that id as their key, so a copy sent again lands once where they can tell, and a
-channel may get a copy twice (at least once). Later versions do not push. A failure does not notify.
+channel with no conversation to send to, a channel answering with a refusal of its own). Until then it stays pending,
+restarts included, and the hub keeps with it which of them took it: it is sent again 1, 2, 4, 8, then every 16 minutes
+after the last try ended, only to those that did not take it, after a restart too. A push still not taken by all 24
+hours after it became due is given up: marked done (as failed) and logged once. Pending pushes are sent at the start
+of a recap round, the one waiting longest first, and a round starts no more of them once it spent a minute on them,
+so they never hold up the recaps. The phone shows one: it gets no copy once it took the push, and its notification's
+collapse id is derived from the push's stable id, so a copy sent again anyway replaces the one shown. The Lark bot
+gets that id as its key, and each channel the id with its own (`<id>:<channel id>`), so a copy sent again lands once
+where they can tell, and a channel may get a copy twice (at least once). Later versions do not push. A failure does
+not notify.
 
 ## The evening routine
 

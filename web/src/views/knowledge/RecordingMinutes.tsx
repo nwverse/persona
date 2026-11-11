@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesAction, type MinutesPoint, type RecordingView } from "../../lib/kb";
@@ -89,8 +89,9 @@ export type ConfirmedActions = { id: string; version?: number; actions: string[]
  *  recording's recap (#4741) goes through the same routes (`recap` picks its messages), and `confirm` sends each of its
  *  parts' actions to that part. One request at a time; a successful write, or a stale-version rejection, is read back
  *  before another mutation is allowed; answers that arrive after the route, credential or assistant changed are
- *  dropped; a pending one is read again every 5 s while the page shows, an `open` one (a recap not final yet) with
- *  `poll` every 60 s and when the page shows again. */
+ *  dropped, and a write's parts not sent yet then stay unsent; a pending one is read again every 5 s while the page
+ *  shows, an `open` one (a recap not final yet) with `poll` every 60 s and when the page shows again (`pollNow`: at
+ *  once), one read at a time. */
 export function useMinutesRequests({ id, version, pending, open = false, recap = false, auth, current, refresh, poll = refresh, onSaved }: {
   id: string;
   /** The shown minutes' (or recap's) version, sent with confirmed actions. */
@@ -113,28 +114,28 @@ export function useMinutesRequests({ id, version, pending, open = false, recap =
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const valid = () => alive.current && current();
 
+  // One read at a time, whichever poll started it: a switch between the two (a recap turning pending) waits for the
+  // read on its way, all of it, and none starts while a write is on its way.
+  const polling = useRef(false);
+  const readOnce = useCallback((read: () => Promise<boolean>) => {
+    if (polling.current || inFlight.current || !current()) return;
+    polling.current = true;
+    void read().catch(() => {}).finally(() => { polling.current = false; });
+  }, [current]);
+
   useEffect(() => {
     if (!pending) return;
-    let polling = false;
-    return visiblePoll(() => {
-      if (polling || inFlight.current || !current()) return;
-      polling = true;
-      void refresh().catch(() => {}).finally(() => { polling = false; });
-    }, 5000, documentPage);
-  }, [pending, current, refresh]);
+    return visiblePoll(() => readOnce(refresh), 5000, documentPage);
+  }, [pending, refresh, readOnce]);
 
   useEffect(() => {
     if (pending || !open) return;
     // The page was just read: the next read is a minute later, or when the page shows again.
-    let polling = false, started = false;
-    const stop = visiblePoll(() => {
-      if (!started || polling || inFlight.current || !current()) return;
-      polling = true;
-      void poll().catch(() => {}).finally(() => { polling = false; });
-    }, OPEN_POLL_MS, documentPage);
+    let started = false;
+    const stop = visiblePoll(() => { if (started) readOnce(poll); }, OPEN_POLL_MS, documentPage);
     started = true;
     return stop;
-  }, [pending, open, current, poll]);
+  }, [pending, open, poll, readOnce]);
 
   // A successful write (or stale-version rejection) must be read back before another mutation is allowed.
   const readback = async () => {
@@ -159,6 +160,8 @@ export function useMinutesRequests({ id, version, pending, open = false, recap =
         // A write that took effect (or found a newer version) is read back even when a later one fails.
         let changed = false, stale = false, failure: { err: unknown } | undefined;
         for (const write of writes ?? [null]) {
+          // The next part's write goes only while the page that asked still shows: its route, credential and assistant.
+          if (!valid()) return;
           try {
             await api(write ? `/recordings/${enc(write.id)}/minutes/todos` : `/recordings/${enc(id)}/minutes`, {
               method: "POST", ...auth,
@@ -184,8 +187,9 @@ export function useMinutesRequests({ id, version, pending, open = false, recap =
   };
   const run = (actions?: string[], refreshOnly = false) => send(actions ? [{ id, version, actions }] : null, refreshOnly);
   const confirm = (writes: ConfirmedActions[]) => send(writes, false);
+  const pollNow = () => readOnce(poll);
 
-  return { busy, needsRefresh, run, confirm };
+  return { busy, needsRefresh, run, confirm, pollNow };
 }
 
 /** Until when a trimmed recording's minutes (or recap) stay: the assistant's minutes_days in effect, when its hub says;

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n";
-import { setToken } from "../../lib/api";
+import { handleUnauthorized, setToken } from "../../lib/api";
 import { dayTitle, minutesKeptUntil, recordingClock, type KBDetailResponse } from "../../lib/kb";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { toast } from "../../ui/atoms";
@@ -268,6 +268,9 @@ describe("an all-day recording's recap in Knowledge detail", () => {
   ])("labels a final recap (%s) and offers to regenerate it", async (reason, label) => {
     const data = fixture(); data.detail.recap!.final = true; data.detail.recap!.final_reason = reason; data.detail.meta!.complete = reason === "complete";
     await load(data);
+    // The day's recap is final once no other part of the day is still to come.
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("Part 1: final");
+    await reply(requests.find((r) => r.url === "/api/v1/recordings")!, { recordings: [] });
     expect(section().querySelector("[data-recap-covers]")!.textContent).toBe(label);
     expect(button("Regenerate")).toBeDefined();
     expect(button("Update")).toBeUndefined();
@@ -492,6 +495,167 @@ describe("a day in two parts", () => {
     expect(requests.some((r) => r.url === part2Path)).toBe(false);
     expect(headings("h4")).toEqual(["Design review", "Lunch with the platform team", "Evening sync"]);
     expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("So far, up to 19:00");
+    expect(section().querySelector("[data-recap-parts-failed]")!.textContent).toBe("Couldn’t load the other parts of the day.·Retry");
+  });
+
+  const covers = () => section().querySelector("[data-recap-covers]")!.textContent;
+  const partsFailed = () => section().querySelector<HTMLElement>("[data-recap-parts-failed]");
+  const finalPart = () => { const one = fixture(); one.detail.recap!.final = true; one.detail.recap!.final_reason = "complete"; return one; };
+
+  it("never calls the day final when its parts couldn't be listed, and lists them again a minute later while the page shows", async () => {
+    vi.useFakeTimers();
+    let visible: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visible);
+    await load(finalPart());
+    await reply(pendingFor(listPath), { error: "boom" }, 500);
+    expect(covers()).toBe("Part 1: final");
+    expect(partsFailed()!.textContent).toBe("Couldn’t load the other parts of the day.·Retry");
+    visible = "hidden"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    let count = requests.length;
+    act(() => vi.advanceTimersByTime(180_000));
+    expect(requests).toHaveLength(count);
+    visible = "visible"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, listPath].sort());
+    await reply(pendingFor(detailPath), finalPart());
+    await reply(pendingFor(listPath), { error: "boom" }, 500);
+    expect(partsFailed()).not.toBeNull();
+    count = requests.length;
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, listPath].sort());
+    await reply(pendingFor(detailPath), finalPart());
+    await reply(pendingFor(listPath), list);
+    await reply(pendingFor(part2Path), second());
+    expect(partsFailed()).toBeNull();
+    expect(covers()).toBe("Part 1: final · Part 2: so far, up to 17:00");
+    expect(headings("h4")).toContain("Beta go/no-go");
+  });
+
+  it("never calls the day final when a part couldn't be read, and reads it again on Retry", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    await load(finalPart());
+    await reply(pendingFor(listPath), list);
+    await reply(pendingFor(part2Path), { error: "boom" }, 500);
+    expect(covers()).toBe("Part 1: final");
+    expect(headings("h4")).not.toContain("Beta go/no-go");
+    const count = requests.length;
+    act(() => partsFailed()!.querySelector("button")!.click());
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, listPath].sort());
+    // Asked again before the answer: one read at a time.
+    act(() => partsFailed()!.querySelector("button")!.click());
+    expect(requests).toHaveLength(count + 2);
+    await reply(pendingFor(detailPath), finalPart());
+    await reply(pendingFor(listPath), list);
+    const two = second(); two.detail.recap!.final = true; two.detail.recap!.final_reason = "complete";
+    await reply(pendingFor(part2Path), two);
+    expect(partsFailed()).toBeNull();
+    expect(covers()).toBe("Final recap of the day");
+    expect(headings("h4")).toContain("Beta go/no-go");
+    const settledCount = requests.length;
+    act(() => vi.advanceTimersByTime(180_000));
+    expect(requests).toHaveLength(settledCount);
+  });
+
+  it("keeps a part shown when reading it again fails, and says the parts aren't all known", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    await loadDay(finalPart());
+    act(() => vi.advanceTimersByTime(60_000));
+    await reply(pendingFor(detailPath), finalPart());
+    await reply(pendingFor(listPath), list);
+    await reply(pendingFor(part2Path), { error: "boom" }, 500);
+    expect(headings("h4")).toContain("Beta go/no-go");
+    expect(covers()).toBe("Part 1: final · Part 2: so far, up to 17:00");
+    expect(partsFailed()).not.toBeNull();
+  });
+
+  it("reads part 2 once at a time when a minute's read finds this part's recap pending", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    await loadDay();
+    let count = requests.length;
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, listPath].sort());
+    await reply(pendingFor(listPath), list);
+    // Part 2 is being read when this part's answer says its recap is being written: the 5 s reads take over, after it.
+    const pending = fixture(); pending.detail.meta!.recap_state = "pending";
+    count = requests.length;
+    await reply(pendingFor(detailPath), pending);
+    expect(section().textContent).toContain("Updating…");
+    expect(requests).toHaveLength(count);
+    await reply(pendingFor(part2Path), second());
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, part2Path].sort());
+  });
+
+  it("starts no other read while part 2's is on its way, even when this part's read failed", async () => {
+    vi.useFakeTimers();
+    let visible: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visible);
+    const showAgain = () => {
+      visible = "hidden"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      visible = "visible"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    };
+    await loadDay();
+    act(() => vi.advanceTimersByTime(60_000));
+    await reply(pendingFor(listPath), list);
+    await reply(pendingFor(detailPath), { error: "boom" }, 500);
+    const count = requests.length;
+    showAgain();
+    expect(requests).toHaveLength(count);
+    await reply(pendingFor(part2Path), second());
+    showAgain();
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, listPath].sort());
+  });
+
+  it.each(["route", "credential", "manager", "unmount"])("sends no other part's to-dos once the page is retired (%s) while the first part's were on their way", async (change) => {
+    await loadDay();
+    click("Add all");
+    expect(writes()).toHaveLength(1);
+    act(() => {
+      if (change === "route") render("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+      else if (change === "credential") setToken("synthetic-owner-b");
+      else if (change === "manager") setRosterDefault("other-manager");
+      else { root.unmount(); root = createRoot(host); }
+    });
+    await reply(writes()[0], { todos: [{ id: "todo-cy" }] });
+    expect(writes()).toHaveLength(1);
+    expect(saved).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["list", "route"], ["list", "manager"], ["part", "route"], ["part", "manager"],
+  ])("cancels the %s read after a %s change, and its late 401 doesn't sign the new page out", async (read, change) => {
+    const unauthorized = vi.fn();
+    const before = handleUnauthorized(unauthorized);
+    try {
+      await load();
+      if (read === "part") await reply(pendingFor(listPath), list);
+      const late = pendingFor(read === "list" ? listPath : part2Path);
+      act(() => {
+        if (change === "route") render("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        else setRosterDefault("other-manager");
+      });
+      expect(late.init.signal?.aborted).toBe(true);
+      await reply(late, { error: "Unauthorized" }, 401);
+      expect(unauthorized).not.toHaveBeenCalled();
+    } finally {
+      handleUnauthorized(before);
+    }
+  });
+
+  it.each(["list", "part"])("signs out on a 401 of the current page's %s read", async (read) => {
+    const unauthorized = vi.fn();
+    const before = handleUnauthorized(unauthorized);
+    try {
+      await load();
+      if (read === "part") await reply(pendingFor(listPath), list);
+      await reply(pendingFor(read === "list" ? listPath : part2Path), { error: "Unauthorized" }, 401);
+      expect(unauthorized).toHaveBeenCalledOnce();
+    } finally {
+      handleUnauthorized(before);
+    }
   });
 });
 
