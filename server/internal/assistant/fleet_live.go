@@ -340,6 +340,9 @@ func needItem(l i18n.Lang, n needer) FleetItem {
 		Place: agentPlace(n.agent.Machine, sess, fleetPlaceMax), Kind: proto.IxScreen, Detail: i18n.T(l, "hub-liveactivity.screen")}
 	if ix := n.card; ix != nil {
 		item.Kind, item.Detail = ix.Kind, clip(oneLine(interactionDetail(l, *ix)), fleetDetailMax)
+		if ix.Private { // a Just me turn's card: the Live Activity shows it without its text
+			item.Detail = i18n.T(l, "push.private_card")
+		}
 		item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
 		if len(ix.Fields) > 0 {
 			item.Interaction = "" // what it asks for (a password) is filled in in the app: no Allow / Deny on the activity

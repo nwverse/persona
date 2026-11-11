@@ -109,7 +109,7 @@ internal fun ProvidersPage(
                     item("hidden") {
                         JSectionHeader(stringResource(R.string.settings_providers_hidden), count = groups.hidden.size,
                             trailing = stringResource(if (open) R.string.settings_providers_fold else R.string.settings_providers_unfold),
-                            onClick = if (query.isBlank()) ({ showHidden = !showHidden }) else null)
+                            onClick = if (query.isBlank()) ({ showHidden = !showHidden }) else null, open = open, trailingIsFoldAction = true)
                     }
                     if (open) {
                         launcherRows("hidden", groups.hidden, name, selected, onOpen) { menu = it }
@@ -212,7 +212,7 @@ internal fun ProviderDetailPage(providers: ProviderSetup?, name: String, machine
                     item("fact-$index") {
                         JGroupItem(GroupPosition.of(index, facts.size)) {
                             JRow(title, trailing = {
-                                Text(value, Modifier.widthIn(max = Tokens.Space.xxxl * 6), style = if (mono) PersonaTheme.type.code else PersonaTheme.type.callout,
+                                Text(value, Modifier.widthIn(max = Tokens.Space.xxl * 6), style = if (mono) PersonaTheme.type.code else PersonaTheme.type.callout,
                                     color = PersonaTheme.palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             })
                         }
@@ -275,7 +275,7 @@ internal fun ProviderDetailPage(providers: ProviderSetup?, name: String, machine
                 }
                 state.notice?.let { notice -> item("notice") { JNotice(notice.text(), Modifier.padding(top = Tokens.Space.m), status = Status.NeedsYou) } }
                 item("action") {
-                    Box(Modifier.padding(top = Tokens.Space.xl)) {
+                    Box(Modifier.padding(top = Tokens.Space.section)) {
                         if (l.hidden) JButton(stringResource(R.string.settings_providers_restore), { scope.launch { model.restore() } }, Modifier.fillMaxWidth(),
                             kind = JButtonKind.Secondary, enabled = !state.busy, loading = state.busy)
                         else JButton(stringResource(if (l.managed) R.string.settings_providers_delete else R.string.settings_providers_hide_long), { confirm = true },
@@ -350,7 +350,9 @@ internal fun ProviderImportPage(providers: ProviderSetup, machines: List<Machine
     val model = remember(providers) { ProviderImportModel(providers) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
-    val online = machines.filter { it.online }
+    // The current assistant's computers alone: the hub reads another assistant's through that one, not this one.
+    val assistant = currentAssistant()
+    val online = machines.filter { it.online && assistant.ownsOn(it.id, it.manager) }
     LaunchedEffect(online.map { it.id }) {
         if (state.machine.isBlank()) (online.firstOrNull { it.kind == "local" } ?: online.firstOrNull())?.let { model.choose(GroupKeys.raw(it.id)) }
     }

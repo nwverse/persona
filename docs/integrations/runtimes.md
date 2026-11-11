@@ -246,6 +246,10 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
+For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
+The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
+status, model, permissions and capabilities continue to describe the running session.
+
 A runtime that declares `caps.assistant` must:
 
 1. For **assistant chats** (started with `assistant: true`, or whose directory is the assistant directory), always send permissions and questions to the phone first (when there's a hub), regardless of whether the local UI is open.
@@ -300,6 +304,10 @@ The runtime bounds native calls to a 75-second budget, followed by bounded sessi
 node's shell check. Shell and managed launchers keep their own execution context.
 
 Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
+
+Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
+empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
+Each prompt clears its live text on completion, including when another prompt is queued.
 
 ### Shared runtime behavior
 

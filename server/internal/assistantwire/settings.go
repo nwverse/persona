@@ -43,6 +43,11 @@ const (
 	// its CLAUDE.md / AGENTS.md written; the assistant's connectors, CLIs and skills are left as they are. A node without
 	// it answers "unknown method": no guest conversation starts there.
 	DeviceAssistantGuestPrepare = "assistant.guest_prepare"
+	// DeviceAssistantGuestDelete: {dir, session_id} → {deleted}: a meeting's room removed at its transcript's cut or
+	// with its recording (docs/assistant/meeting-minutes.md "Deletion"): its process, transcript and directory. With
+	// kind meeting, assistant.guest_prepare answers {cwd, kind, start_ids} on a node that starts rooms; an older node
+	// answers {cwd} only, or "unknown method" for this one.
+	DeviceAssistantGuestDelete = "assistant.guest_delete"
 	// DeviceAssistantWarm: {cwd, launcher, …model} → {}: a process ready for the next new conversation.
 	DeviceAssistantWarm = "assistant.warm"
 	// DeviceAssistantMemory: {op, cwd, name?, content?} → the memory files (op list) or {}.
@@ -62,6 +67,7 @@ type StartParams struct {
 	Text           string        `json:"text"`
 	Images         []proto.Image `json:"images,omitempty"`
 	Launcher       string        `json:"launcher,omitempty"`
+	ConfigDir      string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
 	PermissionMode string        `json:"permission_mode,omitempty"`
 	Effort         string        `json:"effort,omitempty"`
 	Purpose        string        `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
@@ -83,6 +89,12 @@ type StartParams struct {
 	// GuestTools: a guest conversation (assistant/guest.go) that may use only these connector tools; nil is an
 	// ordinary one.
 	GuestTools []string `json:"guest_tools,omitempty"`
+	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
+	// that cannot picks its own. Never over the bus.
+	NewSessionID string `json:"-"`
+	// ClientMsgID: the first message's client_msg_id (with NewSessionID: the node sends it once and its transcript
+	// item carries it, as a send's). Never over the bus.
+	ClientMsgID string `json:"-"`
 }
 
 // SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is

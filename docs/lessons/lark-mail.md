@@ -29,6 +29,8 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 
 ## Messages and documents
 
+- An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
+
 - Lark message rendering copies the Lark gateway's web client (`docs/apple/ios.md` ("Lark message rendering")): the hub forwards `parts` unchanged and only rewrites media URLs to `/api/v1/lark/media/`;
   to read the gateway's source, clone its upstream repository (the address is in the notes of the extension that connects Lark; the hub machine only has the deployed build).
 - For personal Agent sources, look at the hub's `GET /api/v1/agents` first: when no Lark gateway is configured, or only the Lark CLI is, it returns `{"sources":[]}` and the sessions endpoint returns `{"sessions":[]}`, both HTTP 200; the Lark CLI doesn't provide a personal Agent bridge.

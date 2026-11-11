@@ -71,9 +71,11 @@ class HttpTasksApi internal constructor(
             AssistantManagerChoice.noteItem(listOf("todos", it.id), it.manager)
         }
 
-    // A new to-do is the current assistant's (the client names it on `POST todos`).
+    // A new to-do is the current assistant's (the client names it on `POST todos`), or the one the caller named for it
+    // (a RequestManager: an agent's own assistant when it is linked at once; "" the default's).
     override suspend fun createTodo(title: String, notes: String): Todo {
-        val owner = AssistantManagerChoice.current.value.manager
+        val named = kotlinx.coroutines.currentCoroutineContext()[persona.core.contracts.api.RequestManager]
+        val owner = if (named != null) named.id.ifEmpty { null } else AssistantManagerChoice.current.value.manager
         val made: Todo = JsonCodec.decodeFromJsonElement(call(path("todos"), "POST", buildJsonObject {
             put("title", title)
             put("notes", notes)
@@ -185,6 +187,20 @@ class HttpTasksApi internal constructor(
 
     override suspend fun acceptTask(todoId: String, askedAt: String) {
         call(path("todos", todoId, "accept"), "POST", buildJsonObject { put("asked_at", askedAt) })
+    }
+
+    override suspend fun answerTask(todoId: String, askedAt: String, answer: persona.core.contracts.api.AskAnswer) {
+        call(path("todos", todoId, "accept"), "POST", buildJsonObject {
+            put("asked_at", askedAt)
+            when (answer) {
+                is persona.core.contracts.api.AskAnswer.Option -> put("option", answer.label)
+                is persona.core.contracts.api.AskAnswer.Response -> put("response", answer.code)
+            }
+        })
+    }
+
+    override suspend fun markLaterHandled(questionId: String) {
+        call(path("later", questionId, "handled"), "POST", JsonObject(emptyMap()))
     }
 
     override suspend fun removeTask(todoId: String) {

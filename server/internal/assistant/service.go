@@ -55,6 +55,8 @@ type Service struct {
 	leaderStarts atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
+	refs launcherSecrets
 
 	hub   Hub
 	store func() Store
@@ -68,6 +70,9 @@ type Service struct {
 	// taskRetry is how long a task waits before its one retry after a dropped link (0: taskStartRetryDelay; tests
 	// shorten it).
 	taskRetry time.Duration
+	// leaderResume bounds each attempt to put a supervision message into a closed task leader agent, and is the first
+	// wait of the retries after one failed (0: leaderResumeWait; tests shorten it, task_leader.go leaderResumeTime).
+	leaderResume time.Duration
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
@@ -77,10 +82,13 @@ type Service struct {
 	mux    *http.ServeMux
 	routes []string
 
-	// preparedMD is the CLAUDE.md this hub last wrote on a machine for a directory (key: machine id NUL directory),
-	// by prepareSpaceIf; refreshInstructions writes again what differs.
+	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
+	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
+
+	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
+	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
 	preparedMu sync.Mutex
-	preparedMD map[string]string
+	prepared   map[string]preparedState
 
 	epoch string
 	pubMu sync.Mutex
@@ -131,6 +139,10 @@ type Service struct {
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
 	attend     attendState       // meeting_feed.go: feeding the meetings Persona attends, and their turns
+	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
+	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording
+	justMe     justMeBook        // meeting_justme.go: the Just me turns
+	meetLocks  meetingLocks      // meeting_followup.go: one creation at a time per recording
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
@@ -197,6 +209,7 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
+	s.standingAuthorizationRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
 	s.routeRoutes()

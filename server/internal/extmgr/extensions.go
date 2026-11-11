@@ -30,7 +30,6 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
-	wechat "github.com/nwverse/persona/server/internal/wechat/spec"
 )
 
 // Plugins (docs/extensions/extensions.md): one registry of every plugin — built into personad, written in hub.json, installed on
@@ -168,9 +167,14 @@ func (p *hubExtension) healthy(ctx context.Context) bool { return p.proc != nil 
 type extensions struct {
 	// checks limit how often each extension's settings.check runs (extension_settings_check.go).
 	checks checkLimiter
-	dir    string // the hub's data directory
-	root   string // where the extensions are kept: <dir>/extensions (extensionsRoot)
-	reg    *extension.Registry
+	// resolves limit how often each secret provider is asked for a value; words keeps references' descriptions
+	// (secret_providers.go).
+	resolves checkLimiter
+	words    secretWords
+	kept     keptSecrets // resolved launcher keys (secret_kept.go)
+	dir      string      // the hub's data directory
+	root     string      // where the extensions are kept: <dir>/extensions (extensionsRoot)
+	reg      *extension.Registry
 	// logf is the hub's log, each line about an extension kept with its log too; journal only the hub's (the host's
 	// lines reach the extension's log through its Observe).
 	logf, journal func(string, ...any)
@@ -231,7 +235,7 @@ type extensions struct {
 func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)) *extensions {
 	root := extensionsRoot(dir, logf)
 	ps := &extensions{dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
-		stats: newExtensionMetrics()}
+		stats: newExtensionMetrics(), resolves: checkLimiter{most: secretResolvesMost, window: secretResolveWindow}}
 	// The hub's lines about an extension go into its log too (the host's own go there through the spec's Observe).
 	ps.logf = func(format string, args ...any) {
 		logf(format, args...)
@@ -456,11 +460,6 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	reg.Reserve("looks", extension.BuiltinLooks...)
 	reg.Reserve("looks", extension.RetiredLookIDs...)
 	// No agent_sources id is reserved: the hub has no personal agents source of its own (extension_agents.go).
-	if path := siblingProgram(wechat.Program); path != "" {
-		if err := h.addWeChatBuiltin(reg, path); err != nil {
-			h.logf("plugin wechat: %v", err)
-		}
-	}
 	if err := reg.AddBuiltin(cuaManifest(h), "", false); err != nil { // off until the user turns it on (computer.go)
 		h.logf("plugin cua: %v", err)
 	}
@@ -545,7 +544,9 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 	}
-	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
+	ps.forgetAuth(c.ID)          // another version, removed, switched, set up again: ask again
+	ps.forgetSecretWords(c.ID)   // a provider's references may name other things now
+	ps.kept.forgetProvider(c.ID) // and give other values, or none
 	switch c.Kind {
 	case "removed", "upgraded", "rolled_back": // only the version installed now keeps its packages for computers
 		keep := ""
@@ -975,7 +976,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			s.StartEnv = func() []string { return identity.Environment(start()) }
 		}
 		if !s.RPC { // no initialize to carry them
-			secrets, err := ps.reg.Secrets(ctx, id)
+			secrets, err := ps.programSecrets(ctx, id)
 			if err != nil {
 				return s, err
 			}
@@ -984,9 +985,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		}
 		ps.voiceSpec(p, &s) // what the hub.json entry it took over had (voice_extension.go)
 	}
-	builtin := p.Record.Source == extension.SourceBuiltin
 	s.Init = func(ctx context.Context) (extension.InitializeParams, error) {
-		secrets, err := ps.reg.Secrets(ctx, id)
+		secrets, err := ps.programSecrets(ctx, id)
 		if err != nil {
 			return extension.InitializeParams{}, err
 		}
@@ -1054,9 +1054,6 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return extension.InitializeParams{}, storeError(ctx, err)
 		}
 		return params, nil
-	}
-	if builtin && id == wechat.ID && ps.h != nil {
-		s.Check = sameBuild(ps.h, p.Manifest.Name, s.Command) // the program must be the hub's build
 	}
 	s.Accept = func(res extension.InitializeResult) error {
 		ps.clearBadges(id)

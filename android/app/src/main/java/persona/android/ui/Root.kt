@@ -8,7 +8,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -658,7 +665,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), navigator) }
             session.terminal?.let { terminalEntries(navigator, it, { key -> sessions.firstOrNull { s -> s.key == key }?.displayTitle },
                 panes = shell.terminalPanes.takeIf { session.demo == null }, sessions = session.sessions,
-                routed = shell::groupTerminal) }
+                routed = shell::groupTerminal,
+                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation })) }
                 ?: run {
                     entry<TerminalRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
                     entry<persona.core.navigation.TerminalPanesRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
@@ -753,11 +761,16 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                   sidebarColumnShown.value = true
               }
           }
+          // A switch of assistant closes the current assistant's settings pages over the list (docs/assistant/managers.md
+          // "Clients"), in the Settings sheet and on each tab (a link or a readiness card opens them there): none shows one
+          // assistant's settings, or sends what it holds, once another is current; the list shows the new one's.
+          persona.feature.settings.CloseAssistantSettingsOnSwitch(currentAssistant.id) { listOf(settingsSheetStack) + stacks.values }
           if (settingsOpened) {
               val settingsNavigator = remember(navigator, settingsSheetStack) {
                   SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
               }
               JSettingsSheet(onDismiss = { settingsOpened = false }) {
+                CompositionLocalProvider(LocalAssistantWaiting provides waiting) {
                   val settingsEntries = entryProvider<NavKey> {
                       entry<SettingsRoute> { ShellSettings(services, settingsNavigator, shell, onClose = { settingsOpened = false }) }
                       entry<SettingsPageRoute> { route ->
@@ -790,6 +803,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                               })
                       }
                   }
+                }
               }
           }
         }
