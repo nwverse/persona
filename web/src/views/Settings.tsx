@@ -162,10 +162,12 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return () => removeEventListener("popstate", back);
   }, []);
   const listed = phone && !at.tab;
-  // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133)
-  const scroller = useRef<HTMLDivElement>(null);
-  useScrollMemory(scroller, listed ? "settings" : `settings/${at.tab ?? "general"}/${at.sub ?? ""}`);
   const tab: Tab = at.tab ?? "general";
+  // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133).
+  // An item that opens in a dialog over its category's page (a model purpose) is not a page: the key leaves it out, so
+  // opening and closing it leave the page where it was (#4282).
+  const scroller = useRef<HTMLDivElement>(null);
+  useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
   // The current assistant's group (docs/assistant/managers.md "The current assistant"): its pages read and write that
   // assistant only. Their merged lists are filtered by it, its configuration editors name it, and what else they ask of
@@ -302,7 +304,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <Models />
                 </section>
                 <section id="settings-model-config" className="scroll-mt-4">
-                  <ModelConfiguration open={sub} onOpen={(id) => pick("models", id, "model-config")} onProviders={() => pick("models", null, "providers")} />
+                  {/* no section: the row is on the page in view, which stays where it is (#4282) */}
+                  <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
                 </section>
               </>}
               {tab === "agents" && <AgentSections section={at.section} />}
@@ -712,7 +715,7 @@ function Models() {
   const rc = rcGroups(shown);
   // a wrapper script on PATH or a runtime's launcher (agy, omp): a computer's, but not from an rc file
   const onPath = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.source !== "zshrc" && !l.hidden);
-  const hidden = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.hidden);
+  const hidden = shown.filter((l) => !managedProvider(l.source) && l.hidden);
   // the machines that did not answer this time, named on the entries they gave before
   const staleMark = (ids?: string[]) =>
     ids?.length ? <Pill tone="orange">{t("settings.stale", { machines: formatList(ids.map(name), { type: "conjunction", style: "narrow" }) })}</Pill> : null;
@@ -767,7 +770,8 @@ function Models() {
       {builtin.length > 0 && (
         <Group title={t("settings.builtin_title", { count: builtin.length })} footer={t("settings.builtin_footer")}>
           {builtin.map((b) => (
-            <div key={`${b.name}/${b.machine}`} className="flex items-center gap-3 px-4 py-2.5">
+            // its page tests it and hides it in Persona (#4384), as an rc-file launcher's does
+            <button key={`${b.name}/${b.machine}`} type="button" onClick={() => setOpen(b.name)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[13px] font-medium text-ink">{t("settings.builtin_row", { name: b.name, machine: name(b.machine) })}</span>
@@ -775,7 +779,8 @@ function Models() {
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{b.version ? `Claude Code ${b.version}` : "Claude Code"}</div>
               </div>
-            </div>
+              <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+            </button>
           ))}
         </Group>
       )}

@@ -1,10 +1,12 @@
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
 import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
+import { defaultLabel, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { navigate } from "../lib/router";
+import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
@@ -58,6 +60,7 @@ import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeSt
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
+import { resultExtras } from "../lib/brief";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
@@ -1287,6 +1290,11 @@ function askText(ix: Interaction | undefined): string {
 
 // ── Todo Detail ──────────────────────────────────────────────
 
+// A task's brief (#3822) comes with the first to-do that has one, not with the page.
+const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
+const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
+
 // The existing review UI lives with this lazy page, not the first screen's card badges.
 const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
   met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
@@ -1303,6 +1311,8 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
   const list = checklist(sup);
   const review = latestReview(sup);
   const parked = parkedLine(todo);
+  // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
+  const extras = todo.done_at ? resultExtras(todo) : undefined;
   return (
     <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
       <div className="flex items-center gap-2">
@@ -1336,6 +1346,11 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
             );
           })}
         </ul>
+      )}
+      {extras && (
+        <Suspense fallback={null}>
+          <BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />
+        </Suspense>
       )}
       {parked && <p data-testid="review-parked" className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{parked}</p>}
       {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
@@ -1531,7 +1546,19 @@ function TodoDetail({
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
+      {/* The brief its work is held to (#3822): who asked and in what words above the criteria; the scope changes
+          and who worked on it under them. */}
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefPanel todo={todo} />
+        </Suspense>
+      )}
       <ReviewChecklist todo={todo} />
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefHistory todo={todo} />
+        </Suspense>
+      )}
       <LatestReport todo={todo} />
 
       {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
@@ -2268,6 +2295,10 @@ export function HandoverDialog({
   const [mid, setMid] = useState(() => onlineMachines[0]?.id ?? "");
   const [cwd, setCwd] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
+  // What Model settings › Agents runs on this computer, as the hub says (null: no launcher default); undefined until the list
+  // is in, and from an older hub, which has no default to follow.
+  const [hubDefault, setHubDefault] = useState<LauncherDefault | null | undefined>(undefined);
+  // "": the default (the hub resolves it at the start, as New Agent's "Default: …")
   const [launcher, setLauncher] = useState("");
 
   // For "existing":
@@ -2295,20 +2326,29 @@ export function HandoverDialog({
   useEffect(() => {
     if (!open || !mid) return;
     const controller = new AbortController();
-    api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`, { signal: controller.signal })
+    // another computer's list is not this one's
+    setLaunchers([]);
+    setHubDefault(undefined);
+    setLauncher("");
+    machineLaunchers(mid, { signal: controller.signal })
       .then((r) => {
-        setLaunchers(r.launchers ?? []);
-        // the first this computer can start now, not one its terminal can't run (#1643)
-        if (r.launchers?.length) setLauncher(initialLauncher(null, r.launchers));
+        const ls = r.launchers ?? [];
+        setLaunchers(ls);
+        setHubDefault(r.default);
+        // the default the user configured, as New Agent starts from it (#4384); an older hub has none: the first this computer
+        // can start now, not one its terminal can't run (#1643)
+        setLauncher(r.default !== undefined ? "" : initialLauncher(null, ls));
       })
-      .catch(() => {});
+      .catch((e) => { if (!controller.signal.aborted) toast(errorText(e), "error"); });
     return () => controller.abort();
   }, [open, mid]);
 
   const previewCard = useMemo(() => {
     return formatTodoContext(todo.title, todo.notes);
   }, [todo]);
-  const pickedBlock = launcherBlock(launchers.find((l) => l.name === launcher));
+  // the default is held to what it runs here
+  const pickedBlock = launcherBlock(launchers.find((l) => l.name === (launcher || hubDefault?.provider)));
+  const defaultChoice = hubDefault ? defaultLabel(hubDefault) : t("newagent.follow_model_settings");
 
   const submitNew = async () => {
     if (!mid) return;
@@ -2416,14 +2456,16 @@ export function HandoverDialog({
               />
             </div>
 
-            {launchers.length > 0 && (
+            {(launchers.length > 0 || hubDefault !== undefined) && (
               <div>
                 <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.launcher")}</label>
                 <select
+                  data-testid="todo-handoff-launcher"
                   value={launcher}
                   onChange={(e) => setLauncher(e.target.value)}
                   className="w-full rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none"
                 >
+                  {hubDefault !== undefined && <option value="">{defaultChoice}</option>}
                   {usableFirst(launchers).map((l) => {
                     const block = launcherBlock(l);
                     // still a choice (a start that works clears it), with why, after the ones that can start (#1643)
@@ -2440,6 +2482,19 @@ export function HandoverDialog({
                     <span className="min-w-0">{pickedBlock.reason}</span>
                   </p>
                 )}
+                {/* add, hide or restore launchers (#4384): Settings › Model providers, as New Agent's entry */}
+                <button
+                  type="button"
+                  data-testid="todo-handoff-manage-launchers"
+                  onClick={() => {
+                    onClose();
+                    navigate(settingsHref("models", null, false, null, "providers"));
+                  }}
+                  className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium whitespace-nowrap text-accent-ink hover:underline"
+                >
+                  <Icon name="gear" size={11} />
+                  {t("newagent.manage_launchers")}
+                </button>
               </div>
             )}
           </div>

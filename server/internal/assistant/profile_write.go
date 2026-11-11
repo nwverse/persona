@@ -43,6 +43,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if in.Permission != nil && !s.explicitSettingsTarget(w, r) {
 		return
 	}
+	if in.TaskWorkspacePreference != "" && !validWorkspacePreference(in.TaskWorkspacePreference) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("task_workspace_preference must be prefer-existing or prefer-new"))
+		return
+	}
 	machine := s.settings(ctx).MachineID
 	if in.MachineID != "" {
 		if _, ok := s.device(ctx, in.MachineID); !ok {
@@ -139,6 +143,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.StartRequestedTasks != nil {
 			v.StartRequestedTasks = in.StartRequestedTasks
 		}
+		if in.TaskWorkspacePreference != "" {
+			v.TaskWorkspacePreference = in.TaskWorkspacePreference
+		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
 		}
@@ -147,6 +154,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.KBTopics != nil {
 			v.KBTopics = in.KBTopics
+		}
+		if in.MainBackgroundFolded != nil {
+			v.MainBackgroundFolded = in.MainBackgroundFolded
 		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
@@ -168,6 +178,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
+		}
+		if in.InboxSignals != nil {
+			v.InboxSignals = in.InboxSignals
 		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode

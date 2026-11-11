@@ -151,7 +151,7 @@ func withoutDeadProxies(env, own []string, base string, warn func(string)) []str
 }
 
 // userSettingsEnv is the env of the user's settings.json, in the Claude config directory the launcher's claude uses
-// (env's CLAUDE_CONFIG_DIR, else the node's): what Claude Code applies over the environment it starts with. nil when
+// (env's CLAUDE_CONFIG_DIR, else the legacy default): what Claude Code applies over the environment it starts with. nil when
 // there is none.
 func (n *Node) userSettingsEnv(env map[string]any, configDir ...string) map[string]any {
 	dir := n.defaultClaudeDir()

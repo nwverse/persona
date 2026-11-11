@@ -4,6 +4,11 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 
 - A service-level `CLAUDE_CONFIG_DIR` can be a headless-only assistant profile with no `hasCompletedOnboarding` (#3345). It is not evidence that a launcher cannot answer. Probes drop that inherited value before shell startup, then use the existing launcher command and its profile choices. Judge interactive onboarding only against that interactive profile, not another discovered one. Fixing a health check must not silently move existing conversations to another directory.
 
+- A source-search query containing a colon is not necessarily a URL: Go's `url.Parse` treats `bug: login` and `is:open login` as schemes.
+  In `server/internal/node/worktree_composer.go`, only an explicit HTTP(S) prefix selects URL validation; other text remains a repository-scoped
+  search, even when it contains a URL later in the query. Regress through `worktree.source` and check the exact query sent to `github.listWorkItems`,
+  alongside numbered lookups, URL validation and rejection of links to another repository.
+
 - Task placement must preserve locality (#1175): a failed launcher check is not permission to move an explicitly targeted task to another computer with the original absolute directory. Persist fixed placement by default through preview, card edits and retries; require an explicit flexible policy for portable work. Returning from background dispatch only proves the work was queued, not that a native Agent received its first prompt.
 
 - A successful session deletion must survive a node reclassifying an unchanged offline transcript as `interrupted`. Apply persisted deletion notes to that status too, using machine/session ID and last-use time; neither a shared project name nor a missing worktree means another conversation was deleted (#5933).
@@ -787,3 +792,15 @@ A runtime can rediscover an assistant conversation with its current project dire
 session-state projection before publishing runtime rows so the original assistant or health directory and launcher
 survive snapshots and reconnects. The hub uses that directory to classify assistant history. Preserve the runtime's
 status, model, permission choices and capabilities while restoring owned metadata.
+
+## A hook's allow is not an answer for every dialog Claude shows (2026-11-10, #3752, 2.1.322)
+
+A phone's Always Allow closed a permission card while the terminal kept asking: Claude Code runs the PermissionRequest hooks for
+its own safety checks ("Dangerous rm operation …", asked in bypass mode too, with a two-minute countdown) and ignores an allow for
+them, plain or with `updatedPermissions`; a deny it takes. herdr kept saying working, so no screen card came, and every message was
+refused as `dialog_open` with nothing on the phone to answer.
+
+- Don't take a hook's return for the dialog's end: read the pane after an allow (`node/allowwatch.go`) and let what is on screen
+  decide the state.
+- Measure a hook's effect on a real pty with a throwaway `--settings` hook and an empty config directory, answering both ways: the
+  same check that ignored allow honoured deny.

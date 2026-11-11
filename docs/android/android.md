@@ -15,7 +15,7 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 | Entry | Current implementation |
 | --- | --- |
 | Pairing | QR scan, manual entry and pairing deep links; a temporary token is exchanged for a device token; TLS public-key pinning, candidate probing and re-pairing; when done, goes to the setup checklist |
-| Persona | Home, main chat, history drawer and the shared chat page; the drawer (left sidebar on wide screens) starts with a main-chat row named Persona (following the avatar name), prefixed by the App icon (`JAppMark` in the design system), with pending count / working / unread status and menu, then a divider. The main chat is not listed anywhere else (shared client convention #2004, #5111); the first message of the main chat can go into the persistent outbox first, and its target is resolved once the connection is back; once the assistant identity is known it stays in the Persona tab. **Recent** in the drawer lists only chats the user opened; chats the hub opened itself are collected in one **Automatic** row (collapsed by default, remembered per device; when collapsed it shows how many are waiting for you and a dot for running ones; when expanded, chips filter by origin; search still covers everything; #3264, `docs/protocol/protocol.md` ("Origin of assistant chats")) |
+| Persona | Home, main chat, history drawer and the shared chat page; the drawer (left sidebar on wide screens) starts with a main-chat row named Persona (following the avatar name), prefixed by the App icon (`JAppMark` in the design system), with pending count / working / unread status and menu, then a divider. The main chat is not listed anywhere else (shared client convention #2004, #5111); the first message of the main chat can go into the persistent outbox first, and its target is resolved once the connection is back; once the assistant identity is known it stays in the Persona tab. The leader conversations (`assistant.leaders`) come first as **Directions**, in the hub's order, each under its direction's name (`GET /api/v1/assistant/leaders`, `assistantLeadersOf`; the title until it answers), with no Pin / Unpin; with directions, **Recent** reads **Other chats** (the web's and iOS's groups, `ConversationGroups.directions`). **Recent** in the drawer lists only chats the user opened; chats the hub opened itself are collected in one **Automatic** row (collapsed by default, remembered per device; when collapsed it shows how many are waiting for you and a dot for running ones; when expanded, chips filter by origin; search still covers everything; #3264, `docs/protocol/protocol.md` ("Origin of assistant chats")) |
 | Agents | The top of the page is a search box, below it a row of computer chips (all machines + each computer, with online state and counts, scrollable sideways), then the quick filters. When no grouping has been chosen, the default is **By repository** (#2252; iOS #2161 also defaults to it; the web #1671 offers this grouping and defaults to by to-do when none was chosen, #2812): computer → repository → worktree → session. When the node sends `worktree` (#1805, read off git for every session, with `repo_root` and `branch`; `gitPlaceOf`), it groups by `repo_root` (else the worktree itself) and then by `worktree`, labelled with its `branch`; the main checkout is the worktree equal to `repo_root`, and a named branch keeps its heading even when the project has only its main checkout. From an older node, when the session carries `repo_root` (the host knows its repository, #2840: Paseo keeps its worktrees under its own folder, so the path names no repository), it groups by that: a cwd inside it is the main worktree, any other cwd is one of its worktrees. Otherwise the repository is inferred from the session's cwd (`repoOf` / `agentRepos` in `core:domain`, same rules as the web's `web/src/lib/agent-repos.ts`: directories under `/.worktrees/`, `/.claude/worktrees/`, `/.herdr/worktrees/` belong to the repository before the marker, `~/.worktrees/<repo>/<worktree>` belongs to `<repo>`, any other directory is the main worktree of its own repository; sessions without a cwd go under **Other**). Repositories sort by name (natural order, repo2 before repo10, same as iOS); worktrees put the main worktree first, the rest by name. Unlike the web, sessions on offline computers stay in the tree and the computer header says **Offline**, same as by computer and space. A repository with only a main worktree lists its sessions directly, without a worktree level. Repositories with no activity sort after active ones, are collapsed by default and show their session count; expanded, they list all their sessions directly. Worktrees with no activity are also collapsed by default but keep their position. When all of a repository's sessions are in the same herdr space, the repository header carries that space's pin / mute marks and its `⋯` menu. The computer header says "N repositories, M sessions". The list settings also offer **By computer and space** (a three-level tree: computer → space (herdr workspace) → session), by state and by to-do; the choice is kept (any older stored value maps to **By computer and space**). The tree uses indentation, font size / weight and hairlines to show levels, with no background panel per level (`docs/android/android-design.md` section 2.4); every level can collapse and its header shows counts. By computer and space, idle spaces whose sessions are all seen stay under their computer, after the active spaces, collapsed by default and slightly dimmed, showing the session count when collapsed. Pin / mute, request cards and answering. Renaming a session (the tab name goes through herdr, the session name through Claude's /rename; the entry is in the session row menu, the space page and the chat page menu) and renaming a space (the space header menu) update the list, space page and chat page title immediately after sending, and roll back on failure. Pin, mute, rename and close are wired to the hub by the App's `AgentsWiringModule` |
 | Chat | Continuity gap filling, history paging, live deltas, collapsed work process, Markdown, diffs, to-dos, image cache, reading anchor, pending bubbles and manual review; for the composer see "Composer"; for session controls, origin and capabilities see "Session controls, session origin and capabilities" |
 | Inbox | One list for Lark and mail items, persisted filters, AI actions, reply log; Lark has a window cache, event refresh, visible-read marking and basic message rendering; the mail body page and mail read/write are wired to the hub by the App's `InboxModule` (`HttpMailTransport`) |
@@ -92,6 +92,40 @@ intermediate narration remain under a default-collapsed **Checked N places** sum
 Housekeeping notices (compaction, restarts, schedule setup) are hidden while dates remain. Explicit message-source
 metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
 Original events and background records remain inspectable rather than being deleted from history.
+
+#### Background rounds fold into one line (#4314)
+
+The main conversation folds the rounds it did not start, as web and iOS do (rules in
+[assistant.md](../assistant/assistant.md#background-rounds)):
+
+- **Which rounds**: only in the main conversation (the tasks store's `mainConversation`, else the config's `main`) and
+  only while the hub's `main_background_folded` is on (`AssistantConfig.backgroundFolded`: a hub that omits it counts as
+  on). `AssistantConversation.project(…, BackgroundFolding)` (`core/domain/.../tasks/BackgroundRounds.kt`) starts a round
+  at a user input whose message source (`sourceOf`) is `conversation`, `followup` or `patrol` and ends it at the next
+  genuine input, a queued one included; a system hint inside it does not end it. Such a round stays in the conversation
+  rather than going to the background record; supervision and the other quiet rounds keep going there as before.
+  A `followup` counts only as a scheduled follow-up: not a usage-limit continuation or a wake-up (injected
+  `limit_continue` / `wake`), and not one without a title; those stay shown. Until the hub's config is read, the page
+  uses the value it last read this run (in memory, `BackgroundFoldSetting.lastKnown`), else on.
+- **Folded**: the round's lines become one `ChatLine.Extra` carrying a `BackgroundRound`, drawn by `BackgroundRoundLine`
+  with the work summary's own line (`AssistantFoldLine`): `@<source> · Background round`, `· Running in the background`
+  while it runs. A tap opens it and its lines follow in place (the id `bg-<first input>` sits in the chat's open-line set,
+  so it survives scrolling and history paging); a search hit or a `?at=` link inside it opens it. A folded line keeps its
+  place among the feed's lines and days (`AssistantLines`).
+- **Not folded**: `supervisionVisible` (web's rule): a successful `ask_user` / `notify_user` (bare or Persona's
+  `mcp__persona__…`), a pending `ask_user` while the round runs, a `task_review` with verdict `accepted` / `needs_user`,
+  a `supervision_finish` whose result says `visibility: "user"`, or a hub fold with `supervision_user`.
+- **Prompts**: while folding is on, a scheduled task's or follow-up's input shows only the hub's `injected.line` under its
+  source label (`SourceMessage(hidePrompt)`), opened or not, and its line opens no prompt sheet; a supervisor message
+  shows its text when opened.
+- **Needs you**: same entry and count; with folding on and task rows from more than one supervising conversation (a
+  to-do's `origin`), `needsYouGroups` groups them under that conversation's title (`JSectionHeader`, "Another
+  conversation" without one), this conversation's group first with its cards, plans and drafts. One group: as before.
+- **Switch**: Settings › Assistant › **Fold background rounds**, shown when the hub sends the field
+  (`AssistantSettingsState.setMainBackgroundFolded`, as `main_tasks_quiet`). Off: the conversation and Needs you are
+  exactly as before.
+- **Tests**: `BackgroundRoundsTest` (core/domain), `AssistantSettingsStateTest.backgroundFoldSwitchSavesAndComesBackOnFailure`,
+  `HttpSettingsParityWireTest.mainBackgroundFoldedIsSentOnlyWhenSetAndOnWhenMissing`.
 
 #### Shared data contract
 
@@ -409,10 +443,13 @@ iOS app.
 ```sh
 ./scripts/app/android.sh          # build the debug package, install it on the connected phone / emulator and open it
 ./scripts/app/android.sh apk      # APK only: android/app/build/outputs/apk/debug/app-debug.apk
+./scripts/app/android.sh release  # R8 release build, checked, aligned and signed: android/app/build/outputs/apk/release/app-release.apk
+./scripts/app/android.sh release -s <phone>   # and installed on that phone
 ./scripts/app/android.sh test     # unit tests for all modules (including the shared fixture entry)
 ./scripts/app/android.sh lint     # Android lint
 ```
 
+- **Use `release` on the phone you actually use.** The debug package is debuggable, so ART never compiles it ahead of time, and it skips R8: it starts and scrolls noticeably worse ("Debug against release" below has the numbers). `release` runs `:app:assembleRelease`, checks the APK with `scripts/release/check_android_shrink.py`, then aligns and signs it with the newest build-tools. The key is `android.release_keystore` in `~/.config/persona/config.json` (with `android.release_key_alias` and `android.release_keystore_password_command`; [config.md](../operations/config.md)). With none configured it signs with the SDK's local debug keystore (`~/.android/debug.keystore`), which is what debug builds on the same computer are signed with, so the release installs over one of the same application id and keeps its pairing; the script says so when it does. That key is only for your own phone: its password is the same on every computer, so anyone can sign with a debug key; do not pass such a package on to someone else. A package signed on another computer does not update this one. Android refuses an update whose signature differs, so changing keys means uninstalling first, which removes the pairing. The published APKs are built and signed by the release worker ([release.md](../operations/release.md)), not by this command.
 - Needs the Android SDK (`$ANDROID_HOME`, default `~/Library/Android/sdk`) with the API 37 platform and matching build-tools installed; needs JDK 21 (Android Studio's bundled JBR 21 works).
 - The toolchain is Gradle 9.8.2, AGP 9.5.0, Kotlin 2.4.21, Compose BOM 2026.09.00. Versions are centralized in `android/gradle/libs.versions.toml`; the wrapper and daemon configuration are committed too.
 - AGP 9 uses built-in Kotlin and no longer applies `org.jetbrains.kotlin.android`. `build-logic/convention` provides `persona.android.application`, `persona.android.library`, `persona.jvm.library` and `persona.compose`, unifying SDK and JVM configuration; JVM bytecode is still 17.
@@ -594,11 +631,13 @@ python3 scripts/app/android_token_baseline.py --report /tmp/android-token-report
 python3 scripts/app/test_android_token_baseline.py
 ```
 
-The baseline is stored in `android/core/designsystem/tools/token-baseline.json`. The script scans production Kotlin under `android/feature/*/src/`, skips test directories, ignores comments, strings and imports, and recognizes explicit imports and aliases. It counts hard-coded values, token references and adoption rates per module for colors, font sizes and dp; adoption is `token / (token + hard-coded)`, or `null` when there is no usage.
+The baseline is stored in `android/core/designsystem/tools/token-baseline.json`: each file's nonzero hard-coded counts, nothing else (`--report` writes the full counts). The script scans production Kotlin in every module (`android/app`, `android/core/*`, `android/feature/*`, `android/platform/*`; #4209), the design system included, but not the generated `Tokens.kt`, whose literals are the tokens and which `scripts/assets/gen_tokens.py --check` guards. It skips test directories, ignores comments, strings and imports, and recognizes explicit imports and aliases. It counts hard-coded values, token references and adoption rates per module for colors, font sizes and dp; adoption is `token / (token + hard-coded)`, or `null` when there is no usage.
 
 Colors include numeric `Color(...)`, named constants and `parseColor(...)`; font sizes include numeric `.sp`; dp includes all numeric `.dp`, including spacing, sizes and radii. Tokens include the corresponding `Tokens`, `PersonaTheme.colors`, `PersonaTypography` and theme-mapped `MaterialTheme` references. These are source-reference counts, not runtime style coverage; variable propagation, wildcard member imports, expressions inside string templates and custom wrappers are not fully analyzed semantically.
 
 Since the 2026-10-31 redesign, `PersonaTheme.palette` / `type` / `shapes` also count as tokens; feature colors and font sizes all use tokens, while spacing between page elements still uses numeric dp (each style's internal padding lives in design system components). The baseline was updated once against the redesigned code.
+
+A fourth category, `material3`, counts the Material 3 components pages may not use ([android-design.md](android-design.md) "2.3 Rules for writing pages"): calls to a denied component imported from `androidx.compose.material3`, or written out in full, outside `android/core/designsystem`, which wraps them. `Text`, `MaterialTheme`, `Local*` and `material3.adaptive` are not counted. A wildcard `material3` import outside the design system fails the check outright, with no baseline, since it hides which components a page uses.
 
 Hard-coded counts for each file and category must not exceed the baseline; new files start at zero. Existing code with permitted fixed sizes, such as the terminal, also counts toward the baseline, and new usage is checked too. Reducing hard-coded values in another file does not offset additions in this file. When a change really must be accepted, run `python3 scripts/app/android_token_baseline.py --update-baseline` and review the baseline diff; the normal check never rewrites it. After merging several lanes, run the check first, fix new hard-coded values first, then decide whether to update the baseline. The Swift output is out of scope here.
 
@@ -697,6 +736,64 @@ Confirm the connection on the pairing page, handle permissions and the checklist
 ```
 
 Wait until the page is ready before taking screenshots. For batch screenshots use `./scripts/app/android.sh shots`; debug direct-entry arguments are below. None connect to a production hub. For scrolling performance see "Interface style performance".
+
+## Debug against release
+
+A debug package is for development: it is debuggable, so ART never compiles it ahead of time, and it skips R8. On the phone
+you actually use, install a release build (`./scripts/app/android.sh release`, "Build and install" above).
+
+Measured 2026-11-11 at `a5d75efcd` with `scripts/diag/android_build_perf.py`: the debug and the release package of that
+commit installed side by side under two application ids, both paired with the same mock hub
+(`MOCK_AGENTS=1 MOCK_LONG_HISTORY=1`, about 140 sessions), Glass style, the frame-drop fallback left on. Each round
+opens the page with a `persona://open` link, waits 3.5 seconds, resets `dumpsys gfxinfo`, flings up and down twice and
+reads the summary; 10 rounds per scenario, the two packages alternating inside each round. Frame times come from
+gfxinfo's histogram, which counts every frame since the reset (1 ms buckets up to 31 ms, wider ones above). Janky is gfxinfo's own
+"Janky frames ÷ Total frames" summed over the 10 rounds, with the per-round min / median / max in parentheses. The chat is
+the long Agent conversation `MOCK_LONG_HISTORY=1` adds.
+
+| Phone | Scenario | Build | Frames | p50 | p90 | p99 (ms) | 34 ms or longer | Janky |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Huawei BLK-AL80, HarmonyOS 4.2 (Android 12 base), 120 Hz panel | Agents list | debug | 2,584 | 15 | 34 | 105 | 10.10% | 11.57% (6.8 / 11.0 / 19.2) |
+| | | release | 2,840 | 20 | 21 | 27 | 0.04% | 0.11% (0 / 0 / 0.7) |
+| | Chat | debug | 2,517 | 16 | 38 | 121 | 11.08% | 12.16% (8.9 / 10.9 / 17.3) |
+| | | release | 2,840 | 20 | 21 | 26 | 0% | 0% (0 / 0 / 0) |
+| Xiaomi 12 (2201123C), Android 13, 120 Hz panel | Agents list | debug | 5,834 | 9 | 13 | 30 | 0.48% | 4.83% (4.3 / 4.8 / 5.5) |
+| | | release | 5,943 | 17 | 17 | 20 | 0% | 1.51% (0 / 1.3 / 3.7) |
+| | Chat | debug | 5,849 | 9 | 13 | 30 | 0.56% | 4.63% (3.7 / 4.5 / 5.8) |
+| | | release | 5,965 | 16 | 17 | 21 | 0% | 1.83% (0.3 / 2.1 / 2.5) |
+
+| Phone | Cold start, debug | Cold start, release |
+| --- | --- | --- |
+| Huawei BLK-AL80 | 2,431 ms (2,405 to 2,489) | 580 ms (552 to 617) |
+| Xiaomi 12 | 851 ms (828 to 874) | 391 ms (376 to 406) |
+
+Cold start is the median `TotalTime` of six `am start -W` runs after a force-stop, with the range in parentheses; the
+packages were paired and had been opened before. APK size: 97.3 MB debug, 20.8 MB release.
+
+Both panels are 120 Hz, but the Huawei phone drew about half as many frames per round as the Xiaomi phone in the same
+steps, so it was most likely running at 60 Hz; the refresh rate in use was not recorded. Each build is compared with
+the other on the same phone, not across phones.
+
+- The long frames are the difference. On the Huawei phone one debug frame in ten takes 34 ms or longer and the 99th
+  percentile is over 100 ms; the release build has almost none and its 99th percentile is under 30 ms. On the faster
+  Xiaomi phone the debug build's long frames are fewer, and the release build still has none that long and well under
+  half the janky share.
+- The release build's median is not lower: its histogram puts most frames in the 16 to 21 ms buckets on both phones,
+  where the debug build has a faster median and a long tail. Why the release frames sit there was not looked into, and
+  it moves between runs: an earlier run on the Xiaomi phone put the release median at 8 ms for the Agents list. Read the
+  tail and the janky share, not the median.
+- These are two phones, one run each. An earlier run of the same steps agreed: on the Huawei phone 11.33% against
+  1.62% janky for the Agents list and 10.58% against 0% for the chat. The release build has no Baseline Profile of the
+  app's own yet, only the one merged from its libraries (#4055), so its first launches after an install are the slowest
+  it gets.
+
+`android_scroll_perf.py` (below) opens pages through the debug entry and only runs on a debug package. To compare
+builds, install them under different application ids (`-PpersonaApplicationId`, "Build and install"), pair each one,
+and run:
+
+```sh
+CHAT=<machine>/<session> COLD=6 python3 scripts/diag/android_build_perf.py <serial> out.json debug=<package> release=<package>
+```
 
 ## Interface style performance
 

@@ -97,7 +97,8 @@ type Person struct {
 	SourceID  string    `json:"source_id"`
 	Connector string    `json:"connector,omitempty"`
 	Name      string    `json:"name"`
-	Note      string    `json:"note,omitempty"` // who they are to the owner, one line (AI)
+	Note      string    `json:"note,omitempty"`   // who they are to the owner, one line (AI)
+	Status    string    `json:"status,omitempty"` // empty or active | ignored | self
 	Chats     []string  `json:"chats,omitempty"`
 	Projects  []string  `json:"projects,omitempty"`
 	LastSeen  time.Time `json:"last_seen,omitempty"`

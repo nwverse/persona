@@ -65,6 +65,14 @@ func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRi
 			}
 			continue
 		}
+		// `do lark-cli …` inside a loop body, or `then` / `else`.
+		for len(words) > 0 && (words[0] == "do" || words[0] == "then" || words[0] == "else") {
+			words = words[1:]
+			v.other = true
+		}
+		if len(words) == 0 {
+			continue
+		}
 		// `timeout 20 ol …` (the prompt asks for timeouts), `command -v ol`.
 		if len(words) > 2 && words[0] == "timeout" && timeoutArg.MatchString(words[1]) {
 			words = words[2:]

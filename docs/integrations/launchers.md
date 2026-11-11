@@ -10,10 +10,10 @@ Code: `server/internal/assistant/models_launchers.go` (owned by the manager; hub
 | --- | --- | --- |
 | **Persona-managed** | Added in the app: name, Base URL, API Key, authentication method, model, small model, sub-Agent model, custom model option, extra arguments | Edit, delete |
 | **rc file (~/.zshrc / ~/.bashrc) and PATH** | Functions and aliases in each computer's login shell config (zsh reads `~/.zshrc`, bash reads `~/.bashrc`), grouped by file, and wrapper scripts on its PATH (`source: "path"`), shown from the last snapshot and refreshed in the background when opening this page (node caches for 1 minute) | View each computer's function definition or script text (Key / Token redacted), hide / restore in Persona |
-| **Built-in** | Each computer's plain `claude` command (“Claude Code default” in Model Configuration, `source: "builtin"`), listed per computer with its version | View only; can't be hidden (the hub refuses) |
+| **Built-in** | Each computer's plain `claude` command (“Claude Code default” in Model Configuration, `source: "builtin"`), listed per computer with its version | View, hide / restore in Persona (#4384) |
 
 - Scope: each Persona-managed entry has its own **device scope** (“Device scope and on-demand delivery” below): all your computers, chosen ones, or none (the key stays with the manager). ~/.zshrc entries identify their source computers (same-name entries merge into one row). Offline computers use their last synchronized lists (settings `launchers.zshrc`).
-- Deleting a ~/.zshrc launcher **only hides it in Persona** (settings `launchers.hidden`), leaving the file unchanged; it disappears from new-chat and assistant pickers.
+- Deleting a ~/.zshrc launcher **only hides it in Persona** (settings `launchers.hidden`), leaving the file unchanged; it disappears from new-chat and assistant pickers. Hiding the built-in `claude` works the same way (#4384): it leaves the pickers, while a start that names it, or a default that runs it (Model settings set to “Claude Code default”), still runs it.
 - Persona-managed entries win name collisions (shadowing the ~/.zshrc entry). Names may contain only letters, digits, `_`, and `-`, and cannot be `claude`.
 
 ## Sync state (#2854)
@@ -133,6 +133,9 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
   (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`; the small model goes to haiku / small fast; the sub-Agent model to `CLAUDE_CODE_SUBAGENT_MODEL`, following the primary model if empty;
   custom model options go to `ANTHROPIC_CUSTOM_MODEL_OPTION` and its name / description), then execs claude.
   Keys never enter the terminal or command line. You can also type `personad launch <name>` directly in a terminal.
+  With `--ticket <ticket>` (`personad launch --ticket <ticket> <name> …`, or `personad launch --ticket <ticket> -- claude …` for plain
+  claude) it also fetches the values a hand-off card approved for that one start (node.sock `secret.env`, with the launch key and the
+  one-time ticket) and puts them in claude's environment; `docs/extensions/secret-providers.md` "The hand-off to one Agent run".
 - **Only `personad launch` gets the settings** (#5588). Every agent's hooks and MCP servers have to reach node.sock, so being able to connect proves nothing.
   `launcher.env` answers only a request that carries the machine's launch key, a random value the node keeps in `launch.key` beside node.sock
   (0600, written when the node starts listening, kept across restarts). `personad launch` reads the file and sends the key, so every start works as before:

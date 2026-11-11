@@ -28,7 +28,7 @@ import (
 
 func TestMain(m *testing.M) {
 	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
-		if err := Launch(context.Background(), os.Args[2], os.Args[3:]); err != nil {
+		if err := Launch(context.Background(), os.Args[2], os.Args[3:], ""); err != nil {
 			panic(err)
 		}
 		os.Exit(0)
