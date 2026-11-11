@@ -156,7 +156,7 @@ private fun StateCounts(counts: List<Pair<Status, Int>>) {
 @Composable
 fun HeadingAction(icon: PhIcon, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
-        modifier.size(Action).minimumInteractiveComponentSize().clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+        modifier.size(Action).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) { JIcon(icon, null, size = Tokens.Size.iconXS, tint = PersonaTheme.palette.ink2) }
 }

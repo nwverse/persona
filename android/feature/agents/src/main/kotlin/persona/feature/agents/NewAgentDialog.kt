@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.Machine
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import java.net.URI
 
@@ -187,6 +188,29 @@ private fun LazyListScope.newAgentItems(
             }
         }
     }
+    // A branch and a checkout of its own (#4532, iOS NewAgentWorktreeSection), for a folder in a Git repository.
+    state.repo?.takeIf { state.worktreeOffered }?.let { repo -> item("worktree") {
+        val suggested = AgentWorktree.branch(AgentWorktree.nameHint(state.prompt, state.selection.cwd))
+        JSectionHeader(stringResource(R.string.agents_worktree_title))
+        JGroupItem(GroupPosition.of(0, if (state.inWorktree) 2 else 1)) {
+            JSwitchRow(stringResource(R.string.agents_worktree_switch), state.inWorktree, model::inWorktree,
+                leadingIcon = PersonaIcons.gitBranch, enabled = editable)
+        }
+        if (state.inWorktree) JGroupItem(GroupPosition.of(1, 2)) {
+            JTextField(state.worktreeBranch, model::worktreeBranch, placeholder = suggested,
+                label = stringResource(R.string.agents_worktree_branch), singleLine = true, enabled = editable,
+                modifier = Modifier.fillMaxWidth().padding(Tokens.Space.s))
+        }
+        Text(stringResource(R.string.agents_worktree_footer), Modifier.padding(top = Tokens.Space.xs),
+            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+        val path = AgentWorktree.checkout(repo, state.worktreeBranch.trim().ifEmpty { suggested })
+        if (state.inWorktree && path.isNotEmpty()) {
+            val home = machines.firstOrNull { it.id == state.machineId }?.home
+            Text(stringResource(R.string.agents_worktree_checks_out, home?.takeIf { it.isNotEmpty() && path.startsWith("$it/") }
+                ?.let { "~" + path.removePrefix(it) } ?: path), maxLines = 2,
+                style = PersonaTheme.type.codeSmall, color = PersonaTheme.palette.ink2)
+        }
+    } }
     item("agent-types-title") { JSectionHeader(stringResource(R.string.agents_new_agent_type)) }
     val types = state.launchers.map { it.agentType }.distinct()
     val selectedType = state.agentType.takeIf { state.following || state.selection.launcher.isNotEmpty() }

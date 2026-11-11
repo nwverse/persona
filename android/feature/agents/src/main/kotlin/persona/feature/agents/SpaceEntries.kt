@@ -156,7 +156,8 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
         loaded = page.sessions.isNotEmpty() || page.machines.isNotEmpty(),
         onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } })
     operationDialog?.let { dialog ->
-        AgentOperationDialog(dialog, model, page.machines.firstOrNull { it.id == dialog.session.machineId }?.displayName) { operationDialog = null }
+        val machine = page.machines.firstOrNull { it.id == dialog.session.machineId }
+        AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine) { operationDialog = null }
     }
     confirmRead?.let { rows -> MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) } }
     if (newAgent) {

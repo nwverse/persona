@@ -83,12 +83,12 @@ const daemonMaxMessage = 64 << 20
 
 // daemonCaps are the capabilities a daemon may declare; anything a later protocol adds is off for daemons until it is
 // allowed here on purpose.
-var daemonCaps = []string{"start", "send", "interrupt", "rename", "close"}
+var daemonCaps = []string{"start", "send", "interrupt", "rename", "close", "execution"}
 
 // daemonMethods are the node → runtime calls a link forwards to its daemon.
 var daemonMethods = map[string]bool{"session.items": true, "session.image": true, "session.item": true, "session.watch": true,
 	"session.unwatch": true, "session.send": true, "session.interrupt": true, "session.rename": true, "session.close": true,
-	"session.start": true}
+	"session.start": true, "session.execution": true}
 
 // daemonConfig is one daemon in daemons.json.
 type daemonConfig struct {
