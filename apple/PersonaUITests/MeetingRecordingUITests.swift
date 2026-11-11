@@ -242,6 +242,27 @@ final class MeetingRecordingUITests: XCTestCase {
         }
     }
 
+    /// The minutes' time in the app's own date style, as the recording's header above it, not the hub's fixed format
+    /// (#4875): Chinese and Japanese, light and dark. The mock's minutes carry `start` / `end` as the hub writes them.
+    @MainActor func testMinutesTimeInTheAppsDateStyle() throws {
+        let hub = try mockHub()
+        for (language, locale) in [("zh-Hans", "zh_CN"), ("ja", "ja_JP")] {
+            for look in ["light", "dark"] {
+                try minutesMode(hub, "ready")
+                let app = XCUIApplication()
+                app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "minutes",
+                                       "-ui.scheme", look, "-AppleLanguages", "(\(language))", "-AppleLocale", locale]
+                app.launchPinned()
+                let when = app.descendants(matching: .any)["minutes-when"].firstMatch
+                XCTAssertTrue(when.waitForExistence(timeout: 45), "\(language) \(look): no minutes:\n\(app.debugDescription)")
+                acceptIconAlert(timeout: 2)
+                XCTAssertTrue(when.label.contains("月") && !when.label.contains("2027-"), "\(language) \(look): \(when.label)")
+                try shot(app, "minutes-when-\(language)", look: look)
+                app.terminate()
+            }
+        }
+    }
+
     /// The live sheet's whole way (#4240): the sheet opens by itself, lines arrive in the timeline, a bookmark lands in it,
     /// Stop asks first, the wrap-up steps reach the minutes. `-showMeetingSample flow` (no microphone) drives it.
     @MainActor func testLiveSheetFlowReachesTheMinutes() throws {
