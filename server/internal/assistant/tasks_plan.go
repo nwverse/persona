@@ -143,8 +143,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if m, ok := s.machineByName(ctx, t.Machine); ok {
 			params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
 			if own, err := s.resolveStart(ctx, params); err == nil {
-				if err := s.fitTaskLauncher(ctx, t, m, own, params); err != nil {
+				claude, err := s.fitTaskLauncher(ctx, t, m, own, params)
+				if err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)
+				}
+				if claude {
+					t.Permission = permBypass
 				}
 			}
 		}

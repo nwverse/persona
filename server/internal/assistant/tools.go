@@ -403,9 +403,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
-		swapped, err := s.fitLauncher(ctx, am, own, run)
+		swapped, agent, err := s.fitLauncher(ctx, am, own, run)
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		permissionMode := ""
+		if agent == "claude" {
+			permissionMode = permBypass
 		}
 		if swapped != "" {
 			a.Launcher, _ = run["launcher"].(string)
@@ -444,6 +448,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
+		if permissionMode != "" {
+			params["permission_mode"] = permissionMode
+		}
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, s.withCloseoutBrief(sctx, a.Prompt, false))
 		if a.Ultracode {
 			params["ultracode"] = true

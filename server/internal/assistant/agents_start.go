@@ -58,7 +58,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		// Held to what the computer has (#2640): a launcher picked that it lacks is refused, a default it lacks gives
 		// way to one it has.
 		if m, ok := s.device(ctx, p.MachineID); ok {
-			if _, err := s.fitLauncher(ctx, m, own, params); err != nil {
+			if _, _, err := s.fitLauncher(ctx, m, own, params); err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
 		}
@@ -92,7 +92,7 @@ func (s *Service) AgentResumeParams(ctx context.Context, p AgentResumeParams) (m
 	}
 	// One the computer lacks gives way to one it has (#2640; a default is never refused).
 	if m, ok := s.device(ctx, p.MachineID); ok {
-		if _, err := s.fitLauncher(ctx, m, startPick{}, q); err != nil {
+		if _, _, err := s.fitLauncher(ctx, m, startPick{}, q); err != nil {
 			s.logf("resume %s: the New Agent launcher not applied: %v", p.SessionID, err)
 			return params, nil
 		}
