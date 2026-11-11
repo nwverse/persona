@@ -594,7 +594,7 @@ light/dark × compact shell / regular-width sidebar, `TEST_RUNNER_SHOT_SUFFIX`, 
 
 Dev server preview on the iPhone (`PreviewUITests`, #150, `docs/web/preview.md` "iPhone"): ⋯ › Preview lists the mock's launch.json servers and the
 Agent's Storybook port; web opens in the link card (the mock forwards a running preview port to its own page server), the bar goes back, attaches a
-screenshot, and picks the Save button into an Element comment card; api's Start… shows `env PORT=8080 go run ./cmd/api` and opens once its port answers:
+screenshot, and picks the Save button into an Element comment card; api's Start… shows `env 'PORT=8080' go run ./cmd/api` and opens once its port answers:
 `MOCK_PREVIEW=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/PreviewUITests`,
 `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps each screen, `TEST_RUNNER_PERSONA_LOOKS=light,dark` runs it in both appearances in one go. `-openPreviewServers YES` opens the list as the chat appears, `-showPreviewPicking YES` starts picking in a forwarded page (screenshots).
 
