@@ -111,9 +111,8 @@ nonisolated struct CodexTasks: Sendable {
                   !codex || sessions[i].hasCodexIdentity else { return nil }
             return i
         }
-        var parent = [Int](repeating: -1, count: sessions.count)
-        for i in nested {
-            let s = sessions[i]
+        /// Its parent's index. A function, so each session is read where it is rather than copied out (measured, #4767).
+        func parentOf(_ s: Session) -> Int? {
             var found: Int?
             if s.sourceKind == "runtime" {
                 found = named(s, s.parentSessionID, codex: false) ?? named(s, s.rootSessionID, codex: false)
@@ -125,8 +124,11 @@ nonisolated struct CodexTasks: Sendable {
                 }
                 if found == nil { found = named(s, s.rootSessionID, codex: true) }
             }
-            if let found, sessions[found].key != s.key { parent[i] = found }
+            guard let found, sessions[found].key != s.key else { return nil }
+            return found
         }
+        var parent = [Int](repeating: -1, count: sessions.count)
+        for i in nested { if let found = parentOf(sessions[i]) { parent[i] = found } }
         // A cycle keeps one member as a root, the same one every time: walking from each start in a fixed order, the
         // first member met twice loses its parent. Corrupt parents are rare: one linear pass looks for a cycle first.
         var mark = [UInt8](repeating: 0, count: sessions.count) // 1: on this walk, 2: walked
