@@ -44,7 +44,7 @@ object ProviderEditPreview {
 
 /**
  * "New model provider". On a hub with built-in presets (docs/assistant/onboarding.md 4.3 "Three paths" B) it is a wizard: (1) pick a provider (the
- * hub's providers, then "Custom compatible gateway"), (2) paste the key (tested by itself; "Use it for the main conversation and new Agents" follows the main
+ * hub's providers, then "Custom compatible gateway"), (2) paste the key (tested by itself; "Use it for the main conversation and new agents" follows the main
  * conversation's readiness; the name and another model under "More options") and (3) what now runs on it. A gateway typed in is
  * the form, with "Test connection" and "Fetch models". An older hub opens on the form: "Fill in" - the name, the kind, the gateway and
  * key, the models and flags - or "From extension": a preset, then the name, the key and maybe another of its models.
