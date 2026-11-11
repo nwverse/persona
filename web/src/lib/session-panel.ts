@@ -60,6 +60,9 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
     if (e.list === undefined) {
       if (e.error) p.error = e.error;
       else p.loading = true;
+      // the model it runs stays there while its list is read or couldn't be: its flyout (effort, Fast, ultracode) works
+      // as the old popover's tabs did with no list
+      if (mine && s.model) p.models = [panelModel({ id: s.model, name: modelLabel(s.model) }, kind, true, s, false)];
     } else {
       const models = (e.list?.models ?? []).map((m) => panelModel(m, kind, mine && m === row, s));
       // the model it runs, when the list doesn't name it (a list that couldn't be read, an older hub, a model it lacks)
@@ -105,7 +108,8 @@ export function pickPlan(s: Session, config: PanelConfig, list: LauncherModels |
   if (!same) steps.push({ model: config.model });
   const effort = config.effort || (sessionEngine(s) === "agy" ? row?.default_effort : undefined);
   if (effort && effort !== s.effort) steps.push({ effort });
-  const speed = speedStep(s, config.fast);
+  // a saved setup without Fast is Standard (cleanSetup drops `fast: false`)
+  const speed = speedStep(s, Boolean(config.fast));
   if (speed) steps.push(speed);
   return steps;
 }

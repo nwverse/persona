@@ -59,7 +59,9 @@ describe("the providers of an Agent's chat", () => {
   it("puts the session's own launcher first when the computer doesn't list it, and says while lists are read or failed", () => {
     const { providers } = sessionPanel(session({ launcher: "gone" }), launchers, lists({ claude: { error: "claude 没有登录" } }));
     expect(providers.map((p) => p.id)).toEqual(["gone", "claude", "gateway", "cx"]);
-    expect(providers[0]).toMatchObject({ models: null, loading: true });
+    // the own list on its way: the model it runs is its row meanwhile (its flyout works)
+    expect(providers[0]).toMatchObject({ loading: true });
+    expect(providers[0].models!.map((m) => m.id)).toEqual(["claude-opus-5-5"]);
     expect(providers[1]).toMatchObject({ models: null, error: "claude 没有登录" });
     expect(providers[1].loading).toBeUndefined();
     // before the launchers are read: the own one alone
@@ -130,8 +132,8 @@ describe("what a pick sends", () => {
   it("a Codex thread: its effort and its speed, Standard back from Fast", () => {
     expect(pickPlan(codex(), { provider: "cx", model: "gpt-5.5", effort: "low", fast: true }, codexList)).toEqual([{ effort: "low" }, { service_tier: "priority" }]);
     expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5", fast: false }, codexList)).toEqual([{ service_tier: "default" }]);
-    // a setup that says nothing of speed leaves it
-    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5" }, codexList)).toEqual([]);
+    // a saved Standard setup has no `fast` (cleanSetup drops false): picking it turns Fast off
+    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5" }, codexList)).toEqual([{ service_tier: "default" }]);
   });
 
   it("an Antigravity variant brings its own thinking level", () => {
@@ -256,6 +258,21 @@ describe("a speed change", () => {
     // the flyout's switch goes whatever the session says (its speed arrives only with the push)
     expect(speedStep(session({ service_tiers: tiers }), false, true)).toEqual({ service_tier: "default" });
     expect(speedStep(session(), false, true)).toBeUndefined();
+  });
+});
+
+describe("the running model while its list is not in", () => {
+  it("stays in the panel (its flyout works) while the list is read, and when it couldn't be", () => {
+    for (const [e, flag] of [[{ loading: true }, "loading"], [{ error: "no CLI" }, "error"]] as const) {
+      const { providers, state } = sessionPanel(session(), launchers, lists({ gateway: e }));
+      const own = providers.find((p) => p.id === "gateway")!;
+      expect(own[flag]).toBeTruthy();
+      expect(own.models?.map((m) => m.id)).toEqual(["claude-opus-5-5"]);
+      expect(own.models?.[0].efforts.length).toBeGreaterThan(1);
+      expect(state.current?.model).toBe("claude-opus-5-5");
+    }
+    // another provider's list on its way: no rows yet
+    expect(sessionPanel(session(), launchers, lists({})).providers.find((p) => p.id === "claude")!.models).toBeNull();
   });
 });
 
