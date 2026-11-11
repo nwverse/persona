@@ -699,3 +699,87 @@ func TestBackgroundSupervisorGoneAfterRestartKeepsItsQueuedMessage(t *testing.T)
 		t.Fatalf("something was sent to the conversation that is gone: %q", got)
 	}
 }
+
+// The owner comes first in the background supervisor's own queue as in any conversation's (#4925, relay_presence.go),
+// and they are present there only when they write there: talking in the main conversation holds nothing that is for
+// the background supervisor, and writing to the background supervisor holds its next supervision message until they
+// are quiet.
+func TestOwnerPresenceAndTheBackgroundSupervisorsQueue(t *testing.T) {
+	presenceTimes(t, 400*time.Millisecond, time.Hour)
+	s, f, _ := newBackgroundService(t)
+	stopHolds(t, s)
+	ctx := context.Background()
+	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"}) // talking in the main conversation
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "做完了", 0)
+	bg := backgroundID(t, s)
+	listBackground(t, s, f, bg)
+	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 })
+	if _, present := s.ownersPresent(time.Now())[bg]; present {
+		t.Fatal("the owner counts as present in the background supervisor without having written there")
+	}
+
+	// The owner writes to the background supervisor: what the system has for it waits, by rank, until they are quiet.
+	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: bg})
+	other := relayMsg{From: "c2", FromTitle: "Research", Tool: "conversation_send", Text: "hello", At: time.Now().UTC()}
+	urgent := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, Text: "Synthetic supervision.", Urgent: true, At: time.Now().UTC()}
+	s.relayOrQueue(ctx, bg, other)
+	s.relayOrQueue(ctx, bg, urgent)
+	if n := s.queuedFor(bg); n != 2 || f.sentTo(bg) != 1 {
+		t.Fatalf("while the owner writes there: %d queued, %d sent", n, f.sentTo(bg))
+	}
+	// Quiet again: one goes in per turn, and the one that waits on a decision goes before the one that came first.
+	waitFor(t, "the first held message once the owner is quiet", func() bool { return f.sentTo(bg) == 2 })
+	b := &s.relays
+	b.mu.Lock()
+	left := slices.Clone(b.st.Queue[bg])
+	b.mu.Unlock()
+	if len(left) != 1 || left[0].Tool != "conversation_send" {
+		t.Fatalf("the message that waits on a decision did not go first; still queued: %+v", left)
+	}
+}
+
+// The background supervisor's rounds are supervision rounds in the availability metrics (#4924): the one its start
+// begins, whether the round is seen starting before or after the start answered, and each a supervision message starts.
+func TestBackgroundSupervisorsRoundsAreSupervisionRounds(t *testing.T) {
+	s, f, _ := newBackgroundService(t)
+	ctx := context.Background()
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "做完了", 0)
+	bg := backgroundID(t, s)
+	ref := SessionRef{MachineID: "server", SessionID: bg}
+	rounds := func() []map[string]any {
+		var out []map[string]any
+		for _, e := range testEvents(s) {
+			if e.Kind == roundEvent && e.SessionID == bg {
+				out = append(out, e.Detail)
+			}
+		}
+		return out
+	}
+	s.TurnStarted(ctx, ref)
+	s.TurnEnded(ctx, ref)
+	waitFor(t, "its first round", func() bool { return len(rounds()) == 1 })
+	listBackground(t, s, f, bg)
+	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 })
+	s.TurnStarted(ctx, ref)
+	s.TurnEnded(ctx, ref)
+	waitFor(t, "its second round", func() bool { return len(rounds()) == 2 })
+	for i, r := range rounds() {
+		if r["source"] != proto.SourceSupervision || r["main"] != false {
+			t.Errorf("round %d: %v", i+1, r)
+		}
+	}
+
+	// A round seen starting before the start answered is named once it has.
+	s.avail.mu.Lock()
+	s.avail.rounds[[2]string{"server", "bg-late"}] = availRound{source: roundOther, started: time.Now()}
+	s.avail.mu.Unlock()
+	s.availStartedBy("server", "bg-late", proto.SourceSupervision, time.Now())
+	s.avail.mu.Lock()
+	got := s.avail.rounds[[2]string{"server", "bg-late"}].source
+	s.avail.mu.Unlock()
+	if got != proto.SourceSupervision {
+		t.Fatalf("the round already under way is %q", got)
+	}
+}

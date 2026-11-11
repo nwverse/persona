@@ -342,6 +342,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 		s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed is rehomed even with no signal of its own
 		s.backgroundStranded(ctx)      // what waits for a background supervisor that is gone is told again (supervise_background.go)
 		s.superviseWatch(ctx, time.Now())
+		s.drainHeldRelays(ctx, time.Now()) // nothing held for the owner is left behind (relay_presence.go)
 	}
 }
 

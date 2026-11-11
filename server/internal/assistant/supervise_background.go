@@ -271,6 +271,7 @@ func (s *Service) startBackground(ctx context.Context) (string, error) {
 	}
 	s.holdPushes(sctx, c.SessionID)
 	now := time.Now().UTC()
+	s.availStartedBy(c.MachineID, c.SessionID, proto.SourceSupervision, now) // its first round, as every later one (availability.go)
 	if _, err := s.updateSettings(sctx, func(v *Settings) error {
 		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID, v.BackgroundSupervisorAt = c.SessionID, c.MachineID, &now
 		return nil

@@ -217,7 +217,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 				allEntries = append(allEntries, e)
 			}
 		}
-		msg.Text = render(allEntries)
+		msg.Text, msg.Urgent = render(allEntries), anyDecision(all)
 		if s.replaceQueuedSupervise(to, msg) {
 			accepted = true
 			b.mu.Lock()
@@ -227,7 +227,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			return true
 		}
 	}
-	msg.Text = render(entries)
+	msg.Text, msg.Urgent = render(entries), anyDecision(kept)
 	if background {
 		s.logf("supervise: %d signal(s) to the background supervisor %s", len(entries), short(to))
 	} else if to != here.Main {
@@ -236,7 +236,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	}
 	c, ok := s.session(ctx, here.MachineID, to)
-	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(to) > 0 {
+	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
 		if !s.queueDigest(to, msg, kept, now, prev) {
 			return false
 		}
@@ -344,7 +344,7 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	q := b.st.Queue[to]
 	for i := range q {
 		if q[i].Tool == superviseTool && (i > 0 || !b.draining[to]) {
-			q[i] = msg
+			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
 			s.saveRelayLocked()
 			return true
 		}

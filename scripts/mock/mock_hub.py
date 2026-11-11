@@ -6789,6 +6789,22 @@ if os.environ.get("MOCK_IPHONE_ASK") == "1":  # an iphone_do step the node says 
          "summary": "在「我的 iPhone」上：在「钱包」里点「支付 ¥ 36.00」",
          "always_honored": False, "tool_title": "iPhone 操控"})  # the manager's own tool (#3590)
 
+# MOCK_AGENT_OWN_TOOL=before|after: the tests Agent's only card asks about one of Persona's own MCP tools
+# (report_to_supervisor, #4966). `before`: the raw name only, as a card was titled until then; `after`: the title the
+# manager gives a node's card for Persona's tools now (tool_title, in the user's language), and the tool alone for what
+# Always covers (tool_name_title).
+if os.environ.get("MOCK_AGENT_OWN_TOOL") in ("before", "after"):
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["session_id"] != TESTS]
+    _own = {"id": "ix_own_tool", "machine_id": "macbook", "session_id": TESTS, "session_title": "补齐网络层的单元测试",
+            "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+            "tool_name": "mcp__persona__report_to_supervisor",
+            "tool_input": {"kind": "done", "text": "网络层的单元测试补齐了，swift test 全部通过"},
+            "summary": "kind: done"}  # the node's summary: the input's first text argument (toolSummary)
+    if os.environ.get("MOCK_AGENT_OWN_TOOL") == "after":
+        _own["tool_title"] = "向督办汇报 · 完成"
+        _own["tool_name_title"] = "向督办汇报"
+    INTERACTIONS.append(_own)
+
 # MOCK_SECRET_RUN=pending|ran|withheld|long: the password card (secret_run, #1137) in Persona's main conversation.
 # `pending`: the assistant asked to run two commands on the Mac Studio, its call waits and the card asks for the
 # password; `ran`: the card was answered, the call's result (the tool's JSON) says every command exited 0, and no card is
@@ -10562,31 +10578,64 @@ LAUNCHER_PRESETS = [
      "models_error": "插件读模型列表超时"},
 ]
 
-# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and ~/.zshrc import. Two managed
+# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and the alias import. Two managed
 # providers (one with every advanced field), "Test connection" that passes or fails (a key or address with "bad" in it fails),
-# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
-# too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
+# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and the rc-file launchers of the aliases macbook's import
+# preview reads (#5024). The import itself answers in every mode (a page served by Vite against a plain mock asked for it and got
+# a 404): 4 providers on macbook (one merging into gw_full when it is there, one whose aliases differ in more than the model, one
+# from ~/.bashrc with variables carried over and left out), its hide checks recomputed against the launchers each time; studio's
+# node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
+# With the feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
+# launchers list the managed providers with their display names (gw_full has one, anthropic_main shows its ID).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
+# GET /api/v1/launchers/import's groups as the hub reads them from macbook's aliases. `existing` (a provider on the same address,
+# a variant's by its origin) and `hide` (none once Persona lists no such launcher or hides it) are worked out per request,
+# import_preview(); `hide` here is what an alias Persona lists would get.
 PROVIDER_IMPORT = [
-    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "model": "example-opus",
+    # two aliases that differ only in the model: one provider, merging into gw_full when it is there
+    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use", "model": "example-opus",
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
-     "aliases": ["cc_full", "cc_full_haiku"], "existing": "gw_full"},
-    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True,
-     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"]},
-    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True,
-     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}],
-     "aliases": ["cc_kimi", "cc_kimi_fast"], "has_headers": True},
+     "aliases": ["cc_full", "cc_full_haiku"],
+     "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
+     "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},
+    # one gateway and key, but the aliases set their tiers and effort differently: each can become a provider of its own
+    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}], "has_headers": True,
+     "effort": "high", "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"],
+     "aliases": ["cc_kimi", "cc_kimi_fast"], "differs": ["tiers", "effort"],
+     "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}],
+     "variants": [
+         {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}], "has_headers": True, "effort": "high",
+          "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "aliases": ["cc_kimi"],
+          "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"}]},
+         {"name": "cc_kimi_fast", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3-turbo", "models": [{"id": "kimi-k3-turbo"}], "has_headers": True, "effort": "low", "haiku_model": "kimi-k3-turbo",
+          "aliases": ["cc_kimi_fast"], "sources": [{"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}]},
+     ]},
+    # from ~/.bashrc: two variables carried over, three left out; the server defines cc_relay for another address
+    {"name": "cc_relay", "base_url": "https://relay.example.org", "auth": "api_key", "has_key": True, "own_service": "use",
+     "model": "relay-pro", "models": [{"id": "relay-pro"}], "aliases": ["cc_relay"], "has_env": True,
+     "env_names": ["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "DISABLE_TELEMETRY"],
+     "skipped_env": [{"name": "HOME", "reason": "computer"}, {"name": "RELAY_TOKEN", "reason": "credential"}, {"name": "WORKDIR", "reason": "shell"}],
+     "sources": [{"alias": "cc_relay", "file": "~/.bashrc", "hide": "elsewhere", "elsewhere": ["服务器"]}]},
 ]
+# what a preview group carries that a stored provider does not
+IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "variants", "env_names", "skipped_env")
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
 if MOCK_PROVIDERS:
     LAUNCHERS[:0] = [
-        {"name": "gw_full", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
+        {"name": "gw_full", "display_name": "Team gateway", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
          "auth": "bearer", "has_headers": True, "models": [{"id": "example-opus", "context_window": 1000000, "efforts": ["high", "max"], "default_effort": "high"},
                                                            {"id": "example-sonnet", "context_window": 200000}],
          "opus_model": "example-opus", "sonnet_model": "example-sonnet", "haiku_model": "example-haiku", "fable_model": "example-opus",
@@ -10595,6 +10644,106 @@ if MOCK_PROVIDERS:
         {"name": "anthropic_main", "source": "persona", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-4-5", "has_key": True,
          "auth": "api_key", "models": [{"id": "claude-sonnet-4-5", "context_window": 200000}]},
     ]
+    # the aliases the import reads on macbook, as Persona lists them (cc_glm is there already)
+    LAUNCHERS[-1:-1] = [
+        {"name": "cc_full", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-opus", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_full_haiku", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-haiku", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
+    ]
+    _features_without_auto_name = features
+
+    def features():
+        return _features_without_auto_name() + ["launcher_auto_name"]
+
+
+# The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
+# names its routes keep, -2, -3… while taken.
+RESERVED_LAUNCHER_NAMES = ("claude", "presets", "test", "discover", "import", "health")
+
+
+def launcher_slug(s):
+    """launcherSlug: lower case, each run of other characters one -, none at either end, at most 40 bytes, p- before a
+    leading digit; "" when nothing is left."""
+    slug = re.sub(r"[^a-z0-9_]+", "-", s.lower()).strip("-")[:40].rstrip("-")
+    return "p-" + slug if slug[:1].isdigit() else slug
+
+
+def launcher_name_for(base):
+    """freeLauncherName: (name, n), n 1 for base itself, else the number after it."""
+    name, n = base, 1
+    while name in RESERVED_LAUNCHER_NAMES or any(l["name"] == name for l in LAUNCHERS):
+        n += 1
+        name = "%s-%d" % (base, n)
+    return name, n
+
+
+def auto_named(b):
+    """launcher_auto_name: the name a provider added with neither a name nor a preset gets, after its display name, else
+    after its gateway's host, which then is its display name too (with the name's number). (name, the body with it)."""
+    display = (b.get("display_name") or "").strip()
+    host = urlparse((b.get("base_url") or "").strip()).hostname or ""
+    name, n = launcher_name_for(launcher_slug(display) or launcher_slug(host) or "provider")
+    if not display and host:
+        b = dict(b, display_name=host + ("" if n == 1 else " %d" % n))
+    return name, b
+
+
+def machine_launchers():
+    """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"), and under
+    MOCK_PROVIDERS the managed providers Agents can start, each with its display name."""
+    out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+           {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+    if MOCK_PROVIDERS:
+        out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
+                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+    return launcher_health_list(out)
+
+
+def _import_hide(src):
+    """One alias's hide check as the hub makes it now: none when Persona lists no rc-file launcher of that name or hides it."""
+    rc = [l for l in LAUNCHERS if l["source"] == "zshrc" and l["name"] == src["alias"]]
+    if not rc or any(l.get("hidden") for l in rc): return {"alias": src["alias"], "file": src["file"], "hide": "none"}
+    return dict(src)
+
+
+def _import_existing(base_url, alias=None):
+    """The stored provider an import lands in: one on the same address (the mock knows no keys), or for a variant one that
+    came from that alias (origin zshrc:<alias>@<machine>)."""
+    for l in LAUNCHERS:
+        if l["source"] == "persona" and l.get("base_url") == base_url and (alias is None or (l.get("origin") or "").startswith("zshrc:%s@" % alias)):
+            return l["name"]
+    return None
+
+
+def _import_name(name, taken):
+    """The name an imported provider is saved under: its own, or with -2, -3… when a launcher already has it (an alias
+    Persona lists does), as the hub's importLaunchers names it."""
+    out, n = name, 2
+    while out in taken: out, n = "%s-%d" % (name, n), n + 1
+    return out
+
+
+def import_preview():
+    """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
+    created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
+    same launchers; the names a group may take are taken for the groups after it."""
+    out, taken = [], {l["name"] for l in LAUNCHERS}
+    for g in copy.deepcopy(PROVIDER_IMPORT):
+        names = set()
+        for x in [g] + g.get("variants", []):
+            x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
+            existing = _import_existing(x["base_url"], x["aliases"][0] if x is not g else None)
+            if existing:
+                x["existing"] = existing
+                continue
+            name = _import_name(x["name"], taken)
+            if name != x["name"]: x["create_as"] = name
+            names.add(name)
+        taken |= names
+        out.append(g)
+    return out
 
 
 def _provider_redacted(b):
@@ -10614,6 +10763,67 @@ def _provider_apply(l, b):
     if "headers" in b:
         if b["headers"]: l["has_headers"] = True
         else: l.pop("has_headers", None)
+    if b.get("display_name") is not None:  # null or left out keeps it, "" clears it
+        if b["display_name"].strip(): l["display_name"] = b["display_name"].strip()
+        else: l.pop("display_name", None)
+
+
+def _display_name_refused(h, b):
+    """The hub's display-name check (at most 64 characters, no line breaks or other control characters): True when it
+    answered 400."""
+    d = (b.get("display_name") or "").strip()
+    if len(d) <= 64 and not any(unicodedata.category(c) == "Cc" for c in d): return False
+    h.send_json({"error": "显示名最多 64 个字，不能有换行等控制字符"}, 400)
+    return True
+
+
+def import_route(h, method, q, body):
+    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
+    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
+    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
+    hidden, the others kept with why."""
+    b = json.loads(body or b"{}") if method == "POST" else {}
+    machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
+    if machine == "studio":
+        h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 alias，需要更新 node"}, 409); return
+    if not machine_online(machine):
+        h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return
+    if method == "GET":
+        h.send_json({"machine": machine, "providers": import_preview()}); return
+    PROVIDER_LOG["import"] = b
+    groups = {g["name"]: g for g in import_preview()}
+    names, split = b.get("providers") or [], b.get("split") or []
+    unknown = [n for n in names if n not in groups] + [n for n in split if n not in names]
+    if unknown:
+        h.send_json({"code": "bad_request", "error": "没有可导入的 %s" % unknown[0]}, 400); return
+    created, updated, landed = [], [], []
+    taken = {l["name"] for l in LAUNCHERS}
+    for g in (groups[n] for n in names):
+        for x in (g["variants"] if g["name"] in split and g.get("variants") else [g]):
+            landed += x.get("sources", [])
+            if x.get("existing"):
+                l = next(l for l in LAUNCHERS if l["name"] == x["existing"])
+                have = {m["id"] for m in l.get("models", [])}
+                l["models"] = l.get("models", []) + [m for m in x.get("models", []) if m["id"] not in have]
+                updated.append(x["existing"])
+                continue
+            name = x.get("create_as") or x["name"]  # as previewed, unless something took it since
+            if name in taken: name = _import_name(x["name"], taken)
+            l = {k: v for k, v in x.items() if k not in IMPORT_ONLY}
+            l.update(name=name, source="persona", origin="zshrc:%s@%s" % (x["aliases"][0], machine))
+            LAUNCHERS.insert(0, l)
+            taken.add(name)
+            created.append(name)
+    hidden, kept = [], []
+    if b.get("hide_aliases"):
+        for src in map(_import_hide, landed):  # recomputed against what was just saved
+            if src["hide"] == "ok":
+                for l in LAUNCHERS:
+                    if l["source"] == "zshrc" and l["name"] == src["alias"]: l["hidden"] = True
+                hidden.append(src["alias"])
+            elif src["hide"] != "none":
+                kept.append({k: v for k, v in src.items() if k != "file"})
+    h.send_json({"created": created, "updated": updated, "hidden": hidden, "kept": kept})
 
 
 # POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
@@ -10659,10 +10869,12 @@ def _catalog_route(h, body):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
-    "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
-    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route) and the catalog lookup
+    (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection" and "Fetch
+    models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test keeps its own
+    answers then (_builtin_preset_route)."""
+    if p == "/api/v1/launchers/import":
+        import_route(h, method, q, body); return True
     if p == "/api/v1/launchers/catalog" and method == "POST":
         _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
@@ -10677,29 +10889,6 @@ def providers_route(h, method, p, q, body):
         except ValueError:
             return False
         if not isinstance(b, dict) or b.get("preset"): return False
-    if p == "/api/v1/launchers/import":
-        machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
-        if machine == "studio":
-            h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 ~/.zshrc，需要更新 node"}, 409); return True
-        if not machine_online(machine):
-            h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return True
-        if method == "GET":
-            h.send_json({"machine": machine, "providers": PROVIDER_IMPORT}); return True
-        PROVIDER_LOG["import"] = b
-        created, updated = [], []
-        for imp in PROVIDER_IMPORT:
-            if imp["name"] not in b.get("providers", []): continue
-            if imp.get("existing"):
-                l = next(x for x in LAUNCHERS if x["name"] == imp["existing"])
-                have = {m["id"] for m in l.get("models", [])}
-                l["models"] = l.get("models", []) + [m for m in imp["models"] if m["id"] not in have]
-                updated.append(imp["existing"])
-            else:
-                l = {k: v for k, v in imp.items() if k not in ("aliases", "existing")}
-                l.update(source="persona", origin="zshrc:%s@%s" % (imp["aliases"][0], machine))
-                LAUNCHERS.insert(0, l)
-                created.append(imp["name"])
-        h.send_json({"created": created, "updated": updated}); return True
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
@@ -10719,6 +10908,8 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
         name = (b.get("name") or "").strip()
+        if _display_name_refused(h, b): return True
+        if not b.get("name"): name, b = auto_named(b)
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", name):
             h.send_json({"error": "名字只能用字母、数字、_ 和 -，以字母或 _ 开头（不能叫 claude）"}, 400); return True
         if any(l["name"] == name for l in LAUNCHERS):
@@ -10732,6 +10923,7 @@ def providers_route(h, method, p, q, body):
         l = next((x for x in LAUNCHERS if x["name"] == unquote(p.split("/")[4]) and x["source"] == "persona"), None)
         if l is None:
             h.send_json({"error": "只能改 Persona 里加的启动器；~/.zshrc 里的请在那台电脑上改"}, 404); return True
+        if _display_name_refused(h, b): return True
         _provider_apply(l, b)
         h.send_json({"launcher": l}); return True
     return False
@@ -12015,6 +12207,82 @@ if os.environ.get("MOCK_LONG_HISTORY") == "1":
     for _i, _d in enumerate(_all):  # transcript order: the history first
         _d["seq"] = _i + 1
     ITEMS[WIDGET] = _all
+
+# MOCK_LONG_REPORT=1: an agent chat that ends in one very long final report, the shape of a real planning session that
+# scrolled badly (#4970): about 33,000 characters in one reply (headings, lists, nine tables of 115 rows, a dozen code
+# blocks, a quote), after 120 tool calls folded into work lines, eight subagent cards and the same report handed in as a
+# plan. `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`. MOCK_LONG_REPORT=<items.json> serves that file's
+# items instead (a transcript's items as the hub parses them, kept outside the repository), cutting long tool outputs as
+# the hub's pages do.
+LONG_REPORT = "a1f3c2d4-0000-4000-8000-000000000090"
+
+
+def long_report_text():
+    """The report: about 33,000 characters over 750 lines, Chinese and English mixed like the real one."""
+    words = ("迁移方案需要先确认现有数据的边界，再决定哪些字段保留、哪些合并；The adapter keeps the old wire format readable "
+             "while the new one rolls out, so older clients keep working. 每一步都要能单独回滚，不依赖下一步。")
+    tables = [(7, 3), (20, 3), (10, 2), (9, 3), (8, 3), (35, 3), (8, 5), (7, 3), (11, 3)]
+    codes = [31, 6, 3, 7, 8, 18, 3, 1, 1, 20, 6, 56]
+    out = ["# 天气 App 数据层迁移方案", "", "> 本文是第 3 版：根据评审意见补了回滚和灰度两节，表格里的数字都来自压测。", ""]
+    for n in range(12):
+        out += ["## %d. 第 %d 部分：%s" % (n + 1, n + 1, ("背景", "现状", "目标", "约束", "方案", "接口", "存储", "同步", "灰度", "回滚", "监控", "排期")[n]), ""]
+        for k in range(3):
+            out += [words + " " + words[:10 * k], ""]
+            out += ["### %d.%d 细节 %d" % (n + 1, k + 1, k + 1), ""]
+            out += ["- **要点 %d**：%s" % (j + 1, words[:40 + j * 7]) for j in range(3)] + [""]
+            if k == 1:
+                out += ["#### 备注", "", "1. 先在测试环境跑一遍", "2. 再按 5% / 25% / 100% 放量", "3. 每一档观察 24 小时", ""]
+        if n < len(tables):
+            rows, cols = tables[n]
+            out.append("| " + " | ".join("列 %d" % (c + 1) for c in range(cols)) + " |")
+            out.append("|" + "---|" * cols)
+            out += ["| " + " | ".join(("`field_%d_%d`" % (r, c)) if c == 0 else ("第 %d 行的说明文字，" % r) * (1 + c % 2)
+                                     for c in range(cols)) + " |" for r in range(rows - 2)]
+            out.append("")
+        if n < len(codes):
+            out.append("```text")
+            out += ["%-3d %s" % (j + 1, "step_%02d -> check_%02d -> commit  # keep the old reader until every client moved" % (j, j))[:64 + j % 10]
+                    for j in range(codes[n])]
+            out += ["```", ""]
+    return "\n".join(out)
+
+
+if os.environ.get("MOCK_LONG_REPORT"):
+    _src = os.environ["MOCK_LONG_REPORT"]
+    SESSIONS.append(sess("macbook", LONG_REPORT, "数据层迁移方案", "/Users/me/code/weather", "done", "idle", "weather", 1, "plan", 6, 3,
+                         "方案写好了，共十二部分。"))
+    if _src == "1":
+        _report = long_report_text()
+        _r = [it("user", "text", 180, text="把天气 App 的数据层迁移方案整理出来，先读完现有代码再写。")]
+        _r += [it("assistant", "text", 179, text="好，我先分头读代码。")]
+        for _a in range(8):
+            _r += tool("Agent", {"description": "读第 %d 组模块" % (_a + 1), "prompt": "读 Sources/Data 下第 %d 组文件，列出公开接口。" % (_a + 1)},
+                       "第 %d 组共 12 个文件，公开接口如下：\n" % (_a + 1) + "".join("- func load%d()\n" % k for k in range(40)), 178 - _a)
+        for _g in range(15):
+            _r.append(it("assistant", "thinking", 170 - _g * 5, text="接着读第 %d 批文件，确认字段的来源。" % (_g + 1)))
+            for _f in range(8):
+                _body = "".join("%4d  let field%d = try container.decode(String.self, forKey: .field%d)\n" % (k + 1, k, k)
+                                for k in range(40 + 30 * ((_g + _f) % 5)))
+                _r += long_tool("Read", {"file_path": "/Users/me/code/weather/Sources/Data/Model%02d_%d.swift" % (_g, _f)}, _body, 170 - _g * 5)
+        _r += tool("Bash", {"command": "git log --oneline -20 -- Sources/Data"}, "".join("%07x 调整字段 %d\n" % (k * 7919, k) for k in range(20)), 95)
+        _r += tool("WebSearch", {"query": "SwiftData migration plan"}, "3 results", 94)
+        _r += tool("Write", {"file_path": "/Users/me/.claude/plans/data-migration.md", "content": _report}, "File written", 93)
+        _r += tool("ExitPlanMode", {"plan": _report}, "User approved the plan", 92)
+        _r += [it("assistant", "text", 90, text=_report)]
+        _r += [it("user", "text", 60, text="第 6 部分的表再核对一遍")]
+        _r += [it("assistant", "text", 59, text="核对过了，第 6 部分的 33 行都和压测记录一致。")]
+    else:  # a transcript's items: long tool outputs cut to the page's 4 KB, as the hub serves them
+        with open(_src, encoding="utf-8") as _f:
+            _r = json.load(_f)
+        for _x in _r:
+            _t = _x.get("text") or ""
+            if _x.get("kind") == "tool_result" and len(_t.encode()) > 4096:
+                FULL[_x["id"]] = dict(_x)
+                _x["text"] = _t.encode()[:4096].decode(errors="ignore") + "\n…"
+                _x["full_size"] = len(_t.encode())
+    for _i, _d in enumerate(_r):
+        _d["seq"] = _i + 1
+    ITEMS[LONG_REPORT] = _r
 
 # MOCK_DRAWER=1: the main conversation ends with a reply whose code block is much wider than the phone, for the sidebar's
 # drag (DrawerSwipeTests: a drag on the code block scrolls it, a drag anywhere else opens the sidebar).
@@ -17952,8 +18220,7 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    out = {"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                              {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default}
+    out = {"launchers": machine_launchers(), "default": default}
     if pid == "agent.new":
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
@@ -18887,8 +19154,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                                                      {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}])})  # Codex: "Create from the phone"
+            return self.send_json({"launchers": machine_launchers()})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -20116,6 +20382,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/launchers" and self.command == "POST":  # "Add provider" (from a plugin's preset: the rest filled in)
             b = json.loads(self.last_body or b"{}")
             name = (b.get("name") or "").strip()
+            if not b.get("name") and not b.get("preset"): name, b = auto_named(b)
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", name) or name in ("claude", "presets"):
                 return self.send_json({"error": "名字只能用字母、数字、_ 和 -，以字母或 _ 开头（不能叫 claude）"}, 400)
             if any(l["name"] == name for l in LAUNCHERS): return self.send_json({"error": "已经有叫 %s 的启动器" % name}, 409)
@@ -20128,6 +20395,7 @@ class H(BaseHTTPRequestHandler):
             l = {"name": name, "source": "persona", "base_url": b["base_url"], "model": b["model"], "has_key": bool(b.get("api_key"))}
             for k in ("kind", "api", "small_model", "args"):
                 if b.get(k): l[k] = b[k]
+            if (b.get("display_name") or "").strip(): l["display_name"] = b["display_name"].strip()
             LAUNCHERS.insert(0, l)
             return self.send_json({"launcher": l})
         if p.startswith("/api/v1/launchers/") and (self.command == "DELETE" or p.endswith("/restore")):  # hide / bring back
@@ -21198,6 +21466,7 @@ MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
+MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
 MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -22264,7 +22533,7 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
 # the states the setup card shows, in the hub's shapes and words (its own catalogs, by Accept-Language): the features
-# assistant_readiness, machines_add, machine_trust and builtin_presets; GET /api/v1/assistant/readiness[?probe=1],
+# assistant_readiness, machines_add, machine_trust, builtin_presets and launcher_auto_name; GET /api/v1/assistant/readiness[?probe=1],
 # POST …/readiness/dismiss, POST /api/v1/assistant/warm with readiness; POST /api/v1/assistant/conversations refused
 # with the scenario's code (409 no_machine / machine_pending / claude_missing / launcher_missing, 503 node_unreachable); POST
 # /api/v1/sessions on a pending computer 409 machine_pending; GET /api/v1/launchers/presets with the built-in providers
@@ -22273,7 +22542,7 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
 # readiness follows the machines: zero → add → it joins → confirm → the computer step is ok.
 # MOCK_START_ERROR=<code> refuses every conversation start with that code whatever the scenario (no_machine,
 # machine_pending, claude_missing, launcher_missing, node_unreachable, assistant_offline). MOCK_BUILTIN_PRESETS=1 serves
-# the built-in providers and the feature builtin_presets without a scenario.
+# the built-in providers and the features builtin_presets and launcher_auto_name without a scenario.
 READINESS = os.environ.get("MOCK_READINESS", "")
 BUILTIN_PRESETS = bool(READINESS) or os.environ.get("MOCK_BUILTIN_PRESETS") == "1"
 if READINESS or BUILTIN_PRESETS:
@@ -22288,8 +22557,8 @@ if READINESS or BUILTIN_PRESETS:
 
     def features():
         f = _features_without_readiness()
-        extra = ("assistant_readiness", "machines_add", "machine_trust", "builtin_presets") if READINESS else ("builtin_presets",)
-        return f + [x for x in extra if x not in f]
+        extra = ("assistant_readiness", "machines_add", "machine_trust") if READINESS else ()
+        return f + [x for x in extra + ("builtin_presets", "launcher_auto_name") if x not in f]
 
 READY = {"sc": readiness_mock.SCENARIOS.get(READINESS, {}) if READINESS else {}, "dismissed": False}
 # Optional probe boundaries for #1892: exceed Apple's old 30 s timeout, or refuse the try with an HTTP error.
@@ -22393,11 +22662,7 @@ def _builtin_preset_route(handler, p, body):
     PROVIDER_LOG["post"] = _provider_redacted(b)
     name, n = (b.get("name") or "").strip(), 1
     if not name:
-        slug = re.sub(r"[^A-Za-z0-9_-]", "-", pr["id"].split("/", 1)[1])
-        name = slug
-        while any(l["name"] == name for l in LAUNCHERS):
-            n += 1
-            name = "%s-%d" % (slug, n)
+        name, n = launcher_name_for(launcher_slug(pr["id"].split("/", 1)[1]) or "provider")
     if any(l["name"] == name for l in LAUNCHERS):
         handler.send_json({"error": "已经有叫 %s 的启动器了" % name}, 409)
         return True
@@ -22494,7 +22759,7 @@ if READINESS or BUILTIN_PRESETS:
 
 MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|bad_key|full|demo|unverified|launcher_missing|model_route|rate_limited|node_outdated|assistant_offline  "
                  "主对话就绪度的场景（#287，docs/operations/testing.md「Readiness scenarios」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
-                 "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
+                 "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets / launcher_auto_name；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
                  "MOCK_BUILTIN_PRESETS=1 只加内置供应商预设")
 MOCK_HELP.append("MOCK_READINESS_PROBE_DELAY=<秒> / MOCK_READINESS_PROBE_ERROR=<HTTP 状态>  延迟或拒绝 ?probe=1（#1892，超过旧 30 秒客户端超时 / 显示失败）")
 
