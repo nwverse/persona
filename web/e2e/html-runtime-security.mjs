@@ -119,9 +119,12 @@ async function lab(ctx) {
 }
 
 async function cardState(page, timeout = 15_000) {
+  // running and shown: the frame is unseen until it first says how tall the card is (then it takes that height), and a
+  // press before that would land wherever the frame was; stopped as it is
   await page.waitForFunction(() => {
-    const s = document.querySelector('[data-assistant-card="html"]')?.getAttribute("data-html-state");
-    return s === "running" || s === "stopped";
+    const c = document.querySelector('[data-assistant-card="html"]');
+    const s = c?.getAttribute("data-html-state");
+    return (s === "running" && c.querySelector("[data-html-frame-height]")) || s === "stopped";
   }, null, { timeout });
   return page.evaluate(() => {
     const c = document.querySelector('[data-assistant-card="html"]');
