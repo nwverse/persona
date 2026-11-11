@@ -353,32 +353,7 @@ func TestAssistantBypassReviewCommands(t *testing.T) {
 		{"ordinary non CLI", `git status; rm -rf build; tee output.txt`, 0},
 		{"known shell read", `sh -c 'lark-cli docs +fetch | jq .'`, 0},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			n := codexTestNode(t)
-			fh := withFakeHub(t, n)
-			const sid = "11111111-1111-4111-8111-111111111111"
-			n.procs[sid] = &assistantProc{id: sid, agent: "claude", exited: make(chan struct{})}
-			n.larkCfg, n.larkCfgAt = olCfg(), time.Now().Add(time.Hour)
-			// Seed metadata without ever starting the CLI or executing the classified commands.
-			n.larkCfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
-			n.larkRisks = map[string]string{"\x00docs +fetch": "read", "\x00docs +create": "write"}
-			n.noteModes(sid, proto.ModeBypass, "")
-			fh.answer = func(proto.Interaction) proto.Resolution { no := false; return proto.Resolution{Allow: &no} }
-			raw, _ := json.Marshal(map[string]string{"command": tc.command})
-			out, err := n.larkGate(context.Background(), hookInput{SessionID: sid, Cwd: t.TempDir(), ToolInput: raw}, proto.Interaction{SessionID: sid, ExpiresAt: time.Now().Add(time.Minute)})
-			want := "allow"
-			if tc.cards > 0 {
-				want = "deny"
-			}
-			decision := ""
-			if out != nil {
-				decision, _ = out.(map[string]any)["hookSpecificOutput"].(map[string]any)["permissionDecision"].(string)
-			}
-			t.Logf("classification only: decision=%q cards=%d; want %s/%d", decision, len(fh.interactions()), want, tc.cards)
-			if err != nil || len(fh.interactions()) != tc.cards || tc.cards > 0 && decision != want || tc.cards == 0 && decision != "" && decision != "allow" {
-				t.Fatalf("decision=%q err=%v cards=%d, want %s/%d", decision, err, len(fh.interactions()), want, tc.cards)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
 	}
 }
 
@@ -460,7 +435,8 @@ func TestAssistantBypassReadOnlyCompoundCommands(t *testing.T) {
 		{"document fetch redirect traverses tmp", `NO_COLOR=1 lark-cli docs +fetch --as user --doc example > /tmp/../home/me/output/doc.json && jq '.data' /home/me/output/doc.json`},
 		{"document fetch redirect uses a variable", `DEST=/home/me/output; lark-cli docs +fetch --doc example > "$DEST/doc.json" && jq '.data' "$DEST/doc.json"`},
 		{"document fetch redirect uses only a variable", `lark-cli docs +fetch > "$DEST"`},
-		{"non-Lark loop pipes into jq", `for n in 162 163; do example-cli --json review status "$n" -R example/project | jq -c --arg n "$n" '{mr:$n,data:(.data | {status:.merge_request.status,head:.merge_request.source_commit_id,merge:.merge_request.merge_commit_id,failed:.mergeability.failed_checks,review:.review.status})}'; done; `},
+		{"document fetch redirect runs a literal formatter", `lark-cli docs +fetch > "/home/me/$(printf doc).json"`},
+		{"non-Lark loop pipes into jq", `for n in 1 2; do example-cli --json review status "$n" -R example/project | jq -c --arg n "$n" '{mr:$n,data:(.data | {status:.merge_request.status,head:.merge_request.source_commit_id,merge:.merge_request.merge_commit_id,failed:.mergeability.failed_checks,review:.review.status})}'; done; `},
 		{"non-Lark loop uses command substitution in an assignment", `for n in 1 2; do status=$(example-cli --json review status "$n" -R example/project | jq -r '.review.status'); printf '%s\n' "$status"; done`},
 		{"literal shell waits with command substitution assignments", `timeout 90 bash -c 'until f=$(ls -t ~/.claude/projects/*/example-session.jsonl 2>/dev/null | head -1); [ -n "$f" ] && grep -q "\"type\":\"assistant\"" "$f"; do sleep 3; done; echo "$f"'; f=$(ls -t ~/.claude/projects/*/example-session.jsonl 2>/dev/null | head -1); printf '%s\n' "$f"`},
 		{"literal shell until loop has no CLI call", `bash -c 'until f=$(ls -t ~/example/*.jsonl 2>/dev/null | head -1); [ -n "$f" ]; do sleep 1; done; echo "$f"'`},
@@ -498,6 +474,7 @@ func TestAssistantBypassCLIControls(t *testing.T) {
 		"`printf '%s' \"$C\"` im +messages-send --text hello",
 		`lark-cli docs +fetch --doc-id "$DOCUMENT"`,
 		`lark-cli im +messages-send --text hello < /home/me/message.txt`,
+		`echo hi > "/tmp/$(lark-cli im +messages-send --text hello)"`,
 		`$C im +messages-send --text hello <<< input`,
 		`echo {a,b}; $C im +messages-send --text hello`,
 		`$(printf '%s' "$C") im +messages-send --text hello <<< input`,
@@ -648,6 +625,8 @@ func assertAssistantBypassClassification(t *testing.T, command string, cards int
 			n.procs[testThread] = p
 			n.larkCfg, n.larkCfgAt = olCfg(), time.Now().Add(time.Hour)
 			n.larkCfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
+			// Seed metadata without starting the CLI or executing the classified commands.
+			n.larkRisks = map[string]string{"\x00docs +fetch": "read", "\x00docs +create": "write"}
 			n.noteModes(testThread, proto.ModeBypass, "")
 			fh.answer = func(proto.Interaction) proto.Resolution { no := false; return proto.Resolution{Allow: &no} }
 			decision, want := "", "allow"
