@@ -25,5 +25,6 @@
   "line_width": "粗细",
   "width_thin": "细",
   "width_medium": "中",
-  "width_thick": "粗"
+  "width_thick": "粗",
+  "named_value": "{label}：{value}"
 }

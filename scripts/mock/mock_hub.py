@@ -717,6 +717,9 @@ _CONTEXT = {
 # MOCK_SPLIT_TABS=1 see below.
 if os.environ.get("MOCK_CONTEXT_DANGER"):
     _CONTEXT[TESTS] = ("claude-sonnet-5-5", 184_000, 200_000)
+# MOCK_MODEL_CHANGE=1 (#5034): the recipes agent's latest reply came from Sonnet (its first from Opus, ITEMS below).
+if os.environ.get("MOCK_MODEL_CHANGE") == "1":
+    _CONTEXT[RECIPE] = ("claude-sonnet-5-5", 42_000, 200_000)
 for _s in SESSIONS:
     if _s["session_id"] in _CONTEXT:
         _model, _tokens, _window = _CONTEXT[_s["session_id"]]
@@ -5434,6 +5437,21 @@ if os.environ.get("MOCK_OPENCODE"):
     ITEMS[OC_IDLE] = [it("user", "text", 60 * 4, text="CI 里的依赖缓存为什么一直没命中？")] + [
         it("assistant", "text", 60 * 3, text="缓存键里带了时间戳，每次都是新的；改成 lockfile 的哈希就好了。")]
 ITEMS[RECIPE] = [it("user", "text", 60 * 27, text="菜谱网站加个搜索")] + [it("assistant", "text", 60 * 26, text="搜索做好了，支持按食材和用时筛选。")]
+# MOCK_MODEL_CHANGE=1 (#5034): the recipes agent's two exchanges were answered by two models, as the transcript records
+# them (Item.model), so its chat draws the model change divider between them (web lib/model-change.ts).
+if os.environ.get("MOCK_MODEL_CHANGE") == "1":
+    def _by(model, part):  # a tool call is the model's; its result is the tool's
+        return [dict(x, model=model) if x["role"] == "assistant" else x for x in part]
+    ITEMS[RECIPE] = (
+        [it("user", "text", 60 * 28, text="菜谱网站加个搜索")]
+        + [it("assistant", "thinking", 60 * 28, text="先看看现在的路由里有没有搜索的入口。", model="claude-opus-5-5")]
+        + _by("claude-opus-5-5", tool("Grep", {"pattern": "search", "path": "src"}, "src/routes/index.tsx:12:  // TODO search", 60 * 28))
+        + [it("assistant", "text", 60 * 27, text="搜索做好了，支持按食材和用时筛选。", model="claude-opus-5-5")]
+        + [it("user", "text", 60 * 26, text="结果再按用时从短到长排一下")]
+        + _by("claude-sonnet-5-5", tool("Edit", {"file_path": "/Users/me/code/recipes/src/search.ts", "old_string": "return hits",
+                                               "new_string": "return hits.sort(byTime)"}, "ok", 60 * 26))
+        + [it("assistant", "text", 60 * 26, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数。", model="claude-sonnet-5-5")]
+    )
 if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
     for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
                              (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "npm test"),
@@ -10544,25 +10562,56 @@ LAUNCHER_PRESETS = [
      "models_error": "插件读模型列表超时"},
 ]
 
-# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and ~/.zshrc import. Two managed
+# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and the alias import. Two managed
 # providers (one with every advanced field), "Test connection" that passes or fails (a key or address with "bad" in it fails),
-# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
-# too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
+# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and the rc-file launchers of the aliases macbook's import
+# preview reads (#5024). The import itself answers in every mode (a page served by Vite against a plain mock asked for it and got
+# a 404): 4 providers on macbook (one merging into gw_full when it is there, one whose aliases differ in more than the model, one
+# from ~/.bashrc with variables carried over and left out), its hide checks recomputed against the launchers each time; studio's
+# node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
+# GET /api/v1/launchers/import's groups as the hub reads them from macbook's aliases. `existing` (a provider on the same address,
+# a variant's by its origin) and `hide` (none once Persona lists no such launcher or hides it) are worked out per request,
+# import_preview(); `hide` here is what an alias Persona lists would get.
 PROVIDER_IMPORT = [
-    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "model": "example-opus",
+    # two aliases that differ only in the model: one provider, merging into gw_full when it is there
+    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use", "model": "example-opus",
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
-     "aliases": ["cc_full", "cc_full_haiku"], "existing": "gw_full"},
-    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True,
-     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"]},
-    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True,
-     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}],
-     "aliases": ["cc_kimi", "cc_kimi_fast"], "has_headers": True},
+     "aliases": ["cc_full", "cc_full_haiku"],
+     "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
+     "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},
+    # one gateway and key, but the aliases set their tiers and effort differently: each can become a provider of its own
+    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}], "has_headers": True,
+     "effort": "high", "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"],
+     "aliases": ["cc_kimi", "cc_kimi_fast"], "differs": ["tiers", "effort"],
+     "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}],
+     "variants": [
+         {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}], "has_headers": True, "effort": "high",
+          "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "aliases": ["cc_kimi"],
+          "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"}]},
+         {"name": "cc_kimi_fast", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3-turbo", "models": [{"id": "kimi-k3-turbo"}], "has_headers": True, "effort": "low", "haiku_model": "kimi-k3-turbo",
+          "aliases": ["cc_kimi_fast"], "sources": [{"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}]},
+     ]},
+    # from ~/.bashrc: two variables carried over, three left out; the server defines cc_relay for another address
+    {"name": "cc_relay", "base_url": "https://relay.example.org", "auth": "api_key", "has_key": True, "own_service": "use",
+     "model": "relay-pro", "models": [{"id": "relay-pro"}], "aliases": ["cc_relay"], "has_env": True,
+     "env_names": ["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "DISABLE_TELEMETRY"],
+     "skipped_env": [{"name": "HOME", "reason": "computer"}, {"name": "RELAY_TOKEN", "reason": "credential"}, {"name": "WORKDIR", "reason": "shell"}],
+     "sources": [{"alias": "cc_relay", "file": "~/.bashrc", "hide": "elsewhere", "elsewhere": ["服务器"]}]},
 ]
+# what a preview group carries that a stored provider does not
+IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "variants", "env_names", "skipped_env")
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
@@ -10577,6 +10626,59 @@ if MOCK_PROVIDERS:
         {"name": "anthropic_main", "source": "persona", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-4-5", "has_key": True,
          "auth": "api_key", "models": [{"id": "claude-sonnet-4-5", "context_window": 200000}]},
     ]
+    # the aliases the import reads on macbook, as Persona lists them (cc_glm is there already)
+    LAUNCHERS[-1:-1] = [
+        {"name": "cc_full", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-opus", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_full_haiku", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-haiku", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
+    ]
+
+
+def _import_hide(src):
+    """One alias's hide check as the hub makes it now: none when Persona lists no rc-file launcher of that name or hides it."""
+    rc = [l for l in LAUNCHERS if l["source"] == "zshrc" and l["name"] == src["alias"]]
+    if not rc or any(l.get("hidden") for l in rc): return {"alias": src["alias"], "file": src["file"], "hide": "none"}
+    return dict(src)
+
+
+def _import_existing(base_url, alias=None):
+    """The stored provider an import lands in: one on the same address (the mock knows no keys), or for a variant one that
+    came from that alias (origin zshrc:<alias>@<machine>)."""
+    for l in LAUNCHERS:
+        if l["source"] == "persona" and l.get("base_url") == base_url and (alias is None or (l.get("origin") or "").startswith("zshrc:%s@" % alias)):
+            return l["name"]
+    return None
+
+
+def _import_name(name, taken):
+    """The name an imported provider is saved under: its own, or with -2, -3… when a launcher already has it (an alias
+    Persona lists does), as the hub's importLaunchers names it."""
+    out, n = name, 2
+    while out in taken: out, n = "%s-%d" % (name, n), n + 1
+    return out
+
+
+def import_preview():
+    """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
+    created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
+    same launchers; the names a group may take are taken for the groups after it."""
+    out, taken = [], {l["name"] for l in LAUNCHERS}
+    for g in copy.deepcopy(PROVIDER_IMPORT):
+        names = set()
+        for x in [g] + g.get("variants", []):
+            x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
+            existing = _import_existing(x["base_url"], x["aliases"][0] if x is not g else None)
+            if existing:
+                x["existing"] = existing
+                continue
+            name = _import_name(x["name"], taken)
+            if name != x["name"]: x["create_as"] = name
+            names.add(name)
+        taken |= names
+        out.append(g)
+    return out
 
 
 def _provider_redacted(b):
@@ -10596,6 +10698,55 @@ def _provider_apply(l, b):
     if "headers" in b:
         if b["headers"]: l["has_headers"] = True
         else: l.pop("has_headers", None)
+
+
+def import_route(h, method, q, body):
+    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
+    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
+    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
+    hidden, the others kept with why."""
+    b = json.loads(body or b"{}") if method == "POST" else {}
+    machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
+    if machine == "studio":
+        h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 alias，需要更新 node"}, 409); return
+    if not machine_online(machine):
+        h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return
+    if method == "GET":
+        h.send_json({"machine": machine, "providers": import_preview()}); return
+    PROVIDER_LOG["import"] = b
+    groups = {g["name"]: g for g in import_preview()}
+    names, split = b.get("providers") or [], b.get("split") or []
+    unknown = [n for n in names if n not in groups] + [n for n in split if n not in names]
+    if unknown:
+        h.send_json({"code": "bad_request", "error": "没有可导入的 %s" % unknown[0]}, 400); return
+    created, updated, landed = [], [], []
+    taken = {l["name"] for l in LAUNCHERS}
+    for g in (groups[n] for n in names):
+        for x in (g["variants"] if g["name"] in split and g.get("variants") else [g]):
+            landed += x.get("sources", [])
+            if x.get("existing"):
+                l = next(l for l in LAUNCHERS if l["name"] == x["existing"])
+                have = {m["id"] for m in l.get("models", [])}
+                l["models"] = l.get("models", []) + [m for m in x.get("models", []) if m["id"] not in have]
+                updated.append(x["existing"])
+                continue
+            name = x.get("create_as") or x["name"]  # as previewed, unless something took it since
+            if name in taken: name = _import_name(x["name"], taken)
+            l = {k: v for k, v in x.items() if k not in IMPORT_ONLY}
+            l.update(name=name, source="persona", origin="zshrc:%s@%s" % (x["aliases"][0], machine))
+            LAUNCHERS.insert(0, l)
+            taken.add(name)
+            created.append(name)
+    hidden, kept = [], []
+    if b.get("hide_aliases"):
+        for src in map(_import_hide, landed):  # recomputed against what was just saved
+            if src["hide"] == "ok":
+                for l in LAUNCHERS:
+                    if l["source"] == "zshrc" and l["name"] == src["alias"]: l["hidden"] = True
+                hidden.append(src["alias"])
+            elif src["hide"] != "none":
+                kept.append({k: v for k, v in src.items() if k != "file"})
+    h.send_json({"created": created, "updated": updated, "hidden": hidden, "kept": kept})
 
 
 # POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
@@ -10641,10 +10792,12 @@ def _catalog_route(h, body):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
-    "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
-    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route) and the catalog lookup
+    (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection" and "Fetch
+    models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test keeps its own
+    answers then (_builtin_preset_route)."""
+    if p == "/api/v1/launchers/import":
+        import_route(h, method, q, body); return True
     if p == "/api/v1/launchers/catalog" and method == "POST":
         _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
@@ -10659,29 +10812,6 @@ def providers_route(h, method, p, q, body):
         except ValueError:
             return False
         if not isinstance(b, dict) or b.get("preset"): return False
-    if p == "/api/v1/launchers/import":
-        machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
-        if machine == "studio":
-            h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 ~/.zshrc，需要更新 node"}, 409); return True
-        if not machine_online(machine):
-            h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return True
-        if method == "GET":
-            h.send_json({"machine": machine, "providers": PROVIDER_IMPORT}); return True
-        PROVIDER_LOG["import"] = b
-        created, updated = [], []
-        for imp in PROVIDER_IMPORT:
-            if imp["name"] not in b.get("providers", []): continue
-            if imp.get("existing"):
-                l = next(x for x in LAUNCHERS if x["name"] == imp["existing"])
-                have = {m["id"] for m in l.get("models", [])}
-                l["models"] = l.get("models", []) + [m for m in imp["models"] if m["id"] not in have]
-                updated.append(imp["existing"])
-            else:
-                l = {k: v for k, v in imp.items() if k not in ("aliases", "existing")}
-                l.update(source="persona", origin="zshrc:%s@%s" % (imp["aliases"][0], machine))
-                LAUNCHERS.insert(0, l)
-                created.append(imp["name"])
-        h.send_json({"created": created, "updated": updated}); return True
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
@@ -11086,10 +11216,12 @@ if os.environ.get("MOCK_CHAT_LINES") == "1":
                                      "description": "核对没有价格的商品", "running": False, "started_at": ago(minutes=26)}]))
 
 
-# MOCK_SUBAGENT_CARDS=1: subagent cards in the chat (#1963, web): a finished exchange whose subagents completed, failed
-# and nested (one launched another, which launched a third) fold into its "Work done"; then the live exchange, with one
-# still running in the background (its card stays in the open) and a command running after it. Every subagent has a
-# transcript ("<session>@<agent>") for the card's latest steps and the side panel's "View full process".
+# MOCK_SUBAGENT_CARDS=1: subagent cards in the chat (#1963, #5030 web): a finished exchange whose subagents completed,
+# failed and nested (one launched another, which launched a third, each its own card by when it started) fold into its
+# "Worked"; then the live exchange, with one still running in the background and a command running after it (both in
+# its live summary, super rule 2). The subagents carry the model they ran on and their tokens (#5030). A second session, "后台子 Agent",
+# has finished its turn while a background subagent runs on (`background_working`): the bar above the composer says
+# background subtasks still use the model. Old links to a subagent ("<session>@<agent>") open its parent at its card.
 SUBCARDS = "a1f3c2d4-0000-4000-8000-0000000c1e02"
 
 
@@ -11133,18 +11265,34 @@ def mock_subagent_cards():
         + tool("Bash", {"command": "npm run test:e2e -- search --all", "description": "跑搜索全量用例"}, "120 passed", 8)
         + tool("Read", {"file_path": "/Users/me/code/shop-web/e2e/filters.spec.ts"}, "test('filters', …)", 6)
         + [it("assistant", "tool_use", 2, tool_use_id="toolu_scrunb", tool_name="Bash", tool_input={"command": "npm run test:e2e -- filters", "description": "跑筛选用例"})])
-    sub = lambda i, desc, use, **kw: {"id": i, "session_id": SUBCARDS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
-                                      "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 20)), **kw}
+    sub = lambda i, desc, use, **kw: {k: v for k, v in {
+        "id": i, "session_id": SUBCARDS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
+        "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 20)),
+        "model": kw.pop("model", "claude-haiku-4-5-20251001"), "tokens": kw.pop("tokens", 18432), **kw}.items() if v is not None}
     SESSIONS.append(sess("macbook", SUBCARDS, "回归拆给子 Agent", "/Users/me/code/shop-web", "working", "working", "shop-web", 15, "agents", 2, 0,
                          "搜索全量在后台跑，首页在打包。", subagents=[
                              sub("scrun", "回归：搜索全量", _run, at=9.8, running=True, background=True, last_text="筛选的用例在跑。", steps=3,
                                  last_tool={"id": "toolu_scrunb", "name": "Bash", "summary": "跑筛选用例"}),
                              sub("scdone", "回归：结算流程", _done, at=29.5, last_text="结算流程 42 个用例全部通过。", steps=2,
                                  last_tool={"id": "toolu_scdone2", "name": "Read", "summary": "读 checkout.spec.ts"}, updated_at=ago(minutes=27)),
-                             sub("scfail", "回归：支付回调", _fail, at=27, steps=1),
-                             sub("scnest", "回归：价格筛选", _nest, at=26, type="Explore", steps=2),
-                             sub("scdata", "查价格的测试数据", _data, at=25, parent_id="scnest"),
-                             sub("scold", "核对下架商品", None, at=24.5, parent_id="scdata", type="fork", fork=True)]))
+                             sub("scfail", "回归：支付回调", _fail, at=27, steps=1, model="claude-sonnet-4-6", tokens=9120),
+                             sub("scnest", "回归：价格筛选", _nest, at=26, type="Explore", steps=2, tokens=31250),
+                             sub("scdata", "查价格的测试数据", _data, at=25, parent_id="scnest", steps=1, tokens=7340),
+                             sub("scold", "核对下架商品", None, at=24.5, parent_id="scdata", type="fork", fork=True, model=None, tokens=None)]))
+    # the turn is over, a background subagent runs on
+    bg = "a1f3c2d4-0000-4000-8000-0000000c1e12"
+    _b = [it("user", "text", 6, text="后台把 iOS 的崩溃日志归类一下，我先去开会")]
+    _b += tool("Agent", {"description": "归类崩溃日志", "subagent_type": "general-purpose", "prompt": "把最近一周的崩溃日志按调用栈归类，列出前五类", "run_in_background": True},
+               "Async agent launched successfully.\nagentId: bgcrash (This is an internal ID for your use)", 5.8)
+    _bg = _b[-2]["tool_use_id"]
+    _b.append(it("assistant", "text", 5.5, text="已经在后台归类了，归类完会把前五类发给你。"))
+    ITEMS[bg] = _b
+    ITEMS[bg + "@bgcrash"] = [it("user", "text", 5.8, text="把最近一周的崩溃日志按调用栈归类，列出前五类")]
+    SESSIONS.append(sess("macbook", bg, "后台子 Agent", "/Users/me/code/shop-web", "working", "working", "shop-web", 15, "agents", 3, 0,
+                         "崩溃日志在后台归类。", background_working=True, subagents=[
+                             {"id": "bgcrash", "session_id": bg + "@bgcrash", "type": "general-purpose", "description": "归类崩溃日志", "tool_use_id": _bg,
+                              "running": True, "background": True, "started_at": ago(minutes=5.8), "model": "claude-sonnet-4-6", "tokens": 41230, "steps": 9,
+                              "last_tool": {"id": "toolu_bgc9", "name": "Grep", "summary": "找 EXC_BAD_ACCESS"}}]))
 
 
 if os.environ.get("MOCK_SUBAGENT_CARDS") == "1":

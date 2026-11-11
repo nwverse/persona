@@ -270,6 +270,18 @@ func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLaunche
 	return list, nil
 }
 
+// readHiddenLaunchers reads launchers.hidden from the store itself (never a request's memo) for a change to it, made
+// under models.mu so no other hide or restore is lost; a failed read fails the change instead of emptying the list.
+func (s *Service) readHiddenLaunchers(ctx context.Context) ([]string, error) {
+	st := s.store()
+	if st == nil {
+		return nil, i18n.Err("assistant-models.err_no_database")
+	}
+	var list []string
+	_, err := st.Setting(ctx, launchersHiddenKey, &list)
+	return list, err
+}
+
 func (s *Service) hiddenLaunchers(ctx context.Context) []string {
 	var list []string
 	if st := s.store(); st != nil {

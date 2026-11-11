@@ -20,7 +20,7 @@ import { openPanel } from "../lib/panel";
 import { navigate } from "../lib/router";
 import { hubHas, useStore } from "../lib/store";
 import { mediaMatches, NARROW } from "../lib/viewport";
-import { INERT, ViewSections } from "../views/extensions/ViewBody";
+import { INERT, ViewSections } from "../views/extensions/view-sections-lazy";
 import { t } from "../i18n";
 import { Button, cx, Dialog, toast } from "./atoms";
 import { Icon } from "./icons";

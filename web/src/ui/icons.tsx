@@ -115,6 +115,8 @@ const P: Record<string, React.ReactNode> = {
   wrap: <g><path d="M3 6h18M3 12h15a3 3 0 1 1 0 6h-4M3 18h7" /><path d="m16 16-2 2 2 2" /></g>,
   arrowLeft: <path d="M19 12H5M12 19l-7-7 7-7" />,
   arrowRight: <path d="M5 12h14M12 5l7 7-7 7" />,
+  // the chat's model change divider (Lucide's arrow-left-right, as cindy's)
+  arrowLeftRight: <path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4" />,
   textSize: <path d="M4 7V4h16v3M9 20h6M12 4v16" />,
   // an extension's entry on the sidebar (docs/extensions/extensions.md "UI slots" nav_page icons; extension, list, bell and doc reuse the above)
   chart: <path d="M3 3v16a2 2 0 0 0 2 2h16M8 17v-4M13 17V8M18 17v-7" />,

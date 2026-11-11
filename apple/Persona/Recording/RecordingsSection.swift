@@ -749,7 +749,7 @@ struct RecordingMeetingFacts: View {
         // When and where on one line.
         let when: String? = {
             guard let start = meeting.start, let end = meeting.end else { return nil }
-            return (start..<max(end, start)).formatted(.interval.month().day().hour().minute())
+            return RecordingFormat.span(start, end)
         }()
         let line = [when, meeting.location].compactMap { $0 }.joined(separator: " · ")
         if !line.isEmpty {
