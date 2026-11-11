@@ -202,9 +202,14 @@ import UIKit
 /// `-showPagePerfRepeat <n>` glides n times, each its own file after the first (frames-page-glide-2.json, …): the first
 /// pass lays rows out for the first time, the later ones show what scrolling back over them costs.
 @MainActor enum PagePerf {
-    /// The page under a glide, told a finger is on it (true) and lifted (false), so it treats the glide as the user's
-    /// scrolling (a chat stops following its newest end); set by the page itself (`ChatView`).
-    static var touch: ((Bool) -> Void)?
+    /// Pages told a finger is on their scroll view (true) and lifted (false), so they treat a glide as the user's
+    /// scrolling (a chat stops following its newest end), by the page (`ChatView` registers its own). Each answers
+    /// only for its own list: several chats can be mounted at once (Persona's conversation stays in the shell).
+    static var touchers: [ObjectIdentifier: (UIScrollView, Bool) -> Void] = [:]
+
+    private static func touch(_ list: UIScrollView, _ down: Bool) {
+        for toucher in touchers.values { toucher(list, down) }
+    }
 
     static func runIfAsked() {
         let d = UserDefaults.standard
@@ -227,14 +232,14 @@ import UIKit
             try? await Task.sleep(for: .seconds(1))
             guard let list = mainScrollView() else { return }
             for n in 1...repeats {
-                touch?(true)
+                touch(list, true)
                 list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
                 try? await Task.sleep(for: .seconds(1))
                 FrameStats.shared.start()
                 await ListGlide.run(list, seconds: seconds, speed: CGFloat(speed))
                 await ListGlide.run(list, seconds: seconds, speed: CGFloat(-speed))
                 FrameStats.shared.stop(label: n == 1 ? "page-glide" : "page-glide-\(n)")
-                touch?(false)
+                touch(list, false)
             }
         }
     }
@@ -247,10 +252,10 @@ import UIKit
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(8))
             guard let list = mainScrollView() else { return }
-            touch?(true)
+            touch(list, true)
             list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top + y), animated: false)
             try? await Task.sleep(for: .seconds(0.5))
-            touch?(false)
+            touch(list, false)
             try? await Task.sleep(for: .seconds(2))
             if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
                 try? Data().write(to: dir.appending(path: "list-offset-set"))

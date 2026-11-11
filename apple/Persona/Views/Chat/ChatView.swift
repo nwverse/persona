@@ -2709,7 +2709,8 @@ struct ChatView: View {
             // The page measurements move the list's scroll view themselves (`PagePerf`): tell the chat a finger is on
             // it, as a drag does (`onScrollPhaseChange`), or it keeps following the newest end and puts its stored
             // position back whenever rows come in, and the list never gets far (#4970).
-            PagePerf.touch = { down in
+            PagePerf.touchers[ObjectIdentifier(pin)] = { [pin] list, down in
+                guard pin.list === list else { return }
                 if down {
                     scratch.userDragging = true
                     scratch.lastUserScroll = .now
