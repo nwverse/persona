@@ -703,9 +703,11 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
   the entries it came from (`sources`: `projects/<slug>` or `chats/<id>` and the day) and the day it was last confirmed (`when`). `points.json` is the record; `summary.md` is
   written from it after every change, grouped by subtopic, and is what search and the assistant read.
 - **Distill** (`kb/topic_distill.go`, prompt `kb/topic_distill`): a project is due once its timeline has 8 new lines, or fewer and it has been quiet 30 minutes; a chat (not P3, with
-  real people, `HasPeople`) once its summary changed and it was last distilled more than 12 hours ago. One call takes up to 12 KB of a project's timeline lines from where the last one
-  stopped (each clipped to 600 characters, oldest first), or a chat's summary, plus the names, aliases and one lines of the 80 biggest topics, and returns at most 25 candidates, each
-  with a topic name and a path. A name matching a topic's name or alias (`normName`, as projects match) files it there; a new name opens a topic, at most 4 a call and 150 in all (the
+  real people, `HasPeople`) once its summary changed and it was last distilled more than 12 hours ago. One call takes up to 6 KB of a project's timeline lines from where the last one
+  stopped (each clipped to 600 characters, oldest first), or a chat's summary (clipped to 6 KB, not split), plus the names, aliases and one lines of the 80 biggest topics, and
+  returns at most 12 candidates, each with a topic name and a path. The sizes keep a call's answer well inside its 3-minute deadline also on a model that writes 30–40 tokens a
+  second (#4350: with 12 KB and 25 points a third of the calls ran out of time). A project call that ran out of time, or whose answer did not fit even in twice the room, is tried
+  again (after the usual wait) with half the lines it carried, at least 2, halving again while it keeps failing; a success lifts the cap. A name matching a topic's name or alias (`normName`, as projects match) files it there; a new name opens a topic, at most 4 a call and 150 in all (the
   rest of that call's points for new topics are dropped and logged). How far a source was read is its mark, `.topics.json` in its directory: a project's line count and the size of
   `log.md` when it read to the end (an unchanged size means nothing new, and the timeline is not read again), a chat's summary hash. The first pass over existing timelines is the
   same step from line one, so a knowledge base with long timelines fills in over some rounds.
