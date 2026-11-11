@@ -158,7 +158,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				m.turnErr.set(&s)
 				s.Activity, s.ActivityAt = m.activityOf()
 				setContext(&s, m)
-				s.Inventory = m.inventory
 				s.ModelFallback = m.modelFallback
 				if a.Agent != "codex" && a.Agent != traexAgent {
 					s.PermissionMode, s.Effort = n.currentModes(id, m)
@@ -220,6 +219,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	// Runtimes (runtimes.go): listed as they say, appended straight into the list and dropped there when already seen.
 	from := len(out)
 	out = n.runtimes.appendSessions(out)
+	if pass != nil {
+		pass.runtimes = n.runtimes.codexThreads() // conversations that are Codex threads here: listed once (runtimecodex.go)
+	}
 	peak := len(out)
 	j := from
 	for i := from; i < len(out); i++ {

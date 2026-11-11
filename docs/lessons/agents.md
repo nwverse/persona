@@ -236,6 +236,13 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
   (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
+## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
+
+Deleting a meeting room stopped its `claude -p` and removed the transcript at once; a moment later the file was back
+with three lines Claude Code appends on exit (`last-prompt` with the last prompt's text, `atis-latch`, `cost-state`).
+Wait for the process to exit (`stopAndWait`) before removing a conversation's files, and remove its
+`<config dir>/session-env/<session id>` folder with them.
+
 ## A new private profile and `--setting-sources project` both drop the login (2026-11-11, #3862)
 
 A meeting room (an assistant guest started with `--setting-sources project` so none of the owner's setup reaches it)
@@ -574,7 +581,7 @@ Claude Code launches hook commands with `detached: true` on Linux / macOS, so `p
 Don't assume "hook disconnected = Agent no longer waiting": while waiting, node checks every 2 seconds whether claude still exists using hook-supplied `agent_pid` / `agent_start` (`watchAgent`); withdraw only after two consecutive missing checks. A killed but unreaped claude is a zombie: `/proc/<pid>/stat` and its unchanged start time remain; inspect state `Z` to detect that it is gone (`procGone`).
 - "Closed its finished agent" with the tab still there (2026-11-06): herdr's own log (`~/.config/herdr/herdr-server.log`, UTC) showed every `tab.close` from `session.retire` succeeding on the tab the Agent ran in then. The leftover tabs were others:
   the assistant had sent `/exit` with `agent_send`, which exits claude and leaves the shell, and once even to an Agent already closed, which resumed it in a new tab only to quit (that tab stayed).
-  Before blaming a close, match the pane ids in herdr's log (`pane child spawned … pane_id=<n>`, `tab renamed … tab_id=…`) against the tabs that are left. `/exit` and `/quit` now close the Agent like **Close**, and Persona tabs left with a bare shell are swept (`docs/assistant/todos.md` ("Close Agents for completed tasks")).
+  Before blaming a close, match the pane ids in herdr's log (`pane child spawned … pane_id=<n>`, `tab renamed … tab_id=…`) against the tabs that are left. `/exit` and `/quit` stop the Agent and keep its tab, and since #4754 nothing closes a Persona tab left with a bare shell (`docs/assistant/todos.md` ("Stop Agents of completed tasks")).
 
 ## Closing a question is a runtime operation (#5700)
 
