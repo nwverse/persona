@@ -509,7 +509,7 @@ class TasksStore(
         }
     }
 
-    /** Accept the exact round carried by a brief, even if the task's current ask has since changed. */
+    /** Ask the hub to accept the exact round carried by a brief; a superseded round ends in 409. */
     fun acceptBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit, manager: String? = null) {
         if (todoId.isBlank() || askedAt.isBlank()) return
         val key = briefAcceptOutcomeKey(todoId, askedAt)

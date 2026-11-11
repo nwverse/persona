@@ -3755,8 +3755,8 @@ if MOCK_TASKS:
                      {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
             # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
-                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT,
                         "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
@@ -4237,13 +4237,15 @@ def tasks_area(h, method, p, raw):
         h.send_json({"plan": plan})
         return True
     if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith("/accept"):
-        # Accept the exact displayed round: a brief keeps its historical ask; an ordinary card uses the current one.
+        # Accept only the current round; a Brief's older row is already handled, while an ordinary card uses its current ask.
         tid = p.split("/")[4]
         sent = json.loads(h.last_body or b"{}")
         brief = next((row for feeds in TASK_FEED.values() for item in feeds if item.get("kind") == "brief"
                       for row in item.get("body", {}).get("accept", []) if row.get("id") == tid), None)
         current = next((t for t in sorted_todos() if t["id"] == tid), None)
-        expected = brief.get("asked_at") if brief is not None else (current or {}).get("ask", {}).get("asked_at")
+        current_ask = (current or {}).get("ask")
+        # With asks shown the hub accepts only the current round; MOCK_TASKS_NO_ASKS hides that state for visual tests.
+        expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
         if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
         else:
