@@ -197,9 +197,16 @@ import UIKit
 /// Any page, measured (`-showPagePerf YES`, docs/operations/testing.md「Whole App」): 10 s after launch, 8 s on the page as it is
 /// (a script pushes hub updates meanwhile), then the page's main scroll view (the largest one on screen) glides
 /// down for 3 s and back up for 3 s at 2000 pt/s. Writes Documents/frames-page-idle.json and frames-page-glide.json.
+/// `-showPagePerfSpeed <pt/s>` and `-showPagePerfSeconds <s>` change the glide (a slow read through a long reply, a fling);
+/// `-showPagePerfRepeat <n>` glides n times, each its own file after the first (frames-page-glide-2.json, …): the first
+/// pass lays rows out for the first time, the later ones show what scrolling back over them costs.
 @MainActor enum PagePerf {
     static func runIfAsked() {
-        guard UserDefaults.standard.bool(forKey: "showPagePerf") else { return }
+        let d = UserDefaults.standard
+        guard d.bool(forKey: "showPagePerf") else { return }
+        let speed = d.double(forKey: "showPagePerfSpeed") > 0 ? d.double(forKey: "showPagePerfSpeed") : 2000
+        let seconds = d.double(forKey: "showPagePerfSeconds") > 0 ? d.double(forKey: "showPagePerfSeconds") : 3
+        let repeats = max(1, d.integer(forKey: "showPagePerfRepeat"))
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(10))
             FrameStats.shared.start()
@@ -211,12 +218,14 @@ import UIKit
             FrameStats.shared.stop(label: "page-idle")
             try? await Task.sleep(for: .seconds(1))
             guard let list = mainScrollView() else { return }
-            list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
-            try? await Task.sleep(for: .seconds(1))
-            FrameStats.shared.start()
-            await ListGlide.run(list, seconds: 3, speed: 2000)
-            await ListGlide.run(list, seconds: 3, speed: -2000)
-            FrameStats.shared.stop(label: "page-glide")
+            for n in 1...repeats {
+                list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
+                try? await Task.sleep(for: .seconds(1))
+                FrameStats.shared.start()
+                await ListGlide.run(list, seconds: seconds, speed: CGFloat(speed))
+                await ListGlide.run(list, seconds: seconds, speed: CGFloat(-speed))
+                FrameStats.shared.stop(label: n == 1 ? "page-glide" : "page-glide-\(n)")
+            }
         }
     }
 

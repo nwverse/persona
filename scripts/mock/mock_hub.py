@@ -11385,6 +11385,82 @@ if os.environ.get("MOCK_LONG_HISTORY") == "1":
         _d["seq"] = _i + 1
     ITEMS[WIDGET] = _all
 
+# MOCK_LONG_REPORT=1: an agent chat that ends in one very long final report, the shape of a real planning session that
+# scrolled badly (#4970): about 33,000 characters in one reply (headings, lists, nine tables of 115 rows, a dozen code
+# blocks, a quote), after 120 tool calls folded into work lines, eight subagent cards and the same report handed in as a
+# plan. `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`. MOCK_LONG_REPORT=<items.json> serves that file's
+# items instead (a transcript's items as the hub parses them, kept outside the repository), cutting long tool outputs as
+# the hub's pages do.
+LONG_REPORT = "a1f3c2d4-0000-4000-8000-000000000090"
+
+
+def long_report_text():
+    """The report: about 33,000 characters over 750 lines, Chinese and English mixed like the real one."""
+    words = ("迁移方案需要先确认现有数据的边界，再决定哪些字段保留、哪些合并；The adapter keeps the old wire format readable "
+             "while the new one rolls out, so older clients keep working. 每一步都要能单独回滚，不依赖下一步。")
+    tables = [(7, 3), (20, 3), (10, 2), (9, 3), (8, 3), (35, 3), (8, 5), (7, 3), (11, 3)]
+    codes = [31, 6, 3, 7, 8, 18, 3, 1, 1, 20, 6, 56]
+    out = ["# 天气 App 数据层迁移方案", "", "> 本文是第 3 版：根据评审意见补了回滚和灰度两节，表格里的数字都来自压测。", ""]
+    for n in range(12):
+        out += ["## %d. 第 %d 部分：%s" % (n + 1, n + 1, ("背景", "现状", "目标", "约束", "方案", "接口", "存储", "同步", "灰度", "回滚", "监控", "排期")[n]), ""]
+        for k in range(3):
+            out += [words + " " + words[:10 * k], ""]
+            out += ["### %d.%d 细节 %d" % (n + 1, k + 1, k + 1), ""]
+            out += ["- **要点 %d**：%s" % (j + 1, words[:40 + j * 7]) for j in range(3)] + [""]
+            if k == 1:
+                out += ["#### 备注", "", "1. 先在测试环境跑一遍", "2. 再按 5% / 25% / 100% 放量", "3. 每一档观察 24 小时", ""]
+        if n < len(tables):
+            rows, cols = tables[n]
+            out.append("| " + " | ".join("列 %d" % (c + 1) for c in range(cols)) + " |")
+            out.append("|" + "---|" * cols)
+            out += ["| " + " | ".join(("`field_%d_%d`" % (r, c)) if c == 0 else ("第 %d 行的说明文字，" % r) * (1 + c % 2)
+                                     for c in range(cols)) + " |" for r in range(rows - 2)]
+            out.append("")
+        if n < len(codes):
+            out.append("```text")
+            out += ["%-3d %s" % (j + 1, "step_%02d -> check_%02d -> commit  # keep the old reader until every client moved" % (j, j))[:64 + j % 10]
+                    for j in range(codes[n])]
+            out += ["```", ""]
+    return "\n".join(out)
+
+
+if os.environ.get("MOCK_LONG_REPORT"):
+    _src = os.environ["MOCK_LONG_REPORT"]
+    SESSIONS.append(sess("macbook", LONG_REPORT, "数据层迁移方案", "/Users/me/code/weather", "done", "idle", "weather", 1, "plan", 6, 3,
+                         "方案写好了，共十二部分。"))
+    if _src == "1":
+        _report = long_report_text()
+        _r = [it("user", "text", 180, text="把天气 App 的数据层迁移方案整理出来，先读完现有代码再写。")]
+        _r += [it("assistant", "text", 179, text="好，我先分头读代码。")]
+        for _a in range(8):
+            _r += tool("Agent", {"description": "读第 %d 组模块" % (_a + 1), "prompt": "读 Sources/Data 下第 %d 组文件，列出公开接口。" % (_a + 1)},
+                       "第 %d 组共 12 个文件，公开接口如下：\n" % (_a + 1) + "".join("- func load%d()\n" % k for k in range(40)), 178 - _a)
+        for _g in range(15):
+            _r.append(it("assistant", "thinking", 170 - _g * 5, text="接着读第 %d 批文件，确认字段的来源。" % (_g + 1)))
+            for _f in range(8):
+                _body = "".join("%4d  let field%d = try container.decode(String.self, forKey: .field%d)\n" % (k + 1, k, k)
+                                for k in range(40 + 30 * ((_g + _f) % 5)))
+                _r += long_tool("Read", {"file_path": "/Users/me/code/weather/Sources/Data/Model%02d_%d.swift" % (_g, _f)}, _body, 170 - _g * 5)
+        _r += tool("Bash", {"command": "git log --oneline -20 -- Sources/Data"}, "".join("%07x 调整字段 %d\n" % (k * 7919, k) for k in range(20)), 95)
+        _r += tool("WebSearch", {"query": "SwiftData migration plan"}, "3 results", 94)
+        _r += tool("Write", {"file_path": "/Users/me/.claude/plans/data-migration.md", "content": _report}, "File written", 93)
+        _r += tool("ExitPlanMode", {"plan": _report}, "User approved the plan", 92)
+        _r += [it("assistant", "text", 90, text=_report)]
+        _r += [it("user", "text", 60, text="第 6 部分的表再核对一遍")]
+        _r += [it("assistant", "text", 59, text="核对过了，第 6 部分的 33 行都和压测记录一致。")]
+    else:  # a transcript's items: long tool outputs cut to the page's 4 KB, as the hub serves them
+        with open(_src, encoding="utf-8") as _f:
+            _r = json.load(_f)
+        for _x in _r:
+            _t = _x.get("text") or ""
+            if _x.get("kind") == "tool_result" and len(_t.encode()) > 4096:
+                FULL[_x["id"]] = dict(_x)
+                _x["text"] = _t.encode()[:4096].decode(errors="ignore") + "\n…"
+                _x["full_size"] = len(_t.encode())
+    for _i, _d in enumerate(_r):
+        _d["seq"] = _i + 1
+    ITEMS[LONG_REPORT] = _r
+
 # MOCK_DRAWER=1: the main conversation ends with a reply whose code block is much wider than the phone, for the sidebar's
 # drag (DrawerSwipeTests: a drag on the code block scrolls it, a drag anywhere else opens the sidebar).
 if os.environ.get("MOCK_DRAWER") == "1":

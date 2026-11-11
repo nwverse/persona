@@ -1160,7 +1160,12 @@ struct LinkedMarkdown: View {
 
     private static let memo = TextMemo<MarkdownContent>(limit: 512)
 
-    var body: some View { Markdown(content) }
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("LinkedMarkdown")
+        #endif
+        Markdown(content)
+    }
 
     private var content: MarkdownContent {
         // In a chat on the iPhone and iPad a tap on inline code copies it (#2984): its spans are links the chat's
