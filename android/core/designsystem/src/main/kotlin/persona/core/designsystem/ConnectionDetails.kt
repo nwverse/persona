@@ -1,6 +1,5 @@
 package persona.core.designsystem
 
-import android.text.format.DateUtils
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,6 +7,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -34,8 +38,9 @@ import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.DeliveryState
 import persona.core.contracts.api.OutboxMessage
 import persona.core.designsystem.icons.PhIcons
-import java.text.DateFormat
 import java.time.Instant
+import java.time.ZoneId
+import java.util.Locale
 
 /**
  * What the connection details read besides the state the page already has (docs/android/android.md "Connection details"): the
@@ -169,9 +174,13 @@ private fun ago(at: Instant, now: Instant): String {
     return when {
         seconds < 60 -> pluralStringResource(R.plurals.designsystem_connection_seconds_ago, seconds, seconds)
         seconds < 3600 -> pluralStringResource(R.plurals.designsystem_connection_minutes_ago, seconds / 60, seconds / 60)
-        else -> DateUtils.formatSameDayTime(at.toEpochMilli(), now.toEpochMilli(), DateFormat.SHORT, DateFormat.SHORT).toString()
+        else -> clockOrDate(at, now, currentLocale)
     }
 }
+
+/** The time of day of [at] if it is [now]'s day in [zone], else its date; in the app's language, not the system's (#4103). */
+internal fun clockOrDate(at: Instant, now: Instant, locale: Locale, zone: ZoneId = ZoneId.systemDefault()): String =
+    LocalizedFormats.format(at, if (at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()) LocalizedFormats.TIME else LocalizedFormats.DATE, locale, zone)
 
 @get:StringRes
 private val ConnectionState.detailsTitle: Int
@@ -196,3 +205,24 @@ private val ConnectionState.explanation: Int
         ConnectionState.CertificateMismatch -> R.string.designsystem_connection_certificate_text
         ConnectionState.Revoked -> R.string.designsystem_connection_revoked_text
     }
+
+/**
+ * The hub's link while it isn't up, floating under the home bar where no page title says it (iOS `ShellLinkPill`,
+ * docs/apple/shell.md "Connection status and toasts"): a spinner while it retries, a caution mark when only the user
+ * can fix it, and the state's words. It takes no touches, so what lies under it stays tappable; TalkBack hears it change.
+ */
+@Composable
+fun JLinkPill(state: ConnectionState, modifier: Modifier = Modifier) {
+    val palette = PersonaTheme.palette
+    Row(
+        modifier.floatingSurface(androidx.compose.foundation.shape.CircleShape).heightIn(min = Tokens.Size.icon)
+            .padding(horizontal = Tokens.Space.m)
+            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs + Tokens.Space.xxs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (state.retryable) JSpinner(Modifier.size(Tokens.Space.m), stroke = Tokens.Space.xxs)
+        else JIcon(persona.core.designsystem.icons.PersonaIcons.errorFilled, null, size = Tokens.Space.l, tint = palette.cautionText, decorative = true)
+        Text(stringResource(state.detailsTitle), style = PersonaTheme.type.labelSmall, color = palette.ink2, maxLines = 1)
+    }
+}

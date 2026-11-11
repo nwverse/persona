@@ -437,4 +437,7 @@ const (
 	CodeMachineOffline = "machine_offline" // its node is not connected
 	CodeNodeClosed     = "node_closed"     // the connection to its node dropped during the call
 	CodeDeadline       = "deadline"        // the call's time ran out with the node on it (it may have done it)
+	// CodeHandoffRefused: secret.stage, or a session.start with a secret_ticket, asked by the hub or another manager:
+	// only the manager that connects the computer makes a hand-off, after its own card (docs/extensions/secret-providers.md).
+	CodeHandoffRefused = "handoff_refused"
 )

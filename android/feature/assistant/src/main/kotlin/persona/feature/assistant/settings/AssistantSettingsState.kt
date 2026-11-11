@@ -263,6 +263,18 @@ internal class AssistantSettingsState(
         if (!ok) set { copy(config = this.config?.copy(mainTasksQuiet = !on)) }
     }
 
+    /** "Fold background rounds" (#4314): moves at once; a failure puts it back and says so. */
+    suspend fun setMainBackgroundFolded(on: Boolean) {
+        val config = state.value.config ?: return
+        if (config.mainBackgroundFolded == null || config.mainBackgroundFolded == on) return
+        set { copy(config = config.copy(mainBackgroundFolded = on)) }
+        val ok = perform(SettingsText(R.string.assistant_settings_save_failed)) {
+            val updated = api.updateConfig(AssistantConfigUpdate(mainBackgroundFolded = on))
+            set { copy(config = updated) }
+        }
+        if (!ok) set { copy(config = this.config?.copy(mainBackgroundFolded = !on)) }
+    }
+
     suspend fun saveNotes(text: String): Boolean = perform(SettingsText(R.string.assistant_settings_save_failed)) {
         val updated = api.updateConfig(AssistantConfigUpdate(notes = text))
         set { copy(config = updated) }

@@ -273,6 +273,15 @@ enum ExtensionMarketText {
         return c.url!
     }()
 
+    /// Under a market's delete confirmation: what removing it does to the extensions installed from it.
+    static func removalReason(_ count: Int?) -> String {
+        guard let count else {
+            return String(localized: "The hub stops reading this market. Extensions installed from it stay, but stop upgrading until the market is added again with the same address.")
+        }
+        if count == 0 { return String(localized: "The hub stops reading this market. No installed extension came from it.") }
+        return String(localized: "The hub stops reading this market. \(count) extensions installed from it stay, but stop upgrading until the market is added again with the same address.")
+    }
+
     /// A market's line: how many plugins, when it was read.
     static func marketSummary(_ m: ExtensionMarket) -> String {
         var parts = [String(localized: "\(m.plugins ?? 0) extensions")]
@@ -288,7 +297,11 @@ enum ExtensionMarketText {
         var api: () -> APIClient?
         /// The app's own (its installs go through `ExtensionOperations.shared`); a test's has a store of its own.
         var live = false
-        static var live: Deps { .init(api: { AppModel.shared.api }, live: true) }
+        /// The current roster resolves the default manager; without it, explicit ownership stamps are not guessed.
+        var roster: () -> ManagerRoster? = { nil }
+        static var live: Deps {
+            .init(api: { AppModel.shared.api }, live: true, roster: { AppModel.shared.managerRoster })
+        }
     }
 
     private(set) var items: [ExtensionCatalogItem]?
@@ -302,6 +315,10 @@ enum ExtensionMarketText {
     var market: String?
     /// A market being refreshed or removed (its spinner), by id.
     private(set) var busyMarket: String?
+    /// The removal confirmation's market and affected count (nil count: still reading, unavailable, or an older hub).
+    private(set) var removalMarket: String?
+    private(set) var removalCount: Int?
+    @ObservationIgnored private var removalRequest = 0
     /// Whether plugins from the markets upgrade themselves (nil: a hub without auto-upgrade, or not read yet).
     private(set) var autoUpgrade: Bool?
     @ObservationIgnored private let deps: Deps
@@ -368,9 +385,47 @@ enum ExtensionMarketText {
         }
     }
 
+    /// Reads the default manager's installed extensions for the confirmation. A failed or ambiguous read stays unknown.
+    /// False when a newer market's preparation superseded this one, so its stale confirmation does not open.
+    @discardableResult
+    func prepareRemoval(of id: String) async -> Bool {
+        removalRequest += 1
+        let request = removalRequest
+        removalMarket = id
+        removalCount = nil
+        let count: Int?
+        do {
+            let listed = try await api().plugins()
+            let own: [HubExtension]?
+            if let roster = deps.roster() {
+                own = listed.filter { roster.owner($0.manager) == roster.defaultID }
+            } else {
+                // An explicit manager stamp needs the roster: the built-in assistant is not necessarily the default.
+                let ownershipUnknown = listed.contains {
+                    $0.manager != nil && ($0.market == id || ($0.autoUpgrade != nil && $0.market == nil))
+                }
+                own = ownershipUnknown ? nil : listed.filter { $0.manager == nil }
+            }
+            if let own {
+                // A hub from before `market` can report auto_upgrade without saying which market it came from.
+                count = own.contains(where: { $0.autoUpgrade != nil && $0.market == nil }) ? nil : own.filter { $0.market == id }.count
+            } else {
+                count = nil
+            }
+        } catch {
+            count = nil
+        }
+        guard request == removalRequest else { return false }
+        removalCount = count
+        return true
+    }
+
     func removeMarket(_ id: String) async {
         await busy(id) {
             try await $0.deleteExtensionMarket(id)
+            self.removalRequest += 1
+            self.removalMarket = nil
+            self.removalCount = nil
             self.markets.removeAll { $0.id == id }
             if self.market == id { self.market = nil }
         }
@@ -428,6 +483,14 @@ enum ExtensionMarketText {
     /// The install / upgrade / removal request is out and the hub has not said yet what it is doing.
     private(set) var starting = false
     private(set) var isPack = false
+    /// An installed pack's members (its detail's `extension_pack`), for the uninstall confirmation to name.
+    private(set) var members: [ExtensionPackMember] = []
+    /// The installed extensions' names by id, read only for a pack (#4072, #4122): its members are named by them, a member
+    /// not installed keeps its id. Names read earlier are kept, so members a partial uninstall removed keep theirs.
+    private(set) var memberNames: [String: String] = [:]
+    /// The last uninstall with members stopped part way (#4072): what went, what didn't and why, what wasn't tried.
+    /// Its failed operation's card says so; Retry uninstalls again with the same choice.
+    private(set) var partialRemoval: ExtensionPartialRemoval?
     private(set) var removingMembers = false
     private(set) var removalMessage = String(localized: "Uninstalled")
     /// The last uninstall went through with cleanup warnings: shown until its OK (acknowledgeRemoval), not as a toast.
@@ -470,9 +533,12 @@ enum ExtensionMarketText {
             item = it
             if it.installed != nil, let detail = try? await api().plugin(pluginID) {
                 isPack = detail.plugin.kind == "extension_pack"
+                members = detail.extensionPack ?? []
             } else {
                 isPack = false
+                members = []
             }
+            if !members.isEmpty { await nameMembers() }
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -481,6 +547,34 @@ enum ExtensionMarketText {
 
     /// What the hub has going on (this page opening: an install started earlier shows its steps).
     func loadOperations() async { await operations.reload() }
+
+    /// Reads the installed extensions' names for a pack's members; names read earlier stay (a member uninstalled since
+    /// is still named). A list that can't be read leaves the ids.
+    private func nameMembers() async {
+        guard let list = try? await api().plugins() else { return }
+        memberNames.merge(ExtensionPackMemberLine.names(list)) { _, new in new }
+    }
+
+    /// A pack preview's members named before its sheet opens, so the rows don't change under the user.
+    private func nameMembers(of preview: ExtensionPreview) async {
+        if preview.manifest.extensionPack?.isEmpty == false { await nameMembers() }
+    }
+
+    /// The uninstall confirmation's message: for a pack, its members by name and what each choice does with them.
+    var uninstallMessage: String {
+        guard isPack else { return String(localized: "Its settings and data are deleted too. You can install it again from the market later.") }
+        guard !members.isEmpty else {
+            return String(localized: "Uninstalling only the pack keeps its members. Uninstalling with members deletes their settings and data.")
+        }
+        let names = ExtensionText.list(members.map { memberNames[$0.id] ?? $0.id })
+        return String(localized: "Members: \(names). Uninstalling only the pack keeps them. Uninstalling with members deletes their settings and data.")
+    }
+
+    /// The partial uninstall's lines for its failed operation's card (nil: none, or another operation).
+    func partialLines(for op: ExtensionOperation) -> [String]? {
+        guard op.kind == .uninstall, op.state == .failed, let partialRemoval else { return nil }
+        return partialRemoval.lines(pack: item?.name ?? pluginID, names: memberNames)
+    }
 
     /// Asks for the preview, for the permissions to agree to (the sheet opens with `preview`). A hub with operations
     /// downloads and checks in the background, the steps on this page, and the sheet opens when it waits for consent.
@@ -493,7 +587,9 @@ enum ExtensionMarketText {
                 let op = try await operations.preview(market: market, extension: pluginID)
                 if op.state == .needsConsent { try await review(op) }
             } else {
-                preview = try await api().previewCatalogExtension(market: market, plugin: pluginID)
+                let pv = try await api().previewCatalogExtension(market: market, plugin: pluginID)
+                await nameMembers(of: pv)
+                preview = pv
             }
             error = nil
         } catch {
@@ -504,6 +600,7 @@ enum ExtensionMarketText {
     /// Opens the preview an operation waits on (Review Permissions on its card, or the page opened again).
     func review(_ op: ExtensionOperation) async throws {
         guard op.state == .needsConsent, let pv = try await operations.consentPreview(op.id) else { return }
+        await nameMembers(of: pv)
         consentOf = op.id
         preview = pv
     }
@@ -566,6 +663,7 @@ enum ExtensionMarketText {
         guard canUninstall, !working else { return false }
         removingMembers = members
         lastRemoval = (cascade, members)
+        partialRemoval = nil
         starting = true
         defer { starting = false }
         do {
@@ -588,6 +686,7 @@ enum ExtensionMarketText {
             // The operation's card says where it stopped when there is one (its event can come after the answer:
             // read the hub's list first); else the error under the title.
             if operations.stepped, operation?.state != .failed { await operations.reload() }
+            partialRemoval = ExtensionPartialRemoval(error: error)
             self.error = operation?.state == .failed ? nil : error.localizedDescription
             return false
         }
@@ -597,7 +696,9 @@ enum ExtensionMarketText {
     /// already agreed to are not asked again); otherwise the same thing again from this page. true: done.
     func retry() async -> Bool {
         guard let op = operation, op.state == .failed else { return false }
-        if op.retryable, !op.isLocal, operations.stepped {
+        // A partial uninstall is tried again from here: only the synchronous answer lists the members again (#4072).
+        let fromHere = op.kind == .uninstall && partialRemoval != nil
+        if op.retryable, !op.isLocal, operations.stepped, !fromHere {
             starting = true
             defer { starting = false }
             do {
@@ -632,6 +733,7 @@ enum ExtensionMarketText {
     func dismissOperation() async {
         guard let op = operation else { return }
         if op.id == consentOf { consentOf = nil }
+        if op.kind == .uninstall { partialRemoval = nil }
         await operations.dismiss(op.id)
     }
 

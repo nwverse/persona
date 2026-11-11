@@ -278,10 +278,23 @@ Picture in Picture (`AVSampleBufferDisplayLayer`) needs access to each frame, wh
 - **Frames** (`RFBFramebuffer`):
   - Requests 32-bit, depth 24, little-endian pixels with red at bit 16; BGRA in memory, directly usable as `CVPixelBuffer` 32BGRA.
   - Encoding preference: ZRLE (16), CopyRect (1), Raw (0), plus DesktopSize, ExtendedDesktopSize, Cursor and LastRect pseudo-encodings.
-  - One zlib stream for ZRLE over the whole connection, using Compression raw DEFLATE after skipping the two-byte zlib header.
-  - All five ZRLE tile types: raw, solid, packed palette, plain RLE, palette RLE.
+  - What macOS's Screen Sharing really does (macOS 26.6, `vncbench probe`, #3067): of the standard encodings only ZRLE,
+    Zlib and Raw (ZRLE whatever the order asked; no Tight, JPEG, Hextile or H.264), and none of the pseudo-encodings:
+    no Cursor (it draws the pointer into the framebuffer), no ContinuousUpdates or Fence, no ExtendedDesktopSize. It
+    takes a 16-bit pixel format (ZRLE then sends about 43% of the bytes, no longer lossless). Its own encodings are
+    1000 (1-bit), 1001 (4-bit grey), 1002 (16-bit colour through zlib, larger than ZRLE at 16 bits) and 1011, a
+    DCT codec of its own (a tenth of ZRLE's bytes) whose entropy coding is undocumented; 1101, 1107, 1109 and 1110 carry
+    the display layout, formats, the keyboard layout and the model. Asked for 100 or more encodings at once it answers
+    nothing. So lossless ZRLE is the most a standard client gets.
+  - One zlib stream for ZRLE over the whole connection, using Compression raw DEFLATE after skipping the two-byte zlib header (`RFBInflater`).
+  - All five ZRLE tile types: raw, solid, packed palette, plain RLE, palette RLE, written into the framebuffer a row at a time (#3067).
+  - The next incremental FramebufferUpdateRequest goes out once an update is in (stop-and-wait). Asking earlier was measured and left out (#3067, `vncbench run -mode early|gated|pipeline`, over a 25 ms each way, 30 Mbit/s link): asked for as each update starts, macOS's server goes quiet for up to two seconds whenever the request reaches it while it is still writing a big update (video at 1.8 frames a second instead of 5.3); asked for early only when the update is one rectangle of at most 64 KB, typing came back later (p50 374 ms against 215, slower in all 5 interleaved pairs at a load of 25–80); two requests in flight were slower still on loopback.
+  - Requests always cover the whole framebuffer, also when zoomed in or showing one display of several (#3067): macOS's Screen Sharing leaves most incremental requests for less unanswered while that part changes (`vncbench trace -trace-area`: the bench page's part, a full-width band not starting at the top, or anything 1850 of 1920 pixels wide got no updates for 5 s while video played inside it, nor the page's own redraws; only near-whole requests from the top worked), so asking for the part shown would freeze a zoomed-in picture.
+- **Showing frames** (`RFBFrameSink`, #3067): at most 60 a second, into IOSurface-backed pixel buffers from a pool. Each buffer the pool has handed out keeps the region that changed since it was last filled (by its IOSurface id; the client's damage comes with the framebuffer, `RFBClient.withDamage`), and a frame copies only that region: a new buffer, or one the pool let go and handed out again, is filled whole. The page's fps / latency numbers are reported at most four times a second, so the page doesn't redraw for every frame.
 - **Sending back**: pointer (button bits: left, middle, right, wheel up/down), keys (keysym), clipboard (ClientCutText; RFB only carries Latin-1, other characters go through the node, see "Clipboard" below).
-  - All use one outgoing queue (`AsyncStream`), sent in order by one task after the handshake. Previously a `Task` per message could reorder press/release or move/click on the Mac. Messages before the handshake wait and can't interrupt it.
+  - All use one outgoing queue (`RFBOutbox`), sent in order by one task after the handshake. Previously a `Task` per message could reorder press/release or move/click on the Mac. Messages before the handshake wait and can't interrupt it.
+  - A pointer event that only moves (the same buttons as the event before it) replaces one still waiting that only moved: when the way to the Mac stalls, the pointer goes to where the finger is instead of replaying the path. Presses, releases (where they were made) and wheel notches are never folded (#3067).
+  - The queue's wait ends when its task is cancelled: the client's task group waits for both of its tasks when the reader ends.
 - **Tests**:
   - `RFBClientTests`:
     - large numbers checked against Python;
@@ -290,7 +303,27 @@ Picture in Picture (`AVSampleBufferDisplayLayer`) needs access to each frame, wh
     - complete scripted session, outgoing bytes checked byte for byte;
     - ARD handshake and rejected login;
     - pointer, key and clipboard bytes and order (pre-handshake messages after handshake; 120 messages in original order).
+  - `RFBFrameTests` (#3067): region merging, the outbox folding motion but not presses, releases or notches and ending on cancel, the frame sink copying only what changed with every pixel matching the framebuffer, and the next request going out only after an update's data.
   - Mock `MOCK_SCREEN=fake` now offers ARD first like macOS (DH in Python, AES with openssl), then ZRLE or Raw as the client requests. It records pointer, clicks, wheel and clipboard (read at `/mock/screen-password`; `?clip=…` sends clipboard to the client). `MOCK_SCREEN_ANIMATE=1` moves a square at about 30 frames per second to measure frame rate.
+
+### Measuring (#3067)
+
+`server/cmd/vncbench` measures a VNC server the way the app uses it, from the computer the server runs on (straight to
+`127.0.0.1:5900`) or through a hub's relay (`-hub <hub address> -machine <id>`, a device token in `VNCBENCH_TOKEN`).
+It signs in with the login keychain's generic password `persona-vnc-bench` (added once with
+`security add-generic-password -s persona-vnc-bench -a "$(id -un)" -w`) or `VNCBENCH_ACCOUNT` / `VNCBENCH_PASSWORD`, never printing it.
+
+- `probe`: which image encodings, pseudo-encodings and pixel formats the server answers with, Apple's private range
+  included, and Tight's bytes and SSIM / PSNR at each quality level against lossless ZRLE.
+- `run -scenes idle,type,scroll,drag,video -config <encodings> -mode stopwait|gated|early|pipeline|continuous`: a bench page of
+  its own shown in a browser on that Mac; per scene the Mbit/s, updates a second, input-to-pixels latency (the page's
+  marker changing colour, split into getting the input and drawing it back), and the picture's SSIM / PSNR against a
+  second, lossless connection of the same moment. `-delay` and `-rate` add a phone link's latency and bandwidth.
+- `record`: what the server sends, for replaying through the app's own client (decode CPU, bytes copied).
+- `trace -scene <scene> -rec-mode <mode> [-trace-area x,y,w,h|page|stage]`: each request and each update's start, end,
+  size and painted box in order, to see how the server answers a way of asking (or a part of the screen).
+- `relay`: an echo server of its own behind the hub's port relay: small-message round trips and throughput, hop by hop
+  when run on the hub and on the node in turn.
 
 ### Displays (#80)
 
@@ -481,8 +514,22 @@ Flags used:
   - Any step without an app, a `launch_app` step naming no app, computed app names in a script (`getApp` or `launch`), or a script naming no app makes identification incomplete: ask every time for the whole call, without Always Allow.
     A `getApp` / `launch` occurrence the literal reader cannot parse counts the same way: space or a comment before the call's parentheses (`getApp ("Terminal")`), a computed callee (`cua["getApp"]`, a saved function), or an argument that is not a plain string. The completeness check compares every occurrence of the callee's name with the parsed literal calls, so an unreadable one cannot be missed.
 - **Always ask, never offer Always Allow**: terminals (Terminal, iTerm2, Warp, Ghostty, etc.), System Settings, Keychain Access, password managers (Passwords, 1Password, Bitwarden, etc.), Persona, identified by bundle id or name (Chinese/English).
+- **Never operated** (#4336, `computer_protected.go`): System Settings and the system's permission and authorization prompts (`com.apple.UserNotificationCenter`, `com.apple.SecurityAgent`, `com.apple.LocalAuthentication.UIAgent`, and older systems' Accessibility alert). macOS's privacy permissions are meant to be answered by a person; one Allow on a card that said "operate System Settings" would otherwise let an Agent turn any of them on. Reading them (`computer_state`) is still asked about every time; acting is refused before any card, whatever App approval or Confirm on Phone say:
+  - a `computer_run` that names one (a step's or the call's `app`, a `launch_app`, a literal `cua.getApp` / `cua.launch`), by bundle id or by name in English, Chinese or Japanese, names resolved through Cua `list_apps` first;
+  - a script whose apps can't all be read (they were asked about every time before): it could open one under a computed name. The model is told to name them literally;
+  - on Cua Driver, any `computer_run` while one has a window on the screen (`list_windows`, each window's pid matched to its bundle id through `list_apps`, so System Settings counts in any language; the prompts by their process names): an element token, a pid or a step naming no app could still reach it. When the windows can't be read, nothing is done;
+  - steps naming no app (they act on whatever has the focus) run one `run_steps` call at a time, the screen checked before each, so a prompt that an earlier step brought up stops the rest. The answer lists each step's own answer (`one_by_one`);
+  - LCU: a native-app question about one of them is declined without a card (`lcuconfirm.NativeApp`). App-less steps already fail there.
+  The model is told the user does it themselves, on the Mac or through the live screen, and not to retry; the hub log says `refused: protected app <id>` and nothing else of the call.
+  - **The Agents' own Cua Driver** (#4349, `server/internal/node/cua_gate.go`): in the sessions Persona starts on a Mac, a PreToolUse hook on Cua Driver's MCP tools (`mcp__<server>__<tool>`, any server name with "cua" in it) and on Bash commands that run `cua-driver call` applies the same rules on the computer, at once, with no card. The rules and their wording live in `server/internal/protectedapps`, shared with the manager. Reads pass without a look. A call is denied when it names a protected app, aims at one's pid, or acts while one has a window on the screen. A script whose apps can't be read is denied, and so is a `cua-driver call` whose arguments aren't in the command, or one the gate can't follow (a heredoc, a subshell). `cua-driver` counts only where it is the program run (after variable assignments, `env` / `sudo` and the like, or inside `sh -c`), so a `grep` or a commit message that mentions it is no call.
+  - **Not covered**:
+    - what a script does with a window it finds once it is running;
+    - the sessions the user starts themselves (Persona's global hooks only report, `docs/integrations/claude-integration.md` "Global report-only hooks");
+    - Codex Agents' own MCP tools;
+    - any other program a shell can use to drive the screen.
+    Cua Driver 0.38 can't close these itself: its hard invariants protect only its own consent UI, its policy file sees tool names and arguments only, and its capability manifest is an allowlist of apps. macOS's own protections are the backstop there.
 - **With Confirm on Phone Before Acting**: if this call already asked because of an App, don't ask twice; otherwise with confirmation enabled, ask each time as before.
-- **Agent's own Cua MCP** (`mcp__cua-driver__*`): bypasses the hub and still uses the Agent's tool approvals. Integrate allowed Apps later.
+- **Agent's own Cua MCP** (`mcp__cua-driver__*`): bypasses the hub and still uses the Agent's tool approvals, except the never-operated Apps above, which its PreToolUse hook denies (#4349). Integrate allowed Apps later.
 
 ### d) Small settings
 

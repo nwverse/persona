@@ -9,19 +9,25 @@ import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./stor
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
+import type { TaskBrief } from "./brief";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
-import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
+import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
 import { closePanel, getPanel } from "./panel";
 import type { ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
+
+export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
+export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
 
 export interface PlanTask {
   title: string;
   prompt: string;
   machine: string;
   cwd: string;
+  workspace?: TaskWorkspace;
+  workspace_resolved?: TaskWorkspaceResolved;
   launcher?: string;
   model?: string;
   /** An Agent preset (#2225): a tier of the model profile in use, resolved when the task starts. */
@@ -36,6 +42,9 @@ export interface PlanTask {
   /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
   error_code?: string;
   error_args?: Record<string, string>;
+  /** The brief the task will be held to (#3822, lib/brief.ts): the card shows it, and "Start" confirms it. Absent from
+   *  a hub before briefs and on a plan made before them. */
+  brief?: TaskBrief;
 }
 
 export interface TaskPlan {
@@ -458,7 +467,8 @@ async function readFeedPages(conversation: string) {
   const owner = conversationManager(conversation)
     ?? Object.values(getState().sessions).flat().find((s) => s.session_id === conversation)?.manager
     ?? managerHeaderFor(endpoint);
-  const headers = owner ? { [MANAGER_HEADER]: owner } : undefined;
+  // the default's conversation names none (itemHeaders): one manager gets the requests it always did
+  const headers = itemHeaders(owner);
   for (let n = 0; n < FEED_PAGES; n++) {
     const readingAt = feedRevision;
     const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
@@ -516,7 +526,7 @@ onHubEvent("task_plan", (m) => {
 // ── actions ──
 
 /** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
-export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
+export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt" | "workspace"> & { ultracode: boolean };
 
 export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] as const;
 
@@ -531,12 +541,13 @@ export function planEditsOf(plan: TaskPlan, ultracode?: readonly boolean[]): Pla
     permission: t.permission || "default",
     prompt: t.prompt,
     ultracode: ultracode?.[i] ?? t.ultracode === true,
+    ...(t.workspace !== undefined ? { workspace: t.workspace } : {}),
   }));
 }
 
 /** Whether "Edit" changed anything since it opened with `before` (closing it then asks before throwing the changes away). */
 export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]): boolean {
-  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
+  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => JSON.stringify(e[k] ?? "") !== JSON.stringify(before[i]?.[k] ?? "")));
 }
 
 /** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it
@@ -575,7 +586,7 @@ export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[
  * The header naming the manager of conversation, for what its feed offers (a plan, a briefing's question): the routes
  * name no conversation, so the hub would take them to the default manager (docs/protocol/protocol.md "Per-manager
  * routing"), whichever assistant the conversation is (another made current, or another's conversation opened here).
- * The manager a page noted for it, else the one the hub's sessions list has it under; none for the default's.
+ * The manager a page noted for it, else the one the hub's sessions list has it under, else the one its address named; none for the default's.
  */
 export function conversationHeaders(conversation: string): Record<string, string> | undefined {
   const noted = conversationManager(conversation);
@@ -584,7 +595,8 @@ export function conversationHeaders(conversation: string): Record<string, string
     const s = list.find((x) => x.session_id === conversation);
     if (s) return itemHeaders(s.manager);
   }
-  return undefined;
+  const routed = routedConversationManager(conversation);
+  return routed ? itemHeaders(routed) : undefined;
 }
 
 export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
@@ -849,11 +861,23 @@ export function quickResult(use: Item, result?: Item): QuickResult | undefined {
   }
 }
 
+/** When the oldest loaded transcript item happened (displayLines `from`); undefined when none says. */
+export function loadedFrom(items: Item[]): number | undefined {
+  for (const it of items) {
+    const at = Date.parse(it.ts ?? "");
+    if (!Number.isNaN(at)) return at;
+  }
+  return undefined;
+}
+
 /** The chat's lines with the feed among them (each item at the end of the exchange it happened in), each exchange's
- *  quick results after it, and a day line over the first line of each day. */
-export function displayLines(lines: ChatLine[], all: FeedItem[]): DisplayLine[] {
+ *  quick results after it, and a day line over the first line of each day. `from`: while older transcript pages are
+ *  not loaded yet, the time of the oldest loaded item. The feed always holds the whole history, so its older items would
+ *  stack on top of the newest page, with their day lines, and read as the conversation's start with its messages gone;
+ *  they wait for the page that covers them. */
+export function displayLines(lines: ChatLine[], all: FeedItem[], from?: number): DisplayLine[] {
   // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
-  const feed = shownFeed(all);
+  const feed = shownFeed(all).filter((it) => from === undefined || !(Date.parse(it.at) < from));
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {

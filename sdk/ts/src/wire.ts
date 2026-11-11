@@ -54,6 +54,19 @@ export interface Manifest {
    */
   tools?: ToolSpec[];
   auth?: AuthSpec;
+  /**
+   * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+   * executable; writes and arbitrary command lines are not part of this contract.
+   */
+  host_integrations?: HostIntegrationSpec[];
+}
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+export interface HostIntegrationSpec {
+  id: string;
+  version: string;
 }
 
 /**
@@ -319,6 +332,7 @@ export interface Contributes {
   tunnels?: TunnelItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
+  secret_providers?: SecretProviderItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -491,6 +505,19 @@ export interface AuthRelayItem {
   hosts: string[];
   /** The pages' exact paths (a trailing / is ignored). */
   paths: string[];
+}
+
+/**
+ * Secret values it supplies for references of its schemes (op://vault/item/field): the manager calls secrets.describe
+ * and secrets.resolve when a setting holds such a reference or the user approves handing one to an Agent run. Needs
+ * the program to speak the protocol. A scheme another installed extension claims fails the install.
+ */
+export interface SecretProviderItem {
+  id: string;
+  /** Whose secrets these are, in a few words (1Password): the settings say From <name>. */
+  name: string;
+  /** The reference schemes it resolves, without :// (op). */
+  schemes: string[];
 }
 
 /**
@@ -1256,6 +1283,64 @@ export interface AuthRelayResult {
   /** The app the page authorized (or asked to), as the page names it. */
   app?: string;
   reason?: AuthRelayReason;
+}
+
+/**
+ * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
+ * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
+ * user approved it on the phone, id the variable's name, machine and session the Agent's).
+ */
+export interface SecretPurpose {
+  kind: string;
+  id: string;
+  machine?: string;
+  session?: string;
+}
+
+/**
+ * secrets.describe's parameters: a reference of one of the contribution's schemes.
+ */
+export interface SecretsDescribeParams {
+  contribution: string;
+  reference: string;
+}
+
+/**
+ * What secrets.describe answers: words for people (the item and field), never a value.
+ */
+export interface SecretsDescribeResult {
+  title: string;
+  detail?: string;
+}
+
+/**
+ * secrets.resolve's parameters: the reference and what it is resolved for. Only the manager calls it.
+ */
+export interface SecretsResolveParams {
+  contribution: string;
+  reference: string;
+  purpose: SecretPurpose;
+}
+
+/**
+ * What secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in, rate_limited
+ * (data.retry_after), refused.
+ */
+export interface SecretsResolveResult {
+  value: string;
+}
+
+/**
+ * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
+ * page shows. Never the value.
+ */
+export interface SecretsUsedEvent {
+  contribution: string;
+  reference: string;
+  purpose: SecretPurpose;
+  at: string;
+  /** settings (a reference saved in Settings), rule (an Always rule) or the approving device's id. */
+  approved_by?: string;
 }
 
 /**
@@ -4490,8 +4575,8 @@ export interface ChannelEditParams {
   text: string;
 }
 
-export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | (string & {});
-export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
+export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | "topics" | (string & {});
+export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"] as const;
 
 /**
  * error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params,
@@ -4621,7 +4706,10 @@ export interface KBDetail {
   id: string;
   /** Where it is on the manager's machine, for its own file tools. */
   path: string;
-  /** The entity's own fields (meta.json). */
+  /**
+   * The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+   * Status uses the same locked_fields and provenance as other corrected fields.
+   */
   meta: unknown;
   summary?: string;
   log?: string[];
@@ -4631,6 +4719,34 @@ export interface KBDetail {
   segments?: KBRecordingSegment[];
   /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
   minutes?: unknown;
+  /** A topic's knowledge points (docs/assistant/knowledge.md "Topics"). */
+  points?: KBTopicPoint[];
+}
+
+/**
+ * One knowledge point of a topic, under up to two levels of subtopics (path).
+ */
+export interface KBTopicPoint {
+  id: string;
+  path?: string[];
+  kind: string;
+  text: string;
+  /** A decision's reason, a pitfall's cause. */
+  why?: string;
+  sources?: KBTopicSource[];
+  /** YYYY-MM-DD: when it was last confirmed. */
+  when?: string;
+}
+
+/**
+ * An entry a knowledge point came from.
+ */
+export interface KBTopicSource {
+  /** projects or chats */
+  kind: string;
+  id: string;
+  /** YYYY-MM-DD */
+  day?: string;
 }
 
 /**
@@ -4732,6 +4848,10 @@ export interface KBUpdateParams {
   name?: string;
   /** A project's: short or long. */
   project_kind?: string;
+  /**
+   * People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+   * ignored. Omitted or empty keeps the current status; active restores a person.
+   */
   status?: string;
   goal?: string;
   my_role?: string;

@@ -2,6 +2,8 @@ package persona.core.hub
 
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -71,9 +73,11 @@ class HttpTasksApi internal constructor(
             AssistantManagerChoice.noteItem(listOf("todos", it.id), it.manager)
         }
 
-    // A new to-do is the current assistant's (the client names it on `POST todos`).
+    // A new to-do is the current assistant's (the client names it on `POST todos`), or the one the caller named for it
+    // (a RequestManager: an agent's own assistant when it is linked at once; "" the default's).
     override suspend fun createTodo(title: String, notes: String): Todo {
-        val owner = AssistantManagerChoice.current.value.manager
+        val named = kotlinx.coroutines.currentCoroutineContext()[persona.core.contracts.api.RequestManager]
+        val owner = if (named != null) named.id.ifEmpty { null } else AssistantManagerChoice.current.value.manager
         val made: Todo = JsonCodec.decodeFromJsonElement(call(path("todos"), "POST", buildJsonObject {
             put("title", title)
             put("notes", notes)
@@ -88,6 +92,9 @@ class HttpTasksApi internal constructor(
             notes?.let { put("notes", it) }
             done?.let { put("done", it) }
         })["todo"] ?: error("no todo in the answer")))
+
+    override suspend fun setTodoPlan(id: String, plan: persona.core.contracts.TodoPlan): Todo =
+        stamped(JsonCodec.decodeFromJsonElement(call(path("todos", id), "PATCH", todoPlanBody(plan))["todo"] ?: error("no todo in the answer")))
 
     override suspend fun setTodoDue(id: String, due: TodoDue): Todo =
         stamped(JsonCodec.decodeFromJsonElement(call(path("todos", id), "PATCH", buildJsonObject {
@@ -187,6 +194,20 @@ class HttpTasksApi internal constructor(
         call(path("todos", todoId, "accept"), "POST", buildJsonObject { put("asked_at", askedAt) })
     }
 
+    override suspend fun answerTask(todoId: String, askedAt: String, answer: persona.core.contracts.api.AskAnswer) {
+        call(path("todos", todoId, "accept"), "POST", buildJsonObject {
+            put("asked_at", askedAt)
+            when (answer) {
+                is persona.core.contracts.api.AskAnswer.Option -> put("option", answer.label)
+                is persona.core.contracts.api.AskAnswer.Response -> put("response", answer.code)
+            }
+        })
+    }
+
+    override suspend fun markLaterHandled(questionId: String) {
+        call(path("later", questionId, "handled"), "POST", JsonObject(emptyMap()))
+    }
+
     override suspend fun removeTask(todoId: String) {
         call(path("todos", todoId), "DELETE")
     }
@@ -253,4 +274,15 @@ class HttpTasksApi internal constructor(
 
     private fun plan(o: JsonObject): TaskPlan = JsonCodec.decodeFromJsonElement(o["plan"] ?: error("no plan in the answer"))
     private fun item(o: JsonObject): FeedItem = JsonCodec.decodeFromJsonElement(o["item"] ?: error("no item in the answer"))
+}
+
+/** The PATCH body of a to-do's plan (#4636), as iOS `TodoPlanChange` encodes it: every field sent, null clears. */
+internal fun todoPlanBody(plan: persona.core.contracts.TodoPlan) = buildJsonObject {
+    when (val due = plan.due) {
+        null -> put("due_at", JsonNull)
+        is TodoDue.At -> put("due_at", due.at.toString())
+        is TodoDue.Day -> put("due_date", due.day.toString())
+    }
+    put("remind_at", plan.remindAt?.toString()?.let(::JsonPrimitive) ?: JsonNull)
+    put("priority", plan.priority)
 }

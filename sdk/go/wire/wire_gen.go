@@ -56,6 +56,16 @@ type Manifest struct {
 	// "Command-line programs (tools)", #4507). Installing them is a permission. Hubs before them refuse the manifest.
 	Tools []ToolSpec `json:"tools,omitempty"`
 	Auth  *AuthSpec  `json:"auth,omitempty"`
+	// Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+	// executable; writes and arbitrary command lines are not part of this contract.
+	HostIntegrations []HostIntegrationSpec `json:"host_integrations,omitempty"`
+}
+
+// HostIntegrationSpec: A configured CLI integration, selected by a closed ID rather than by an extension-provided
+// executable.
+type HostIntegrationSpec struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
 }
 
 // ToolSpec: one command-line program. Exactly one of archive and npm.
@@ -275,6 +285,7 @@ type Contributes struct {
 	Tunnels         []TunnelItem         `json:"tunnels,omitempty"`
 	ErrorReports    []ErrorReportsItem   `json:"error_reports,omitempty"`
 	AuthRelay       []AuthRelayItem      `json:"auth_relay,omitempty"`
+	SecretProviders []SecretProviderItem `json:"secret_providers,omitempty"`
 	Messaging       []MessagingItem      `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -286,7 +297,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -318,7 +329,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging":
+		case "connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -518,6 +529,18 @@ type AuthRelayItem struct {
 	Hosts []string `json:"hosts"`
 	// The pages' exact paths (a trailing / is ignored).
 	Paths []string `json:"paths"`
+}
+
+// SecretProviderItem: secret values it supplies for references of its schemes (op://vault/item/field): the manager
+// calls secrets.describe and secrets.resolve when a setting holds such a reference or the user approves handing one
+// to an Agent run. Needs the program to speak the protocol. A scheme another installed extension claims fails the
+// install.
+type SecretProviderItem struct {
+	ID string `json:"id"`
+	// Whose secrets these are, in a few words (1Password): the settings say From <name>.
+	Name string `json:"name"`
+	// The reference schemes it resolves, without :// (op).
+	Schemes []string `json:"schemes"`
 }
 
 // ErrorReportsItem: it is given the error and crash reports of the hub and the user's devices
@@ -1274,6 +1297,53 @@ type AuthRelayResult struct {
 	// The app the page authorized (or asked to), as the page names it.
 	App    string `json:"app,omitempty"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// SecretPurpose: what a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a
+// launcher's or model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent
+// run after the user approved it on the phone, id the variable's name, machine and session the Agent's).
+type SecretPurpose struct {
+	Kind    string `json:"kind"`
+	ID      string `json:"id"`
+	Machine string `json:"machine,omitempty"`
+	Session string `json:"session,omitempty"`
+}
+
+// SecretsDescribeParams: secrets.describe's parameters: a reference of one of the contribution's schemes.
+type SecretsDescribeParams struct {
+	Contribution string `json:"contribution"`
+	Reference    string `json:"reference"`
+}
+
+// SecretsDescribeResult: what secrets.describe answers: words for people (the item and field), never a value.
+type SecretsDescribeResult struct {
+	Title  string `json:"title"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// SecretsResolveParams: secrets.resolve's parameters: the reference and what it is resolved for. Only the manager
+// calls it.
+type SecretsResolveParams struct {
+	Contribution string        `json:"contribution"`
+	Reference    string        `json:"reference"`
+	Purpose      SecretPurpose `json:"purpose"`
+}
+
+// SecretsResolveResult: what secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in,
+// rate_limited (data.retry_after), refused.
+type SecretsResolveResult struct {
+	Value string `json:"value"`
+}
+
+// SecretsUsedEvent: secrets.used (an event to the provider, no answer): a reference it resolved was used, for the
+// usage record its own page shows. Never the value.
+type SecretsUsedEvent struct {
+	Contribution string        `json:"contribution"`
+	Reference    string        `json:"reference"`
+	Purpose      SecretPurpose `json:"purpose"`
+	At           time.Time     `json:"at"`
+	// settings (a reference saved in Settings), rule (an Always rule) or the approving device's id.
+	ApprovedBy string `json:"approved_by,omitempty"`
 }
 
 // ExtensionNotification: extension_notification in an extension's alert push: whose it is, the page a tap opens (ui
@@ -4255,10 +4325,11 @@ const (
 	KBKindMeetings   = "meetings"
 	KBKindEvents     = "events"
 	KBKindRecordings = "recordings"
+	KBKindTopics     = "topics"
 )
 
 // KBKinds are the values of KBKind, in order.
-var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "events", "recordings"}
+var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"}
 
 // KBErrorCode: error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing):
 // invalid_params, not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict
@@ -4380,7 +4451,8 @@ type KBDetail struct {
 	ID   string `json:"id"`
 	// Where it is on the manager's machine, for its own file tools.
 	Path string `json:"path"`
-	// The entity's own fields (meta.json).
+	// The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+	// Status uses the same locked_fields and provenance as other corrected fields.
 	Meta     json.RawMessage      `json:"meta"`
 	Summary  string               `json:"summary,omitempty"`
 	Log      []string             `json:"log,omitempty"`
@@ -4390,6 +4462,30 @@ type KBDetail struct {
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
 	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
 	Minutes json.RawMessage `json:"minutes,omitempty"`
+	// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
+	Points []KBTopicPoint `json:"points,omitempty"`
+}
+
+// KBTopicPoint: one knowledge point of a topic, under up to two levels of subtopics (path).
+type KBTopicPoint struct {
+	ID   string   `json:"id"`
+	Path []string `json:"path,omitempty"`
+	Kind string   `json:"kind"`
+	Text string   `json:"text"`
+	// A decision's reason, a pitfall's cause.
+	Why     string          `json:"why,omitempty"`
+	Sources []KBTopicSource `json:"sources,omitempty"`
+	// YYYY-MM-DD: when it was last confirmed.
+	When string `json:"when,omitempty"`
+}
+
+// KBTopicSource: an entry a knowledge point came from.
+type KBTopicSource struct {
+	// projects or chats
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	// YYYY-MM-DD
+	Day string `json:"day,omitempty"`
 }
 
 // KBMomentRef: A feed post linked to a project.
@@ -4477,12 +4573,14 @@ type KBUpdateParams struct {
 	Name           string   `json:"name,omitempty"`
 	// A project's: short or long.
 	ProjectKind string `json:"project_kind,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Goal        string `json:"goal,omitempty"`
-	MyRole      string `json:"my_role,omitempty"`
-	Note        string `json:"note,omitempty"`
-	Importance  string `json:"importance,omitempty"`
-	Relevance   *int   `json:"relevance,omitempty"`
+	// People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+	// ignored. Omitted or empty keeps the current status; active restores a person.
+	Status     string `json:"status,omitempty"`
+	Goal       string `json:"goal,omitempty"`
+	MyRole     string `json:"my_role,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Importance string `json:"importance,omitempty"`
+	Relevance  *int   `json:"relevance,omitempty"`
 	// Replaces the tags; an empty list clears them, none keeps them.
 	Tags    []string `json:"tags,omitzero"`
 	Summary string   `json:"summary,omitempty"`
@@ -5650,6 +5748,7 @@ func (v requiredJSONView) MarshalJSON() ([]byte, error) {
 // newDef makes a value of each definition, for tests that read examples by definition name.
 var newDef = map[string]func() any{
 	"Manifest":                      func() any { return new(Manifest) },
+	"HostIntegrationSpec":           func() any { return new(HostIntegrationSpec) },
 	"ToolSpec":                      func() any { return new(ToolSpec) },
 	"ToolCheck":                     func() any { return new(ToolCheck) },
 	"ToolArchive":                   func() any { return new(ToolArchive) },
@@ -5684,6 +5783,7 @@ var newDef = map[string]func() any{
 	"LookItem":                      func() any { return new(LookItem) },
 	"TriageTemplateItem":            func() any { return new(TriageTemplateItem) },
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
+	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
@@ -5747,6 +5847,12 @@ var newDef = map[string]func() any{
 	"ErrorReportsDeliver":           func() any { return new(ErrorReportsDeliver) },
 	"AuthRelayCompleteParams":       func() any { return new(AuthRelayCompleteParams) },
 	"AuthRelayResult":               func() any { return new(AuthRelayResult) },
+	"SecretPurpose":                 func() any { return new(SecretPurpose) },
+	"SecretsDescribeParams":         func() any { return new(SecretsDescribeParams) },
+	"SecretsDescribeResult":         func() any { return new(SecretsDescribeResult) },
+	"SecretsResolveParams":          func() any { return new(SecretsResolveParams) },
+	"SecretsResolveResult":          func() any { return new(SecretsResolveResult) },
+	"SecretsUsedEvent":              func() any { return new(SecretsUsedEvent) },
 	"ExtensionNotification":         func() any { return new(ExtensionNotification) },
 	"View":                          func() any { return new(View) },
 	"Section":                       func() any { return new(Section) },
@@ -5982,6 +6088,8 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBTopicPoint":                  func() any { return new(KBTopicPoint) },
+	"KBTopicSource":                 func() any { return new(KBTopicSource) },
 	"KBMomentRef":                   func() any { return new(KBMomentRef) },
 	"KBRecordingSegment":            func() any { return new(KBRecordingSegment) },
 	"KBDayParams":                   func() any { return new(KBDayParams) },

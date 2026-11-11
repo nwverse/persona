@@ -7,7 +7,7 @@ subscription, a transcript download, or an alternate login credential.
 ## Deployment and transport
 
 Configure the hub's `sharing.public_origin` explicitly, for example
-`http://share.example.test:18661` or `https://share.example.test`. Both HTTP and HTTPS
+`http://share.example.test:18081` or `https://share.example.test`. Both HTTP and HTTPS
 are supported. The origin must have no userinfo, path, query, fragment, or invalid
 port and must differ from the authenticated application's configured origin.
 The same host with a different port is an independent origin. Links never use
@@ -22,6 +22,70 @@ A missing independent build fails closed and is not replaced with the app shell;
 creation is unavailable until the hub hands a configured origin to the manager.
 The public origin must actually be routed to the hub by the deployment's listeners
 or reverse proxy; configuring a URL alone does not open a listener.
+
+### Independent HTTP ingress
+
+For an unprivileged separate port without changing the hub's socket-activation
+configuration, run the standalone public-only ingress from the installed binary:
+
+```sh
+personad share-http --listen :18081 \
+  --upstream http://127.0.0.1:18080 \
+  --public-origin http://share.example.test:18081 \
+  --hub-config <private hub configuration>
+```
+
+Choose unused ports from the deployment's own configuration, not these examples.
+Set `sharing.public_origin` to the same public origin. The hub loads it at startup;
+`admin/reload` does not update sharing. When an existing automatic release process
+is in use, wait for its normal release and verify the serving configuration before
+starting the ingress. Do not restart, switch or redeploy the hub solely to open the
+sharing port without separate authorization. A URL change by itself is not proof
+that the running process has loaded it.
+
+This command starts no hub, manager, runtime or database. It accepts only an
+explicit HTTP origin with an unprivileged port and a literal-loopback HTTP upstream.
+It rejects unexpected Host, nonpublic/encoded/absolute paths, bodies, upgrades and
+non-GET methods before contacting the hub. The upstream Host is fixed to the
+sharing authority, client credentials and forwarded headers are removed, and
+upstream cookies, redirects, login challenges and compressed/oversized bodies fail
+closed. Every response has the restrictive sharing headers; request paths and
+capabilities are never logged. Only the viewer, isolated `.js`/`.css` assets and
+exact anonymous capability API are eligible.
+
+The ingress bounds accepted connections (64), simultaneous relays (16), request
+and response headers (16 KiB), upstream requests (10 seconds) and fully buffered
+responses (1 MiB). The upstream retains its own capability and token/IP limits.
+The private Unix-owned mode0600 configuration must also contain
+`sharing.ingress_key`: 32 independently random bytes encoded as 64 hexadecimal
+characters, never copied into command arguments, URLs, logs or client state.
+Configure the key and origin before the hub's normal configuration lifecycle;
+this ingress reads the existing file without starting another hub.
+
+The ingress MAC binds its actual TCP peer IP, timestamp and exact GET authority,
+path and query. Only the exact anonymous capability API arriving on literal
+loopback verifies that proof, within 30 seconds, and uses its canonical IP for the
+existing IPv4 / IPv6 /64 budget. The key grants no account, management or content
+access; the publication capability and ownership checks remain mandatory. Client
+forwarding/proof headers are removed before the ingress creates its own proof.
+No general X-Forwarded-For or proxy-protocol trust is enabled. The original direct
+public ingress still budgets its actual peer when no authenticated proof exists.
+
+Before opening its listener, the command makes one bounded anonymous probe and
+requires the hub's proof acknowledgement. A legacy, unconfigured or wrongly keyed
+upstream cannot open the sharing listener. Losing acknowledgement on an API
+response blocks subsequent anonymous relays until the separate ingress service is
+started again after verification; it never falls back to one shared loopback
+budget. The acknowledgement and proof are never returned to readers. This
+restores IP isolation, not a guarantee against distributed load; all resource and
+per-token bounds remain in force.
+
+Run it under a separate user service for persistence. Stop that service to close
+only the sharing port; it never signals or changes the upstream hub. Removing the
+sharing origin also requires the hub's normal configuration lifecycle. Use the
+same origin again for existing links: their origin cannot be reconstructed or
+retargeted from tokenless metadata. Check anonymous HTTP behavior at the configured
+origin; local browser checks do not prove external-network reachability.
 
 HTTP preview responses include `requires_insecure_transport_ack:true` and a
 localized `transport_warning`: the bearer link and selected content cross the

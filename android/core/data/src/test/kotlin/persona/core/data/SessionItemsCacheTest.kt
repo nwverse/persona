@@ -83,6 +83,43 @@ class SessionItemsCacheTest {
         assertEquals(true to null, ledger.needsScan(a, 1, Long.MAX_VALUE) to ledger.total)
     }
 
+    /** Opening and closing a chat scan the whole cache only when that can evict something (#4045). */
+    @Test fun opensAndClosesScanOnlyWhileTheTotalIsUnknownOrOverBudget() = runBlocking {
+        val chat = listOf(Item("1#0", 1, role = "user", kind = "text", text = "q".repeat(400)),
+            Item("2#0", 2, role = "assistant", kind = "text", text = "a".repeat(400)))
+        val bytes = chat.sumOf { JsonCodec.encodeToString(it).toByteArray().size }.toLong()
+        val cache = SessionItemsCache(database, scope, budget = bytes * 5 / 2)
+        val (a, b, c) = listOf("a", "b", "c").map { SessionKey("m", it) }
+        suspend fun cached() = database.items().sizes(scope.path).map { it.session }.sorted()
+
+        // A new cache does not know its total: the first open scans and learns it.
+        cache.retain(a)
+        cache.load(a)
+        assertEquals(1, cache.scans)
+        // All three on screen and over budget together: the save that goes over scans, and can evict nothing.
+        cache.retain(b)
+        cache.retain(c)
+        listOf(a, b, c).forEach { cache.save(it, chat) }
+        assertEquals(2, cache.scans)
+        assertEquals(listOf("a", "b", "c"), cached())
+        // Still over budget: an open scans, and closing c lets it go.
+        cache.load(a)
+        assertEquals(3, cache.scans)
+        cache.release(c)
+        assertEquals(4, cache.scans)
+        assertEquals(listOf("a", "b"), cached())
+        // Within budget again: opening and closing chats read no other session's rows.
+        repeat(5) {
+            for (session in listOf(a, b, c)) {
+                cache.retain(session)
+                cache.load(session)
+                cache.release(session)
+            }
+        }
+        assertEquals(4, cache.scans)
+        assertEquals(bytes * 2, cache.ledgerTotal)
+    }
+
     @Test fun overBudgetSavesEvictTheOldestUnpinnedSessionsAsTheFullScanDid() = runBlocking {
         val chat = listOf(Item("1#0", 1, role = "user", kind = "text", text = "q".repeat(400)),
             Item("2#0", 2, role = "assistant", kind = "text", text = "a".repeat(400)))
@@ -160,5 +197,38 @@ class SessionItemsCacheTest {
                 assertEquals("$step rows written", writes, written)
             }
         } finally { reference.close() }
+    }
+
+    /** #2528: a refusal notice is kept with the refusal's words as its text, never an older hub's whole line. */
+    @Test fun aRefusalNoticeKeepsOnlyItsWords() = runBlocking {
+        val cache = SessionItemsCache(database, scope)
+        val session = SessionKey("computer", "refused")
+        val line = """{"type":"system","subtype":"model_refusal_fallback","content":"no","secret":"x"}"""
+        fun notice(id: String, seq: Int, r: persona.core.contracts.ModelRefusal) =
+            Item(id, seq, role = "system", kind = "notice", text = line, modelRefusal = r)
+        cache.save(session, listOf(
+            Item("u1", 1, role = "user", kind = "text", text = "go"),
+            notice("words", 2, persona.core.contracts.ModelRefusal("model_refusal_fallback", "a", "b", text = "no")),
+            notice("explained", 3, persona.core.contracts.ModelRefusal("model_refusal_fallback", explanation = "declined")),
+        ))
+        assertEquals(listOf("go", "no", "declined"), cache.load(session).items.map { it.text })
+    }
+
+    /** Version 4 drops what an older build cached (#2528): it was decoded without `model_refusal`. */
+    @Test fun migratingToFourEmptiesTheCache() {
+        val db = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(
+            androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(RuntimeEnvironment.getApplication()).name(null)
+                .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(3) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE items (scope TEXT, machine TEXT, session TEXT, seq INTEGER, part INTEGER, id TEXT, json TEXT)")
+                        db.execSQL("CREATE TABLE cursors (scope TEXT, machine TEXT, session TEXT)")
+                        db.execSQL("INSERT INTO items VALUES ('s','m','x',1,0,'n','{}')")
+                        db.execSQL("INSERT INTO cursors VALUES ('s','m','x')")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+                }).build()).writableDatabase
+        ItemsDatabase.MIGRATION_3_4.migrate(db)
+        db.query("SELECT (SELECT COUNT(*) FROM items) + (SELECT COUNT(*) FROM cursors)").use { it.moveToFirst(); assertEquals(0, it.getInt(0)) }
+        db.close()
     }
 }

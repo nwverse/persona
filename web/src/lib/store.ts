@@ -4,7 +4,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 
 import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { BASE } from "./base";
-import { clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
+import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode } from "./agents";
 import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
@@ -29,6 +29,7 @@ import { dropElicitationDraft } from "./elicitation";
 import type { OutboxEntry } from "./outbox";
 import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
 import { setOfflineProbe } from "./feedback";
+import { readDirectionTree } from "./direction-names";
 import { afterEvent, afterHello, graceUntil, isResumed, NO_CURSOR, RESTART_FAST_MS, retryDelay, shownConn, wsQuery, type Drop, type EventCursor } from "./reconnect";
 
 export type Conn = "connecting" | "online" | "offline";
@@ -678,6 +679,24 @@ if (typeof window !== "undefined") {
   window.addEventListener("offline", () => set({ link: { ...state.link, networkUp: false } }));
 }
 
+/** The tree read again: its leaders become the assistant's (a new one not listed yet: the assistant is read again). */
+async function followDirections() {
+  if (pageOf() !== "") return; // the tree is the default assistant's (docs/protocol/protocol.md)
+  const ids = await readDirectionTree();
+  const a = state.assistant;
+  if (!ids || !a) return;
+  const known = new Set(a.conversations.map((c) => c.session_id));
+  if (ids.some((id) => !known.has(id))) void refreshAssistant().catch(() => {});
+  else if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) set({ assistant: { ...a, leaders: ids } });
+}
+
+const helloHooks = new Set<() => void>();
+/** Runs `f` on every hello (lib/new-version.ts asks for the shell then); loaded after the first screen, so it is not in it. */
+export function onHello(f: () => void): () => void {
+  helloHooks.add(f);
+  return () => void helloHooks.delete(f);
+}
+
 // The assistant's live updates about the page itself rather than one conversation: only the shown manager's count.
 const PAGE_EVENTS = new Set(["assistant_schedule"]);
 
@@ -685,6 +704,7 @@ function onMessage(msg: Record<string, unknown>) {
   cursor = msg.type === "hello" ? afterHello(cursor, msg) : afterEvent(cursor, msg);
   switch (msg.type) {
     case "hello": {
+      helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
       set({
@@ -708,12 +728,18 @@ function onMessage(msg: Record<string, unknown>) {
       resendSeen();
       // resumed: the hub replays every broadcast missed since the cursor, nothing needs refetching
       if (!isResumed(msg)) {
+        void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
         void refreshAgentSessions();
         void refreshAgentPrefs();
       }
       break;
     }
+    case "directions":
+      // the direction tree changed (#4352): a leader made or ended anywhere, a name, a task's state. The sidebar's 常驻
+      // follow at once (#4331: a sixth leader stayed hidden until a reload)
+      void followDirections();
+      break;
     case "hub_restarting":
       restartNotice = true; // the close that follows is a restart: retry at once, stay quiet longer
       break;
@@ -1253,7 +1279,7 @@ export async function refreshAssistant() {
     const assistant = { ...a, conversations: a.conversations ?? [] };
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
-    if (cached && (cached.manager ?? "") === from && (cached.machineID !== assistant.machine_id || cached.sessionID !== assistant.main)) discardFeedCache(scope);
+    if (cached && (cached.manager ?? "") === from && (cached.machineID !== mainConversationMachine(assistant) || cached.sessionID !== assistant.main)) discardFeedCache(scope);
     assistantByManager.set(cacheKey(), assistant);
     // its conversations' own requests (feed, stop…) go to it, whichever manager the page shows later
     // (the default's are not noted: with no header the hub finds their manager itself)
