@@ -934,12 +934,11 @@ struct AssistantSidebar: View {
             }
         } else {
             HStack {
-                if model.showsAssistantIdentity {
-                    #if os(macOS)
-                    Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                    #else
-                    Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                    #endif
+                if model.showsAssistantIdentity, let current = model.currentAssistant {
+                    // Several assistants: the current one, and the way to another (`AssistantSwitcher`); on the Mac one line,
+                    // the other sections' title (`MacPageTitle`, #3179). One assistant, or a hub without a roster: no
+                    // assistant identity here (#3975).
+                    AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow, openSettings: showSettings)
                 }
                 Spacer(minLength: Theme.Space.s)
                 if let collapse {
@@ -980,6 +979,21 @@ struct AssistantSidebar: View {
     private func openSearch() {
         withAnimation(Theme.Motion.state) { searchOpen = true }
         searching = true
+    }
+
+    /// The header sits in the Mac's title bar row: one line.
+    private var macTitleRow: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// Settings on the page `AppModel.settingsPath` names (the switcher's Manage Assistants…): the way this sidebar has
+    /// to Settings, else the app's own.
+    private func showSettings() {
+        if let openSettings { openSettings() } else { model.showSettings() }
     }
 
     /// The split's list column (a wide display), beside the conversation's top bar: the header is that bar's row, with
