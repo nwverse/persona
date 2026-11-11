@@ -254,6 +254,7 @@ func New(o Options) *Service {
 	s.workSessionStartRoutes()
 	s.launcherQuotaRoutes()
 	s.providerProbeRoutes()
+	s.providerCatalogRoutes()
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
 	return s
