@@ -32,7 +32,7 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 
 - Repository: iOS draws a card with the folder, the bold name and a chevron, no counts, with its actions in the long-press menu. Android draws a plain heading with marks, state counts and a ⋯ sheet.
 - Worktree: iOS shows a Primary chip on the main one, the branch when it differs from the name, "Detached HEAD @sha" as a caution, "N agents" or "Idle", and dims it when the computer is offline. Android shows the icon, the name and counts.
-- Computer: iOS draws it only when the list shows more than one computer, with a background-waiting clock and an idle count. Android draws it always. Done (11-12): only with more than one computer and no computer chosen (`AgentsTreeTest`); the clock and the idle count are still to do.
+- Computer: iOS draws it only when the list shows more than one computer, with a background-waiting clock and an idle count. Android draws it always. Done (11-12): only with more than one computer and no computer chosen (`AgentsTreeTest`); its counts as iOS's `StateCounts`: needing you, working without those that only wait in the background, unread, a clock for those, idle (`HeadingCountsShotsTest`).
 
 **A8. Idle repositories.** iOS gives each computer an "Idle Repositories" section with a count, each idle repository one row with "N agents · tab names" and when it last moved; idle sessions show as "2 idle · review · research" with a "Hide N Idle" row. Android keeps idle repositories inline after the busy ones, without times, and "N more idle" can't be folded again.
 

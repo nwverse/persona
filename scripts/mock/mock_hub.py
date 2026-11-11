@@ -1715,8 +1715,8 @@ WEEKDAYS = [1, 2, 3, 4, 5]
 
 
 # MOCK_ASSISTANT_SIDEBAR=1: the Persona sidebar's "Recent" holds more than the 30 it shows before "View all"
-# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (red dot), unread
-# (blue dot), working (spinner).
+# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (blue dot), unread
+# (green dot), working (spinner).
 if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
     for _n, _state in enumerate(["needs_you", "unread", "working"] + ["idle"] * 33):
         _s = assistant_sess("b2e4d6f8-0000-4000-8000-%012d" % (100 + _n), "整理第 %d 周的周报" % (_n + 1),
