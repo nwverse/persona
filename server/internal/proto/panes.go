@@ -52,6 +52,9 @@ type PaneItem struct {
 	Title     string `json:"title,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// AgentSession is the stopped agent whose terminal this is: a pane Persona opened for that session, with no agent
+	// in it now (#4754). "Close finished terminals" closes these (panes.close_finished).
+	AgentSession string `json:"agent_session,omitempty"`
 }
 
 // NewShellResult is what panes.new opened.

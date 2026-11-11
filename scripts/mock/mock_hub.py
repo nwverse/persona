@@ -1632,6 +1632,20 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_RECENT=1 (#4873): more of the user's own conversations, so the sidebar's Recent (the newest five that are not the main
+# conversation or a leader) has more than it lists and All chats holds the rest. Synthetic titles.
+if os.environ.get("MOCK_RECENT") == "1":
+    for i, (title, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles
+        ("1112 | 规划 | 周末去杭州的行程", 60 * 2, "两天的安排排好了。"),
+        ("1112 | 写作 | 给物业的报修邮件", 60 * 7, "邮件草稿在这里。"),
+        ("1111 | 研究 | 家用净水器怎么选", 60 * 26, "三款的对比如下……"),
+        ("1109 | 整理 | 孩子的疫苗时间表", 60 * 24 * 3, "下一针在 12 月。"),
+        ("1106 | 学习 | 每天 20 分钟西班牙语", 60 * 24 * 6, "第 6 课的单词表。"),
+    ]):
+        c = assistant_sess(f"mine{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
+        c["origin"] = "user"
+        ASSISTANT.append(c)
+
 # MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
 # /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
@@ -1651,26 +1665,12 @@ if os.environ.get("MOCK_LEADERS") == "1":
         MOCK_DIRECTION_NAMES[c["session_id"]] = name
 
 
-# Each leader's open tasks by state, as the direction tree counts them (#4352, assistant/direction_tree.go), synthetic.
-MOCK_LEADER_COUNTS = [{"working": 2, "needs_you": 1, "stuck": 0, "review": 0}, {"working": 1, "needs_you": 0, "stuck": 0, "review": 1},
-                      {"working": 0, "needs_you": 0, "stuck": 0, "review": 0}, {"working": 0, "needs_you": 2, "stuck": 1, "review": 0}]
-
-
 def mock_leaders_list():
     """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
     titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
     return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
                          "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
 
-
-def mock_direction_tree():
-    """GET /api/v1/assistant/directions/tree (#4352): the leaders in order with their names and counts (no tasks listed
-    here), then the secretary group."""
-    dirs = [{"id": sid, "name": MOCK_DIRECTION_NAMES.get(sid, ""), "counts": MOCK_LEADER_COUNTS[i % len(MOCK_LEADER_COUNTS)],
-             "tasks": []} for i, sid in enumerate(MOCK_LEADERS)]
-    main = next((c["session_id"] for c in ASSISTANT if c.get("title") == "Persona"), "")
-    return {"directions": dirs + [{"id": main, "name": "", "secretary": True,
-                                   "counts": {"working": 1, "needs_you": 1, "stuck": 0, "review": 0}, "tasks": []}]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -2449,7 +2449,98 @@ def _todo_list_fixture(variant):
 _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
+
+
+def _lead_supervision(leader, state=""):
+    return {"supervisor": leader, "done_when": [], "state": state, "round": 0, "reviews": [], "updated_at": ago(minutes=30)}
+
+
+# MOCK_LEADERS=1 also hands some to-dos to the directions (#4352, the direction tree): a task asking for you, one awaiting
+# review, one stuck for a day and some running under the four leaders; the rest have no leader and fall to the secretary.
+if MOCK_LEADERS:
+    _leads = {"todo_weather": 0, "todo_review": 0, "todo_photos": 1, "todo_orders": 1, "todo_blog": 2}
+    for _t in TODOS_INIT:
+        if _t["id"] in _leads:
+            _t["supervision"] = _lead_supervision(MOCK_LEADERS[_leads[_t["id"]]])
+    TODOS_INIT.extend([
+        {"id": "lead_review", "title": "首页卡片改版", "notes": "改完了，等你验收。", "done_at": None,  # i18n-ignore: mock data
+         "created_at": ago(hours=6), "updated_at": ago(minutes=20), "spaces": [], "agents": [],
+         "supervision": _lead_supervision(MOCK_LEADERS[0], "pending_review")},
+        {"id": "lead_stuck", "title": "对账差异排查", "notes": "上游的流水还没给到。", "done_at": None,  # i18n-ignore: mock data
+         "created_at": ago(days=3), "updated_at": ago(hours=30), "spaces": [], "agents": [],
+         "supervision": _lead_supervision(MOCK_LEADERS[3])},
+    ])
 TODOS = copy.deepcopy(TODOS_INIT)
+
+_DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3}
+
+
+def _direction_task_state(t, sessions):
+    """The mock's stand-in for the hub's one task-state rule (assistant/direction_tree.go): needs you, review, stuck, working."""
+    sup = t.get("supervision") or {}
+    states = [(sessions.get((a["machine_id"], a["session_id"])) or {}).get("state", "") for a in _direction_active_agents(t)]
+    if "needs_you" in states or sup.get("state") == "needs_user" or (TODO_ASKS.get(t["id"]) or {}).get("outcome") == "decide":
+        return "needs_you"
+    if sup.get("state") == "pending_review" and "working" not in states:
+        return "review"
+    if "working" not in states and (t.get("updated_at") or "") < ago(hours=24):
+        return "stuck"
+    return "working"
+
+
+def _direction_active_agents(t):
+    return [a for a in t.get("agents", []) if not a.get("released_at") and not a.get("dismissed_at")]
+
+
+def _direction_agents(t, sessions):
+    """A task's active agents, a spawned one under the agent it came from."""
+    active = _direction_active_agents(t)
+    refs = {f"{a['machine_id']}/{a['session_id']}" for a in active}
+    nodes = {}
+    for a in active:
+        s = sessions.get((a["machine_id"], a["session_id"]))
+        nodes[f"{a['machine_id']}/{a['session_id']}"] = {
+            "machine_id": a["machine_id"], "session_id": a["session_id"], "title": (s or {}).get("title") or a.get("title", ""),
+            "agent": a.get("agent", ""), "state": (s or {}).get("state", ""), "children": []}
+    roots = []
+    for a in active:
+        key = f"{a['machine_id']}/{a['session_id']}"
+        via = a.get("via", "")
+        if a.get("source") == "spawned" and via in refs and via != key:
+            nodes[via]["children"].append(nodes[key])
+        else:
+            roots.append(nodes[key])
+    return roots
+
+
+def mock_direction_tree():
+    """GET /api/v1/assistant/directions/tree (#4352): each current leader with the open to-dos it supervises, then the
+    secretary's group (the main conversation's id) with the rest. The real hub decides the states with the To-dos page's
+    triage; the mock with a simple stand-in."""
+    sessions = {(s["machine_id"], s["session_id"]): s for s in SESSIONS}
+    groups = {lid: [] for lid in MOCK_LEADERS}
+    secretary = []
+    for t in TODOS:
+        if t.get("done_at") or t.get("kind") in ("ask", "concern") or t.get("shelved_at"):
+            continue
+        sup = (t.get("supervision") or {}).get("supervisor", "")
+        if (t.get("supervision") or {}).get("state") in ("accepted", "cancelled"):
+            continue
+        task = {"id": t["id"], "title": t["title"], "state": _direction_task_state(t, sessions), "agents": _direction_agents(t, sessions),
+                "_at": t.get("updated_at") or ""}
+        (groups[sup] if sup in groups else secretary).append(task)
+
+    def direction(did, name, tasks, **extra):
+        tasks.sort(key=lambda x: x["id"])
+        tasks.sort(key=lambda x: x["_at"], reverse=True)
+        tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
+        counts = {k: sum(1 for x in tasks if x["state"] == k) for k in ("working", "needs_you", "stuck", "review")}
+        return {"id": did, "name": name, **extra, "counts": counts,
+                "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
+
+    out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]
+    out.append(direction(ASSISTANT_CONFIG.get("main") or "", "", secretary, secretary=True))
+    return {"directions": out}
 
 
 def active_todo_for_session(mid, sid):
@@ -2554,6 +2645,8 @@ def push_todos():
     for send, _ in list(LIVE):
         try:
             send(from_default({"type": "todos"}))
+            # the direction tree reads the to-dos (#4352): the hub says when it changed
+            send(from_default({"type": "directions"}))
         except Exception:
             pass
 
@@ -2705,6 +2798,7 @@ def recording_minutes(body, rid=None):
     out = {
         "title": cal.get("title") or body.get("title") or None,
         "when": "2027-01-15 16:00–17:00",
+        "start": "2027-01-15T16:00:00+08:00", "end": "2027-01-15T17:00:00+08:00",  # the same span, for the apps to format (#4713)
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
         "points": [item(x) for x in segs[:2]] + [
@@ -3164,7 +3258,8 @@ def meeting_answer(st, a):
         return
     zh = a["lang"].lower().startswith("zh")
     earlier = next((k for k, v in reversed(list(RECORDINGS.items())) if earlier_material(k, v) and k != st["id"]), None)
-    sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10"}]
+    sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10",
+                "start": "2026-11-03T14:00:00+08:00", "end": "2026-11-03T15:10:00+08:00"}]
                if earlier else []) + [{"kind": "projects", "id": "weather-app", "name": "天气 App"}]
     a.update(state="answered", sources=sources, answered_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
              answer="上次设计评审定了：这一版保留 4 MB 的导出上限，补充清楚的提示。回归测试由 Bo 负责，还没完成。" if zh else  # i18n-ignore: made-up model answer
@@ -9961,7 +10056,7 @@ LAUNCHER_PRESETS = [
 
 # MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and ~/.zshrc import. Two managed
 # providers (one with every advanced field), "Test connection" that passes or fails (a key or address with "bad" in it fails),
-# "Fetch models" with 3 models, and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
+# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
 # too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "import": None}
@@ -10014,11 +10109,21 @@ def _provider_apply(l, b):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered."""
-    if not MOCK_PROVIDERS: return False
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
+    "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
+    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route)."""
+    probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
+    if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
         h.send_json(PROVIDER_LOG); return True
-    b = json.loads(body or b"{}") if method != "GET" else {}
+    if MOCK_PROVIDERS:
+        b = json.loads(body or b"{}") if method != "GET" else {}
+    else:  # a body that is not this wizard's goes on to the routes after this one
+        try:
+            b = json.loads(body or b"{}")
+        except ValueError:
+            return False
+        if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/import":
         machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
         if machine == "studio":
@@ -13018,12 +13123,14 @@ def case_route(h, method, p, q, body):
         return True
     if p == "/mock/case/load" and method == "POST":  # another case in the same mock (its sockets closed first)
         try:
-            case = sync_case.load(json.loads(body or b"{}").get("case", ""))
+            asked = json.loads(body or b"{}")
+            case = sync_case.load(asked.get("case", ""))
         except (ValueError, KeyError, OSError) as e:
             case_json(h, {"error": str(e)}, 400)
             return True
         CASE.close()
-        CASE = sync_case.CaseHub(case)
+        # "now": its times moved to the present, for an app on the real clock (the iOS simulator's)
+        CASE = sync_case.CaseHub(case, shift=sync_case.shift_to(time.time()) if asked.get("now") else 0)
         case_json(h, CASE.state())
         return True
     if method == "GET" and MOCK_WEB and not p.startswith(("/api/", "/mock/")):
@@ -17686,7 +17793,9 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
         if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
-        if p == "/api/v1/assistant/directions/tree": return self.send_json(mock_direction_tree())
+        if p == "/api/v1/assistant/directions/tree":
+            if os.environ.get("MOCK_LEGACY_HUB"): return self.send_json({"error": "not found"}, 404)
+            return self.send_json(mock_direction_tree())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))

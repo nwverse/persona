@@ -749,6 +749,12 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			p.compacting = false
 			if !recovering {
 				p.busy = false
+				// A failed turn (is_error, or an answer that is only an auth / upstream error) is the session's turn
+				// error, as Codex's is: the apps show it failed and the push says so (#4669). The transcript may hold no
+				// line for it at all (a start refused before the model ran).
+				if text, kind := claudeTurnFailure(ev.IsError, ev.Result, kinds); text != "" {
+					p.turnError, p.turnErrorKind = text, kind
+				}
 			}
 			p.lastActive = time.Now()
 			p.partial.Reset()
