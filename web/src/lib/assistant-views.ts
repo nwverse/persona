@@ -12,6 +12,7 @@ import { useSyncExternalStore } from "react";
 import { ApiError, api, enc } from "./api";
 import { uuid } from "./format";
 import { onHubEvent } from "./store";
+import type { HtmlActionRequest } from "./assistant-html";
 import type { AssistantView, ViewAction, ViewActionInput, ViewChangedError } from "./extension-wire";
 
 /** A card's key: `view_…` for a live card, `<item id>/<n>` for a text block. */
@@ -245,6 +246,35 @@ function failed(conversation: string, key: CardKey, e: unknown): SubmitOutcome {
   const retry = !(e instanceof ApiError) || e.status >= 500 || e.status === 0;
   updateDraft(conversation, key, (x) => ({ ...x, error: message, sending: retry && x.sending ? { ...x.sending, inFlight: false } : undefined }));
   return "failed";
+}
+
+/** The path of an html component's bridge calls (POST, docs/assistant/assistant-views.md "Free-form HTML rendering"). */
+export const htmlActionsPath = (conversation: string, key: CardKey) => `/assistant/conversations/${enc(conversation)}/views/${enc(key)}/html-actions`;
+
+export type HtmlActionOutcome = { ok: true; open?: string } | { ok: false; outcome: Exclude<SubmitOutcome, "sent" | "busy">; message?: string };
+
+/**
+ * Sends a bridge call the user confirmed (persona.reply / persona.open of an html component, #4215). A reply is the
+ * card's one answer, kept like a declared one; open comes back with what to open. The same 409s as submitAction:
+ * answered from somewhere else, or the card changed under it.
+ */
+export async function postHtmlAction(conversation: string, key: CardKey, req: HtmlActionRequest): Promise<HtmlActionOutcome> {
+  try {
+    const res = await api<{ action?: ViewAction; open?: string }>(htmlActionsPath(conversation, key), { method: "POST", json: req });
+    if (res.action) applyAction(conversation, res.action);
+    return { ok: true, ...(typeof res.open === "string" && res.open ? { open: res.open } : {}) };
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409 && e.code === "already_answered") {
+      applyAction(conversation, e.body.action as ViewAction | undefined);
+      return { ok: false, outcome: "answered_elsewhere" };
+    }
+    if (e instanceof ApiError && e.status === 409 && e.code === "view_changed") {
+      const latest = (e.body as Partial<ViewChangedError>).view;
+      if (latest && latest.id === key && isCardVersion(latest.version)) applyView(conversation, latest);
+      return { ok: false, outcome: "changed" };
+    }
+    return { ok: false, outcome: "failed", message: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /** Clears everything (tests). */
