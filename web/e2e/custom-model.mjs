@@ -1,8 +1,8 @@
 // End-to-end check of typing a model ID on the web (#1644, docs/assistant/model-config.md "Typing a model ID"): "New
 // agent"'s list shows the IDs typed before and "Other model…", whose field says why an ID can't be used and starts with
 // a good one; a running Claude Code session's model panel (the composer's model pill, #5032) lists the IDs typed before
-// with Forget, offers "Use “…”" for a good ID no listed model answers, and sends it through POST …/modes; the Persona
-// chat's launcher menu takes one for the next messages.
+// with Forget, offers "Use “…”" for a good ID no listed model answers, and sends it through POST …/modes; a Persona
+// chat's model panel (its composer's model pill, #5033) does the same and takes one for the next messages.
 //
 // Needs the web page against the fake hub with MOCK_CUSTOM_MODELS set, and Chrome (playwright-core drives it):
 //
@@ -165,29 +165,30 @@ async function run(browser, theme) {
   }
   ok(`${theme}: the session switched through …/modes, and the panel closed`);
 
-  // The Persona chat: the launcher menu's Other model…
+  // The Persona chat: its model pill's panel (#5033) lists the IDs typed before and takes a typed one for the next messages
   await page.evaluate(() => {
     history.pushState(null, "", "/");
     dispatchEvent(new PopStateEvent("popstate"));
   });
-  const launcherChip = page.locator('button[title="启动器：下一条消息起使用"]').first();
-  await expectVisible(page, launcherChip, `${theme}: the chat's launcher chip`);
-  await launcherChip.click();
-  await page.getByRole("menu").getByText("claude", { exact: true }).first().click();
-  await expectVisible(page, page.getByRole("menu").getByText("vendor/model-x"), `${theme}: a typed ID in the launcher's models`);
-  await expectVisible(page, page.getByRole("menu").locator('[role="presentation"]').filter({ hasText: "输入过的" }), `${theme}: their heading`);
-  await page.getByRole("menu").getByText("其他模型…").click();
-  const mf = page.getByRole("menu").locator("input");
-  await mf.fill("vendor model");
-  await expectVisible(page, page.getByRole("menu").getByRole("alert"), `${theme}: why "vendor model" can't be used`);
-  const ring = () => mf.evaluate((el) => getComputedStyle(el).boxShadow);
-  const bad = await ring();
-  await shot(page, "chat-menu-invalid", theme);
-  await mf.fill("vendor/model-y");
-  if ((await ring()) === bad) fail(`${theme}: a bad ID's ring is the same as a good one's (${bad})`);
-  await shot(page, "chat-menu-valid", theme);
-  await mf.press("Enter");
-  await expectVisible(page, page.getByText("vendor/model-y"), `${theme}: the pick said`);
+  const chat = await openPanel(page, theme);
+  await expectVisible(page, panelRow(chat, "vendor/model-x").filter({ hasText: "输入过的" }), `${theme}: an ID typed before in the chat's panel`);
+  await shot(page, "chat-panel", theme);
+  const chatSearch = chat.locator('input[aria-label="搜索模型…"]');
+  const chatUse = chat.locator('[data-panel-row^="typed:"]');
+  await chatSearch.fill("a;b");
+  await expectVisible(page, chat.getByText("没有匹配的模型"), `${theme}: "a;b" matches nothing in the chat's panel`);
+  if (await chatUse.count()) fail(`${theme}: "a;b" offered to use in the chat`);
+  await chatSearch.fill("vendor/model-y");
+  await expectVisible(page, chatUse.filter({ hasText: "使用「vendor/model-y」" }), `${theme}: Use “vendor/model-y” in the chat's panel`);
+  await shot(page, "chat-panel-typed", theme);
+  await chatUse.first().click();
+  try {
+    await chat.waitFor({ state: "detached", timeout: 5000 });
+  } catch {
+    fail(`${theme}: the chat's panel stays open after the pick`);
+  }
+  await expectVisible(page, page.locator('main button[data-model-pill][title*="model-y"]'), `${theme}: the pick on the chat's pill`);
+  await shot(page, "chat-picked", theme);
   ok(`${theme}: the chat takes a typed ID for the next messages`);
   await ctx.close();
 }
