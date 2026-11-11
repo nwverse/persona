@@ -5,8 +5,8 @@ the conversation, live text, sending, interrupting, renaming, the `ask_user` que
 the phone. Without it an omp in a herdr pane is still listed, with its terminal only.
 
 omp reads pi extensions through its compatibility layer, so this package is the pi extension
-(`integrations/pi`) running under omp's identity: runtime `omp-<pid>`, card ids starting with `omp`, and
-`omp --resume <session file>` to resume a stopped session on this computer.
+(`integrations/pi`) running under omp's identity: runtime `omp-<pid>` and card ids starting with `omp`. Details:
+`docs/integrations/omp.md`.
 
 ## Install
 
@@ -31,7 +31,7 @@ when omp is told to keep its agent directory elsewhere (the same variable omp re
   "approve": ["bash", "write"],
   "askUser": true,
   "answerFirst": "auto",
-  "socket": "/Users/me/.persona/runtime.sock"
+  "socket": "/home/me/.persona/runtime.sock"
 }
 ```
 
@@ -48,8 +48,6 @@ The extension stays quiet when no Persona node is listening: omp runs as it alwa
 
 ## Notes
 
-- Only the default agent directory is read. An omp started with another profile keeps its sessions elsewhere, and the
-  node's list of stopped sessions does not include them.
-- A launcher is omp only when it is named exactly `omp`. A wrapper of it is a Claude start unless `hub.json` names the
-  agent (`machines[].launchers`).
+- Only the default agent directory is read. An omp started with another profile keeps its sessions elsewhere.
+- Only the launcher named exactly `omp` starts omp.
 - There is no auto-update for this package: it is installed from a checkout and follows it.
