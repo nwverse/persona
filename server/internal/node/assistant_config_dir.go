@@ -199,6 +199,17 @@ func (n *Node) claudeProcessEnv(base []string, dir string) []string {
 	if n.sessionScope != nil {
 		dir = n.sessionScope.claude
 	}
+	if dir == "" {
+		// "default" is Claude's unset directory. Claude takes an empty CLAUDE_CONFIG_DIR as a directory of its own (a
+		// resume then finds no conversation), so the variable is removed, not set empty.
+		out := make([]string, 0, len(base))
+		for _, entry := range base {
+			if !strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+				out = append(out, entry)
+			}
+		}
+		return out
+	}
 	return identity.Environment(base, "CLAUDE_CONFIG_DIR="+dir)
 }
 
