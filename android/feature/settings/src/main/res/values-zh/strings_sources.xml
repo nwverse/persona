@@ -228,8 +228,8 @@
     <string name="settings_src_model_group_other">其他</string>
     <string name="settings_src_model_summary_separator">，</string>
     <string name="settings_src_model_follows">跟随 %1$s</string>
-    <string name="settings_src_model_lark_separate">单独设置</string>
-    <string name="settings_src_model_lark_follow">跟随 Agents</string>
+    <string name="settings_src_model_agents_separate">单独设置</string>
+    <string name="settings_src_model_agents_follow">跟随 Agents</string>
     <string name="settings_src_model_follow_default">跟随默认</string>
     <string name="settings_src_model_provider_hidden">%1$s（已隐藏）</string>
     <string name="settings_src_model_provider_unavailable">%1$s（已经没有了）</string>

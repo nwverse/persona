@@ -64,6 +64,18 @@ extension AppModel {
             return .failed
         } catch where error.isOffline || error.isTimeout || error.isGap {
             return .waiting
+        } catch let e as APIError where e.code == "dialog_open" {
+            // A dialog holds the computer's terminal (#3752): nothing was typed. Say which one, and open the terminal
+            // from here: answering at the computer is no way out for someone away from it.
+            Haptics.attention()
+            markRefused(key, msg.id)
+            let head = e.fields["dialog"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let reason = head.isEmpty ? (e.shown ?? e.localizedDescription) : String(localized: "The terminal is waiting on “\(head)”.")
+            noteFailure(key, msg.id, reason)
+            toast = Toast(reason, style: .error, action: Toast.Action(title: String(localized: "Open terminal")) { [weak self] in
+                self?.terminalAsk = key
+            })
+            return .failed
         } catch {
             if (error as? APIError)?.fields["delivered"] == "none" { markRefused(key, msg.id) } // a dialog open, say
             noteFailure(key, msg.id, error.shown ?? error.localizedDescription)

@@ -464,7 +464,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 		}
 	case KindPerson:
 		for _, p := range e.Store.People() {
-			if has(p.Tags) {
+			if p.Status != "ignored" && has(p.Tags) {
 				out = append(out, Entry{Kind: kind, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 					Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 			}

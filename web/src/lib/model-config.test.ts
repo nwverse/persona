@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  chooseProvider, draftFor, modelConfiguration, modelPatch, modelPurpose, modelSummary, providersFor, runtimeChoices, runtimeFallbackText, saveModelPurpose,
+  agentsOverride, chooseProvider, draftFor, modelConfiguration, modelPatch, modelPurpose, modelSummary, providersFor, runtimeChoices, runtimeFallbackText, saveModelPurpose,
   type ModelProvider, type ModelPurpose,
 } from "./model-config";
 import { executionForm, purposeGroups } from "./model-config-execution";
@@ -46,6 +46,15 @@ describe("用途配置", () => {
     expect(purposeGroups([purpose, triage], " MAIN ").length).toBe(2);
     expect(purposeGroups([purpose], "技能")).toEqual([]);
     expect(modelSummary(purpose, providers)).toBe("常用启动器 · main · 思考 high");
+  });
+  it("sets apart only the uses of Agents the hub gives fields of their own", () => {
+    for (const id of ["lark.agent", "inbox.agent"]) {
+      expect(agentsOverride({ ...purpose, id, parent: "agent.new" })).toBe(true);
+      expect(agentsOverride({ ...purpose, id, parent: "agent.new", fields: [] })).toBe(false); // an older hub: read-only
+      expect(agentsOverride({ ...purpose, id, parent: "agent.new", fields: undefined })).toBe(false);
+    }
+    expect(agentsOverride({ ...purpose, id: "agent.new" })).toBe(false); // the category itself
+    expect(agentsOverride({ ...purpose, id: "inbox.judge", parent: "inbox.triage" })).toBe(false);
   });
 });
 
