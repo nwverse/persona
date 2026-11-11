@@ -92,6 +92,7 @@
     <string name="agents_filter_needs_you">Needs you</string>
     <string name="agents_filter_unread">Unread</string>
     <string name="agents_filter_working">Working</string>
+    <string name="agents_filter_background_waiting">Waiting in the background</string>
     <string name="agents_history_check_resume">Check resume result</string>
     <string name="agents_history_resume">Continue this session</string>
     <string name="agents_todo_move_title">Move to another to-do</string>

@@ -57,10 +57,17 @@ enum class AgentGrouping {
 enum class RepoLevel { Repository, MainCheckout, Worktree }
 enum class AgentQuickFilter(val state: AgentState?, val source: AgentSource? = null) {
     All(null), NeedsYou(AgentState.NeedsYou), Unread(AgentState.Unread), Working(AgentState.Working),
+    /**
+     * Working, but all it still runs in the background only waits (#6045, iOS `AgentFilter.backgroundWaiting`): a filter of
+     * its own, and not Working. The hub has no state for it: a paged list asks for working rows ([state]) and keeps these.
+     */
+    BackgroundWaiting(AgentState.Working),
     /** Where the agent was opened (#2526): a botmux session (its Feishu group) or a herdr pane. */
     Feishu(null, AgentSource.Feishu), Terminal(null, AgentSource.Terminal);
     fun matches(session: AgentSession) = when {
         source != null -> session.session.agentSource == source
+        this == BackgroundWaiting -> session.waitsInBackground
+        this == Working -> session.state == AgentState.Working && !session.waitsInBackground
         else -> state == null || session.state == state
     }
     /** "Lark group" matches botmux sessions only, so it and a hidden botmux cannot both hold (web `botmuxAndFilter`). */

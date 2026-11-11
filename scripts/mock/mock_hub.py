@@ -10033,7 +10033,7 @@ LAUNCHER_PRESETS = [
 
 # MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and ~/.zshrc import. Two managed
 # providers (one with every advanced field), "Test connection" that passes or fails (a key or address with "bad" in it fails),
-# "Fetch models" with 3 models, and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
+# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
 # too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "import": None}
@@ -10086,11 +10086,15 @@ def _provider_apply(l, b):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered."""
-    if not MOCK_PROVIDERS: return False
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
+    "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
+    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route)."""
+    probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
+    if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
         h.send_json(PROVIDER_LOG); return True
     b = json.loads(body or b"{}") if method != "GET" else {}
+    if not MOCK_PROVIDERS and b.get("preset"): return False
     if p == "/api/v1/launchers/import":
         machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
         if machine == "studio":

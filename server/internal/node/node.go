@@ -1249,6 +1249,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		_ = json.Unmarshal(params, &a)
 		return n.newShell(ctx, a.Kind, a.WorkspaceID)
+	case "panes.close_finished": // the user's "Close finished terminals" (stopped.go, #4754)
+		var a struct {
+			Panes   string `json:"panes"`
+			Preview bool   `json:"preview"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.closeFinished(ctx, a.Panes, a.Preview)
 	case "panes.close":
 		return ok(n.closePane(ctx, p.Pane))
 	case "panes.split":

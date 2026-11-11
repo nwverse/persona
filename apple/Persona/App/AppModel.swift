@@ -1275,11 +1275,25 @@ final class AppModel {
             // still reported, by the read of the transcript itself.
             guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else { return }
             guard self.api(key.group)?.config.url == api.config.url else { return }
-            let list = (sessionsByMachine[key.machineRef] ?? []).filter { $0.key != key } + [full]
-            applySessions([key.machineRef: list])
+            // In its place: the same row again must leave the list equal, or every reader of the sessions redraws
+            // for nothing (#4683).
+            applySessions([key.machineRef: Self.replacing(full, in: sessionsByMachine[key.machineRef] ?? [])])
         } catch {
             if isSubscribed(key), !error.isQuiet { chat(key).error = error.localizedDescription }
         }
+    }
+
+    /// `row` where the list has its session (any other copy of it dropped), or at the end when it has none: an unchanged
+    /// row leaves the list equal.
+    nonisolated static func replacing(_ row: Session, in list: [Session]) -> [Session] {
+        let key = row.key
+        guard let first = list.firstIndex(where: { $0.key == key }) else { return list + [row] }
+        var out = list
+        out[first] = row
+        if out[(first + 1)...].contains(where: { $0.key == key }) {
+            out = out.enumerated().filter { $0.offset <= first || $0.element.key != key }.map(\.element)
+        }
+        return out
     }
 
     func subscribe(_ key: SessionKey, by owner: UUID) {
@@ -1776,7 +1790,8 @@ final class AppModel {
         var olds: [(old: [Session], new: [Session])] = []
         for (machineID, list) in byMachine {
             let old = lists[machineID] ?? []
-            if old != list { lists[machineID] = list }
+            guard old != list else { continue } // the same rows again: no transition, nothing new for AgentSync (#4683)
+            lists[machineID] = list
             olds.append((old, list))
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
@@ -2291,7 +2306,10 @@ final class AppModel {
         // Each photo with its path on the machine (the outbox's in the order they went, as the paths are).
         var photos: [(path: String?, photo: (UIImage, ImagePayload))] = []
         var left: [String] = []
-        let copies = sent.compactMap(Self.composerPhoto)
+        var copies: [(UIImage, ImagePayload)] = []
+        for payload in sent {
+            if let photo = await Self.composerPhoto(payload) { copies.append(photo) }
+        }
         if copies.count >= draft.imagePaths.count {
             photos = copies.enumerated().map { (draft.imagePaths.indices.contains($0.offset) ? draft.imagePaths[$0.offset] : nil, $0.element) }
         } else { // sent from elsewhere, or its copy here is gone
@@ -2312,20 +2330,24 @@ final class AppModel {
         return left.count
     }
 
-    /// A photo as the composer holds it, from the bytes a message carried.
-    private static func composerPhoto(_ payload: ImagePayload) -> (UIImage, ImagePayload)? {
-        guard let data = Data(base64Encoded: payload.data), let image = UIImage(data: data) else { return nil }
-        return (image, payload)
+    /// A photo as the composer holds it, from the bytes a message carried: decoded off the main actor and no larger than
+    /// a picked one (`MessagePhotos.maxSide`), as `LarkMedia` decodes (docs/apple/performance.md, P8).
+    private static func composerPhoto(_ payload: ImagePayload) async -> (UIImage, ImagePayload)? {
+        let side = MessagePhotos.maxSide
+        let image = await Task.detached(priority: .userInitiated) {
+            Data(base64Encoded: payload.data).flatMap { LarkMedia.decode($0, maxPixel: side) }
+        }.value
+        return image.map { ($0, payload) }
     }
 
     /// A photo a message carried, read back from the conversation's machine.
     private func machinePhoto(_ key: SessionKey, _ path: String) async -> (UIImage, ImagePayload)? {
         guard let api = api(key.group), let file = try? await api.file(machine: key.machineID, path: path, cwd: nil) else { return nil }
         let mime = file.mime ?? "image/jpeg"
-        if let data = file.data, let photo = Self.composerPhoto(ImagePayload(mime: mime, data: data)) { return photo }
+        if let data = file.data, let photo = await Self.composerPhoto(ImagePayload(mime: mime, data: data)) { return photo }
         // A big one comes described, its bytes from the download.
         guard let bytes = try? await api.fileBytes(machine: key.machineID, path: path, cwd: nil) else { return nil }
-        return Self.composerPhoto(ImagePayload(mime: mime, data: bytes.base64EncodedString()))
+        return await Self.composerPhoto(ImagePayload(mime: mime, data: bytes.base64EncodedString()))
     }
 
     /// Moves a queued message one place up or down (#6088): the queue is pulled back and re-queued in the new order.
