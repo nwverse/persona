@@ -110,17 +110,29 @@ type Engine struct {
 
 	find findCache // what Find read last time, kept while the files are unchanged (find_cache.go)
 
-	projectRetries retrySet // projects whose rewrite failed, by slug (RefreshProjects)
-	// topicRetries: sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>").
-	topicRetries retrySet
-	// recordingRetries: recordings whose summary failed, by id (SummarizeRecordings).
-	recordingRetries retrySet
-	// itemRetries: documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems).
-	itemRetries retrySet
+	// Retries are the steps' backoffs, shared by the engines a caller builds over the same store one after another (the
+	// hub's settings changed), so they carry over (#4247); nil: the engine's own.
+	Retries    *Retries
+	ownRetries Retries
 
 	// ownerNow is how the owner is called as the knowledge base loop last read it (SetOwner); its lanes read it while
 	// it is set (#4247), so it is not the Owner field. Nil: Owner.
 	ownerNow atomic.Pointer[string]
+}
+
+// Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
+type Retries struct {
+	projects   retrySet // projects whose rewrite failed, by slug (RefreshProjects)
+	topics     retrySet // sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>")
+	recordings retrySet // recordings whose summary failed, by id (SummarizeRecordings)
+	items      retrySet // documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems)
+}
+
+func (e *Engine) retries() *Retries {
+	if e.Retries != nil {
+		return e.Retries
+	}
+	return &e.ownRetries
 }
 
 // SetOwner sets how the owner is called in the models' prompts from now on; safe while the lanes run.

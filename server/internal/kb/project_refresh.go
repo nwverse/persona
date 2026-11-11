@@ -16,32 +16,40 @@ import (
 type projectRetry struct {
 	failures int
 	at       time.Time
+	// about is what failed (a recording's revision, an item's title and time): a source changed since is tried at
+	// once, its failures forgotten. "" for steps without a cheap change signal (projects, topics' sources).
+	about string
 }
 
 // retrySet is a step's sources whose call failed, by key: the knowledge base's steps that call the model per source
 // (projects, topics, recordings, items) put a failing one off this way (retryWait), so it costs a call now and then,
-// not every round. Safe for concurrent use: the knowledge points lane runs two calls of a step at once (#4247).
+// not every round. Safe for concurrent use: the knowledge points lane runs two calls of a step at once (#4247). It
+// lives on the Service's knowledge base state, not the engine, so a new engine (the hub's settings changed) keeps it.
 type retrySet struct {
 	mu sync.Mutex
 	m  map[string]projectRetry
 }
 
-// waits: key failed and its next try is not due at now.
-func (r *retrySet) waits(key string, now time.Time) bool {
+// waits: key failed about about and its next try is not due at now. One that changed since waits no more.
+func (r *retrySet) waits(key, about string, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return now.Before(r.m[key].at)
+	f, ok := r.m[key]
+	return ok && f.about == about && now.Before(f.at)
 }
 
-// fail counts one more failure in a row of key and returns its new state: how many failures, and when it may be tried
-// again.
-func (r *retrySet) fail(key string) projectRetry {
+// fail counts one more failure in a row of key, about what it was asked about, and returns its new state: how many
+// failures, and when it may be tried again. A failure about something else starts the count again.
+func (r *retrySet) fail(key, about string) projectRetry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.m == nil {
 		r.m = map[string]projectRetry{}
 	}
 	f := r.m[key]
+	if f.about != about {
+		f = projectRetry{about: about}
+	}
 	f.failures++
 	f.at = time.Now().Add(retryWait(f.failures))
 	r.m[key] = f
@@ -66,29 +74,10 @@ func (r *retrySet) keep(due map[string]bool) {
 	}
 }
 
-// get is key's failures (tests).
-func (r *retrySet) get(key string) (projectRetry, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	f, ok := r.m[key]
-	return f, ok
-}
-
-// set replaces key's failures (tests: a wait made over).
-func (r *retrySet) set(key string, f projectRetry) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.m == nil {
-		r.m = map[string]projectRetry{}
-	}
-	r.m[key] = f
-}
-
-// len is how many keys wait (tests).
-func (r *retrySet) len() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.m)
+// deferred: err puts the work off rather than failing it, so nothing waits for it and the step stops: the connection is
+// paused, no model is set up for it (the next round asks again, as before; not a source's fault), or the run ended.
+func deferred(ctx context.Context, err error) bool {
+	return ai.IsPaused(err) || ai.IsNotConfigured(err) || ctx.Err() != nil
 }
 
 type projectDigest struct {
@@ -103,8 +92,8 @@ type projectDigest struct {
 	Keywords   []string   `json:"keywords"`
 }
 
-// RefreshProjects rewrites the summaries of projects with news, at most max calls per run, failed ones included (they
-// cost a call as much as the others); it returns how many it rewrote. A project whose rewrite failed waits like a chat
+// RefreshProjects rewrites the summaries of projects with news, at most max model calls per run, failed ones included
+// (they cost a call as much as the others; a project gone meanwhile costs none); it returns how many it rewrote. A project whose rewrite failed waits like a chat
 // whose compression failed (retryWait), so a model that keeps failing (2026-11-08: a model name the endpoint did not
 // serve, 404 every two minutes) does not cost a call and a log line every round. Only the knowledge base loop calls it.
 func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
@@ -117,38 +106,49 @@ func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 	for _, p := range e.Store.Projects() {
 		if p.Dirty && p.Status != "ignored" && p.Live() {
 			live[p.Slug] = true
-			if e.projectRetries.waits(p.Slug, now) {
+			if e.retries().projects.waits(p.Slug, "", now) {
 				continue
 			}
 			dirty = append(dirty, p)
 		}
 	}
-	e.projectRetries.keep(live) // done, merged or gone in the meantime
+	e.retries().projects.keep(live) // done, merged or gone in the meantime
 	sort.Slice(dirty, func(i, j int) bool { return dirty[i].Relevance > dirty[j].Relevance })
 	n, calls := 0, 0
 	for _, p := range dirty {
 		if calls >= max || ctx.Err() != nil {
 			break
 		}
-		calls++
-		if err := e.refreshProject(ctx, p); err != nil {
-			if ai.IsPaused(err) || ctx.Err() != nil { // the connection is held or the run ended: the rest wait (still dirty)
+		called, err := e.refreshProjectCall(ctx, p)
+		if called {
+			calls++
+		}
+		if err != nil {
+			if deferred(ctx, err) { // the connection is held, no model, or the run ended: the rest wait (still dirty)
 				break
 			}
-			r := e.projectRetries.fail(p.Slug)
+			r := e.retries().projects.fail(p.Slug, "")
 			e.logf("project %s: %v (failed %d time(s) in a row, next try in %s)", p.Slug, err, r.failures, retryWait(r.failures))
 			continue
 		}
-		e.projectRetries.clear(p.Slug)
-		n++
+		e.retries().projects.clear(p.Slug)
+		if called {
+			n++
+		}
 	}
 	return n
 }
 
 func (e *Engine) refreshProject(ctx context.Context, p *Project) error {
+	_, err := e.refreshProjectCall(ctx, p)
+	return err
+}
+
+// refreshProjectCall rewrites p's summary; called: the model was asked (not for a project gone meanwhile).
+func (e *Engine) refreshProjectCall(ctx context.Context, p *Project) (called bool, err error) {
 	current, ok := e.Store.Project(p.Slug)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	p = current
 	in := e.projectInput(p)
@@ -156,9 +156,9 @@ func (e *Engine) refreshProject(ctx context.Context, p *Project) error {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	if err := e.modelFor("kb.project").JSONMax(cctx, prompts.RenderKBProject(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBProjectInput(in), 8000, &d); err != nil {
-		return err
+		return true, err
 	}
-	return e.commitProject(p, in, d)
+	return true, e.commitProject(p, in, d)
 }
 
 func (e *Engine) projectInput(p *Project) prompts.KBProjectInput {

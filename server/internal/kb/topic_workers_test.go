@@ -58,7 +58,8 @@ func TestDistillTopicsRunsSourcesInParallel(t *testing.T) {
 	}
 }
 
-// A panic in one source's call is logged and starts no more; the process (and the loop's goroutine) goes on.
+// A panic in one source's call is logged, starts no more, and puts that source off like a failure (the same panic
+// would otherwise come first every run); the process (and the loop's goroutine) goes on.
 func TestDistillTopicsRecoversAPanic(t *testing.T) {
 	m := &overlapModel{full: make(chan struct{}), panicOn: "项目 a"}
 	e := testEngine(t, m)
@@ -67,9 +68,12 @@ func TestDistillTopicsRecoversAPanic(t *testing.T) {
 	e.Logf = func(f string, a ...any) { mu.Lock(); logs = append(logs, f); mu.Unlock() }
 	quietProject(t, e, "a", "示例：定了周五灰度")
 	e.DistillTopics(context.Background(), 1)
+	if e.DistillTopics(context.Background(), 1); m.calls.Load() != 1 {
+		t.Fatalf("%d call(s), want 1: the panicking source was not put off", m.calls.Load())
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(logs) != 1 || !strings.HasPrefix(logs[0], "kb: panic:") {
+	if len(logs) != 2 || !strings.HasPrefix(logs[0], "kb: panic:") || !strings.Contains(logs[1], "failed %d time(s)") {
 		t.Fatalf("logs = %q", logs)
 	}
 }

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -118,7 +119,8 @@ type kbLaneStats struct{ calls, failed, putOff atomic.Int32 }
 type kbLaneStatsKey struct{}
 
 // kbCountedModel counts each call in the lane run its context belongs to; calls from elsewhere (tools, the history
-// import) carry none and are not counted.
+// import) carry none and are not counted. A call cancelled with its run counts as nothing; one that ran out of its own
+// time (DeadlineExceeded) failed.
 type kbCountedModel struct{ m kb.Model }
 
 func kbCounted(m kb.Model) kb.Model {
@@ -132,6 +134,7 @@ func (c kbCountedModel) JSONMax(ctx context.Context, system, user string, maxTok
 	err := c.m.JSONMax(ctx, system, user, maxTokens, out)
 	if st, ok := ctx.Value(kbLaneStatsKey{}).(*kbLaneStats); ok {
 		switch {
+		case errors.Is(err, context.Canceled): // the run was stopped (shutdown): neither answered nor failed
 		case ai.IsPaused(err):
 			st.putOff.Add(1)
 		case err != nil:

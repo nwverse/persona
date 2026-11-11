@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"runtime/debug"
 	"sort"
@@ -21,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -169,8 +169,8 @@ func (e *Engine) dueForDistill(now time.Time) []distillSource {
 const topicWorkers = 2
 
 // DistillTopics distills at most max sources, topicWorkers at a time; how many calls it made, failed ones included. A
-// source whose call failed waits like a project whose rewrite failed (retryWait), in the engine's memory; a paused
-// connection starts no more. Only the knowledge base loop calls it.
+// source whose call failed (or panicked) waits like a project whose rewrite failed (retryWait); a paused connection or
+// no model starts no more. Only the knowledge base loop calls it.
 func (e *Engine) DistillTopics(ctx context.Context, max int) int {
 	if e.Model == nil || !e.topicsOn() || e.Store.ReadOnly() {
 		return 0
@@ -181,46 +181,49 @@ func (e *Engine) DistillTopics(ctx context.Context, max int) int {
 		if len(todo) >= max {
 			break
 		}
-		if !e.topicRetries.waits(src.kind+"/"+src.id, now) {
+		if !e.retries().topics.waits(src.kind+"/"+src.id, "", now) {
 			todo = append(todo, src)
 		}
 	}
 	var calls atomic.Int32
 	e.bounded(ctx, len(todo), topicWorkers, func(i int) bool {
-		src := todo[i]
-		key := src.kind + "/" + src.id
-		if err := e.distill(ctx, src, now); err != nil {
-			if ai.IsPaused(err) || ctx.Err() != nil {
+		key := todo[i].kind + "/" + todo[i].id
+		if err := e.distill(ctx, todo[i], now); err != nil {
+			if deferred(ctx, err) {
 				return false
 			}
 			e.topicRetryLater(key, err, "distill")
 			calls.Add(1) // a failed call is a call
 			return true
 		}
-		e.topicRetries.clear(key)
+		e.retries().topics.clear(key)
 		calls.Add(1)
 		return true
-	})
+	}, func(i int, p any) { e.topicRetryLater(todo[i].kind+"/"+todo[i].id, fmt.Errorf("panic: %v", p), "distill") })
 	return int(calls.Load())
 }
 
 func (e *Engine) topicRetryLater(key string, err error, step string) {
-	r := e.topicRetries.fail(key)
+	r := e.retries().topics.fail(key, "")
 	e.logf("topics: %s %s: %v (failed %d time(s) in a row, next try in %s)", step, key, err, r.failures, retryWait(r.failures))
 }
 
 // bounded runs job(i) for every i below n, at most workers at once, and starts no more once a job returns false (the
-// connection is paused, the run ended) or ctx ends. A job's panic is logged and stops the rest like a false, so one
-// bad source does not end the process (the loop's own recovery is in another goroutine).
-func (e *Engine) bounded(ctx context.Context, n, workers int, job func(i int) bool) {
+// connection is paused, no model, the run ended) or ctx ends. A job that panics is logged with its stack, handed to
+// panicked (to put that source off: the same panic would otherwise come first every run) and stops the rest like a
+// false, so one bad source cannot end the process (the loop's own recovery is in another goroutine).
+func (e *Engine) bounded(ctx context.Context, n, workers int, job func(i int) bool, panicked func(i int, p any)) {
 	var (
 		wg   sync.WaitGroup
 		stop atomic.Bool
 		sem  = make(chan struct{}, max(1, workers))
 	)
 	for i := range n {
-		sem <- struct{}{}
 		if stop.Load() || ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		if stop.Load() || ctx.Err() != nil { // it may have changed while waiting for a slot
 			<-sem
 			break
 		}
@@ -229,9 +232,10 @@ func (e *Engine) bounded(ctx context.Context, n, workers int, job func(i int) bo
 			defer wg.Done()
 			defer func() { <-sem }()
 			defer func() {
-				if r := recover(); r != nil {
-					e.logf("panic: %v\n%s", r, debug.Stack())
+				if p := recover(); p != nil {
+					e.logf("panic: %v\n%s", p, debug.Stack())
 					stop.Store(true)
+					panicked(i, p)
 				}
 			}()
 			if !job(i) {

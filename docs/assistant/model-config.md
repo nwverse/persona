@@ -28,6 +28,46 @@ The home page has five category rows and a separate **Lark /agent** row, showing
 
 The original `/launchers` API remains. New connections have `kind` of `launcher` or `api`; omitted on legacy entries, it still means launcher. Messages-protocol API connections (`api` empty or `messages`) can also be selected for the main chat and Agents: node starts claude with their address and key (#2455; see `docs/integrations/claude-integration.md` for environment variables). Responses and Chat Completions connections support only direct calls; `finishModel` refuses to treat them as launchers. Chat Completions can be configured manually, while extension provider declarations accept only Messages and Responses. Legacy API connections (`ai`, `inbox.*_ai`, `kb.ai`, in the manager's `manager.json` since 2026-11-06, in `hub.json` before) appear as compatibility sources; authentication-file paths and values are not returned to clients.
 
+## Execution form
+
+`ModelPurpose.launch` is a read-only value derived from the purpose's `kind` and ID or parent, not from its provider.
+It is returned by the model-configuration list and detail endpoints, never stored in a binding, and rejected in PUT/PATCH.
+
+| Purpose | `kind` | `launch` | Execution |
+| --- | --- | --- | --- |
+| `assistant`, `schedule`, `task.*`, `inbox.agent`, `lark.agent` | `launcher` | `headless` | Background process, without a terminal panel |
+| `agent.new` | `launcher` | `engine` | Interactive Agent in the target computer's terminal host |
+| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant |
+| `plugin.*` | `plugin` | omitted | The plugin's own model service |
+
+Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
+`applyModel` overwrites any caller-supplied `launch` in node-call params. `startOn` requires `headless` before
+`assistant.send`; a new `AgentStartParams` requires `engine` before `session.start`. Existing launcher, model, effort,
+runtime, permission and resume choices are unchanged.
+
+The web page groups purposes by `(kind, launch)`: **Persona chats · Background process**, **Agents · Interactive**,
+**Background processing · Direct API**, then **Extensions** (only when installed; extensions' own API purposes stay here).
+These groups describe execution, not inheritance levels. Lark /agent sits alongside the main chat in the background-process
+group, with **Inherits the Agents model · Runs as a background process** when following Agents, or **Separately configured**
+when overridden. Its reset action still says **Follow Agents**. Only **New agent** sits in the interactive group.
+Scheduled tasks follow the main chat's category; this presentation does not add independent task settings.
+
+Each row's neutral execution chip has a fixed form and a backend that follows the effective provider and runtime:
+`Background process · claude -p`, `Background process · codex app-server`, `Background process · Agent SDK`,
+`Interactive · herdr · claude`, or `Direct API · Messages` / `Responses` / `Chat`.
+The terminal host is a computer setting, not a provider property: only a purpose bound to a known computer shows its
+configured default host; `agent.new` says **By machine**. The editor previews backend changes before saving.
+
+The trailing **?** expands an inline explanation on desktop hover, keyboard focus or click (including touch).
+Click pins or closes it; Escape or a click outside dismisses it. This stays inside the settings card so long explanations
+remain readable on narrow screens and at larger text sizes, without nesting a help button inside the edit button.
+The explanation covers environment, configuration directories, compatible providers, typical uses and the current backend:
+headless processes use the assistant's working directory and the launcher's environment/configuration;
+interactive Agents use the target computer's terminal host environment and launcher configuration;
+direct API purposes use provider connections/credentials and no terminal or Claude/Codex profile;
+plugins use their own environment, configuration and credentials.
+**Unverified** means launcher execution on the target computer has not been confirmed, not that a paid model request succeeded or failed.
+
 ## Editing and inheritance
 
 Each category shows both “In Effect” and “Model Settings”:
@@ -41,7 +81,7 @@ Each category shows both “In Effect” and “Model Settings”:
 
 For launcher purposes without a bound machine (such as Agents), saving a specific model uses the model picker's online-machine selection among the provider's reported machines. This also applies to effort-only edits with an existing model and to model-profile switches. If every candidate is offline, the binding can still be saved without a live model check; it remains unverified. A purpose bound to a known machine still validates there, and an online node's model-validation error still rejects the save. These checks do not make a paid model request.
 
-For API purposes (triage, assessment, drafting, translation, knowledge processing, titles), when there is no override or legacy `ai` configuration in the manager's `manager.json`, automatically choose a connection directly callable from the hub: first the first `kind: api` entry, then the first Persona-managed launcher with a key and Messages protocol (excluding hidden entries or those missing an address / default model / key). Use its default model. “Inherited From” shows “Automatic selection”; no override is written, and later selections here still take priority. If none exists, status and errors explain where to configure one (#388, 2026-11-02: with only “Claude Code default” configured, reply drafting immediately returned no model configured).
+For API purposes (triage, assessment, drafting, translation, knowledge processing, titles), when there is no override or legacy `ai` configuration in the manager's `manager.json`, automatically choose a connection directly callable from the hub: first the first `kind: api` entry, then the first Persona-managed launcher with a key and Messages protocol (excluding hidden entries or those missing an address / default model / key). Use its default model. “Inherited From” shows “Automatic selection”; no override is written, and later selections here still take priority. Automatic selection by these built-in categories alone does not block provider deletion when another eligible connection can take over: the next eligible connection takes over, while an explicit provider choice (or deleting the last provider that leaves no eligible connection) still returns 409. If none exists, status and errors explain where to configure one (#388, 2026-11-02: with only “Claude Code default” configured, reply drafting immediately returned no model configured).
 
 Launchers such as “Claude Code default” are only CLIs on computers, without an API address or key, so they cannot be called directly and are not offered for API purposes.
 
@@ -199,7 +239,7 @@ Direct-API purposes (knowledge processing, Inbox triage / assessment / drafting,
 - **No requests during a pause**: Calls immediately receive `ai.PausedError` (`ai.IsPaused`), with the same text displayed in the app: “Quota exhausted; retry in 23 minutes.” Callers treat it as deferred: knowledge-processing loops stop immediately (sessions remain pending compaction, projects pending rewrite, entries untagged); Inbox triage does not mark entries as triaged (new entries go into rule-based groups first and are triaged again after recovery); assessment and translation wait for the next round. None logs it.
 - **Only the gate logs**: One line on entry (address, upstream code and message, pause end time), one on exit (pause duration, number of deferred requests).
 - **Release one request after the pause**: The first request probes recovery; others remain deferred. Only a successful probe opens the gate; another rejection starts a new pause (without another log). Matching responses from requests already in flight before the pause do not count and do not compound the backoff.
-- **Concurrency cap**: On the first concurrency-full response, set it to half the current in-flight count (at least 1); halve it again on another full response. Then increase by 1 after every 10 successes; stop limiting once it exceeds 8. Requests above the cap queue for a slot for at most 30 seconds (`slotWait`), or until their own deadline if sooner, and are then deferred without being sent, so a background call gives its turn back instead of spending its whole deadline (minutes) in the queue (#4246).
+- **Concurrency cap**: On the first concurrency-full response, set it to half the current in-flight count (at least 1); halve it again on another full response. Then increase by 1 after every 10 successes; stop limiting once it exceeds 8. Requests above the cap queue for a slot until their own deadline; reaching it also counts as deferred. The knowledge base loop's calls are marked background (`ai.Background`): they queue for at most 30 seconds, or until their own deadline if sooner, and are then deferred without being sent, so they give their turn back instead of spending their whole deadline (minutes) in the queue, while a call someone waits for on the same connection keeps waiting (#4246).
 - **Visible in the app**: In the model-configuration API, purposes whose connection is paused carry `limit` (`reason`: `quota` / `busy`, `until`), and `status` is the text above (apps, web, and Android versions that do not understand `limit` still show it).
   The app displays a warning in purpose rows and details under “Settings › Model Settings” (a `Theme.caution` symbol + `cautionText` text), counting down from `until` while the page is open. Screenshots use mock `MOCK_MODEL_LIMIT=1`.
 

@@ -87,6 +87,7 @@ type kbState struct {
 	agentAt      map[string]time.Time        // agent → when its turn last went into a project timeline (kb_bus.go)
 	waiting      []assistantwire.KBAgentTurn // turns that came before it opened
 	postsDirty   atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
+	retries      kb.Retries                  // the steps' backoffs, kept across the engines built one after another
 
 	history   kbHistoryShared  // the history import (kb_history.go)
 	selection kbSelectionState // what is brought in and kept (kb_selection.go)
@@ -215,7 +216,8 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	}
 	s.kbRezone(k.store, loc)
 	// The models are counted per lane run (kb_lanes.go: kbCounted, through the run's context).
-	e := &kb.Engine{Store: k.store, Model: kbCounted(s.kbModel("inbox.triage")), ModelFor: func(id string) kb.Model { return kbCounted(s.kbModel(id)) },
+	// Retries: the steps' backoffs carry over to the engine after this one (the hub's settings changed; #4247).
+	e := &kb.Engine{Store: k.store, Retries: &k.retries, Model: kbCounted(s.kbModel("inbox.triage")), ModelFor: func(id string) kb.Model { return kbCounted(s.kbModel(id)) },
 		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, MinutesWritten: s.minutesWritten, LiveChanged: s.meetingKick, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
 		Selection: s.kbSelectionNow, TopicsOn: s.kbTopicsNow}
 	e.ObserveChanges()
@@ -400,8 +402,10 @@ func (s *Service) kbLoop(ctx context.Context) {
 	if s.kb.dir == "" {
 		return
 	}
+	ctx = ai.Background(ctx) // its model calls give their turn back when queued under a connection's cap (ai/limit.go)
 	var r kbRounds
 	lanes := s.kbLaneSet(&r)
+	var debounce <-chan time.Time // a kick's round, kbDebounce after it
 	t := time.NewTicker(kbPoll)
 	defer t.Stop()
 	for {
@@ -431,11 +435,11 @@ func (s *Service) kbLoop(ctx context.Context) {
 		case <-t.C:
 			lanes.tick()
 		case <-s.kb.kick:
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(kbDebounce):
+			if debounce == nil { // a round in kbDebounce, for what else comes meanwhile; the loop goes on handling the rest
+				debounce = time.After(kbDebounce)
 			}
+		case <-debounce:
+			debounce = nil
 			lanes.tick()
 		}
 	}
@@ -447,26 +451,31 @@ type kbRounds struct {
 	tagMore             bool // item tagging stopped at its cap with untagged items left
 }
 
-// kbPrepare is what a round does before it starts lanes: nothing when the knowledge base is read-only or the user's
-// zone cannot be read (false: the lanes wait for the next round); else the archive kept in the user's zone and the
-// owner's name for the models' prompts read again.
+// kbPrepare is what a round checks before it starts lanes, quickly, on the loop's goroutine: nothing when the
+// knowledge base is read-only or the user's zone cannot be read (false: the lanes wait for the next round); else the
+// owner's name for the models' prompts read again. Moving the archive into the user's zone (Store.Rezone, which waits
+// for the archive's lock) is the archive lane's first step, so the loop never waits behind a lane's writes.
 func (s *Service) kbPrepare(ctx context.Context, e *kb.Engine) bool {
 	if e.Store.ReadOnly() || !s.kbWritable(ctx) {
 		return false
 	}
-	loc, ok := s.kbZone(ctx)
-	if !ok {
+	if _, ok := s.kbZone(ctx); !ok {
 		s.logf("kb: the user's time zone could not be read: archiving waits for the next round")
 		return false
 	}
-	s.kbRun(ctx, func() { s.kbRezone(e.Store, loc) })
 	e.SetOwner(s.owner(ctx)) // the lanes read it while they run
 	return true
 }
 
 // kbArchiveLane is one run of the archive lane (kb_lanes.go): its steps one after another, each under kbRun so a panic
-// in one is logged and the steps after it still run.
+// in one is logged and the steps after it still run. First the archive is kept in the user's zone (kb/zone.go), before
+// anything is archived in it.
 func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) {
+	loc, ok := s.kbZone(ctx)
+	if !ok {
+		return // read a moment ago (kbPrepare); the next round tries again
+	}
+	s.kbRun(ctx, func() { s.kbRezone(e.Store, loc) })
 	s.kbRun(ctx, func() { s.kbConnectors(ctx, e) }) // mail, GitHub, the plugins'…, each when it is due
 	s.kbRun(ctx, func() {
 		for i, c := range e.DueForCompression(time.Now()) {
@@ -505,9 +514,9 @@ func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) 
 	switch {
 	case s.kbItemsDue(r.items):
 		r.items = time.Now()
-		s.kbRun(ctx, func() { r.tagMore = s.kbCollectItems(ctx, e) })
+		s.kbRun(ctx, func() { r.tagMore = s.kbCollectItems(ctx, e, r.tagMore) })
 	case r.tagMore: // untagged items left past the last run's cap
-		s.kbRun(ctx, func() { r.tagMore = s.kbTagItems(ctx, e) })
+		s.kbRun(ctx, func() { r.tagMore = s.kbTagItems(ctx, e, r.tagMore) })
 	}
 	daily := time.Since(r.prune) >= 24*time.Hour
 	if daily {

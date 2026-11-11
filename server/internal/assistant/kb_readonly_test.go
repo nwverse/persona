@@ -102,7 +102,7 @@ func TestKBReadOnlyAbsentArchiveAndWriteRefusals(t *testing.T) {
 	s.kbAgentTurn(ctx, assistantwire.KBAgentTurn{Line: "example"})
 	kbRoundNow(ctx, s, e)
 	s.kbConnectors(ctx, e)
-	s.kbCollectItems(ctx, e)
+	s.kbCollectItems(ctx, e, false)
 	if _, _, _, err := (busArchive{s: s}).Changes(ctx, "", 1); !errors.Is(err, kb.ErrReadOnly) {
 		t.Fatal(err)
 	}

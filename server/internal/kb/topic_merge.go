@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -42,8 +41,8 @@ type mergeDigest struct {
 }
 
 // RefreshTopics merges the candidates of at most max topics, those waiting longest first, topicWorkers at a time; how
-// many merges it tried, failed ones included. A topic whose merge failed waits (retryWait) like a project whose rewrite
-// failed; a paused connection starts no more. Only the knowledge base loop calls it.
+// many merges it tried, failed ones included. A topic whose merge failed (or panicked) waits (retryWait) like a project
+// whose rewrite failed; a paused connection or no model starts no more. Only the knowledge base loop calls it.
 func (e *Engine) RefreshTopics(ctx context.Context, max int) int {
 	if e.Model == nil || !e.topicsOn() || e.Store.ReadOnly() {
 		return 0
@@ -51,7 +50,7 @@ func (e *Engine) RefreshTopics(ctx context.Context, max int) int {
 	now := time.Now()
 	var dirty []*Topic
 	for _, t := range e.Store.Topics() {
-		if t.Dirty && !e.topicRetries.waits(KindTopic+"/"+t.Slug, now) {
+		if t.Dirty && !e.retries().topics.waits(KindTopic+"/"+t.Slug, "", now) {
 			dirty = append(dirty, t)
 		}
 	}
@@ -61,17 +60,17 @@ func (e *Engine) RefreshTopics(ctx context.Context, max int) int {
 	e.bounded(ctx, len(dirty), topicWorkers, func(i int) bool {
 		key := KindTopic + "/" + dirty[i].Slug
 		if err := e.mergeTopic(ctx, dirty[i].Slug); err != nil {
-			if ai.IsPaused(err) || ctx.Err() != nil {
+			if deferred(ctx, err) {
 				return false
 			}
 			e.topicRetryLater(key, err, "merge")
 			tried.Add(1)
 			return true
 		}
-		e.topicRetries.clear(key)
+		e.retries().topics.clear(key)
 		tried.Add(1)
 		return true
-	})
+	}, func(i int, p any) { e.topicRetryLater(KindTopic+"/"+dirty[i].Slug, fmt.Errorf("panic: %v", p), "merge") })
 	return int(tried.Load())
 }
 

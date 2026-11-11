@@ -100,18 +100,18 @@ type lanesModel struct{ err error }
 
 func (m lanesModel) JSONMax(context.Context, string, string, int, any) error { return m.err }
 
-// A lane run's model calls are counted through its context: answered, failed and put off; calls outside a lane run
-// are not.
+// A lane run's model calls are counted through its context: answered, failed (an error, its own time running out) and
+// put off; a call cancelled with its run counts as nothing, and calls outside a lane run are not counted.
 func TestKBCountedModel(t *testing.T) {
 	st := &kbLaneStats{}
 	ctx := context.WithValue(context.Background(), kbLaneStatsKey{}, st)
 	paused := &ai.PausedError{Pause: ai.Pause{Reason: ai.ReasonBusy, Until: time.Now()}}
-	for _, err := range []error{nil, nil, errors.New("example"), paused} {
+	for _, err := range []error{nil, nil, errors.New("example"), paused, context.Canceled, context.DeadlineExceeded} {
 		_ = kbCounted(lanesModel{err: err}).JSONMax(ctx, "", "", 1, nil)
 	}
 	_ = kbCounted(lanesModel{}).JSONMax(context.Background(), "", "", 1, nil)
-	if st.calls.Load() != 3 || st.failed.Load() != 1 || st.putOff.Load() != 1 {
-		t.Fatalf("calls %d, failed %d, put off %d; want 3, 1, 1", st.calls.Load(), st.failed.Load(), st.putOff.Load())
+	if st.calls.Load() != 4 || st.failed.Load() != 2 || st.putOff.Load() != 1 {
+		t.Fatalf("calls %d, failed %d, put off %d; want 4, 2, 1", st.calls.Load(), st.failed.Load(), st.putOff.Load())
 	}
 	if kbCounted(nil) != nil {
 		t.Fatal("a missing model became one")

@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -659,10 +659,11 @@ type recordingSummary struct {
 const recordingPromptChars = 24000
 
 // SummarizeRecordings writes the summary and tags of complete recordings whose latest revision has none yet, newest
-// first, at most max calls per run (failed ones included); how many it did. A recording whose summary failed waits
-// like a project whose rewrite failed (retryWait) and the next one goes on, so one transcript the model keeps failing
-// on neither costs a call every round nor holds back the others. A paused connection stops the run without counting:
-// the rest stay due.
+// first, at most max model calls per run (failed ones included; one that needed no call, changed meanwhile, costs none);
+// how many it did. A recording whose summary failed waits like a project whose rewrite failed (retryWait) and the next
+// one goes on, so one transcript the model keeps failing on neither costs a call every round nor holds back the others;
+// a new revision of it is tried at once. A paused connection or no model set up stops the run without counting: the
+// rest stay due.
 func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	if e.Model == nil && e.ModelFor == nil {
 		return 0
@@ -673,54 +674,65 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	for _, r := range e.Store.Recordings() {
 		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() {
 			due[r.ID] = true
-			if e.recordingRetries.waits(r.ID, now) {
+			if e.retries().recordings.waits(r.ID, recordingAbout(r), now) {
 				continue
 			}
 			todo = append(todo, r)
 		}
 	}
-	e.recordingRetries.keep(due) // summarized, trimmed or gone in the meantime
+	e.retries().recordings.keep(due) // summarized, trimmed or gone in the meantime
 	sort.Slice(todo, func(i, j int) bool { return todo[i].StartedAt.After(todo[j].StartedAt) })
 	n, calls := 0, 0
 	for _, r := range todo {
 		if calls >= max || ctx.Err() != nil {
 			break
 		}
-		calls++
-		if err := e.summarizeRecording(ctx, r); err != nil {
-			if ai.IsPaused(err) || ctx.Err() != nil { // the connection is held or the run ended: they stay due
+		called, err := e.summarizeRecording(ctx, r)
+		if called {
+			calls++
+		}
+		if err != nil {
+			if deferred(ctx, err) { // the connection is held, no model, or the run ended: they stay due
 				break
 			}
-			f := e.recordingRetries.fail(r.ID)
+			f := e.retries().recordings.fail(r.ID, recordingAbout(r))
 			e.logf("recording %s: %v (failed %d time(s) in a row, next try in %s)", r.ID, err, f.failures, retryWait(f.failures))
 			continue
 		}
-		e.recordingRetries.clear(r.ID)
-		n++
+		e.retries().recordings.clear(r.ID)
+		if called {
+			n++
+		}
 	}
 	return n
 }
 
-func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
+// recordingAbout is what a recording's summary is asked about: its revision (a new upload is tried at once).
+func recordingAbout(r *Recording) string { return strconv.FormatInt(r.Revision, 10) }
+
+// summarizeRecording writes r's summary; called: the model was asked (not when r changed meanwhile so that it needs
+// none, or could not be read).
+func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called bool, err error) {
 	files, err := e.Store.recordingSnapshot(r.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var snapshot Recording
 	if files["meta.json"] == nil {
-		return nil
+		return false, nil
 	}
 	if err := json.Unmarshal(files["meta.json"], &snapshot); err != nil {
-		return err
+		return false, err
 	}
 	r = &snapshot
 	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision || r.Trimmed() {
-		return nil
+		return false, nil
 	}
 	var segs []RecordingSegment
 	if err := json.Unmarshal(files["segments.json"], &segs); err != nil {
-		return err
+		return false, err
 	}
+	called = true
 	zone := e.Store.Zone()
 	in := prompts.KBRecordingInput{Pinned: r.Pinned, Title: r.Title, Device: r.Device, Language: r.Language,
 		Start: r.StartedAt.In(zone), Minutes: int(r.Duration / 60), Projects: e.knownProjects(), Tags: e.TopTags(40),
@@ -730,19 +742,19 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
 	err = e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBRecording(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBRecordingInput(in), 4000, &out)
 	cancel()
 	if err != nil {
-		return err
+		return true, err
 	}
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	cur, ok := st.Recording(r.ID)
 	if !ok || cur.Trimmed() {
-		return nil // deleted or trimmed meanwhile: no summary of a transcript that is gone
+		return true, nil // deleted or trimmed meanwhile: no summary of a transcript that is gone
 	}
 	now := time.Now().UTC()
 	if s := strings.TrimSpace(out.Summary); s != "" && !cur.fieldLocked("summary") {
 		if err := st.putSummary(KindRecording, cur.ID, s+"\n", false); err != nil {
-			return err
+			return true, err
 		}
 	}
 	applyTags(&cur.Tagging, out.Importance, int(out.Relevance), out.Tags, now)
@@ -767,10 +779,10 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
 		_ = st.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, false)
 	}
 	if err := st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false); err != nil {
-		return err
+		return true, err
 	}
 	e.index(KindRecording, cur.ID, cur.Name, cur.Tagging, cur.OneLine, cur.StartedAt)
-	return nil
+	return true, nil
 }
 
 // clipMiddle keeps the first and last of s within n runes, marking the cut.
