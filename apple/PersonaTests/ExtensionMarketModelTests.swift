@@ -124,6 +124,34 @@ struct ExtensionMarketModelTests {
         #expect(page.markets.map(\.id) == ["m2"] && page.market == nil && page.error == nil)
     }
 
+    @Test func removalCountsOnlyTheDefaultManagersAffectedExtensions() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"a","name":"A","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m1"},{"id":"b","name":"B","kind":"ui","status":"disabled","source":"installed","auto_upgrade":false,"market":"m1"},{"id":"c","name":"C","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m2"},{"id":"other","name":"Other","kind":"ui","status":"running","source":"installed","manager":"other","auto_upgrade":true,"market":"m1"}]}"#)
+        let page = market(hub)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalMarket == "m1" && page.removalCount == 2)
+        #expect(page.error == nil, "counting is explanatory and must not block the market page")
+    }
+
+    @Test func removalCountDistinguishesAnOldHubFromNoAffectedExtensions() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"old","name":"Old","kind":"ui","status":"running","source":"installed","auto_upgrade":true}]}"#)
+        let page = market(hub)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalMarket == "m1" && page.removalCount == nil, "an auto-upgrade item without market means the hub cannot give a trustworthy count")
+
+        hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"c","name":"C","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m2"}]}"#)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalCount == 0)
+    }
+
+    @Test func removalCopyCoversUnknownNoneOneAndSeveral() {
+        #expect(ExtensionMarketText.removalReason(nil) == "hub 不再读这个市场。从它装的扩展留着，但不再升级，直到用同样的地址把市场加回来。")
+        #expect(ExtensionMarketText.removalReason(0) == "hub 不再读这个市场。没有扩展是从它装的。")
+        #expect(ExtensionMarketText.removalReason(1) == "hub 不再读这个市场。从它装的 1 个扩展留着，但不再升级，直到用同样的地址把市场加回来。")
+        #expect(ExtensionMarketText.removalReason(2) == "hub 不再读这个市场。从它装的 2 个扩展留着，但不再升级，直到用同样的地址把市场加回来。")
+    }
+
     @Test func installingGoesThroughThePreviewsDigest() async throws {
         let hub = FakeHub()
         var installed = false
