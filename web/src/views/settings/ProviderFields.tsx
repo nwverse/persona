@@ -1,6 +1,6 @@
 // The provider wizard's form pieces (#2455): a labelled input, a secret one (keys, headers: never offered to the
 // browser's password manager, shown only on request), and the "Advanced" disclosure.
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Collapse, cx, SECRET_INPUT } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { inputClass, textareaClass } from "../assistant/parts";
@@ -24,12 +24,11 @@ export function Labelled({ label, hint, error, children, htmlFor, describedById 
   );
 }
 
-const wholeInput = (e: Event) => "inputType" in e && (e.inputType === "insertFromPaste" || e.inputType === "insertFromDrop");
-
 export function TextField({ label, value, onChange, hint, error, placeholder, mono, disabled, inputMode, onBlur }: {
   label: React.ReactNode;
   value: string;
-  /** `pasted`: the change was a paste or a drop, so it came whole (the provider wizard's address counts as entered then). */
+  /** `pasted`: the change was a paste that replaced all the text (an empty or fully selected field), so the value came
+   *  whole; a paste into part of the text, a drop or typing is not (the provider wizard's address counts as entered then). */
   onChange: (v: string, pasted: boolean) => void;
   hint?: React.ReactNode;
   error?: string;
@@ -41,9 +40,18 @@ export function TextField({ label, value, onChange, hint, error, placeholder, mo
 }) {
   const id = useId();
   const noteId = useId();
+  // set by the paste event that comes just before its input event: whether the paste replaces all the text
+  const pastesAll = useRef(false);
   return (
     <Labelled label={label} hint={hint} error={error} htmlFor={id} describedById={noteId}>
-      <input id={id} aria-invalid={error ? true : undefined} aria-describedby={error || hint ? noteId : undefined} value={value} onChange={(e) => onChange(e.target.value, wholeInput(e.nativeEvent))} onBlur={onBlur} disabled={disabled} placeholder={placeholder} inputMode={inputMode} autoComplete="off" spellCheck={false} className={cx(INPUT, mono && "font-mono")} />
+      <input id={id} aria-invalid={error ? true : undefined} aria-describedby={error || hint ? noteId : undefined} value={value}
+        onPaste={(e) => void (pastesAll.current = e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === e.currentTarget.value.length)}
+        onChange={(e) => {
+          const pasted = (e.nativeEvent as InputEvent).inputType === "insertFromPaste" && pastesAll.current;
+          pastesAll.current = false;
+          onChange(e.target.value, pasted);
+        }}
+        onBlur={onBlur} disabled={disabled} placeholder={placeholder} inputMode={inputMode} autoComplete="off" spellCheck={false} className={cx(INPUT, mono && "font-mono")} />
     </Labelled>
   );
 }

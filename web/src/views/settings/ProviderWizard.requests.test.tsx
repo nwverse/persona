@@ -90,9 +90,12 @@ async function resolve(request: Pending, value: unknown) {
 function leave(el: HTMLInputElement) {
   act(() => { el.focus(); el.blur(); });
 }
-/** Pastes `value` over the field's text: the change a paste makes (its input event says so). */
-function paste(el: HTMLInputElement, value: string) {
+/** Pastes so the field ends up holding `value`: over all its text (`whole`), or at the caret after what is there. */
+function paste(el: HTMLInputElement, value: string, whole = true) {
   act(() => {
+    if (whole) el.setSelectionRange(0, el.value.length);
+    else el.setSelectionRange(el.value.length, el.value.length);
+    el.dispatchEvent(new Event("paste", { bubbles: true }));
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }));
   });
@@ -496,7 +499,7 @@ describe("the Connect step's own check (#4881)", () => {
 
   it.each([
     ["a refused key", { models: [], error: "The gateway refused this key", code: "auth" }],
-    ["an unreachable host", { models: [], error: "Couldn't reach the gateway" }],
+    ["a refused region", { models: [], error: "Not available in this region", code: "region_blocked" }],
   ] as const)("does not test the same connection again after %s", async (_, answer) => {
     await draw({ ...a, model: "known-model", models: [{ id: "known-model" }] });
     type(keyInput(), "example-key-b");
@@ -504,6 +507,57 @@ describe("the Connect step's own check (#4881)", () => {
     await resolve(pending[0]!, answer);
     await advance(AUTO * 3);
     expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/discover"]);
+  });
+
+  it.each([
+    ["a busy gateway", { models: [], error: "Too many requests" }],
+    ["an unreadable list", { models: [], error: "The model list could not be read" }],
+    ["a list that failed after its first page", { models: [{ id: "first-model" }], error: "The next page could not be read" }],
+  ] as const)("still tests the model after %s", async (_, answer) => {
+    await draw({ ...a, model: "known-model", models: [{ id: "known-model" }] });
+    type(keyInput(), "example-key-b");
+    await advance(AUTO);
+    await resolve(pending[0]!, answer);
+    expect(pending[1]).toMatchObject({ path: "/api/v1/launchers/test", body: { model: "known-model" } });
+  });
+
+  it("does not send a second test when the list is retried while the check's test runs", async () => {
+    await draw({ ...a, model: "known-model", models: [{ id: "known-model" }] });
+    type(keyInput(), "example-key-b");
+    await advance(AUTO);
+    await resolve(pending[0]!, { models: [], error: "The gateway has no model list", code: "not_found" });
+    expect(text()).toContain(t("settings-providerwizard.testing"));
+    click("settings-providerwizard.retry");
+    await resolve(pending[2]!, { models: [], error: "The gateway has no model list", code: "not_found" });
+    await resolve(pending[1]!, { ok: true, ms: 412, model: "known-model" });
+    expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/discover", "/api/v1/launchers/test", "/api/v1/launchers/discover"]);
+    expect(text()).toContain(t("lib-providers.test_ok", { ms: 412 }));
+  });
+
+  it("counts a paste into part of the URL as typing", async () => {
+    await draw(a);
+    const url = urlInput();
+    act(() => url.focus());
+    type(url, "https://b.exa");
+    paste(url, "https://b.example", false);
+    await advance(AUTO * 3);
+    expect(pending).toHaveLength(0);
+    paste(url, "https://b.example.com");
+    await advance(AUTO);
+    expect(pending[0]).toMatchObject({ path: "/api/v1/launchers/discover", body: { base_url: "https://b.example.com" } });
+  });
+
+  it("takes Next as the URL being entered, even when the field never blurs", async () => {
+    await draw("new");
+    click("settings-providerwizard.custom");
+    type(nameInput(), "my_gateway");
+    type(keyInput(), "example-key-a");
+    type(urlInput(), "https://a.example.com");
+    expect(text()).toContain(t("settings-providerwizard.check_leave_url"));
+    click("settings-providerwizard.next");
+    click("settings-providerwizard.back");
+    await advance(AUTO);
+    expect(pending[0]).toMatchObject({ path: "/api/v1/launchers/discover", body: { base_url: "https://a.example.com" } });
   });
 
   it("keeps waiting while the window, not the field, loses focus, and says leaving the field starts the check", async () => {

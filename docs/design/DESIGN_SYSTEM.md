@@ -939,15 +939,15 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 Where a form exists to connect to something with an address or key the user types (the web provider wizard's preset
 key step and its custom gateway's Connect step), the check runs without a button: once what it needs is valid and has
 stopped changing for 0.7 s, it runs once for that input. An address being typed counts only once focus moves from its
-field to something else on the page (not when the window loses focus) or an address is pasted or dropped in whole, so
-a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never runs on
-opening something already saved, only after the fields the form names as its connection change (the provider wizard:
-address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it. A step
-whose failure already answers the question (a refused key, an unreachable host) is not followed by one that would fail
-the same way. A line says it will check by itself, then shows progress with a spinner, then the result; a failure
-keeps the server's words and offers to run that part again (Retry on the Connect step), never repeating a part that
-passed. Manual buttons, where the form has them, and the note that a test may cost a little stay; pressing one counts
-as the check. Once the check found what the next step needs, that step's button is the one primary action (section
-3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path already answered
-it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and status-line
-styles and adds no setting.
+field to something else on the page (not when the window loses focus), the step is left, or a paste replaces all its
+text, so a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never
+runs on opening something already saved, only after the fields the form names as its connection change (the provider
+wizard: address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it. A
+step whose failure already answers the question (the key or the region refused) is not followed by one that would fail
+the same way, and a part that is running or passed is not sent again. A line says it will check by itself, then shows
+progress with a spinner, then the result; a failure keeps the server's words and offers to run that part again (Retry
+on the Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay;
+pressing one counts as the check. Once the check found what the next step needs, that step's button is the one primary
+action (section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path
+already answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and
+status-line styles and adds no setting.

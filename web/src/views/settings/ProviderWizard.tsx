@@ -82,9 +82,9 @@ const stepTitle = (s: Step) =>
 type KeyTest = { running: true } | { running: false; result: TestResult };
 
 /** What fetching a gateway's models found: how many, or why not; `check` when it was the Connect step's check
- *  (which goes on to test), `seq` the request it answers. `testable`: the connection can still be worth testing, the
- *  gateway answered with no list or none at all (`not_found`); a key it refused or a host it never reached would only
- *  fail the test the same way. */
+ *  (which goes on to test), `seq` the request it answers. `testable`: a test can still tell something; not when the
+ *  gateway refused the key (`auth`) or the region (`region_blocked`), or the hub refused the request, since a test
+ *  would fail the same way. */
 type Found = { n: number; error?: string; check: boolean; seq: number; testable: boolean };
 
 /** How long a pasted or typed key (a gateway's address and key) has to stay the same before it is tested on its own. */
@@ -113,6 +113,8 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const [checked, setChecked] = useState(false);
   const testAfter = useRef(0);
   const [urlTyping, setUrlTyping] = useState(false);
+  // the model the latest test asked about (running or answered), so a list fetched again never re-sends a test of it
+  const testedModel = useRef("");
   const modelToTest = probeModel.trim() || testModel(f);
   // the hub's providers (built-in ones, then the extensions'); null while loading
   const [presets, setPresets] = useState<LauncherPreset[] | null>(null);
@@ -150,6 +152,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     setTesting(false);
     setTest(null);
     setChecked(false);
+    testedModel.current = "";
     return () => { ++connectionGeneration.current; };
   }, [existing, choice, f.kind, f.agent, f.api, f.base_url, f.auth, f.api_key, f.headers, f.headers_touched]);
 
@@ -240,6 +243,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const runTest = async () => {
     if (hasLegacyChat) return;
     setChecked(true);
+    testedModel.current = modelToTest;
     const generation = connectionGeneration.current;
     const seq = ++connectionTestSeq.current;
     const current = () => generation === connectionGeneration.current && seq === connectionTestSeq.current;
@@ -277,7 +281,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
         const models = mergeDiscovered(x.models, list, x.kind === "api" && x.api === "chat");
         return { ...x, models, model: x.model || models.find((m) => m.checked)?.id || "" };
       });
-      setFound({ n: list.length, error: r.error, check, seq, testable: !r.error || r.code === "not_found" });
+      setFound({ n: list.length, error: r.error, check, seq, testable: !r.error || (r.code !== "auth" && r.code !== "region_blocked") });
     } catch (e) {
       if (current()) setFound({ n: 0, error: errorText(e), check, seq, testable: false });
     } finally {
@@ -295,14 +299,20 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   }, [autoCheck, existing, f.kind, f.agent, f.api, f.base_url, f.auth, f.api_key, f.headers, f.headers_touched]);
 
   // The check's test, after the render that put the fetched models in the form (and retired any test of the model
-  // before them): the default model, else the first found, else the one typed to test with. A gateway with no model
-  // list (or an empty one) still has a model already known tested; none known, or a fetch that failed for another
-  // reason (the key, the host), nothing is tested. A test or fetch pressed by hand meanwhile takes over (testAfter is 0).
+  // before them): the default model, else the first found, else the one typed to test with. A list that failed or came
+  // back empty still has a model already known tested, unless the key or region was refused; none known, nothing is
+  // tested. A test of the same model that is running or passed is not sent again (Retry on the list); a test or fetch
+  // pressed by hand meanwhile takes over (testAfter is 0).
   useEffect(() => {
     if (!found || found.seq !== testAfter.current) return;
     testAfter.current = 0;
-    if (found.testable && modelToTest) void runTest();
+    const same = testedModel.current === modelToTest && (testing || !!test?.ok);
+    if (found.testable && modelToTest && !same) void runTest();
   }, [found]);
+  // Leaving the step is leaving the URL field (a field removed while focused never blurs).
+  useEffect(() => {
+    if (step !== "connect") setUrlTyping(false);
+  }, [step]);
 
   const save = async () => {
     if (busy || !canSave) return;
@@ -346,6 +356,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const at = steps.indexOf(step);
   const stepProblem = step === "connect" ? problems.connect : step === "models" ? problems.models || problems.advanced : step === "devices" ? devicesProblem : "";
   const next = () => {
+    setUrlTyping(false); // Next or Enter: the address is as the user wants it
     if (stepProblem) return setError(stepProblem);
     setError("");
     setStep(steps[at + 1]);
@@ -511,8 +522,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
                     test={test}
                     // before anything ran: a new gateway says it checks itself, and both say when it is about to
                     waiting={autoCheck ? "wait" : autoReady ? "leave" : isNew && !checked ? "hint" : null}
-                    // a test that already passed is not sent again
-                    onRetryFetch={() => void runDiscover(!!found?.check && !test?.ok)}
+                    onRetryFetch={() => void runDiscover(!!found?.check)}
                     onRetryTest={testByHand}
                   />
                 )}

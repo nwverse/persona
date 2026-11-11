@@ -10116,11 +10116,14 @@ def providers_route(h, method, p, q, body):
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
         h.send_json(PROVIDER_LOG); return True
-    try:  # a body that is not one of these routes' goes on to the routes after this one
+    if MOCK_PROVIDERS:
         b = json.loads(body or b"{}") if method != "GET" else {}
-    except ValueError:
-        return False
-    if not isinstance(b, dict) or (not MOCK_PROVIDERS and b.get("preset")): return False
+    else:  # a body that is not a typed-in gateway's probe goes on to the routes after this one
+        try:
+            b = json.loads(body or b"{}")
+        except ValueError:
+            return False
+        if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/import":
         machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
         if machine == "studio":
