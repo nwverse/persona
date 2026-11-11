@@ -1,5 +1,6 @@
 // One main conversation's newest page, for rendering before the hub answers. This is never a source of authority.
 import { BASE } from "./base";
+import { credentialEpoch } from "./credential-epoch";
 import type { Item } from "./types";
 import { injectedOf } from "./injected";
 import { taskCalls } from "./task-association";
@@ -27,10 +28,10 @@ function fingerprint(value: string): string {
 }
 
 /** Includes the proxy prefix: two hubs behind the same origin must not share their cached conversation. */
-export function feedCacheKey(hub: string, token: string, deviceID = ""): string | null {
+export function feedCacheKey(hub: string, token: string, deviceID = "", epoch = ""): string | null {
   if (!token) return null;
   // A saved device id can be stale after pasting a different jd_ token or pairing against an older hub.
-  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify([deviceID, token]))}`;
+  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify(epoch ? [deviceID, token, epoch] : [deviceID, token]))}`;
 }
 
 let generation = 0;
@@ -43,11 +44,12 @@ export function feedCacheScope(): string | null {
     const token = localStorage.getItem("persona.token") ?? "";
     const deviceID = localStorage.getItem("persona.tokenId") ?? "";
     const hub = location.origin + BASE;
-    const now = JSON.stringify([hub, token, deviceID]);
+    const epoch = credentialEpoch();
+    const now = JSON.stringify([hub, token, deviceID, epoch]);
     if (identity !== now) {
       if (identity) clearFeedCache();
       identity = now;
-      key = feedCacheKey(hub, token, deviceID);
+      key = feedCacheKey(hub, token, deviceID, epoch);
     }
     return key ? `${key}.${generation}` : null;
   } catch {
