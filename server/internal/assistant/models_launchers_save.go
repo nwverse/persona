@@ -31,7 +31,10 @@ type launcherInput struct {
 	CustomModelDescription string   `json:"custom_model_description"`
 	Args                   []string `json:"args"`
 	APIKey                 *string  `json:"api_key"` // nil or "" on an update keeps the key
-	Auth                   string   `json:"auth"`    // api_key (x-api-key, the default) or bearer (Authorization: Bearer)
+	// APIKeyReference is a reference to a provider extension's secret in place of the key (launcher_secrets.go); nil
+	// or "" keeps the key, and a key given later replaces it.
+	APIKeyReference *string `json:"api_key_reference"`
+	Auth            string  `json:"auth"` // api_key (x-api-key, the default) or bearer (Authorization: Bearer)
 	// Preset is the provider it is added from (GET /api/v1/launchers/presets): what is left empty is filled in, the
 	// name too (POST only).
 	Preset string `json:"preset,omitempty"`
@@ -57,6 +60,13 @@ type launcherInput struct {
 	CompactWindow *int                   `json:"compact_window"`
 	MaxContext    *int                   `json:"max_context"`
 	Effort        *string                `json:"effort"`
+
+	// The device scope (models_launchers_scope.go); left out keeps what is stored.
+	scopeInput
+
+	// keyRefSealed and machineRefsSealed are the references above, checked and sealed (sealKeyReferences).
+	keyRefSealed      string
+	machineRefsSealed map[string]string
 }
 
 // checkEffort: a thinking level Claude Code takes (CLAUDE_CODE_EFFORT_LEVEL), or none. whose is the error's key
@@ -264,6 +274,14 @@ func (in launcherInput) check() error {
 	if in.Auth != "" && in.Auth != "api_key" && in.Auth != "bearer" {
 		return i18n.Err("assistant-models_launchers.err_auth")
 	}
+	if keyGiven(in.APIKey) && keyGiven(in.APIKeyReference) {
+		return i18n.Err("assistant-models_launchers.err_key_value_or_reference")
+	}
+	for m, ref := range in.MachineKeyReferences {
+		if keyGiven(ref) && keyGiven(in.MachineKeys[m]) {
+			return i18n.Err("assistant-models_launchers.err_key_value_or_reference")
+		}
+	}
 	if in.Kind == "api" && (len(in.Args) != 0 || in.SmallModel != "" || in.SubagentModel != "" || in.CustomModel != "") {
 		return i18n.Err("assistant-models_launchers.err_api_launch_fields")
 	}
@@ -404,6 +422,9 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 		}
 		l.KeySealed = sealed
 	}
+	if in.keyRefSealed != "" {
+		l.KeySealed = in.keyRefSealed
+	}
 	in.applyProvider(&l)
 	// A bypass list that is the gateway's host alone (iOS's Proxy › No Proxy) follows the gateway to a new address: the
 	// web form and an import send it back as it was, and the old host would leave the new gateway on the proxy (#6238).
@@ -434,13 +455,25 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 		l.Effort != "" || l.OpusModel != "" || l.SonnetModel != "" || l.HaikuModel != "" || l.FableModel != "" || l.SubagentForce) {
 		return storedLauncher{}, errChatLaunchSettings
 	}
+	if err := in.applyScope(&l, old == nil, len(in.Assign) > 0); err != nil {
+		return storedLauncher{}, err
+	}
+	keys, err := s.readMachineKeys(ctx)
+	if err != nil {
+		return storedLauncher{}, err
+	}
+	newKeys, _, err := s.withMachineKeys(keys, l.Name, in.MachineKeys, in.MachineKeyReferences, in.machineRefsSealed)
+	if err != nil {
+		return storedLauncher{}, err
+	}
 	l.APIKey, l.Headers, l.HasHeaders, l.Env, l.HasEnv = "", "", false, "", false // only ever stored sealed
+	l.Withheld, l.Rev = false, ""
 	if i := slices.IndexFunc(list, func(x storedLauncher) bool { return x.Name == l.Name }); i >= 0 {
 		list[i] = l
 	} else {
 		list = append(list, l)
 	}
-	if err := s.storeManagedLaunchers(ctx, list); err != nil {
+	if err := s.storeManagedWithKeys(ctx, list, keys, newKeys); err != nil {
 		return l, err
 	}
 	return l, nil
@@ -450,7 +483,36 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 // node credentials can be opened. An unrelated corrupt credential defers publication without discarding
 // readable records or preventing repair. A post-commit read failure cannot clear the nodes' providers.
 func (s *Service) storeManagedLaunchers(ctx context.Context, list []storedLauncher) error {
-	nodes, publicationErr := s.nodeLaunchers(list)
+	keys, err := s.readMachineKeys(ctx)
+	if err != nil {
+		return err
+	}
+	// a provider's keys for single computers go with it
+	kept := slices.DeleteFunc(slices.Clone(keys), func(k machineKey) bool {
+		return !slices.ContainsFunc(list, func(l storedLauncher) bool { return l.Name == k.Launcher })
+	})
+	return s.storeManagedWithKeys(ctx, list, keys, kept)
+}
+
+// storeManagedWithKeys is storeManagedLaunchers with the computers' keys as they are to be (old: as read).
+func (s *Service) storeManagedWithKeys(ctx context.Context, list []storedLauncher, old, keys []machineKey) error {
+	_, publicationErr := s.nodeLaunchers(list)
+	if publicationErr == nil {
+		for _, k := range keys {
+			if _, err := s.openKey(k.KeySealed); err != nil {
+				publicationErr = i18n.Err("assistant-models.err_key_decrypt")
+				break
+			}
+		}
+	}
+	if !slices.Equal(old, keys) {
+		if keys == nil {
+			keys = []machineKey{}
+		}
+		if err := s.putSetting(ctx, launchersMachineKeysKey, keys); err != nil {
+			return err
+		}
+	}
 	if err := s.putSetting(ctx, launchersManagedKey, list); err != nil {
 		return err
 	}
@@ -458,6 +520,9 @@ func (s *Service) storeManagedLaunchers(ctx context.Context, list []storedLaunch
 		s.logf("launchers: saved providers; node publication deferred: %v", publicationErr)
 		return nil
 	}
-	s.pushNodeLaunchers(ctx, "", nodes)
+	s.pushNodeLaunchers(ctx, "", list, keys)
 	return nil
 }
+
+// keyGiven: a key or reference that is there (nil and blank are not).
+func keyGiven(v *string) bool { return v != nil && strings.TrimSpace(*v) != "" }

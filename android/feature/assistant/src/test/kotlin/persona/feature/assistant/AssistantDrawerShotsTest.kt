@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -33,6 +34,7 @@ import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PhIcons
 import java.io.File
 import java.time.Instant
 
@@ -79,13 +81,18 @@ class AssistantDrawerShotsTest {
         var info: AssistantInfo? = null
         var settingsTapped = false
         var inboxTapped = false
+        var openedPage = ""
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = groups.main != null,
                         onEnd = null, onMain = { mainTapped = true }, onOpen = { opened = it }, onInfo = { info = it },
                         onNew = {}, onHome = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2,
-                        onInbox = { inboxTapped = true }, inboxCount = 5, settingsDot = true)
+                        onInbox = { inboxTapped = true }, inboxCount = 5, settingsDot = true,
+                        pages = listOf(
+                            NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
+                            NavItem("extension", "扩展", PhIcons.PuzzlePiece, dot = true),
+                        ), onPage = { openedPage = it })
                 }
             }
         }
@@ -128,6 +135,42 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("开始主对话").performClick()
         assertTrue(mainTapped)
         capture("drawer-no-main-glass-light")
+    }
+
+    @Test fun navigationPagesAddTrailingChevronsAndKeepBadges() {
+        var opened = ""
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                CompositionLocalProvider(LocalHomeDrawer provides true) {
+                    Box(Modifier.width(320.dp).height(800.dp).background(PersonaTheme.palette.background)) {
+                        AssistantDrawer("", {}, ConversationGroups(null, emptyList(), emptyList()), active = null,
+                            hasMain = false, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {},
+                            onSettings = {}, onInbox = {}, inboxCount = 2, showTodos = false, pages = listOf(
+                                NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
+                                NavItem("extension", "扩展", PhIcons.PuzzlePiece, badge = 2),
+                            ), onPage = { opened = it })
+                    }
+                }
+            }
+        }
+        rule.onAllNodesWithText("2").assertCountEquals(3)
+        // Inbox has the same badge but no navigation chevron. The final 22 dp are its chevron slot on each page.
+        val withoutChevron = rule.onNodeWithText("收件箱").captureToImage().asAndroidBitmap()
+        for (label in listOf("电脑", "扩展")) {
+            val page = rule.onNodeWithText(label).captureToImage().asAndroidBitmap()
+            assertEquals(withoutChevron.width, page.width)
+            assertEquals(withoutChevron.height, page.height)
+            val trailingStart = page.width - with(rule.density) { 22.dp.toPx() }.toInt()
+            var differentPixels = 0
+            for (x in trailingStart until page.width) for (y in 0 until page.height) {
+                if (page.getPixel(x, y) != withoutChevron.getPixel(x, y)) differentPixels++
+            }
+            assertTrue("$label draws a chevron after its badge", differentPixels > 20)
+        }
+        rule.onNodeWithText("电脑").performClick()
+        assertEquals("machines", opened)
+        rule.onNodeWithText("扩展").performClick()
+        assertEquals("extension", opened)
     }
 
     @Test fun aConversationsMenuArchivesItButTheMainOnesDoesNot() {

@@ -153,7 +153,8 @@ data class Pong(
 @KeepGeneratedSerializer
 @Serializable(with = NotifyEventSerializer::class)
 data class NotifyEvent(
-    @WireEnum("interaction", "done", "assistant", "alert", "unknown") val kind: String,
+    /** reply: an Agent still waiting on the user's answer ("Awaiting reply"), laid out as a finished turn's. */
+    @WireEnum("interaction", "done", "assistant", "alert", "reply", "unknown") val kind: String,
     @SerialName("machine_id") val machineId: String,
     @SerialName("session_id") val sessionId: String,
     val title: String = "", val subtitle: String = "", val body: String = "",
@@ -184,6 +185,15 @@ data class ExtensionUiEvent(
     /** The manager that sent it ([pushManager]): none from the assistant the hub starts (docs/assistant/managers.md). */
     val manager: String? = null,
 ) : ServerEvent
+
+/**
+ * A source subscription was saved, ran or was deleted (#2041, docs/extensions/subscriptions.md "API"): the subscription pages on
+ * screen are drawn again.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = SubscriptionEventSerializer::class)
+data class SubscriptionEvent(val id: String, val connector: String? = null, val revision: Long? = null, val state: String? = null,
+                             val removed: Boolean = false) : ServerEvent
 
 /** The hub's update status changed (docs/operations/hub-update.md "In the app"): `update` is what GET /api/v1/hub/update answers. */
 @KeepGeneratedSerializer
@@ -251,6 +261,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "extension_ui_stream" -> ExtensionUiStreamEvent(NativeStreamSchema.parse(obj.toString(), "UIStreamServerEnvelope"))
             "hub_update" -> input.json.decodeFromJsonElement<HubUpdateEvent>(obj)
             "managers" -> ManagersEvent
+            "subscription" -> input.json.decodeFromJsonElement<SubscriptionEvent>(obj)
             "extension_operation" -> input.json.decodeFromJsonElement<ExtensionOperationEvent>(obj).also {
                 require(it.operation.id.isNotEmpty()) { "An operation has its id" }
             }
@@ -310,6 +321,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             is ExtensionUiEvent -> "extension_ui" to output.json.encodeToJsonElement(value)
             is HubUpdateEvent -> "hub_update" to output.json.encodeToJsonElement(value)
             ManagersEvent -> "managers" to JsonObject(emptyMap())
+            is SubscriptionEvent -> "subscription" to output.json.encodeToJsonElement(value)
             is ExtensionOperationEvent -> "extension_operation" to output.json.encodeToJsonElement(value)
             is ExtensionAuthEvent -> "extension_auth" to output.json.encodeToJsonElement(value)
             is LockTestEvent -> "lock_test" to output.json.encodeToJsonElement(value)
@@ -353,5 +365,6 @@ object PongSerializer : WireSerializer<Pong>(Pong.generatedSerializer())
 object NotifyEventSerializer : WireSerializer<NotifyEvent>(NotifyEvent.generatedSerializer())
 object ExtensionUiEventSerializer : WireSerializer<ExtensionUiEvent>(ExtensionUiEvent.generatedSerializer())
 object HubUpdateEventSerializer : WireSerializer<HubUpdateEvent>(HubUpdateEvent.generatedSerializer())
+object SubscriptionEventSerializer : WireSerializer<SubscriptionEvent>(SubscriptionEvent.generatedSerializer())
 object ExtensionOperationEventSerializer : WireSerializer<ExtensionOperationEvent>(ExtensionOperationEvent.generatedSerializer())
 object ExtensionAuthEventSerializer : WireSerializer<ExtensionAuthEvent>(ExtensionAuthEvent.generatedSerializer())

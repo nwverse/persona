@@ -478,6 +478,7 @@ nonisolated enum Theme {
     /// Small / Standard / Large and the system's text size (up to 1.6 ×, `Theme.sizeScale`); the lines stay as they are, in a
     /// plain `.frame`. Nothing on a page writes a size as a number (`TokenRatchetTests`).
     enum Size {
+        static let nonvisualProbe: CGFloat = 0
         // Lines, rules and bars: do not scale.
         static let hairline: CGFloat = 0.5
         /// The width of the small window's source layer (VNC's picture in picture, #1839): a normal size, behind the
@@ -545,8 +546,9 @@ nonisolated enum Theme {
         static let box72: CGFloat = 72
         static let box76: CGFloat = 76
         static let box80: CGFloat = 80
-        /// The height of a saved place's map in its editor: the reminder's circle and a street or two around it.
-        static let placeMap: CGFloat = 160
+        /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
+        /// pan the map and tap where the place is (#4248).
+        static let placeMap: CGFloat = 220
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the
@@ -643,6 +645,8 @@ nonisolated enum Theme {
         /// Opening and closing things (a work card, a menu, a section): a state change, 0.25 s (it was the system's
         /// default snappy, 0.5 s, which trailed behind the finger).
         static let standard = state
+        /// Task-draft dismissal uses the same six-second Undo window as the web.
+        static let draftUndo: Duration = .seconds(6)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)

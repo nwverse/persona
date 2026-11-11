@@ -43,8 +43,8 @@ describe("收件箱事件：分区", () => {
     expect(ids(s.tiers.fyi)).toEqual([conclusion.id]);
     expect(ids(s.tiers.noise)).toEqual([noise.id]);
     expect(s.done).toHaveLength(2);
-    // the badge counts Needs you only (urgent included, it is status action): In progress is the AI's
-    expect(badgeCount(fixture.items)).toBe(4);
+    // The navigation badge follows unread Needs you items, not every open section.
+    expect(badgeCount(fixture.items)).toBe(s.tiers.action.filter((it) => !it.read).length);
     expect(badgeCount([urgent])).toBe(1);
     expect(badgeCount([waiting, agentWorking])).toBe(0);
   });

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/herdr"
@@ -23,6 +24,7 @@ const (
 	HerdrCorePaneEnv  = "HC_TERMINAL_ID"    // herdr-core (Herdr App)
 	OrcaPaneEnv       = "ORCA_PANE_KEY"     // Orca
 	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE"   // older Orca
+	TernPaneEnv       = "TERN_PANE"         // Tern
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
@@ -37,8 +39,8 @@ const HomeFlag = "--persona-home"
 // HookPane is the pane a hook runs in, from its environment, as a stored PaneRef: herdr's HERDR_PANE_ID as it always
 // was in the default server, qualified with its session in a named one ("@<session>:w4:p1", herdr.PaneOf, #2196),
 // else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
-// "orca:<tabId>:<leafId>"); "" in none. A node whose own herdr server is a named session writes its panes the other
-// way round and translates (node ownPane).
+// "orca:<tabId>:<leafId>"), else Tern's TERN_PANE ("tern:<block>"); "" in none. A node whose own herdr server is a
+// named session writes its panes the other way round and translates (node ownPane).
 func HookPane(getenv func(string) string) string {
 	if p := getenv(HerdrPaneEnv); p != "" {
 		return herdr.PaneOf(p, herdr.EnvSession(getenv), "")
@@ -50,6 +52,9 @@ func HookPane(getenv func(string) string) string {
 		if k := getenv(v); k != "" {
 			return host.PaneRef{Kind: host.Orca, ID: k}.String()
 		}
+	}
+	if b := getenv(TernPaneEnv); b != "" {
+		return host.PaneRef{Kind: host.Tern, ID: b}.String()
 	}
 	return ""
 }
@@ -72,6 +77,9 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 		ReportHook(ctx, input, HookPane(os.Getenv))
 		return
 	}
+	if len(args) > 0 && args[0] == CuaOnlyFlag && !runsCua(input) {
+		return // an Agent's Bash command that does not run cua-driver: nothing to ask the node
+	}
 	if isDisplay(input) {
 		Display(ctx, input)
 		return
@@ -81,6 +89,24 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 		return
 	}
 	_, _ = stdout.Write(append(out, '\n'))
+}
+
+// CuaOnlyFlag marks the Bash hook of the Agents Persona starts on a Mac (node/doctor.go): only a command that
+// mentions cua-driver goes to the node's gate (node/cua_gate.go, #4349); any other returns at once, so the Agent's
+// Bash never waits on the node, not even while it restarts.
+const CuaOnlyFlag = "--cua-only"
+
+// runsCua: the hook is a Bash PreToolUse whose command mentions cua-driver.
+func runsCua(input json.RawMessage) bool {
+	var in struct {
+		Event     string `json:"hook_event_name"`
+		Tool      string `json:"tool_name"`
+		ToolInput struct {
+			Command string `json:"command"`
+		} `json:"tool_input"`
+	}
+	return json.Unmarshal(input, &in) == nil && in.Event == "PreToolUse" && in.Tool == "Bash" &&
+		strings.Contains(in.ToolInput.Command, "cua-driver")
 }
 
 // Hook hands a Claude Code hook's input to the node and returns what the hook should print (nil: let the TUI decide).

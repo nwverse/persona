@@ -1,10 +1,12 @@
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
 import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
+import { defaultLabel, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { navigate } from "../lib/router";
+import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
@@ -25,6 +27,7 @@ import {
   isLegacySpacesRouteError,
   makeSessionLookup,
   mostUrgentAgent,
+  orphanedLine,
   sortTodos,
   TODO_STATUS_INFO,
   heldDelivery,
@@ -54,19 +57,21 @@ import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import { useRestoredTodos } from "../lib/todo-restore";
-import { progressLine } from "../lib/supervision";
+import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
+import { resultExtras } from "../lib/brief";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
 import { stateName } from "../lib/state-labels";
 import { answeredLookup } from "./assistant/answered-lookup";
 import { Empty, Segmented } from "./assistant/parts";
+import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
 import type { Route } from "../lib/router";
-import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
+import { LatestReport, ReviewBadge } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
 import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
@@ -128,6 +133,9 @@ export function TodosView({
   }, [everyTodo, ownTodos, selectedId]);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosError = useStore((s) => s.todosError);
+  // the current assistant offline (several assistants): the hub's merged list leaves it out, so none here means it
+  // couldn't answer; the page says so instead of the empty one
+  const offline = useShownOffline();
   const machines = useStore((s) => s.machines);
   const interactions = useStore((s) => s.interactions);
   const allSessions = useAgentSessions();
@@ -283,12 +291,13 @@ export function TodosView({
     } else navigate("/todos", true);
   };
 
-  const toggleDone = useCallback(async (todo: Todo) => {
+  // `open`: the row's checkbox shows it open (`checksAsOpen`): a failed start waiting on the owner is ticked to close it
+  const toggleDone = useCallback(async (todo: Todo, open = !todo.done_at) => {
     try {
-      await updateTodo(todo.id, { done: !todo.done_at });
+      await updateTodo(todo.id, { done: open });
       await refreshTodos();
       await refresh();
-      toast(todo.done_at ? t("todos.reopened") : t("todos.completed"), "ok");
+      toast(open ? t("todos.completed") : t("todos.reopened"), "ok");
     } catch (e) {
       toast(t("todos.action_failed", { error: errorText(e) }), "error");
     }
@@ -376,7 +385,11 @@ export function TodosView({
         </div>
       </header>
 
-      {calendarOn ? (
+      {calendarOn && offline && todosLoaded && todos.length === 0 ? (
+        <div className="flex min-h-0 flex-1 items-start justify-center bg-page">
+          <OfflineState offline={offline} className="py-14" />
+        </div>
+      ) : calendarOn ? (
         <div className="flex min-h-0 flex-1">
           <div className={cx("flex min-h-0 min-w-0 flex-1 flex-col bg-page", selectedTodo && "max-md:hidden")}>
             <TodoCalendar
@@ -479,7 +492,9 @@ export function TodosView({
                 {todosError}
               </Empty>
             ) : filteredUncompleted.length === 0 && filteredCompleted.length === 0 ? (
-              search.trim() ? (
+              offline && todos.length === 0 ? (
+                <OfflineState offline={offline} ring="ring-surface" className="py-14" />
+              ) : search.trim() ? (
                 <Empty icon="search" title={t("todos.no_match_title")}>
                   {t("todos.no_match_body")}
                 </Empty>
@@ -719,7 +734,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   views: readonly TodoRowView[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
 }) {
   const holds = group.todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds });
@@ -793,7 +808,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
   views: ReadonlyMap<string, TodoRowView>;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
   onRestore: (id: string) => void;
 }) {
   const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
@@ -830,7 +845,7 @@ function TodoTriageRow({
   views: ReadonlyMap<string, TodoRowView>;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
   onRestore: (id: string) => void;
 }) {
   const others = group.members.slice(1);
@@ -885,6 +900,8 @@ export type TodoRowView = {
   urgentLead: string;
   /** What the agent asks (its card) or does / last said. */
   urgentText: string;
+  /** The line says nobody is working on it (#3618): its lead is in the caution color, the reason after it. */
+  orphaned: boolean;
   /** One of its agents runs with ultracode on (#12): the Agent list row's mark after its title. */
   ultracode: boolean;
 };
@@ -906,8 +923,18 @@ const DOT_STATE: Record<TodoStatus, AgentState> = {
  *  else what its agent last reported to its supervisor (#3156). */
 export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Interaction[]): TodoRowView {
   const view = agentRowView(todo, lookup, interactions);
+  // Nobody is working on it (#3618): the hub's finding goes ahead of what a stopped agent last said (Interrupted,
+  // Follow up; docs/assistant/todos.md). A card that waits for the user still says its question.
+  const orphan = view.status !== "needs_you" ? orphanedLine(todo) : undefined;
+  if (orphan) {
+    view.urgentLine = true;
+    view.orphaned = true;
+    view.urgentLead = orphan.lead;
+    view.urgentText = orphan.reason ? ` · ${orphan.reason}` : "";
+    return view;
+  }
   if (!view.urgentLine && !todo.done_at) {
-    const said = progressLine(todo.supervision);
+    const said = parkedLine(todo) ?? progressLine(todo.supervision);
     if (said) {
       view.urgentLine = true;
       view.urgentText = said;
@@ -926,7 +953,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -966,7 +993,7 @@ const TodoListItem = memo(function TodoListItem({
   view: TodoRowView;
   selected: boolean;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
   /** Its status section (#3156): a PR to merge shows its link, a shelved one its Restore. */
   section?: TriageSection;
   onRestore?: (id: string) => void;
@@ -976,6 +1003,9 @@ const TodoListItem = memo(function TodoListItem({
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
+  // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713)
+  const open = checksAsOpen(todo, section);
+  const failedOpen = open && Boolean(todo.start_error);
 
   return (
     <div
@@ -997,14 +1027,14 @@ const TodoListItem = memo(function TodoListItem({
       {/* Checkbox button: touch-hit makes the 16px circle a 44px target on touch, its own (no row underneath) */}
       <button
         type="button"
-        aria-label={todo.done_at ? t("todos.reopen_todo") : t("todos.complete_todo")}
+        aria-label={open ? t("todos.complete_todo") : t("todos.reopen_todo")}
         onClick={(e) => {
           e.stopPropagation();
-          onToggleDone(todo);
+          onToggleDone(todo, open);
         }}
         className={cx(
           "touch-hit mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
-          todo.done_at
+          !open
             ? "border-accent bg-accent text-white"
             : "border-line-strong hover:border-accent hover:text-accent text-transparent",
         )}
@@ -1021,7 +1051,7 @@ const TodoListItem = memo(function TodoListItem({
               <UltraMark size={11} />
             </span>
           ) : (
-            <span className={cx("truncate text-[13.5px] font-semibold text-ink", todo.done_at && "line-through text-ink-3 font-normal")}>
+            <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "line-through text-ink-3 font-normal")}>
               {todo.title}
             </span>
           )}
@@ -1037,7 +1067,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Status Line */}
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]">
-          {!todo.done_at && <StatusMark state={dotState} size="sm" />}
+          {open && <StatusMark state={dotState} size="sm" />}
           <span className={cx("shrink-0 whitespace-nowrap font-medium", toneClass)}>{todoStatusLabel(todo, status)}</span>
           {!todo.done_at && activeCount > 0 && (
             <>
@@ -1057,6 +1087,9 @@ const TodoListItem = memo(function TodoListItem({
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
 
+        {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
+        {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
+
         {/* Why the hub closed it */}
         {isAutoDone(todo) && todo.done_reason && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3">{todo.done_reason}</div>
@@ -1073,8 +1106,8 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Most Urgent Agent Line */}
         {view.urgentLine && (
-          <div className="mt-1 truncate text-[11.5px] text-ink-3">
-            {view.urgentLead && <span className="font-medium text-attention">{view.urgentLead}</span>}
+          <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
+            {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
             {view.urgentText}
           </div>
         )}
@@ -1257,6 +1290,103 @@ function askText(ix: Interaction | undefined): string {
 
 // ── Todo Detail ──────────────────────────────────────────────
 
+// A task's brief (#3822) comes with the first to-do that has one, not with the page.
+const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
+const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
+
+// The existing review UI lives with this lazy page, not the first screen's card badges.
+const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
+  met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
+  missing: { icon: "x", className: "text-red", label: () => t("assistant-tasks.review_missing") },
+  open: { icon: "clock", className: "text-ink-3", label: () => t("assistant-tasks.review_open") },
+  // added after the acceptance, which still stands (#3156): nothing waits on it
+  unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
+};
+
+/** The task's criteria, each as its latest report or review found it, and what the supervisor said last. */
+export function ReviewChecklist({ todo }: { todo: Todo }) {
+  const sup = todo.supervision;
+  if (!sup) return null;
+  const list = checklist(sup);
+  const review = latestReview(sup);
+  const parked = parkedLine(todo);
+  // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
+  const extras = todo.done_at ? resultExtras(todo) : undefined;
+  return (
+    <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
+      <div className="flex items-center gap-2">
+        <span className="text-[12.5px] font-semibold text-ink-2">{t("assistant-tasks.review_title")}</span>
+        <ReviewBadge todo={todo} />
+        <span className="flex-1" />
+        {sup.expect_minutes ? <span className="text-[12px] text-ink-3">{t("assistant-tasks.review_expect", { minutes: sup.expect_minutes })}</span> : null}
+      </div>
+      {list.length === 0 ? (
+        <p className="mt-2 text-[12.5px] text-ink-3">{t("assistant-tasks.review_none")}</p>
+      ) : (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {list.map((c) => {
+            const m = MARK[c.mark];
+            return (
+              <li key={c.criterion} className="flex items-start gap-2 text-[13px]">
+                <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
+                  <Icon name={m.icon} size={13} stroke={2.4} />
+                </span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-ink">{c.criterion}</span>
+                  {c.evidence && <span className="text-[12px] text-ink-3 select-text">{c.evidence}</span>}
+                  {(c.at || c.by) && (
+                    <span className="flex flex-wrap gap-x-1.5 text-[11px] text-ink-3">
+                      {c.by && <span>{c.by}</span>}
+                      {c.at && <time dateTime={c.at} title={c.at}>{new Date(c.at).toLocaleString()}</time>}
+                    </span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {extras && (
+        <Suspense fallback={null}>
+          <BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />
+        </Suspense>
+      )}
+      {parked && <p data-testid="review-parked" className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{parked}</p>}
+      {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
+      <AutoReviewResult sup={sup} />
+    </section>
+  );
+}
+
+/** The independent reviewer's result (#2173) under the criteria: a line, and its report on a click. Nothing when no
+ *  review ran, so a task without one looks as it did. */
+function AutoReviewResult({ sup }: { sup: Supervision }) {
+  const [open, setOpen] = useState(false);
+  const line = autoReviewLine(sup);
+  if (!line) return null;
+  const findings = sup.auto_review?.findings;
+  return (
+    <div data-testid="auto-review" className="mt-2 flex flex-col gap-1 text-[12.5px] text-ink-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <Icon name="target" size={12} className="shrink-0" />
+        <span className="shrink-0 whitespace-nowrap font-semibold">{t("assistant-tasks.auto_review_title")}</span>
+        <span className="min-w-0">· {line}</span>
+        {findings && (
+          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="touch-hit ml-auto shrink-0 whitespace-nowrap text-ink-3 hover:text-ink-2">
+            {t(open ? "assistant-tasks.auto_review_hide" : "assistant-tasks.auto_review_show")}
+          </button>
+        )}
+      </div>
+      {open && findings && (
+        <div data-testid="auto-review-findings" className="leading-[1.55] whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">
+          {findings}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TodoDetail({
   todo,
   owner,
@@ -1416,7 +1546,20 @@ function TodoDetail({
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
+      {/* The brief its work is held to (#3822): who asked and in what words above the criteria; the scope changes
+          and who worked on it under them. */}
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefPanel todo={todo} />
+        </Suspense>
+      )}
       <ReviewChecklist todo={todo} />
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefHistory todo={todo} />
+        </Suspense>
+      )}
+      <LatestReport todo={todo} />
 
       {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
       <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />
@@ -2152,6 +2295,10 @@ export function HandoverDialog({
   const [mid, setMid] = useState(() => onlineMachines[0]?.id ?? "");
   const [cwd, setCwd] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
+  // What Model settings › Agents runs on this computer, as the hub says (null: no launcher default); undefined until the list
+  // is in, and from an older hub, which has no default to follow.
+  const [hubDefault, setHubDefault] = useState<LauncherDefault | null | undefined>(undefined);
+  // "": the default (the hub resolves it at the start, as New Agent's "Default: …")
   const [launcher, setLauncher] = useState("");
 
   // For "existing":
@@ -2179,20 +2326,29 @@ export function HandoverDialog({
   useEffect(() => {
     if (!open || !mid) return;
     const controller = new AbortController();
-    api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`, { signal: controller.signal })
+    // another computer's list is not this one's
+    setLaunchers([]);
+    setHubDefault(undefined);
+    setLauncher("");
+    machineLaunchers(mid, { signal: controller.signal })
       .then((r) => {
-        setLaunchers(r.launchers ?? []);
-        // the first this computer can start now, not one its terminal can't run (#1643)
-        if (r.launchers?.length) setLauncher(initialLauncher(null, r.launchers));
+        const ls = r.launchers ?? [];
+        setLaunchers(ls);
+        setHubDefault(r.default);
+        // the default the user configured, as New Agent starts from it (#4384); an older hub has none: the first this computer
+        // can start now, not one its terminal can't run (#1643)
+        setLauncher(r.default !== undefined ? "" : initialLauncher(null, ls));
       })
-      .catch(() => {});
+      .catch((e) => { if (!controller.signal.aborted) toast(errorText(e), "error"); });
     return () => controller.abort();
   }, [open, mid]);
 
   const previewCard = useMemo(() => {
     return formatTodoContext(todo.title, todo.notes);
   }, [todo]);
-  const pickedBlock = launcherBlock(launchers.find((l) => l.name === launcher));
+  // the default is held to what it runs here
+  const pickedBlock = launcherBlock(launchers.find((l) => l.name === (launcher || hubDefault?.provider)));
+  const defaultChoice = hubDefault ? defaultLabel(hubDefault) : t("newagent.follow_model_settings");
 
   const submitNew = async () => {
     if (!mid) return;
@@ -2300,14 +2456,16 @@ export function HandoverDialog({
               />
             </div>
 
-            {launchers.length > 0 && (
+            {(launchers.length > 0 || hubDefault !== undefined) && (
               <div>
                 <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.launcher")}</label>
                 <select
+                  data-testid="todo-handoff-launcher"
                   value={launcher}
                   onChange={(e) => setLauncher(e.target.value)}
                   className="w-full rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none"
                 >
+                  {hubDefault !== undefined && <option value="">{defaultChoice}</option>}
                   {usableFirst(launchers).map((l) => {
                     const block = launcherBlock(l);
                     // still a choice (a start that works clears it), with why, after the ones that can start (#1643)
@@ -2324,6 +2482,19 @@ export function HandoverDialog({
                     <span className="min-w-0">{pickedBlock.reason}</span>
                   </p>
                 )}
+                {/* add, hide or restore launchers (#4384): Settings › Model providers, as New Agent's entry */}
+                <button
+                  type="button"
+                  data-testid="todo-handoff-manage-launchers"
+                  onClick={() => {
+                    onClose();
+                    navigate(settingsHref("models", null, false, null, "providers"));
+                  }}
+                  className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium whitespace-nowrap text-accent-ink hover:underline"
+                >
+                  <Icon name="gear" size={11} />
+                  {t("newagent.manage_launchers")}
+                </button>
               </div>
             )}
           </div>

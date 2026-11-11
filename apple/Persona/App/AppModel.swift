@@ -139,6 +139,10 @@ final class AppModel {
     /// Interactions ended locally (answered, cancelled or gone), by `uid`: neither the full list nor a card frame brings
     /// them back (#1688, #1521). By `uid`, not the hub's id: another group's card with the same id is another card.
     @ObservationIgnored var endedInteractionIDs: Set<String> = []
+    /// The terminal dialogs of several questions this device answers in, by session (#2970, ScreenStepsLogic).
+    var screenTrails: [SessionKey: ScreenTrail] = [:]
+    /// A screen card answered in such a dialog, shown greyed until the next card of the dialog comes.
+    var screenMoves: [SessionKey: ScreenMove] = [:]
     /// What the app's timed waits sleep on (`settleSend`'s wait for a transcript copy): the wall clock. The shared sync
     /// replay's own (`SyncClock`), so that a case's minutes take none.
     @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
@@ -195,6 +199,9 @@ final class AppModel {
     var latestAnswerFor: SessionKey?
     /// A hub link's message to land on once its chat shows (HubPageRouting, #2696); taken by that chat.
     var messageJump: MessageJump?
+    /// A refused send's Open Terminal (a dialog holds that session's terminal, #3752): its chat opens the terminal
+    /// and takes it.
+    var terminalAsk: SessionKey?
     /// The phone writes waiting for Allow / Deny, one shown at a time (#4456).
     @ObservationIgnored let phoneConfirmations = PhoneConfirmations()
     /// The one on screen (RootView / MacRootView's alert).
@@ -231,7 +238,11 @@ final class AppModel {
     static var rememberedChat: String? = UserDefaults.standard.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
-        didSet { if heldInList != visibleSession { heldInList = nil } }
+        didSet {
+            if heldInList != visibleSession { heldInList = nil }
+            // the recently opened conversations: the home screen menu's (#2191)
+            if visibleSession != oldValue { RecentChatsStore.shared.shown(visibleSession) }
+        }
     }
     /// The open agent that was Unread and was marked seen by being open: the Agents list keeps it where it was until
     /// its chat is left (`AgentListOrder.held`, #2213; user, 2026-11-05: it moves to Idle only after you leave).
@@ -248,6 +259,9 @@ final class AppModel {
     /// instead of a made-up launcher name (#4200). Held settings (or a restored snapshot) keep the page usable. An
     /// answer that names no launcher sets it too (current hubs always name one; purely defensive against old hubs).
     private(set) var assistantConfigLoadFailed = false
+    /// The directions' names by leader conversation id (`GET /api/v1/assistant/leaders`): the sidebar's Directions group
+    /// shows these instead of the conversations' titles. Read again with the assistant; empty without leaders.
+    private(set) var directionNames: [String: String] = [:]
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
     /// The assistant conversation shown in the Chat tab (persisted across launches).
     ///
@@ -505,7 +519,7 @@ final class AppModel {
     func adopt(_ configs: [ServerConfig]) {
         var r = HubRegistry()
         for cfg in configs {
-            if let had = registry.hubs.first(where: { $0.config == cfg }) {
+            if let had = registry.hubs.first(where: { $0.config.url == cfg.url && $0.config.token == cfg.token }) {
                 r.hubs.append(had)
             } else {
                 var hub = PairedHub(config: cfg)
@@ -521,6 +535,12 @@ final class AppModel {
         // `-seedLocalProxy <base64 of the LocalProxyRoute JSON>`: the first hub's local proxy, the same way.
         if let s = UserDefaults.standard.string(forKey: "seedLocalProxy"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
            let route = try? JSONDecoder().decode(LocalProxyRoute.self, from: json) { r.hubs[0].localProxy = route }
+        // `-seedCloudflareAccess <client id>:<client secret>`: the first hub's Cloudflare Access token (MOCK_CF_ACCESS,
+        // docs/operations/testing.md); "-" clears it.
+        if let s = UserDefaults.standard.string(forKey: "seedCloudflareAccess"), !r.hubs.isEmpty {
+            let parts = s.split(separator: ":", maxSplits: 1).map(String.init)
+            r.hubs[0].config.access = parts.count == 2 ? HubAccess(clientID: parts[0], clientSecret: parts[1]) : nil
+        }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()
@@ -555,6 +575,9 @@ final class AppModel {
         let tunnels = SSHTunnels.shared
         // Paired again: the tunnel it has, unless the pairing page set one.
         let ssh = ssh ?? registry.hubs.first { $0.config.url == new.url }?.ssh
+        // And its Cloudflare Access token, unless the pairing page set one (a link opened from the camera has none).
+        var new = new
+        if new.access == nil { new.access = registry.hubs.first { $0.config.url == new.url }?.config.access }
         if let ssh, ssh.isUsable {
             let direct = ssh.always ? false : await HubRoute.healthProbe(new)
             if !direct { try await tunnels.open(SSHTunnels.pairingID, route: ssh, hub: new.url) }
@@ -585,6 +608,7 @@ final class AppModel {
             // The same pairing link again (scanned twice, opened from the camera as well): it was traded for this
             // device's own token already. Writing it back would leave the app on a token the hub drops in minutes.
             if let ssh { r.hubs[i].ssh = ssh }
+            r.hubs[i].config.access = new.access
             group = r.hubs[i].group
             tunnels.adopt(SSHTunnels.pairingID, as: r.hubs[i].id)
         } else if let i = same {
@@ -697,6 +721,7 @@ final class AppModel {
         drafts = drafts.filter { !demo.contains($0.key) }
         heldAttachments = heldAttachments.filter { !demo.contains($0.key) }
         starterDrafts = [:] // the demo's group is the empty one, as a hub's may be
+        healthReports = [:]
         if let k = assistantCurrent, demo.contains(k) { assistantCurrent = nil }
         if let k = openChat, demo.contains(k) { openChat = nil }
         for key in demo { ChatCache.remove(key, in: stateFolder) }
@@ -716,6 +741,7 @@ final class AppModel {
         if isDemo { leaveDemo() }
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
+        PortForwarder.shared.closeAll() // no hub left for a forwarded port to reach
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
         // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
@@ -733,9 +759,10 @@ final class AppModel {
         chats = [:]
         subscribers = [:]
         shown = []
-        // What was picked for a next message goes with the hubs it was for (#2626).
+        // What was picked for a next message goes with the hubs it was for (#2626), Health's reports too (#2836).
         heldAttachments = [:]
         starterDrafts = [:]
+        healthReports = [:]
         saveOutbox()
     }
 
@@ -942,6 +969,8 @@ final class AppModel {
                 assistantConfig = updated
             }
             guard showsPage(of: api) else { return }
+            await refreshDirectionNames(api, leaders: st.leaders ?? [])
+            guard showsPage(of: api) else { return }
             // A hub that names no launcher gets the same retry state as a failed read (#4200): current hubs always
             // resolve one (their default), so an empty answer means an old hub — show Couldn't Load Settings instead of an
             // endless Reading or a made-up name.
@@ -950,6 +979,23 @@ final class AppModel {
             // Settings that already name a launcher stay usable; with none held the page shows Couldn't Load Settings (#4200).
             if showsPage(of: api), (assistantConfig?.launcher ?? "").isEmpty { assistantConfigLoadFailed = true }
         }
+    }
+
+    /// The directions' names for `leaders`: none without leaders; a hub that cannot list them keeps the names held
+    /// (or none), and the sidebar shows those conversations' titles.
+    private func refreshDirectionNames(_ api: APIClient, leaders: [String]) async {
+        guard !leaders.isEmpty else {
+            if !directionNames.isEmpty { directionNames = [:] }
+            return
+        }
+        guard let names = try? await api.directionNames(), showsPage(of: api), names != directionNames else { return }
+        directionNames = names
+    }
+
+    /// The assistant's leader conversations (the sidebar's Directions), in the hub's order, never the main one.
+    var assistantLeaders: [String] {
+        let main = assistantConfig?.main
+        return (assistantConfig?.leaders ?? []).filter { !$0.isEmpty && $0 != main }
     }
 
     /// The Couldn't Load Settings retry: the page flips back to Reading at once, and repeated taps share the one request (#4200).
@@ -1061,6 +1107,43 @@ final class AppModel {
             assistantConfig = st
         } catch {
             if showsPage(of: api) { assistantConfig?.mainTasksQuiet = was }
+            show(error)
+        }
+    }
+
+    /// Whether the main conversation folds its background rounds (docs/apple/ios.md "Background rounds"): on until the
+    /// hub says off, an older hub and settings not read yet included.
+    var mainBackgroundFolded: Bool { assistantConfig?.backgroundFolded ?? true }
+
+    /// Settings › Assistant › Fold Background Rounds. Shown at once, put back if the hub says no.
+    func setMainBackgroundFolded(_ on: Bool) async {
+        guard let api, var shown = assistantConfig else { return }
+        let was = shown.mainBackgroundFolded
+        shown.mainBackgroundFolded = on
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(mainBackgroundFolded: on)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.mainBackgroundFolded = was }
+            show(error)
+        }
+    }
+
+    /// Settings › Meetings (#2981): the role every meeting recording starts with. Shown at once, put back if the hub says no.
+    func setMeetingAttendanceDefault(_ role: MeetingAttendance) async {
+        guard let api else { return }
+        // Before the assistant settings are in, the hub's answer brings them.
+        let was = assistantConfig?.meetingAttendanceDefault
+        assistantConfig?.meetingAttendanceDefault = role.rawValue
+        MeetingAttendanceDefaults.remember(offered: true, role: role)
+        do {
+            let st = try await api.setAssistant(meetingAttendanceDefault: role.rawValue)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.meetingAttendanceDefault = was }
             show(error)
         }
     }
@@ -1500,7 +1583,9 @@ final class AppModel {
         for ix in list where all[ix.uid] == nil && !endedInteractionIDs.contains(ix.uid) {
             all[ix.uid] = ix
         }
+        let new = all.values.filter { interactions[$0.uid] == nil }
         if all != interactions { interactions = all }
+        for ix in new { noteScreenCard(ix, live: false) }
         if let askedAt {
             interactionsListedAt[group] = askedAt
             withdrawStaleNotifications()
@@ -1734,8 +1819,8 @@ final class AppModel {
                     socket(group)?.send(subscribeMessage(key))
                 }
             }
-        case .sessionsList:
-            sessionLists.invalidate(group)
+        case .sessionsList(let revision):
+            sessionLists.invalidate(group, revision: revision)
             for key in subscribers.keys where key.group == group { Task { await refreshSessionDetail(key) } }
         case .sessions(let machineID, let list):
             // A busy hub sends each machine's list on its own, one after another: they are applied together a moment
@@ -1866,6 +1951,7 @@ final class AppModel {
             guard !endedInteractionIDs.contains(ix.uid) else { break }
             let announces = Delegated.announces(ix, replacing: interactions[ix.uid])
             interactions[ix.uid] = ix
+            noteScreenCard(ix, live: true)
             if announces { Haptics.attention() }
             WatchSync.shared.push(summary: watchSummary())
         case .interactionResolved(let id, let assistant):
@@ -2099,6 +2185,17 @@ final class AppModel {
         let draft = StarterDraft()
         starterDrafts[key] = draft
         return draft
+    }
+
+    /// Health's checkup reports on their way up, per hub group (#2836): the page is built again with the whole tree when
+    /// iPhone Duo folds or opens, and the uploads under way lost their place in it.
+    @ObservationIgnored private var healthReports: [String: FileUploads] = [:]
+
+    func healthReportUploads() -> FileUploads {
+        if let held = healthReports[hubGroup] { return held }
+        let held = FileUploads()
+        healthReports[hubGroup] = held
+        return held
     }
     @ObservationIgnored let draftWriter = Debouncer()
     /// A send the computer refused because its input box holds a draft (SendSafety.swift).
@@ -2846,12 +2943,14 @@ final class AppModel {
         guard !gone.isEmpty else { return }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
+        PortForwarder.shared.close(groups: gone)
         machines = machines.filter { !gone.contains($0.group) }
         sessionsByMachine = sessionsByMachine.filter { !gone.contains($0.key.group) }
         interactions = interactions.filter { !gone.contains($0.value.group) }
         for key in chats.keys where gone.contains(key.group) { dropChat(key) }
         drafts = drafts.filter { !gone.contains($0.key.group) }
         heldAttachments = heldAttachments.filter { !gone.contains($0.key.group) }
+        healthReports = healthReports.filter { !gone.contains($0.key) }
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
@@ -2960,15 +3059,19 @@ final class AppModel {
 
     private func countBadges() {
         var b = TabBadges()
+        func place(_ key: SessionKey) -> TabBadges.Place {
+            TabBadges.place(key, session: sessionIndex[key], quiet: isQuiet(key), mutes: pinsStore(key.group)?.mutes)
+        }
         for ix in interactions.values {
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
-            switch TabBadges.place(ix.sessionKey, session: sessionIndex[ix.sessionKey], quiet: isQuiet(ix.sessionKey),
-                                   mutes: pinsStore(ix.sessionKey.group)?.mutes) {
+            switch place(ix.sessionKey) {
             case .assistant, .quiet: b.assistant += 1
-            case .agents: b.agents += 1
-            case .muted: break
+            case .agents, .muted: break
             }
         }
+        // Agents counts what its Needs You section lists: one per session that waits for the user, not one per card.
+        b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: pendingInteractions, waiting: AgentsNeedsYou.waiting(allSessions)),
+                                        place: place)
         if b != badges { badges = b }
         if !watchingMutes { watchingMutes = true; watchMutes() }
     }
@@ -3264,12 +3367,15 @@ struct Toast: Identifiable, Equatable {
     let action: Action?
     /// A second button before `action` (Undo beside View).
     let secondary: Action?
+    /// An explicit display window for flows whose Undo timing is shared across clients.
+    let duration: Duration?
 
-    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil) {
+    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil, duration: Duration? = nil) {
         self.message = message
         self.style = style
         self.action = action
         self.secondary = secondary
+        self.duration = duration
     }
 
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }

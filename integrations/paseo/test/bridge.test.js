@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
 import { PaseoClient } from '../lib/paseo.js'
-import { agentSnapshot, entry, startFakePaseo } from './fake-paseo.js'
+import { agentSnapshot, entry, mcpServersError, startFakePaseo } from './fake-paseo.js'
 
 const SID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const SID2 = 'aaaaaaaa-0000-4000-8000-000000000002'
@@ -45,7 +45,7 @@ async function setup(t, o = {}) {
   const logs = []
   const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, log: (m) => logs.push(m) })
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
-    { socketPath: node.path, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500 })
+    { socketPath: node.path, mcpConfig: o.mcpConfig, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500 })
   bridge.start()
   t.after(() => bridge.stop())
   await node.ready
@@ -280,6 +280,115 @@ test('interrupt, rename, permission mode and effort go to the agent', async (t) 
   assert.equal(fake.requestsOf('set_agent_mode_request').at(-1).modeId, 'full-access')
 })
 
+const MCP_JSON = {
+  mcpServers: {
+    persona: { command: '/usr/bin/personad', args: ['mcp'], env: { PERSONA_HOME: '/home/u/.persona' } },
+    legacy: { command: '/usr/bin/personad', args: ['mcp'] },
+  },
+}
+
+test("a new session gets Persona's agent tools, each server naming the session the agent is kept under", async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const mcpConfig = join(dir, 'mcp.json')
+  writeFileSync(mcpConfig, JSON.stringify(MCP_JSON))
+  const { fake, node } = await setup(t, { mcpConfig })
+  for (const launcher of ['my-claude', 'my-codex']) {
+    await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher })
+    const req = fake.requestsOf('agent.create.request').at(-1)
+    const sessionId = req.labels['persona.session']
+    assert.equal(sessionId, `paseo-${req.agentId}`)
+    assert.deepEqual(req.config.mcpServers, {
+      persona: { type: 'stdio', command: '/usr/bin/personad', args: ['mcp'], env: { PERSONA_HOME: '/home/u/.persona', PERSONA_SESSION_ID: sessionId } },
+      legacy: { type: 'stdio', command: '/usr/bin/personad', args: ['mcp'], env: { PERSONA_SESSION_ID: sessionId } },
+    })
+  }
+  const [first, second] = fake.requestsOf('agent.create.request').map((r) => r.config.mcpServers.persona.env.PERSONA_SESSION_ID)
+  assert.notEqual(first, second, 'each agent has its own session id')
+  assert.equal(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.persona.env.PERSONA_SESSION_ID, undefined, 'the shared config is not changed')
+})
+
+test("the fake daemon takes config.mcpServers only in Paseo's stdio shape", () => {
+  const ok = { type: 'stdio', command: 'personad', args: ['mcp'], env: { A: 'b' } }
+  assert.equal(mcpServersError({ persona: ok }), null)
+  assert.equal(mcpServersError({ persona: { command: 'personad' } }), 'mcpServers.persona.type: expected stdio, http or sse')
+  assert.match(mcpServersError({ persona: { ...ok, command: 1 } }), /command/)
+  assert.match(mcpServersError({ persona: { ...ok, args: ['a', 2] } }), /args/)
+  assert.match(mcpServersError({ persona: { ...ok, env: { A: 1 } } }), /env/)
+})
+
+test("an Agent for a provider that takes no MCP servers is created again without them, once, and only for that error", async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const mcpConfig = join(dir, 'mcp.json')
+  writeFileSync(mcpConfig, JSON.stringify(MCP_JSON))
+  const { fake, node, logs, rows } = await setup(t, { mcpConfig, noMcpProviders: ['grok'] })
+  const res = await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' })
+  const [first, second, ...more] = fake.requestsOf('agent.create.request')
+  assert.equal(more.length, 0, 'one more request, not a loop')
+  assert.ok(first.config.mcpServers.persona.env.PERSONA_SESSION_ID)
+  assert.deepEqual(second.config, { provider: 'grok', cwd: '/tmp' }, 'the old configuration, no mcpServers')
+  assert.notEqual(second.agentId, first.agentId, 'a new agent id: the failed one has a record in Paseo')
+  assert.equal(first.labels['persona.session'], `paseo-${first.agentId}`)
+  assert.equal(second.labels['persona.session'], first.labels['persona.session'], 'the Persona session stays; only the Paseo agent is new')
+  assert.equal(res.session.session_id, first.labels['persona.session'])
+  assert.ok(logs.some((l) => /provider grok takes no MCP servers; creating the agent again without the Persona tools/.test(l)), logs.join('\n'))
+  await until('listed', () => rows().some((r) => r.session_id === res.session.session_id))
+  assert.equal(fake.agents.has(first.agentId), false, 'the failed attempt left no agent')
+  assert.equal(fake.agents.has(second.agentId), true)
+  assert.deepEqual([...fake.agents.values()].filter((e) => e.agent.provider === 'grok' && e.agent.labels['persona.session']).map((e) => e.agent.id), [second.agentId], 'one new agent, not two')
+
+  // Any other failure is the answer, not a reason to try again.
+  const before = fake.requestsOf('agent.create.request').length
+  fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: 'Provider unavailable' } })
+  await assert.rejects(call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' }), /Provider unavailable/)
+  assert.equal(fake.requestsOf('agent.create.request').length, before + 1)
+
+  // Without servers to give there is nothing to take away: the failure is final.
+  const none = await setup(t, { noMcpProviders: ['grok'], mcpConfig: join(dir, 'absent.json') })
+  none.fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: "Provider 'grok' does not support MCP servers" } })
+  await assert.rejects(call(none.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /does not support MCP servers/)
+  assert.equal(none.fake.requestsOf('agent.create.request').length, 1)
+})
+
+test("a refusal that comes after the start was answered keeps the session id the row, the label and the tools named", async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const mcpConfig = join(dir, 'mcp.json')
+  writeFileSync(mcpConfig, JSON.stringify(MCP_JSON))
+  const { fake, node, rows } = await setup(t, { mcpConfig, noMcpProviders: ['grok'] })
+  const known = new Set(rows().map((r) => r.session_id))
+  fake.refuseDelay = 2000 // past the bridge's wait for the answer (callWait 1500 in setup)
+  const res = await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' })
+  const placeholder = res.session.session_id
+  const [first] = fake.requestsOf('agent.create.request')
+  assert.equal(fake.requestsOf('agent.create.request').length, 1, 'the row came while the first request was unanswered')
+  assert.equal(placeholder, `paseo-${first.agentId}`)
+  assert.equal(first.config.mcpServers.persona.env.PERSONA_SESSION_ID, placeholder)
+  await until('the second request', () => fake.requestsOf('agent.create.request').length === 2)
+  const second = fake.requestsOf('agent.create.request')[1]
+  assert.notEqual(second.agentId, first.agentId, 'a new Paseo agent')
+  assert.equal(second.config.mcpServers, undefined)
+  assert.equal(second.labels['persona.session'], placeholder, 'the same Persona session')
+  await until('listed under the row\'s id', () => rows().some((r) => r.session_id === placeholder))
+  assert.deepEqual([...fake.agents.values()].filter((e) => e.agent.provider === 'grok' && e.agent.labels['persona.session']).map((e) => [e.agent.id, e.agent.labels['persona.session']]),
+    [[second.agentId, placeholder]])
+  assert.equal(rows().filter((r) => !known.has(r.session_id) && r.session_id !== placeholder).length, 0, 'no second session id')
+})
+
+test('a new session without a usable MCP config is created as before, and the log says why', async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const missing = await setup(t, { mcpConfig: join(dir, 'absent.json') })
+  await call(missing.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
+  assert.deepEqual(missing.fake.requestsOf('agent.create.request')[0].config, { provider: 'my-claude', cwd: '/tmp' })
+  assert.ok(missing.logs.some((l) => /cannot read the MCP config .*absent\.json.*no Persona tools/.test(l)), missing.logs.join('\n'))
+  const unset = await setup(t)
+  await call(unset.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
+  assert.equal(unset.fake.requestsOf('agent.create.request')[0].config.mcpServers, undefined)
+  assert.ok(unset.logs.some((l) => /no MCP config given/.test(l)))
+})
+
 test('a new session: an agent of the launcher\'s provider, with the form\'s choices, under an id kept on it', async (t) => {
   const { fake, node, rows } = await setup(t)
   const res = await call(node, 'session.start', { cwd: '/tmp', prompt: '修一下登录', launcher: 'my-claude', model: 'fable[1m]', permission_mode: 'acceptEdits', effort: 'high', workspace_id: 'wks_1' })
@@ -468,4 +577,40 @@ test('Paseo restarting: the bridge connects again and keeps the sessions; gone f
     return gone
   }, 5000)
   assert.ok(logs.some((l) => /away/.test(l)))
+})
+
+for (const toolName of ['mcp__persona__report_to_supervisor', 'mcp__jarvis__report_to_supervisor']) {
+  test(`a read-only ${toolName} runs once without permission or mode updates`, async (t) => {
+    const { fake, node, a, rows } = await setup(t)
+    fake.update(a.claude.id, { currentModeId: 'plan' })
+    await until('plan mode', () => rows().find((r) => r.session_id === SID)?.permission_mode === 'plan')
+    node.resolve = (ix) => {
+      assert.equal(ix.kind, 'permission')
+      assert.equal(ix.tool_name, toolName)
+      return { allow: true }
+    }
+    const modesBefore = fake.requestsOf('set_agent_mode_request').length
+    fake.permission(a.claude.id, { id: 'readonly-report', provider: 'claude', name: toolName, kind: 'tool',
+      input: { kind: 'done', text: 'Inspection complete.' },
+      suggestions: [{ type: 'addRules', rules: [{ toolName: toolName }], behavior: 'allow', destination: 'session' },
+        { type: 'setMode', mode: 'bypassPermissions' }] })
+    await until('report response', () => fake.requestsOf('agent_permission_response').length === 1)
+    assert.deepEqual(fake.requestsOf('agent_permission_response')[0].response, { behavior: 'allow' })
+    assert.equal(fake.requestsOf('set_agent_mode_request').length, modesBefore)
+    assert.equal(rows().find((r) => r.session_id === SID)?.permission_mode, 'plan')
+  })
+}
+
+test('forced close cancels a confirmation and retains the Agent on archive failure', async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  fake.update(a.claude.id, { pendingPermissions: [{ id: 'confirm-close', provider: 'claude', name: 'Bash', input: { command: 'echo test' } }] })
+  await until('confirmation blocked', () => rows().find(r => r.session_id === SID)?.status === 'blocked')
+  fake.handlers.archive_agent_request = () => ({ type: 'agent_archived', payload: { agentId: a.claude.id, error: 'Archive refused' } })
+  await assert.rejects(call(node, 'session.close', { session_id: SID, force: true }), /Archive refused/)
+  assert.ok(rows().some(r => r.session_id === SID), 'failed close remains visible')
+  delete fake.handlers.archive_agent_request
+  await call(node, 'session.close', { session_id: SID, force: true })
+  assert.equal(fake.requestsOf('archive_agent_request').at(-1).agentId, a.claude.id)
+  assert.equal(fake.requestsOf('agent_permission_response').filter(r => r.response?.behavior === 'allow').length, 0)
+  await until('force-archived Agent gone', () => !rows().some(r => r.session_id === SID))
 })

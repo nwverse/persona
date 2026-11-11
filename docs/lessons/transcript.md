@@ -101,6 +101,22 @@ Tests need the system row followed by a real-shaped synthetic assistant error, p
 an out-of-window record. A new error code alone does not change old clients' error buttons: document that client work
 and the item-cache version bump separately.
 
+## Subagent peer reports are nonterminal tool output (#3378)
+
+A peer display name such as `general-purpose` does not prove a subagent relationship. Associate `origin.from` /
+`senderTaskId` with the actual Agent/Task launch receipt or explicit notification call ID before normalizing its
+reports. A launch receipt and an interim SendMessage are `task.status: running`, not completed merely because
+`kind` is `tool_result`. Keep every result item, not just the last per call; status-only completion pointers do not
+replace the report. Seed launches, peer origins and terminal status across cold windows and incremental catch-up.
+When historical user text becomes tool output at the same item ID, change the opaque history version so existing
+client caches cannot preserve the old standalone peer card. Full-text reparse also needs the call association for
+hidden handback lines. Validate both the bounded preview and the full report, not only a short fixture.
+
+A report card is only mounted inside manually opened work. Load it on that intent rather than enlarging the cold
+first screen for everyone. Keep the same component, disclosure state and running-summary bar; verify manual opening
+in a real browser as well as mounted tests. A later main merge can consume prior bundle headroom: compare against
+unmodified main and reduce eager code, never raise the first-screen budget for the report feature.
+
 ## A tail window may contain no words at all (2026-11-04, #1163)
 
 When listing offline sessions, the node reads only the last 384 KB of a transcript (`quickTail`) to get its title and last words. Claude Code now writes an entire `api-request-blob` on one transcript line, 300–500 KB per line;
@@ -132,6 +148,18 @@ Claude Code 2.1.319 adds two more shapes (#6381). A hand-back that arrives while
 A subagent that waits on its own background work gets an interim notification ("This agent has not reported yet … SubagentHandback"), and the notification that ends it names only the subagent, no `<tool-use-id>`.
 The apps find a task's card by `tool_use_id`, else by the id in the launch receipt, and the 2.1.319 receipt's first sentence says "including the agentId below": their pattern took "below" for the id. So the report stayed off the card, which kept the interim text as its result.
 The node now gives such a notification the call an earlier notification of the task named (`noteCall`), drops the interim text, and seeds both, with the reports handed back, into windows read from a file's end (`window.go`), so a cold open of a big file gives the same notices.
+
+## Apple subagent results (#3377)
+
+A background Agent launch receipt is not a completion result. Keep its progress card until authoritative terminal
+state arrives, then use the ordinary collapsed tool-result row. Keep report deliveries separately from lifecycle
+state: an empty completion pointer must not erase earlier report bodies, and `running`, `waiting` or unknown
+statuses must not stop the progress bar. Preserve exact tool-use IDs; a shared subagent type
+or title cannot safely identify a report's call. Legacy notice detail and notice text are separate payloads: do not
+reuse a notice's text-truncation metadata for its report detail. When the hub changes peer input into tool results,
+bump the Apple chat cache so old peer cards are not retained. Retain referenced launch exchanges when trimming
+cached tails, and treat `wake` as turn evidence without drawing another message card. Run the shared result tests
+in both Apple app targets.
 
 ## Work opened in the App folded again by the same page (2026-11-07, #6038)
 
@@ -193,3 +221,33 @@ A view that fetches once per id cannot recover when the store puts the same id b
   A Write that creates a file records no hunks; its lines are the content's.
 - One machine's transcripts (2026-11-10): 76k records, 4.4k of them strings and 554 arrays, none with a field of an
   unexpected type; parsing them before and after the change gave the same items in all 2,023 files.
+
+## A rollout line is told by its own top-level type (#3159)
+
+- `ParseLine` switches a file to the Codex parser for good on the first rollout line. A substring test for
+  `"type":"event_msg"` and `"payload"` also matched a Claude line whose tool input had that shape (an MCP call is
+  enough), and every later line of the session then parsed to nothing. `isCodexLine` keeps the substring test as a cheap
+  filter and then reads only the line's top-level keys (`rolloutHead`), without decoding the line.
+- Checked on one machine's transcripts (2026-11-10): 10,597 files and 1.9M lines gave the same answer before and after
+  for every line, rollout lines included.
+
+## A list hint is not a reason to read the whole list (2026-11-11, #3759)
+
+- A client that negotiates `sessions_list` gets no session rows over the socket, only a `sessions_list` hint for every
+  change to the list's revision: about one or two a second while agents work. Views that need every row (iOS grouping,
+  filters, search, pins or mutes, including the default By Repository; the web's pins, saved grouping and per-assistant
+  lists; Android always) fell back to the no-query `GET /api/v1/sessions` and read it again for each hint. On a hub with
+  269 sessions (373 KB a list) the hub's traffic counters showed an iOS app reading it 49 times a minute (15 MB) and a
+  web page 17 times a minute, while the socket carried 20–32 KB a minute.
+- The paged API already serves complete rows: `summary=0` pages make a baseline with a `revision`, and `since` returns
+  only changed and removed rows. Keep a complete copy that way (iOS `SessionListModel.complete`, web
+  `lib/complete-sessions.ts`) and read complete pages again only on first use, an expired revision (`409
+  revision_expired`: every hub restart), a changed hub or pull to refresh.
+- A hint carries the hub's revision; one the copy already holds (the hint on every connect, a burst's repeat) needs no read.
+- A loop that follows `next_cursor` stops on a cursor it has already seen: a web test fake that answered every page
+  with the same cursor kept the new baseline reading pages until the test runner ran out of memory.
+- A one-shot recovery budget must be refilled after a successful read: iOS allowed one `409` recovery per query for
+  the life of the list, so the second hub restart left a list with a stale checkpoint that failed every later read.
+- The hub's `traffic` journal lines count by route template, not query, so a complete list and a small delta look the
+  same there; divide `body_bytes` by `count` to tell them apart. On the mock, `GET /mock/sessions_reads` counts by kind
+  of read (`docs/operations/testing.md`, "Session list reads").

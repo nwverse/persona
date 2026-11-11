@@ -168,9 +168,14 @@ func (p *hubExtension) healthy(ctx context.Context) bool { return p.proc != nil 
 type extensions struct {
 	// checks limit how often each extension's settings.check runs (extension_settings_check.go).
 	checks checkLimiter
-	dir    string // the hub's data directory
-	root   string // where the extensions are kept: <dir>/extensions (extensionsRoot)
-	reg    *extension.Registry
+	// resolves limit how often each secret provider is asked for a value; words keeps references' descriptions
+	// (secret_providers.go).
+	resolves checkLimiter
+	words    secretWords
+	kept     keptSecrets // resolved launcher keys (secret_kept.go)
+	dir      string      // the hub's data directory
+	root     string      // where the extensions are kept: <dir>/extensions (extensionsRoot)
+	reg      *extension.Registry
 	// logf is the hub's log, each line about an extension kept with its log too; journal only the hub's (the host's
 	// lines reach the extension's log through its Observe).
 	logf, journal func(string, ...any)
@@ -231,7 +236,7 @@ type extensions struct {
 func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)) *extensions {
 	root := extensionsRoot(dir, logf)
 	ps := &extensions{dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
-		stats: newExtensionMetrics()}
+		stats: newExtensionMetrics(), resolves: checkLimiter{most: secretResolvesMost, window: secretResolveWindow}}
 	// The hub's lines about an extension go into its log too (the host's own go there through the spec's Observe).
 	ps.logf = func(format string, args ...any) {
 		logf(format, args...)
@@ -467,6 +472,9 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	if err := reg.AddBuiltin(egoManifest(h), "", false); err != nil { // the same, for ego lite (browser.go)
 		h.logf("plugin ego: %v", err)
 	}
+	if err := reg.AddBuiltinTranslated(iphoneManifest(h), "", false, iphoneTranslations()); err != nil { // the same, for paired iPhones (iphone.go)
+		h.logf("plugin iphone: %v", err)
+	}
 	if err := reg.AddBuiltin(imessageManifest(h), "", false); err != nil { // which Mac's Messages (imessage_extension.go)
 		h.logf("plugin imessage: %v", err)
 	}
@@ -542,7 +550,9 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 	}
-	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
+	ps.forgetAuth(c.ID)          // another version, removed, switched, set up again: ask again
+	ps.forgetSecretWords(c.ID)   // a provider's references may name other things now
+	ps.kept.forgetProvider(c.ID) // and give other values, or none
 	switch c.Kind {
 	case "removed", "upgraded", "rolled_back": // only the version installed now keeps its packages for computers
 		keep := ""
@@ -577,6 +587,9 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if c.ID == egoExtensionID && ps.h != nil {
 		ps.h.browserChanged(ctx)
+	}
+	if c.ID == iphoneExtensionID && ps.h != nil {
+		ps.h.iphoneChanged(ctx)
 	}
 	if c.ID == imessageExtensionID && ps.h != nil {
 		ps.h.applyIMessage() // its Mac changed, or it went on or off (imessage_extension.go)
@@ -969,7 +982,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			s.StartEnv = func() []string { return identity.Environment(start()) }
 		}
 		if !s.RPC { // no initialize to carry them
-			secrets, err := ps.reg.Secrets(ctx, id)
+			secrets, err := ps.programSecrets(ctx, id)
 			if err != nil {
 				return s, err
 			}
@@ -980,7 +993,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 	}
 	builtin := p.Record.Source == extension.SourceBuiltin
 	s.Init = func(ctx context.Context) (extension.InitializeParams, error) {
-		secrets, err := ps.reg.Secrets(ctx, id)
+		secrets, err := ps.programSecrets(ctx, id)
 		if err != nil {
 			return extension.InitializeParams{}, err
 		}

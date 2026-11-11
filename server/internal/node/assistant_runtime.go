@@ -49,7 +49,7 @@ func (n *Node) assistantRuntime(launcher string) *runtimeConn {
 			return h
 		}
 	}
-	h := n.runtimes.launcherRuntime(launcher)
+	h := n.runtimeOf(launcher)
 	if h == nil || !h.assistant() {
 		return nil
 	}

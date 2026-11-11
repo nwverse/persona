@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { t } from "../../i18n";
 import type { FeedItem } from "../../lib/feed";
-import { autoReviewLine, checkCount, checklist, latestReview, reportLine, reviewBadge, reviewVerdictLabel, type CheckMark, type ReviewTone, type Supervision } from "../../lib/supervision";
+import { ago } from "../../lib/format";
+import { checkCount, reportLine, reportText, reviewBadge, reviewVerdictLabel, type ReviewTone } from "../../lib/supervision";
 import type { Todo } from "../../lib/todos";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { Markdown } from "../../ui/Markdown";
 import { useClamped } from "../../ui/use-clamped";
 
 // How a supervised task's review stands (#3124, docs/assistant/unified-entry.md "Supervision"): a chip and the count of criteria met
-// on its card, the checklist on its page, a line in the conversation for each review.
+// on its card, a line in the conversation for each review. The existing checklist stays with the lazy to-do detail.
 
 const TONE: Record<ReviewTone, string> = {
   accent: "bg-field text-accent-ink",
@@ -32,79 +34,41 @@ export function ReviewBadge({ todo, className }: { todo: Todo; className?: strin
   );
 }
 
-const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
-  met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
-  missing: { icon: "x", className: "text-red", label: () => t("assistant-tasks.review_missing") },
-  open: { icon: "clock", className: "text-ink-3", label: () => t("assistant-tasks.review_open") },
-  // added after the acceptance, which still stands (#3156): nothing waits on it
-  unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
-};
-
-/** The task's criteria, each as its latest review found it, and what the supervisor said last. */
-export function ReviewChecklist({ todo }: { todo: Todo }) {
-  const sup = todo.supervision;
-  if (!sup) return null;
-  const list = checklist(sup);
-  const review = latestReview(sup);
-  return (
-    <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
-      <div className="flex items-center gap-2">
-        <span className="text-[12.5px] font-semibold text-ink-2">{t("assistant-tasks.review_title")}</span>
-        <ReviewBadge todo={todo} />
-        <span className="flex-1" />
-        {sup.expect_minutes ? <span className="text-[12px] text-ink-3">{t("assistant-tasks.review_expect", { minutes: sup.expect_minutes })}</span> : null}
-      </div>
-      {list.length === 0 ? (
-        <p className="mt-2 text-[12.5px] text-ink-3">{t("assistant-tasks.review_none")}</p>
-      ) : (
-        <ul className="mt-2 flex flex-col gap-1.5">
-          {list.map((c) => {
-            const m = MARK[c.mark];
-            return (
-              <li key={c.criterion} className="flex items-start gap-2 text-[13px]">
-                <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
-                  <Icon name={m.icon} size={13} stroke={2.4} />
-                </span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="text-ink">{c.criterion}</span>
-                  {c.evidence && <span className="text-[12px] text-ink-3 select-text">{c.evidence}</span>}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
-      <AutoReviewResult sup={sup} />
-    </section>
-  );
-}
-
-/** The independent reviewer's result (#2173) under the criteria: a line, and its report on a click. Nothing when no
- *  review ran, so a task without one looks as it did. */
-function AutoReviewResult({ sup }: { sup: Supervision }) {
-  const [open, setOpen] = useState(false);
-  const line = autoReviewLine(sup);
-  if (!line) return null;
-  const findings = sup.auto_review?.findings;
-  return (
-    <div data-testid="auto-review" className="mt-2 flex flex-col gap-1 text-[12.5px] text-ink-2">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-        <Icon name="target" size={12} className="shrink-0" />
-        <span className="shrink-0 whitespace-nowrap font-semibold">{t("assistant-tasks.auto_review_title")}</span>
-        <span className="min-w-0">· {line}</span>
-        {findings && (
-          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="touch-hit ml-auto shrink-0 whitespace-nowrap text-ink-3 hover:text-ink-2">
-            {t(open ? "assistant-tasks.auto_review_hide" : "assistant-tasks.auto_review_show")}
-          </button>
-        )}
-      </div>
-      {open && findings && (
-        <div data-testid="auto-review-findings" className="leading-[1.55] whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">
-          {findings}
-        </div>
-      )}
+/** What the task's agent last reported to Persona, as it wrote it (#3181): the Progress row shows the hub's paraphrase,
+ *  this is the original, Markdown rendered. A section on the to-do's page; `banner`: over its agent's chat in the task's
+ *  details, folding to its title line. Nothing before its first report (or on an older hub). */
+export function LatestReport({ todo, banner }: { todo: Todo; banner?: boolean }) {
+  const [open, setOpen] = useState(true);
+  const text = reportText(todo.supervision);
+  if (!text) return null;
+  const when = ago(todo.supervision?.progress?.at);
+  const body = (
+    <div className={cx("min-w-0 select-text text-ink [overflow-wrap:anywhere]", banner ? "mt-1.5 max-h-[40vh] overflow-y-auto overscroll-contain" : "mt-2")}>
+      <Markdown text={text} small />
     </div>
+  );
+  if (banner) {
+    return (
+      <section data-testid="latest-report" aria-label={t("assistant-tasks.report_latest")} className="border-b border-line bg-inset px-4 py-2.5">
+        <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className="touch-hit flex w-full min-w-0 items-center gap-2 text-left text-[12.5px] text-ink-2 hover:text-ink">
+          <Icon name="chat" size={12} className="shrink-0" />
+          <span className="min-w-0 flex-1 truncate font-semibold">{t("assistant-tasks.report_latest")}</span>
+          {when && <span className="shrink-0 text-[12px] text-ink-3">{when}</span>}
+          <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />
+        </button>
+        {open && body}
+      </section>
+    );
+  }
+  return (
+    <section data-testid="latest-report" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
+      <div className="flex items-center gap-2 text-[12.5px] text-ink-2">
+        <Icon name="chat" size={12} className="shrink-0" />
+        <h3 className="min-w-0 flex-1 truncate font-semibold">{t("assistant-tasks.report_latest")}</h3>
+        {when && <span className="shrink-0 text-[12px] text-ink-3">{when}</span>}
+      </div>
+      {body}
+    </section>
   );
 }
 

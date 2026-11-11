@@ -196,6 +196,10 @@ The assistant's claude no longer belongs to a single hub connection:
   stops idle chat processes, and `exec`s the new binary (same PID, invisible to systemd / launchd). Idle chats `--resume` on their next message. Old resident nodes do not understand SIGHUP; they simply exit and are restarted, like the old `restart`.
 
 Machines without a resident node (where the hub starts `node --stdio` directly over ssh and it handles everything itself) behave as before: a hub restart still interrupts chats, and background tasks still get "just restarted".
+  The node stops them itself: when its connection ends, `Serve` returns only once every assistant process (and the warm spare) has exited, those ignoring SIGTERM killed after 5 s (`stopAtConnectionEnd`, `stopAndWait`).
+  On the hub machine the manager ends that node by closing its stdin, not with a kill, and kills it only after 10 s (`localNodeStopGrace` in `server/internal/devices/machine.go`).
+  Before #4259 a blue-green switch SIGKILLed it: its Claude processes, each leading its own process group, went on beside the ones the next node resumed for the same conversations,
+  and that node refused them the assistant's tools. `scripts/deploy/hub-systemd.sh` says so after a switch on a machine with no resident node (no `node-attach.sock`).
 
 ### Clients tolerate short disconnects
 

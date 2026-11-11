@@ -54,6 +54,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	h.startTokenRecord(ctx) // before any extension starts with a token (extension_scopes.go)
 	h.startConnectors(ctx)  // the extensions' connectors join here (attachExtensions)
 	h.startExtensions(ctx)
+	h.startSubscriptions(ctx) // after the connectors it pulls from
 	go h.extensionUpgradeLoop(ctx)
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)
@@ -119,6 +120,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.extensionRoutes(api)
 	h.messagingRoutes(api)
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
+	h.subscriptionRoutes(api)
 	api.HandleFunc("POST /api/v1/error-reports", h.postErrorReports)
 	withMachine := func(fn func(http.ResponseWriter, *http.Request, *Machine)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +146,11 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/machines/{mid}/browser/cookies", withMachine(h.browserCookies))
 	api.HandleFunc("POST /api/v1/machines/{mid}/browser/cookies", withMachine(h.browserCookies))
 	api.HandleFunc("DELETE /api/v1/machines/{mid}/browser/cookies", withMachine(h.browserCookies))
+	api.HandleFunc("GET /api/v1/machines/{mid}/iphone", withMachine(h.getIPhone))
+	api.HandleFunc("PUT /api/v1/machines/{mid}/iphone", withMachine(h.putIPhone))
+	api.HandleFunc("POST /api/v1/machines/{mid}/iphone/{action}", withMachine(h.postIPhoneJob))
+	api.HandleFunc("GET /api/v1/iphone", h.getIPhoneList)
+	api.HandleFunc("PUT /api/v1/iphone/consent", h.putIPhoneConsent)
 	if h.mail != nil {
 		api.Handle("/api/v1/mail/", h.mail.Handler())
 	} else {
@@ -580,7 +587,10 @@ func (h *Manager) report() extwire.Report {
 			x.Browser, _ = json.Marshal(b)
 			x.ScreenPort = x.ScreenPort || b.Enabled
 		}
-		if x.Computer != nil || x.Browser != nil {
+		if p := h.iphoneOf(m); p != nil {
+			x.IPhone, _ = json.Marshal(p)
+		}
+		if x.Computer != nil || x.Browser != nil || x.IPhone != nil {
 			r.Machines[m.cfg.ID] = x
 		}
 	}
@@ -635,6 +645,7 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 	if assistant {
 		assistantOnly = append(assistantOnly, h.computerTools()...)
 		assistantOnly = append(assistantOnly, h.browserTools()...)
+		assistantOnly = append(assistantOnly, h.iphoneTools()...)
 		assistantOnly = append(assistantOnly, h.connectors.ToolsFor(ctx, false)...)
 	}
 	return agents, assistantOnly
@@ -653,6 +664,8 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 		return h.callComputerTool(ctx, session, name, args), true
 	case assistant && isBrowserTool(name):
 		return h.callBrowserTool(ctx, session, name, args), true
+	case assistant && isIPhoneTool(name):
+		return h.callIPhoneTool(ctx, session, name, args), true
 	}
 	return proto.ToolResult{}, false
 }

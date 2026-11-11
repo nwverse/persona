@@ -43,6 +43,29 @@ import SwiftUI
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
     }
 
+    /// Where entering Health lands (#4329, docs/assistant/health.md "Entering Health"): like Codex, back in the latest
+    /// health conversation with its context; a space with none opens this page, the new conversation page.
+    nonisolated enum Entry: Equatable {
+        case open(SessionKey)
+        case new
+    }
+
+    /// The newest open conversation by last activity (`updatedAt`, the order the page lists them), else `.new`.
+    nonisolated static func entry(_ fetched: [Session], live: [Session]) -> Entry {
+        merge(fetched, live: live).first.map { .open($0.key) } ?? .new
+    }
+
+    /// Reads the space's list, with what the pushes say over it: one that can't be read leaves the pushed ones,
+    /// and with none of those the new conversation page (which says why the list is missing).
+    static func entry(deps: AssistantDeps, live: [Session]) async -> Entry {
+        let fetched = (try? await deps.api()?.healthConversations()) ?? []
+        return entry(fetched, live: live)
+    }
+
+    /// New Chat from the open conversation: a health one's opens this page, a new health conversation with the space's
+    /// past ones listed; any other the assistant's new conversation.
+    nonisolated static func newOpensHealth(_ open: Session?) -> Bool { open?.isHealth == true }
+
     /// One-tap questions (the web's): each starts a health conversation with it.
     static let suggestions = [String(localized: "How did I sleep this week?"), String(localized: "How do my steps over the last 7 days compare with last week?"), String(localized: "Log my weight today: 62.5 kg [Health View 1a24cb]"), String(localized: "Log my weight today: 62.5 kg [Health View c5fdcd]")]
 }
@@ -57,7 +80,12 @@ struct HealthView: View {
     @State private var page = HealthModel()
     // Upload a Checkup Report (docs/assistant/health.md「Checkup reports」): the picked files go to reports/; once they are up the conversation starts.
     @State private var showReports = false
-    @State private var reports = FileUploads()
+    /// Kept by the app, not the page (#2836): built again with the whole tree when iPhone Duo folds or opens, the page
+    /// lost the uploads under way.
+    private var reports: FileUploads { model.healthReportUploads() }
+    #if DEBUG
+    private static var reportUploadShown = false
+    #endif
 
     /// The default manager's assistant machine (the hub's unless set otherwise), where the health space's directory is.
     private var machine: MachineRef { model.hubRef(model.healthMachineID) }
@@ -94,12 +122,19 @@ struct HealthView: View {
         .pageTitle(String(localized: "Health"))
         .fileUploadPicker(isPresented: $showReports) { uploadReports($0) }
         #if DEBUG
-        .task { // `-showReportUpload <name>`: a made-up report uploaded as if picked, to check the whole way without the picker
-            if let name = UserDefaults.standard.string(forKey: "showReportUpload") {
+        // `-showReportUpload <name>[,<name>…]`: made-up reports uploaded as if picked, to check the whole way without the
+        // picker; `-showReportUploadMB <n>`: each that big, on its way a while (the mock hub reads it slowly). Once a launch:
+        // the page built again (a fold, #2836) does not upload them twice.
+        .task {
+            if let list = UserDefaults.standard.string(forKey: "showReportUpload"), !Self.reportUploadShown {
+                Self.reportUploadShown = true
                 try? await Task.sleep(for: .seconds(3))
-                let url = FileManager.default.temporaryDirectory.appending(path: name)
-                try? Data("%PDF-1.7 demo".utf8).write(to: url)
-                uploadReports([url])
+                let mb = UserDefaults.standard.integer(forKey: "showReportUploadMB")
+                uploadReports(list.split(separator: ",").map { name in
+                    let url = FileManager.default.temporaryDirectory.appending(path: String(name))
+                    try? (mb > 0 ? Data(count: mb << 20) : Data("%PDF-1.7 demo".utf8)).write(to: url)
+                    return url
+                })
             }
         }
         #endif

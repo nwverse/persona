@@ -3,6 +3,8 @@
 The Inbox tab is Persona's information entry point: Lark messages and mail from all email accounts share **one list**, grouped into items. AI triages first; people see only the conclusions.
 (Requested direction 2026-10-27: no group-by-group browsing, no second Lark client; see `docs/extensions/feishu.md`.)
 
+Android's navigation badge counts unread actionable entries: each native conversation in the reconciled Action section counts once, plus unread non-conversation items whose current section requires action. Other conversation sections do not add to this badge; non-conversation items marked FYI, Noise, In progress, read or completed do not count either. Web and Apple likewise count only unread open items in Needs you, using the current status with the existing tier fallback. FYI, Noise and In progress do not increase their badges. Read-but-pending items remain in their sections and keep their completion state; zero keeps the existing hidden-badge behavior. The roster's `inbox_needs_you` and the home page's pending count retain their separate meaning: open items requiring action, including ones already read. A receipt can precede the next item-list update, so Android's badge reads `InboxConversations` rather than only the cached item flags.
+
 ## Ownership: the manager owns the Inbox (2026-11-04)
 
 The Inbox belongs to the **manager** (assistant process `personad assistant`; `docs/assistant/assistant.md`, "Boundary with hub"): items and their state (pre-admission triage,
@@ -129,6 +131,7 @@ a summary up to 40 characters, and a short reason:
 - **Scope (requested 2026-11-04)**: "Triage before admission" and "No admission without fallback" below **apply only to plugin-provided connectors** (installed plugins or plugins in the manager's manager.json, not bundled personad connectors;
   currently the Lark extension). Hub-owned mail, GitHub, Telegram, and Messages behave unchanged: new items appear immediately, then triage in the background; timing and fallback (no rule tier means noise) remain as before.
   Identify by plugin ownership (`extensionConnectors`, recorded when hub starts a plugin connector and passed each round as `InboxSource.extension`), not name.
+  Source subscriptions (#2039) are handed in the same way, one source per subscription with `extension` set: their items carry a fallback tier unless the user chose to wait for the model ([subscriptions.md](../extensions/subscriptions.md) "Destinations").
 - **Triage before admission (#1644)**: hold new plugin-connector items aside for a collection round (`inbox_admit.go`). After collection, triage in the background; only then write to the database and list them:
   - Model succeeds: use its tier and summary.
   - Model fails, fallback exists: admit by fallback with "Rule-based." **That version is final**, with no retriage on model recovery (only new activity triggers it).
@@ -296,7 +299,7 @@ A policy says, for a chat, a sender or a repository, how its items are handled, 
 Rules:
 
 - **A mute wins**: a muted item is filed whatever its policy says. Among policies the most specific tag wins: `sender`, then `chat`, then `repo` (so a Lark group can be FYI while one person in it is always Needs you; in groups `sender` is the newest message's sender).
-- **The tier is applied after triage**, so the model's title, summary and urgency stay: after model triage (`triage`), at admission (`admitInbox`), when an event is grouped (`putEvent`), and for a connector's rule tier when the round files it. When the policy changes the tier, the reason reads "Your rule: <name>"; a tier other than Needs you clears `urgent`. If the model fails, the fallback tier is overridden the same way. Items an event's processing conversation is handling keep their tier (the conversation decides).
+- **The tier is applied after triage**, so the model's title, summary and urgency stay: after model triage (`triage`), at admission (`admitInbox`), when an event is grouped (`putEvent`), and for a connector's rule tier when the round files it. A connector's rule tier (`InboxThing.Tier`) files its item without triage at all — for generic connector things and for a migrated connector's block items alike (`fillConnectorItem`, `fillMigrated`) — and a policy read in the same round overrides it. When the policy changes the tier, the reason reads "Your rule: <name>"; a tier other than Needs you clears `urgent`. If the model fails, the fallback tier is overridden the same way. Items an event's processing conversation is handling keep their tier (the conversation decides).
 - **Setting or changing a policy** re-applies it to open, triaged, unhandled items at once (`applied` count). An item whose row cannot be written keeps its old tier and nothing is announced for it; the call then answers 500 and the policy stays kept, so setting it again applies it. **Deleting one** leaves the tiers it gave; the next triage of new content decides again.
 - **The twin's part** is read by `escalate` and the queue (`sortQueued`, `startInboxAgents`). Before starting or adopting a conversation, the queue rechecks the effective policy, including sender/chat/repository precedence. A queued item with no session and a `never` policy returns to its tier's section, clears pending notes and retry metadata, and records the rule in its handling chain. This also applies during backoff or when every conversation slot is occupied, and to queues restored after a restart. A failed release write is rolled back and retried on the next pass without starting a conversation. `inbox.agent.enabled` still gates the twin as a whole; nothing here sends anything without confirmation.
 - Stored in the settings key `inbox_policies` (`assistant/inbox_policies.go`); one policy per source + tag + value.
@@ -378,7 +381,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 
 The AI twin becomes a **handling chat**. With `inbox.agent.enabled` on, every Needs you item goes to the manager (no longer filtered by model 2), **one chat per item**,
 bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = item ID). It runs in the manager background. Code: `assistant/inbox_agent.go` (promotion, chat creation, reconciliation),
-`inbox_handle.go` (chat notifications, suggestion tool, confirmation API). Actions visible to others **produce suggestions only**; code executes them verbatim after your confirmation. With the switch off, the manager stops automatic promotion, new handling chats, and chat notifications; chain recording continues.
+`inbox_handle.go` (chat notifications), `inbox_suggest.go` (suggestion tool), `inbox_suggestion_api.go` (confirmation API). Actions visible to others **produce suggestions only**; code executes them verbatim after your confirmation. With the switch off, the manager stops automatic promotion, new handling chats, and chat notifications; chain recording continues.
 
 - **Turning the twin off releases unfinished work**: the next handling pass (including collection after a restart) returns open `looking` / `agent` items, queued or running, to Needs you with `handling.state = failed` and the localized reason "The AI twin is off". Queued messages and start retries are discarded, so later messages can be triaged normally. The release is saved and announced through the normal item-change path; a failed save is retried on the next pass.
 - Existing completed suggestions remain available. Rejecting, adding instructions, or confirming a handback while the twin is off returns the item to Needs you immediately with the same reason, without waking or starting its handling chat. Confirmed replies already `waiting` on the other side retain that state. Explicitly handed-off conversations keep their separate workflow. Turning off the twin does not terminate processes already running on a computer.
@@ -388,7 +391,9 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 | 1 Triage | `inbox.triage` (small model) | Triage above, also returning `urgent` |
 | 2 Promote | Code | Triaged Needs you items with triaged content and latest message within `max_age_hours` (default 24) queue a handling chat; `handling.state = looking` (Working; urgent stays Needs you). The task comes from the triage summary and reason |
 | 2′ Link task | `inbox.judge` (small model, only when tasks are active) | Use only its `task_id`: which task the item concerns ([unified-entry.md](unified-entry.md), "Message cards link to tasks"). Its `handle` no longer decides whether to process the item |
-| 3 Handle | `inbox.agent.launcher` (Claude Code launcher, Agents category in model configuration) | Headless claude in the assistant directory; investigate, then submit a suggestion and recap through MCP `inbox_suggest` |
+| 3 Handle | `inbox.agent` (a launcher: Agents' unless set apart, see below) | Headless claude in the assistant directory; investigate, then submit a suggestion and recap through MCP `inbox_suggest` |
+
+- **The twin's model (#4232)**: by default the handling chat runs on **Agents** (`agent.new`): its provider / launcher, model and effort, including later changes there. Because the twin is a high-volume, short-lived job, it can be set apart under **Settings › Model configuration › AI twin runs** to run on a cheaper or faster launcher, model or effort without changing new Agents; **Follow Agents** clears that again. Only new handling chats use a change; running ones keep what they started on. The setting is stored as `model_config.overrides.v1.inbox.agent`; the retired `model_config.inbox.agent` record and the old `inbox.agent.launcher` are never read. It does not touch the twin's switch, its rules or which computer it runs on (`inbox.agent.machine`), and the model does not decide what the twin may do (`docs/assistant/model-config.md`, "AI twin override").
 
 - **Continue on new messages, do not restart**: new messages for an item with a handling chat (a response or additional detail), or your confirmation / rejection / instruction, are **sent into the same chat**
   (`sendToSession`, prompts `prompts/inbox/handling/*.md`: new messages, sent, Agent started, handed back, rejected, your instruction, item done). No new chat or fresh judgment.
@@ -405,7 +410,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
   Knowledge-base tools may update people and projects along the way (`kb_update` is an allowed write).
 - Its chat appears in Chats but sends no completion push (`notifyFinished` skips it); the result is the Inbox suggestion.
 
-**Suggestion tool `inbox_suggest`** (`assistant/inbox_handle.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
+**Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
 `{item?, kind, text, note?, handback?, outcome?, recap?, machine?, cwd?, related?, changes?}`.
 
@@ -424,6 +429,9 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
   nothing changes then. Without `item` the tool works as before. A suggestion from a hand-off records where it came from (`suggestion.conversation`), its chain entry links that
   conversation, and the item's `agent` / `handling` stay as they were (no message card, no old-App draft).
 - **Task-related items**: for linked tasks (2′), prompts include task progress; a reply suggestion inserts a message card into the chat that started the task (`message`, retaining sent state after sending).
+  When the linked task is supervised and the assistant's `inbox_signals` is on (off by default, #4293), each pass that takes new messages from other people into the item also tells the task's supervisor:
+  the signal `inbox` in its next supervision message, naming the item (id, title, sender, one line) and how many messages came ([unified-entry.md](unified-entry.md), "Supervision (#3124)").
+  Persona's own confirmed reply and bot chats never raise one, and nothing the handling chat does goes into the Inbox.
 
 **Confirmation API** `POST /api/v1/inbox/{id}/suggestion`: `{version, action, text?, client_id?}`, `action` = `confirm` / `reject` / `instruct`.
 

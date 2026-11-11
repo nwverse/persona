@@ -22,5 +22,9 @@
   "review_cancelled": "已取消",
   "thread_feishu": "飞书话题",
   "thread_channel": "话题（{channel}）",
-  "thread_line": "{kind} · {name}"
+  "thread_line": "{kind} · {name}",
+  "orphaned": "没人在做",
+  "orphaned_error": "出错后关闭",
+  "orphaned_closed": "已关闭",
+  "orphaned_offline": "电脑离线"
 }

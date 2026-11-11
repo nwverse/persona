@@ -82,6 +82,8 @@
     <string name="assistant_pinned_actions">置顶操作</string>
     <string name="assistant_unpin_all">全部取消置顶</string>
     <string name="assistant_recent">最近</string>
+    <string name="assistant_directions">方向</string>
+    <string name="assistant_other_chats">其他对话</string>
     <string name="assistant_auto">自动对话</string>
     <string name="assistant_origin_inbox">收件箱</string>
     <string name="assistant_origin_task">定时任务</string>
@@ -126,6 +128,7 @@
     <string name="assistant_needs_you_header">现在要你处理的事</string>
     <string name="assistant_source_lark">飞书</string>
     <string name="assistant_source_mail">邮件</string>
+    <string name="assistant_needs_you_agent">Agent</string>
     <string name="assistant_pair_first">请先配对 hub</string>
     <plurals name="assistant_show_all_recent">
         <item quantity="other">查看全部 %1$d 个</item>
@@ -149,4 +152,11 @@
     <string name="assistant_settings_permission_full">完全允许</string>
     <string name="assistant_settings_permission_failed">未能保存默认权限</string>
     <string name="assistant_settings_permission_unavailable">此助手尚未确认支持默认权限设置，暂不可修改。其他设置仍可使用。</string>
+    <string name="assistant_health">健康</string>
+    <string name="assistant_health_title">问问你的健康</string>
+    <string name="assistant_health_lead">睡眠、步数、心率、体重、饮食，基于你手机里的健康数据回答。这里的对话和记忆与其他对话分开。</string>
+    <string name="assistant_health_placeholder">问健康相关的问题…</string>
+    <string name="assistant_health_history">健康对话</string>
+    <string name="assistant_health_new">新的健康对话</string>
+    <string name="assistant_health_load_failed">没读到健康对话</string>
 </resources>

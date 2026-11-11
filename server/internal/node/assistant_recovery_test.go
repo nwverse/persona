@@ -15,9 +15,10 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A provider refusal after assistant.send returned must not end the conversation without the one bounded same-model
-// retry the owner asked for (#3204). The fake CLI is the real node process/stream-json seam, not a model call.
-func TestAssistantRefusalRetriesOnceOnTheSameModel(t *testing.T) {
+// A transient model failure after assistant.send returned must not end the conversation without the one bounded
+// same-model retry the owner asked for (#3204); a Claude safeguards refusal skips it (#4283,
+// TestAssistantClaudeRefusalSwitchesAtOnce). The fake CLI is the real node process/stream-json seam, not a model call.
+func TestAssistantTransientErrorRetriesOnceOnTheSameModel(t *testing.T) {
 	f := sdkTest(t)
 	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
@@ -27,7 +28,7 @@ while IFS= read -r line; do
     count=$(cat "$SDK_FAKE_DIR/refusals" 2>/dev/null || echo 0)
     if [ "$count" -eq 0 ]; then
       echo 1 > "$SDK_FAKE_DIR/refusals"
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
     else
       echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
       echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered"}},"parent_tool_use_id":null}'
@@ -55,7 +56,7 @@ done
 	}
 }
 
-func TestAssistantRefusalThenUsesTheNextLauncherModel(t *testing.T) {
+func TestAssistantFailureThenUsesTheNextLauncherModel(t *testing.T) {
 	f := sdkTest(t)
 	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
@@ -75,7 +76,7 @@ while IFS= read -r line; do
         if [ "$count" -eq 2 ]; then
           echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
         fi
-        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
       else
         printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
         printf '{"type":"assistant","uuid":"final","timestamp":"2026-11-10T00:00:00Z","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"answered by fallback"}]}}\n' "$model" >> "$SDK_FAKE_DIR/transcript.jsonl"
@@ -192,7 +193,7 @@ func TestAssistantRecoverableErrorClasses(t *testing.T) {
 		{"successful result mentioning an error", "API Error: 503", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := assistantRecoverableError(tc.failed, tc.result); got != tc.want {
+			if got := assistantRecoverableError(tc.failed, tc.result, true); got != tc.want {
 				t.Fatalf("assistantRecoverableError(%v, %q) = %v, want %v", tc.failed, tc.result, got, tc.want)
 			}
 		})
@@ -328,6 +329,35 @@ done
 	}
 }
 
+// The model switch registers its replacement before it marks it busy and sends it the retry. The fixture's wait for
+// the end of a turn must not take that gap for it, as the node does not (#3815): waiting on busy alone counted the
+// requests while the fallback model had not been asked yet.
+func TestSDKFixtureIdleWaitsOutTheModelSwitch(t *testing.T) {
+	n := assistantNode(t)
+	f := &sdkFixture{n: n}
+	const id = "11111111-2222-3333-4444-555555555555"
+	replacement := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}, tasksObserved: true}
+	n.procs[id] = replacement
+	n.recoveries = map[string]*assistantTurnRecovery{id: {
+		retried: map[string]bool{"primary-model": true},
+		used:    map[string]bool{"primary-model": true, "fallback-model": true},
+		proc:    replacement,
+		running: true,
+	}}
+	if f.turnOver(id) {
+		t.Fatal("the registered replacement, not yet busy, ended a turn its recovery still holds")
+	}
+	if sessions := n.assistantSessions(); len(sessions) != 1 || sessions[0].Status != proto.StatusWorking {
+		t.Fatalf("the node publishes the model switch as %+v, want working", sessions)
+	}
+	n.mu.Lock()
+	delete(n.recoveries, id) // finishAssistantRecovery ends the recovery before it clears busy
+	n.mu.Unlock()
+	if !f.turnOver(id) {
+		t.Fatal("an idle process with no recovery did not end the turn")
+	}
+}
+
 func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
 	shortStartRetries(t, 300*time.Millisecond)
@@ -337,10 +367,8 @@ func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	back := make(chan error, 1)
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		back <- os.Rename(moved, claude)
-	}()
+	// the install finishes half a second in, while the start is being retried
+	time.AfterFunc(500*time.Millisecond, func() { back <- os.Rename(moved, claude) })
 	n := codexTestNode(t)
 	withFakeHub(t, n)
 	const id = "11111111-2222-3333-4444-555555555555"
@@ -366,6 +394,13 @@ func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 		n.stopAssistant(id)
 		t.Fatal("the failed starter's exit watcher finalized the recovery before its replacement was delivered")
 	}
+	n.mu.Lock()
+	follows := r.proc == current
+	n.mu.Unlock()
+	if !follows {
+		n.stopAssistant(id)
+		t.Fatal("the recovery still follows the starter that exited, not its replacement (#3495)")
+	}
 	n.stopAssistant(id)
 }
 
@@ -380,7 +415,7 @@ while IFS= read -r line; do
     count=$((count+1))
     echo "$count" > "$SDK_FAKE_DIR/attempts"
     if [ "$count" -eq 1 ]; then
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
     else
       exit 0 # the recovered turn ends without any result event
     fi ;;
@@ -428,7 +463,7 @@ func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	if !n.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !n.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {
@@ -479,11 +514,11 @@ func TestAssistantRecoveryIgnoresAReplacedProcessCleanup(t *testing.T) {
 	old, current := &assistantProc{id: id}, &assistantProc{id: id}
 	n.procs[id] = current
 	n.recoveries = map[string]*assistantTurnRecovery{id: {running: true}}
-	n.clearAssistantRecovery(old)
+	n.clearAssistantRecovery(old, true)
 	if n.recoveries[id] == nil {
 		t.Fatal("a replaced process cleared its replacement's recovery")
 	}
-	n.clearAssistantRecovery(current)
+	n.clearAssistantRecovery(current, true)
 	if n.recoveries[id] != nil {
 		t.Fatal("the current process did not clear its completed recovery")
 	}
@@ -588,7 +623,7 @@ func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
 	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true}}
 	a.recoveries = map[string]*assistantTurnRecovery{id: r}
 	a.handOverAssistants()
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("a result in the handover gap was published instead of queued")
 	}
 
@@ -606,6 +641,12 @@ func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
 	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
 		t.Fatalf("the live conversation was not adopted: %+v", adopted)
 	}
+	select {
+	case got := <-selected:
+		t.Fatalf("the carried failure resumed (on %q) before the new connection's session state loaded", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	b.resumeAdoptedFailures(true) // startState, once the state is in
 	select {
 	case got := <-selected:
 		if got != "fallback-model" {
@@ -629,7 +670,7 @@ func TestAssistantSuccessBeforeAdoptionDoesNotMigrateRecovery(t *testing.T) {
 	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
 	a.recoveries = map[string]*assistantTurnRecovery{id: r}
 	a.handOverAssistants()
-	a.clearAssistantRecovery(p) // success is recorded, but the result handler has not cleared busy yet
+	a.clearAssistantRecovery(p, true) // success is recorded, but the result handler has not cleared busy yet
 	if adopted := k.adopt(b); len(adopted) != 1 {
 		t.Fatalf("the live conversation was not adopted: %+v", adopted)
 	}
@@ -654,7 +695,7 @@ func TestAssistantSuccessOnTheOldNodeClearsTheAdoptedRecovery(t *testing.T) {
 	if adopted := k.adopt(b); len(adopted) != 1 {
 		t.Fatalf("the live conversation was not adopted: %+v", adopted)
 	}
-	a.clearAssistantRecovery(p) // the result handler read the old owner before adoption
+	a.clearAssistantRecovery(p, true) // the result handler read the old owner before adoption
 	p.mu.Lock()
 	p.busy = false
 	p.mu.Unlock()
@@ -688,7 +729,7 @@ func TestAssistantResultOnTheOldNodeForwardsAfterAdoption(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("a result that read the old owner was not forwarded after adoption")
 	}
 	select {
@@ -727,7 +768,7 @@ func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoverySend = send })
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {
@@ -788,16 +829,13 @@ func TestAssistantPendingFailureUsesTheReplacementProcess(t *testing.T) {
 			n.procs[p.id] = replacement
 			n.mu.Unlock()
 			// The replacement's first result arrives before its recovery send has returned.
-			n.recoverAssistantResult(replacement, true, "API Error: safeguards flagged this message")
+			n.recoverAssistantResult(replacement, true, "API Error: 503 no eligible upstream account is currently available")
 		}
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
 	n.runAssistantRecovery(old, r, "claude", old.cwd, old.model, "primary-model", false)
-	deadline := time.Now().Add(2 * time.Second)
-	for calls.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitWithin(t, 2*time.Second, "the replacement's recovery send", func() bool { return calls.Load() >= 2 })
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("the replacement's pending failure was dropped: %d recovery send(s), want 2", got)
 	}

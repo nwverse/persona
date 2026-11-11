@@ -88,8 +88,10 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 	return cwd, err
 }
 
-// prepareSpaceIf is prepareSpace; onlyChanged skips the node when the CLAUDE.md is the one this hub last wrote there
-// (refreshInstructions), and it answers whether it was written.
+// prepareSpaceIf is prepareSpace; onlyChanged skips the node when it would get what this hub last gave it there, the
+// same CLAUDE.md and plugin skills (refreshInstructions), and it answers whether it was written. An answer that brings
+// a skill's files always goes: plugins.assistant hands them out once, so skipping would leave the old files on the
+// machine until the CLAUDE.md changed.
 func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
 	if s.isWorkMachine(machine) {
 		return "", false, errWorkAssistant
@@ -117,9 +119,11 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
 	}
 	key := machine + "\x00" + dir
-	if onlyChanged {
+	digests, files := skillDigests(plugins.Skills)
+	given := preparedState{md: md, skills: digests}
+	if onlyChanged && !files {
 		s.preparedMu.Lock()
-		same := s.preparedMD[key] == md
+		same := s.prepared[key] == given
 		s.preparedMu.Unlock()
 		if same {
 			return "", false, nil
@@ -135,10 +139,16 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		return "", false, err
 	}
 	s.preparedMu.Lock()
-	if s.preparedMD == nil {
-		s.preparedMD = map[string]string{}
+	if s.prepared == nil {
+		s.prepared = map[string]preparedState{}
 	}
-	s.preparedMD[key] = md
+	if len(prep.Need) > 0 {
+		// The node lacks some skills: their files come with the next plugins.assistant (plugins.skills_need below), and
+		// the next refresh prepares this directory again, so its copies are made from them.
+		delete(s.prepared, key)
+	} else {
+		s.prepared[key] = given
+	}
 	s.preparedMu.Unlock()
 	if len(prep.Need) > 0 {
 		if err := s.appCall(ctx, AppPlugins, PluginsSkillsNeed, map[string]any{"machine_id": machine, "names": prep.Need}, nil); err != nil {
@@ -146,6 +156,27 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		}
 	}
 	return prep.Cwd, true, nil
+}
+
+// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md and the plugin skills (skillDigests).
+type preparedState struct{ md, skills string }
+
+// skillDigests are the plugin skills of a plugins.assistant answer as prepareSpaceIf compares them, each one's plugin,
+// name and digest; files says whether any comes with its files.
+func skillDigests(raw json.RawMessage) (digests string, files bool) {
+	var skills []struct {
+		Name   string                     `json:"name"`
+		Plugin string                     `json:"plugin"`
+		Digest string                     `json:"digest"`
+		Files  map[string]json.RawMessage `json:"files"`
+	}
+	_ = json.Unmarshal(raw, &skills) // null from a manager without plugins: none
+	var b strings.Builder
+	for _, sk := range skills {
+		fmt.Fprintf(&b, "%s/%s %s\n", sk.Plugin, sk.Name, sk.Digest)
+		files = files || len(sk.Files) > 0
+	}
+	return b.String(), files
 }
 
 // instructionsEvery is how often refreshInstructions looks at the CLAUDE.md the assistant's machine should have.
@@ -171,7 +202,8 @@ func (s *Service) instructionsLoop(ctx context.Context) {
 }
 
 // refreshInstructions writes the assistant's and the health space's CLAUDE.md on the assistant's machine when they
-// differ from the ones this hub last wrote there (none yet after a start: both are written).
+// differ from the ones this hub last wrote there (none yet after a start: both are written), and their plugin skills
+// when those changed (prepareSpaceIf).
 func (s *Service) refreshInstructions(ctx context.Context) {
 	if s.hello(ctx).Assistant.Standby {
 		return // a mesh member: the center's assistant is the one in use (docs/mesh.md)
@@ -218,6 +250,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.ConfigDir != "" {
+		params["config_dir"] = p.ConfigDir
+	}
 	if p.GuestTools != nil {
 		// The node starts it with no built-in tools and only these of Persona's (node/assistant_guest.go).
 		params["guest"] = map[string]any{"tools": p.GuestTools}
@@ -226,7 +261,22 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if purpose == "" {
 		purpose = "assistant"
 	}
+	if p.Launcher != "" {
+		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
+		switch fit {
+		case mainChatRefused:
+			return proto.Session{}, refusal
+		case mainChatGone:
+			delete(params, "launcher")
+		}
+	}
 	if err := s.applyModel(ctx, purpose, params); err != nil {
+		return proto.Session{}, err
+	}
+	if params["launch"] != "headless" {
+		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
+	}
+	if err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
@@ -587,6 +637,7 @@ func (s *Service) startRoutes() {
 			guestTools, in.ReportTasks = in.Guest.Tools, false // it hands nothing out
 		}
 		origin, ref := requestOrigin(r, in.Purpose)
+		sentence := in.Prompt // as the owner wrote it, for the route (route.go)
 		if in.Guest == nil {
 			in.Prompt = s.withWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
@@ -600,6 +651,10 @@ func (s *Service) startRoutes() {
 		}
 		if in.ReportTasks && !in.Main {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)
+		}
+		// The owner's New chat: is it a direction? In the background; nothing waits for it (route.go).
+		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks {
+			go s.routeNewChat(sess.MachineID, sess.SessionID, sentence)
 		}
 		apierr.WriteJSON(w, map[string]any{"session": sess})
 	})
@@ -748,6 +803,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		p["model"], picked = m, true
 	}
 	l, _ := p["launcher"].(string)
+	asked := l != "" // picked in the chat's menu for this message
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
 			l = c.Launcher // no launcher picked: the one this conversation runs
@@ -760,14 +816,18 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped) fails every turn:
-	// fall back to the assistant's launcher and its default.
+	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped), or a launcher that
+	// can't run the assistant (a Paseo provider, a managed Codex one: launcher_mainchat.go) fails every turn: fall back
+	// to the assistant's launcher and its default. One picked for this message that can't run it is refused, saying why.
 	if l != "" {
 		model, _ := p["model"].(string)
+		fit, refusal := s.mainChatFit(ctx, machine, l)
 		switch {
-		case !s.launcherAvailable(ctx, machine, l): // true when it can't be told
+		case fit == mainChatRefused && asked:
+			return refusal
+		case fit != mainChatFits:
 			l = s.launcherNow(ctx)
-			s.logf("[%s] %s: its launcher is gone, using %s", machine, short(sid), l)
+			s.logf("[%s] %s: its launcher can't run it any more, using %s", machine, short(sid), l)
 			p["launcher"] = l
 			delete(p, "model")
 		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
@@ -775,10 +835,15 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			delete(p, "model")
 		}
 	}
-	if l != "" {
-		return s.applyPickedModel(ctx, p)
+	pickedLauncher := l != ""
+	if pickedLauncher {
+		if err := s.applyPickedModel(ctx, p); err != nil {
+			return err
+		}
+	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
+		return err
 	}
-	return s.applyModel(ctx, "assistant", p)
+	return s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.
@@ -788,7 +853,8 @@ func (s *Service) isTaskConversation(ctx context.Context, machine, sid string) b
 
 // Rename is assistant.rename: the user renames conversation p.SessionID in the app ({title?, tab_name?}). The main
 // conversation has no title to change; a Codex one keeps the assistant's title (its tab is still renamed). The node
-// renames; a new title is the user's from now on.
+// renames; a new title is the user's from now on. An extension's (p.Extension, as the hub's auth found it) is only a
+// hint (titleHinted): the hub still names a conversation it started, as it names the others.
 func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, error) {
 	params := p.Params
 	if params == nil {
@@ -810,7 +876,11 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 			return nil, err
 		}
 	}
-	if strings.TrimSpace(title) != "" {
+	switch {
+	case strings.TrimSpace(title) == "":
+	case p.Extension != "":
+		s.titleHinted(p.MachineID, p.SessionID, title)
+	default:
 		s.titleSet(p.MachineID, p.SessionID, title, titleByUser)
 	}
 	return out, nil

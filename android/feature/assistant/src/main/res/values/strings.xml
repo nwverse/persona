@@ -83,6 +83,8 @@
     <string name="assistant_pinned_actions">Pinned actions</string>
     <string name="assistant_unpin_all">Unpin all</string>
     <string name="assistant_recent">Recent</string>
+    <string name="assistant_directions">Directions</string>
+    <string name="assistant_other_chats">Other chats</string>
     <string name="assistant_auto">Automatic</string>
     <string name="assistant_origin_inbox">Inbox</string>
     <string name="assistant_origin_task">Scheduled</string>
@@ -129,6 +131,7 @@
     <string name="assistant_needs_you_header">Needs you now</string>
     <string name="assistant_source_lark">Lark</string>
     <string name="assistant_source_mail">Email</string>
+    <string name="assistant_needs_you_agent">Agent</string>
     <string name="assistant_pair_first">Pair a hub first</string>
     <plurals name="assistant_show_all_recent">
         <item quantity="one">See all %1$d</item>
@@ -154,4 +157,11 @@
     <string name="assistant_settings_permission_full">Full access</string>
     <string name="assistant_settings_permission_failed">Could not save the permission default</string>
     <string name="assistant_settings_permission_unavailable">Unavailable until this assistant can confirm support for permission defaults. Other settings remain available.</string>
+    <string name="assistant_health">Health</string>
+    <string name="assistant_health_title">Ask about your health</string>
+    <string name="assistant_health_lead">Sleep, steps, heart rate, weight and diet, answered from the health data on your phone. Chats and memory here are kept apart from your other chats.</string>
+    <string name="assistant_health_placeholder">Ask a health question…</string>
+    <string name="assistant_health_history">Health chats</string>
+    <string name="assistant_health_new">New health chat</string>
+    <string name="assistant_health_load_failed">Couldn\'t load health chats</string>
 </resources>

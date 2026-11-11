@@ -92,6 +92,7 @@ class InboxDataOwner @Inject constructor(
             var persona: AssistantConversations? = null
             val realInbox = RealInboxRepository(connection, data.inboxReplies, sessions, interactions, data.coroutineScope,
                 snapshots = snapshots, hubPreferences = preferences, hubConnection = runtime,
+                subscriptionsShownFlow = socket.serverFeatures.map { "source_subscriptions" in it }.distinctUntilChanged(),
                 mainConversationSender = data.messages.inGroup(names, data.coroutineScope), actions = actions,
                 lookupReply = { target, clientId ->
                     try {
@@ -276,5 +277,7 @@ class InboxDataOwner @Inject constructor(
         override suspend fun mainConversationOf(manager: String) = use { it.assistant.mainConversationOf(manager) }
         override suspend fun startConversation() = use { it.assistant.startConversation() }
         override suspend fun startConversation(launcher: String) = use { it.assistant.startConversation(launcher) }
+        override suspend fun spaceConversations(space: String) = use { it.assistant.spaceConversations(space) }
+        override suspend fun startConversationIn(space: String) = use { it.assistant.startConversationIn(space) }
     }
 }

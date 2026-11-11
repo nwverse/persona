@@ -8,7 +8,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -75,6 +82,7 @@ import persona.feature.inbox.LocalInboxTriageSetup
 import persona.feature.inbox.inboxEntries
 import persona.feature.inbox.inboxItemPage
 import persona.feature.inbox.needsYouCount
+import persona.feature.inbox.inboxUnreadCount
 import persona.feature.inbox.agentWorking
 import persona.feature.inbox.inboxSourcePage
 import persona.feature.knowledge.*
@@ -203,7 +211,7 @@ private fun PersonaRootContent(
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                SnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
+                persona.core.designsystem.JAppSnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
             }
         }
     }
@@ -423,7 +431,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val shownPending = pending.filter(counts::owned)
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
-    val agentNeeds = agentRequests.count(counts::countsCard)
+    // The Agents tab counts its waiting agents, one per session (ShellCounts.agentsWaiting), as iOS and the web do.
+    val agentNeeds = counts.agentsWaiting(agentRequests)
     // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
     // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current
@@ -438,6 +447,13 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // Rows the AI twin is on are Persona's: the same count as the inbox page's "Needs you" (#4848).
         needsYouCount(
             buildInboxList(shownRecords.map { it.item }, shownInteractions, inbox.sessions, inbox.mutes), shownRecords)
+    }
+    val inboxConversations by session.inbox.conversationInbox.collectAsStateWithLifecycle()
+    val inboxConversationList by (inboxConversations?.state ?: remember {
+        kotlinx.coroutines.flow.MutableStateFlow(persona.feature.inbox.InboxConversationList())
+    }).collectAsStateWithLifecycle()
+    val inboxUnread = remember(shownRecords, inboxConversationList) {
+        inboxUnreadCount(shownRecords, inboxConversationList)
     }
     val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size)
     // "Needs you now" on the Persona home: the agents waiting (not Persona's own, not muted), then the inbox's "Needs you".
@@ -534,7 +550,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                     onInbox = { sidebarDestination(InboxRoute) },
                     onKnowledge = { sidebarDestination(KnowledgeRoute) },
                     onTodos = { sidebarDestination(TodosRoute) }, todoCount = uncompletedTodosCount, showTodos = todosSupported,
-                    inboxCount = inboxNeeds, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
+                    inboxCount = inboxUnread, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
                     pages = sidebarPages,
                     onPage = { key ->
                         if (key == "machines") sidebarDestination(MachinesRoute)
@@ -711,21 +727,23 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val listDetail = rememberShellListDetail(tab, directive, maxWidth, paneHinges, detailOpen = detail != null,
                             store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
-                        CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
-                            persona.feature.settings.LocalExtensionPageVisible provides shown) {
-                            NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
-                                onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
-                                sceneStrategies = listOf(listDetail),
-                                // A pushed page slides in over the page it came from, which stays drawn underneath; going
-                                // back, it slides away over the page below. Pages stay opaque the whole way (fading them
-                                // showed both pages' text on top of each other) and nothing in between shows the background.
-                                transitionSpec = { ContentTransform(slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> width },
-                                    slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> -width / 4 }) },
-                                popTransitionSpec = { ContentTransform(slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> -width / 4 },
-                                    slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width }, targetContentZIndex = -1f) },
-                                predictivePopTransitionSpec = { _ -> ContentTransform(slideInHorizontally(tween(260)) { width -> -width / 4 },
-                                    slideOutHorizontally(tween(260)) { width -> width }, targetContentZIndex = -1f) },
-                                entryProvider = panes)
+                        ShellTabLifecycle(shown) {
+                            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
+                                persona.feature.settings.LocalExtensionPageVisible provides shown) {
+                                NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
+                                    onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
+                                    sceneStrategies = listOf(listDetail),
+                                    // A pushed page slides in over the page it came from, which stays drawn underneath; going
+                                    // back, it slides away over the page below. Pages stay opaque the whole way (fading them
+                                    // showed both pages' text on top of each other) and nothing in between shows the background.
+                                    transitionSpec = { ContentTransform(slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> width },
+                                        slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> -width / 4 }) },
+                                    popTransitionSpec = { ContentTransform(slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> -width / 4 },
+                                        slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width }, targetContentZIndex = -1f) },
+                                    predictivePopTransitionSpec = { _ -> ContentTransform(slideInHorizontally(tween(260)) { width -> -width / 4 },
+                                        slideOutHorizontally(tween(260)) { width -> width }, targetContentZIndex = -1f) },
+                                    entryProvider = panes)
+                            }
                         }
                     }
                 }
@@ -742,11 +760,16 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                   sidebarColumnShown.value = true
               }
           }
+          // A switch of assistant closes the current assistant's settings pages over the list (docs/assistant/managers.md
+          // "Clients"), in the Settings sheet and on each tab (a link or a readiness card opens them there): none shows one
+          // assistant's settings, or sends what it holds, once another is current; the list shows the new one's.
+          persona.feature.settings.CloseAssistantSettingsOnSwitch(currentAssistant.id) { listOf(settingsSheetStack) + stacks.values }
           if (settingsOpened) {
               val settingsNavigator = remember(navigator, settingsSheetStack) {
                   SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
               }
               JSettingsSheet(onDismiss = { settingsOpened = false }) {
+                CompositionLocalProvider(LocalAssistantWaiting provides waiting) {
                   val settingsEntries = entryProvider<NavKey> {
                       entry<SettingsRoute> { ShellSettings(services, settingsNavigator, shell, onClose = { settingsOpened = false }) }
                       entry<SettingsPageRoute> { route ->
@@ -779,6 +802,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                               })
                       }
                   }
+                }
               }
           }
         }

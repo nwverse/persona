@@ -14,9 +14,11 @@ import { useSessionPanels } from "./lib/panel-memory";
 import { resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
 import { resolveSessionLink, sessionLinkRoute, type SessionLink } from "./lib/session-link";
 import { href, navigate, onLinkClick, type Route, routePath, useRoute } from "./lib/router";
+import { agentChatKey, noteChatShown, personaChatKey } from "./lib/recent-chats";
 import { ago, sessionTitle, shortPath } from "./lib/format";
 import type { Session } from "./lib/types";
 import { unreachable } from "./lib/shell";
+import { useTabLookup } from "./lib/tab-lookup";
 import { ConnectionPill } from "./views/ConnectionPill";
 import { NARROW, useKeyboardFrame, useMedia } from "./lib/viewport";
 import { connect, disconnect, reset, type State, useStore } from "./lib/store";
@@ -32,7 +34,12 @@ import { RequestPage } from "./views/RequestPage";
 import { Home } from "./views/Home";
 import { PersonaAssistant } from "./views/PersonaAssistant";
 import { Login } from "./views/Login";
-import { NewWorktreeHost } from "./views/NewWorktree";
+import { NewWorktreeHost } from "./views/NewWorktreeHost";
+import { WorktreeActionsHost } from "./views/WorktreeActions";
+import { openWorktreeActions } from "./lib/worktree-actions";
+import { selectWorkspace } from "./lib/workspace-selection";
+import { setAgentGrouping } from "./lib/sidebar-api";
+import type { WorkspaceTarget } from "./lib/workspace-target";
 import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { StartingAgent } from "./views/StartingAgent";
 import { ShortcutHelp } from "./views/ShortcutHelp";
@@ -53,6 +60,7 @@ const AgentsView = lazyPage(() => import("./views/agents/AgentsView").then((m) =
 const WorkspaceBoard = lazyPage(() => import("./views/WorkspaceBoard").then((m) => m.WorkspaceBoard), { routes: ["workspace-board"] });
 const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines"] });
 const TerminalPage = lazyPage(() => import("./views/terminal/TerminalPage").then((m) => m.TerminalPage), { routes: ["terminal"] });
+const SubscriptionsPage = lazyPage(() => import("./views/subscriptions/SubscriptionsPage").then((m) => m.SubscriptionsPage), { routes: ["subscriptions"] });
 const MachineDetail = lazyPage(() => import("./views/machines/MachineDetail").then((m) => m.MachineDetail), { routes: ["machine"] });
 const SpacePage = lazyPage(() => import("./views/SpacePage").then((m) => m.SpacePage), { routes: ["space"] });
 const Settings = lazyPage(() => import("./views/Settings").then((m) => m.Settings), { routes: ["settings"] });
@@ -81,6 +89,13 @@ const carried = typeof window === "undefined" ? null : takeHubs(window.location.
 if (carried) {
   acceptHubs(carried.hubs, carried.removed);
   window.history.replaceState(window.history.state, "", carried.rest);
+}
+
+const workspaceActions = { onWorkspaceMenu: openWorktreeActions };
+function openWorkspaceInTree(target: WorkspaceTarget) {
+  selectWorkspace(target);
+  setAgentGrouping("repo");
+  navigate({ name: "agent-list" });
 }
 
 export function App() {
@@ -197,7 +212,11 @@ function Shell() {
   useEffect(() => {
     if (tabLinkPath) navigate(tabLinkPath, true);
   }, [tabLinkPath]);
-  const pane = target?.sid ? { mid: target.mid, sid: target.sid } : undefined;
+  // a tab not among the page's rows (a paged hub lists only active and pinned ones): asked of the hub before it is gone
+  const tabRoute = route.name === "tab" ? route : undefined;
+  const lookup = useTabLookup(tabRoute, !!tabRoute && loaded && !target?.sid);
+  const found = lookup.state === "found" ? { mid: lookup.mid, sid: lookup.sid } : undefined;
+  const pane = target?.sid ? { mid: target.mid, sid: target.sid } : found;
   const launch = useStore((s) => (pane ? s.launches[pane.sid] : undefined));
   const starting = useStore((s) => (pane ? (s.sessions[pane.mid] ?? []).find((session) => session.session_id === pane.sid)?.starting : undefined));
   const shell = useRef<HTMLDivElement>(null);
@@ -299,6 +318,12 @@ function Shell() {
   // and coming back to it opens them again where they were (#5150, lib/panel-memory.ts); a Persona chat's panel too
   // (#6199)
   const chat = route.name === "persona" ? (route.sid ?? "") : undefined;
+  // the conversation on the page goes first among the recently opened ones, ⌘K's first group (#2191): an Agent's, or a
+  // Persona conversation (the main one when the page names none); any other page shows none
+  const personaMain = useStore((s) => s.assistant?.main ?? "");
+  const personaShown = route.name === "persona" ? (route.sid || personaMain) : "";
+  const shownChat = pane ? agentChatKey(pane.mid, pane.sid) : personaShown ? personaChatKey(personaShown) : "";
+  useEffect(() => noteChatShown(shownChat), [shownChat]);
   const at = pane ? `${pane.mid}/${pane.sid}` : chat !== undefined ? `persona/${chat}` : route.name;
   useSessionPanels(at, pane, chat);
 
@@ -306,7 +331,7 @@ function Shell() {
   const title =
     pane ? "Agent" : route.name === "persona" ? "Persona" : route.name === "persona-new" ? t("app.title_new_chat") : route.name === "history" ? t("app.title_history") : route.name === "health" ? t("app.title_health") : route.name === "profile" ? t("app.title_profile") : route.name === "inbox" ? t("app.title_inbox") : route.name === "messages" ? t("app.title_messages")
       : route.name === "request" ? t("request-page.title") : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "terminal" ? t("app.title_terminal") : route.name === "settings" ? t("app.title_settings")
-      : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "extension" ? extensionTitle || t("app.title_extension") : t("app.title_home");
+      : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "extension" ? extensionTitle || t("app.title_extension") : route.name === "subscriptions" ? t("app.title_subscriptions") : t("app.title_home");
 
   // never reached the hub: say so with a way to try again, instead of pages loading forever (kept through a retry)
   const [away, setAway] = useState(false);
@@ -321,12 +346,12 @@ function Shell() {
     case "session":
     case "tab":
       main = route.name === "session" && target?.link === "ambiguous" ? <SessionChoices mid={route.mid} sid={route.sid} onToggleSidebar={toggle} />
-        : !pane ? (loaded && route.name === "tab" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
+        : !pane ? (loaded && route.name === "tab" && lookup.state === "missing" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
         : launch ? <StartingAgent launch={launch} onToggleSidebar={toggle} />
         : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={toggle} inPage />;
       break;
     case "persona":
-      main = <PersonaAssistant sid={route.sid} onToggleSidebar={toggle} />;
+      main = <PersonaAssistant sid={route.sid} routed={route.mid || route.manager ? { mid: route.mid, manager: route.manager } : undefined} onToggleSidebar={toggle} />;
       break;
     case "persona-new":
       main = <PersonaAssistant fresh onToggleSidebar={toggle} />;
@@ -335,7 +360,7 @@ function Shell() {
       main = <History origin={route.origin} onToggleSidebar={toggle} />;
       break;
     case "health":
-      main = <Health key={route.sid ?? ""} sid={route.sid} onToggleSidebar={toggle} />;
+      main = <Health key={route.sid ?? (route.fresh ? "new" : "")} sid={route.sid} fresh={route.fresh} onToggleSidebar={toggle} />;
       break;
     case "profile":
       main = <Profile onToggleSidebar={toggle} />;
@@ -362,7 +387,7 @@ function Shell() {
       main = <AgentsView key={route.id ?? ""} id={route.id} onToggleSidebar={toggle} />;
       break;
     case "agent-list":
-      main = <AgentsPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} />;
+      main = <AgentsPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} workspaceActions={workspaceActions} />;
       break;
     case "agent-archives":
       main = <AgentArchives onToggleSidebar={toggle} />;
@@ -381,6 +406,9 @@ function Shell() {
       break;
     case "settings":
       main = <Settings onToggleSidebar={toggle} />;
+      break;
+    case "subscriptions":
+      main = <SubscriptionsPage onToggleSidebar={toggle} />;
       break;
     case "extension":
       main = <ExtensionNavPage key={`${route.extension}/${route.ui}`} extension={route.extension} ui={route.ui} onToggleSidebar={toggle} />;
@@ -409,7 +437,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} onNavigate={close} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
@@ -446,6 +474,7 @@ function Shell() {
         </OverlayBoundary>
       )}
       <NewWorktreeHost />
+      <WorktreeActionsHost onOpenWorkspace={openWorkspaceInTree} />
       {/* tab title with the "Needs you" count, favicon badge, optional sounds (#2332): a leaf, so a sessions push re-renders
           only it, not the whole shell */}
       <AttentionSignals label={title} pane={pane} />

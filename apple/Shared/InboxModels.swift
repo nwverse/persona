@@ -19,6 +19,8 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var summary: String?
     var reason: String?
     var read: Bool?
+    /// Navigation counts only unread Needs you items; reading never files them.
+    var isUnreadAction: Bool { read != true && !isDone && triage == .action }
     var doneAt: Date?
     var doneBy: String?
     var lark: Lark?
