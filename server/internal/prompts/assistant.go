@@ -485,6 +485,27 @@ type TaskNotice struct {
 
 func RenderTaskNotice(n TaskNotice) string { return render("assistant/task_notice", n) }
 
+// SpawnNotice tells the conversation that opened another with conversation_new that the other failed, or ended a turn
+// without reporting back with conversation_send (#4669): once per opened conversation.
+type SpawnNotice struct {
+	ID, Title, Link string
+	Failed          bool
+	Error           string // Failed: the turn's error
+	Last            string // what it said last, when it did not fail
+}
+
+func RenderSpawnNotice(n SpawnNotice) string { return render("assistant/spawn_notice", n) }
+
+// TaskEnded tells a conversation that is not the main one that a task it handed out with task_plan, supervised by the
+// main conversation, ended (#4669): accepted or cancelled, with the task's link (or its id without one).
+type TaskEnded struct {
+	ID, Title, Link string
+	Verdict         string // accepted | cancelled
+	Note            string
+}
+
+func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended", n) }
+
 // AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
 // (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
 // are escaped by the caller.
