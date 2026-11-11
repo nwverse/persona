@@ -7,6 +7,7 @@ import { api, ApiError, enc, pastHub } from "./api";
 import { cleanModelId, validModelId } from "./model-id";
 import type { ModelBinding } from "./model-config";
 import { EFFORTS } from "./session-actions";
+import { launcherTitle, type Named } from "./provider-names";
 import type { Launcher } from "./types";
 
 export interface AgentModel {
@@ -74,9 +75,10 @@ export function machineLaunchers(mid: string, opts: { purpose?: string; signal?:
 }
 
 /** A picker's first entry: "Default: <provider> · <model>" from the hub's default, `fallback` naming the launcher when the hub
- *  says nothing (an older hub). */
-export function defaultLabel(d: LauncherDefault | null | undefined, fallback = ""): string {
-  const parts = [d?.provider || fallback, d?.model && modelName({ id: d.model.split("/").pop() || d.model })].filter(Boolean);
+ *  says nothing (an older hub). The provider is a startup ID; `names` titles it (#5029). */
+export function defaultLabel(d: LauncherDefault | null | undefined, fallback = "", names?: readonly Named[]): string {
+  const provider = d?.provider || fallback;
+  const parts = [provider && launcherTitle(provider, names), d?.model && modelName({ id: d.model.split("/").pop() || d.model })].filter(Boolean);
   return parts.length ? t("lib-launcher-models.default_named", { name: parts.join(" · ") }) : t("lib-launcher-models.default");
 }
 
