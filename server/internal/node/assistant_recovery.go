@@ -115,7 +115,7 @@ func assistantRecoverableError(failed bool, result string, limitWords bool) bool
 		return false
 	}
 	t := strings.ToLower(strings.TrimSpace(result))
-	if strings.Contains(t, "safeguards flagged") {
+	if assistantSafeguardsRefusal(t) {
 		return true // the provider's transient refusal may itself be an HTTP 400 (#3204)
 	}
 	if limitWords && (strings.Contains(t, "usage limit") || strings.Contains(t, "usage_limit") || strings.Contains(t, "account_quota_exhausted")) {
@@ -126,6 +126,27 @@ func assistantRecoverableError(failed bool, result string, limitWords bool) bool
 	}
 	return assistantRateLimit.MatchString(t) || strings.Contains(t, "rate limit") || strings.Contains(t, "rate_limit") ||
 		strings.Contains(t, "too many requests") || assistantServerError.MatchString(t)
+}
+
+// assistantSafeguardsRefusal: the provider's safeguards refused the turn.
+func assistantSafeguardsRefusal(result string) bool {
+	return strings.Contains(strings.ToLower(result), "safeguards flagged")
+}
+
+// assistantModelUnavailable: the model asked for does not exist there, or this account cannot use it (Claude Code's
+// "There's an issue with the selected model (…). It may not exist or you may not have access to it.", model_not_found).
+func assistantModelUnavailable(result string) bool {
+	t := strings.ToLower(result)
+	return strings.Contains(t, "issue with the selected model") || strings.Contains(t, "model_not_found") ||
+		strings.Contains(t, "model not found") || strings.Contains(t, "model does not exist")
+}
+
+// recoverySwitched: conversation id's chain has moved it to another model.
+func (n *Node) recoverySwitched(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	r := n.recoveries[id]
+	return r != nil && r.switched
 }
 
 // claudeResultKinds is what the transcript says of the failed turn that just ended (transcript.claudeErrorKind): a
@@ -236,7 +257,10 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 // recoverAssistantResultFor optionally requires the recovery that captured a pending result to still own the session.
 // That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
 func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
-	if !assistantRecoverable(failed, result, kinds) {
+	// A model this chain switched to that the gateway does not have was the recovery's pick, not the user's: it is
+	// spent, and the chain goes on to the next one (#4283). One the user asked for stays theirs to fix.
+	unavailable := failed && assistantModelUnavailable(result) && n.recoverySwitched(p.id)
+	if !unavailable && !assistantRecoverable(failed, result, kinds) {
 		return false
 	}
 	p.mu.Lock()
@@ -300,6 +324,11 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		p.busy = true
 		p.mu.Unlock()
 		return true
+	}
+	if unavailable || p.agent == "claude" && assistantSafeguardsRefusal(result) {
+		// Claude Code continues a safeguards refusal once by itself ("continuing once with that noted"): a resend on the
+		// same model would be the third try at it (#4283).
+		r.retried[key] = true
 	}
 	same := !r.retried[key]
 	if same {

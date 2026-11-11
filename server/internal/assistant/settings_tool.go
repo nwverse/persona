@@ -90,6 +90,14 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.kbTopics(ctx)), nil },
 			set: s.setKBTopics},
+		{Setting: Setting{Key: "assistant.main_background_folded", Title: "Fold background rounds", Actions: getSet,
+			About: "on (the default): in the apps, a main-conversation round the user did not start (another conversation's " +
+				"conversation_send / conversation_new message, a scheduled task or follow-up) is one line that opens on request, and " +
+				"a scheduled task's prompt is not shown; rounds that asked or told the user something (ask_user, notify_user, a " +
+				"task_review verdict card) stay shown. Off: every round is shown in full. Display only: what runs is unchanged",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
+			set: s.setMainBackgroundFolded},
 		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
 			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
 				"default) only records and makes minutes afterwards; listener follows the meeting in a session and answers questions " +
@@ -265,7 +273,7 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
 	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "model_profiles.tiers": "title_model_tiers",
 	"assistant.meeting_attendance_default": "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
-	"assistant.kb_topics": "title_kb_topics"}
+	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -339,6 +347,13 @@ func (s *Service) setStartRequestedTasks(ctx context.Context, v json.RawMessage)
 		return i18n.T(l, "assistant-settings_tool.change_start_requested_tasks", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.StartRequestedTasks },
 		"assistant.start_requested_tasks is %v for plans from now on.")
+}
+
+func (s *Service) setMainBackgroundFolded(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.mainBackgroundFolded, "assistant.main_background_folded is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_main_background_folded", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.MainBackgroundFolded },
+		"assistant.main_background_folded is %v; the apps redraw the main conversation with it.")
 }
 
 func (s *Service) setKBTopics(ctx context.Context, v json.RawMessage) (*ownChange, error) {
