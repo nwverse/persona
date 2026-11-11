@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -144,9 +145,15 @@ type archiveDropBegin struct {
 
 type archiveSwitchStore struct {
 	*memStore
-	writes         chan bool
-	failAfterWrite atomic.Bool
-	failAIRead     atomic.Bool
+	writes             chan bool
+	failAfterWrite     atomic.Bool
+	failAIRead         atomic.Bool
+	waitAIContext      atomic.Bool
+	stallReservation   atomic.Bool
+	reservationEntered chan struct{}
+	reservationRelease chan struct{}
+	stallOnce          sync.Once
+	releaseOnce        sync.Once
 }
 
 func (s *archiveSwitchStore) Setting(ctx context.Context, key string, out any) (bool, error) {
@@ -157,16 +164,32 @@ func (s *archiveSwitchStore) Setting(ctx context.Context, key string, out any) (
 }
 
 func (s *archiveSwitchStore) PutSetting(ctx context.Context, key string, value any) error {
+	if key == "imessage.archive_reservations" && s.stallReservation.Load() {
+		s.stallOnce.Do(func() { close(s.reservationEntered) })
+		select {
+		case <-s.reservationRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if err := s.memStore.PutSetting(ctx, key, value); err != nil {
 		return err
 	}
 	if on, ok := value.(bool); key == "imessage.ai" && ok {
 		s.writes <- on
+		if s.waitAIContext.Load() {
+			<-ctx.Done()
+			return ctx.Err()
+		}
 		if s.failAfterWrite.Swap(false) {
 			return errors.New("synthetic lost setting acknowledgement")
 		}
 	}
 	return nil
+}
+
+func (s *archiveSwitchStore) releaseReservation() {
+	s.releaseOnce.Do(func() { close(s.reservationRelease) })
 }
 
 // A remote relay exercises BusHub's client.Call path, with a synthetic bus peer
@@ -183,7 +206,8 @@ func newArchiveSwitchRigMode(t *testing.T, remote bool, mode string, oldPeer boo
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	node := &archiveSwitchNode{entered: make(chan struct{}), release: make(chan struct{})}
-	store := &archiveSwitchStore{memStore: &memStore{}, writes: make(chan bool, 32)}
+	store := &archiveSwitchStore{memStore: &memStore{}, writes: make(chan bool, 32),
+		reservationEntered: make(chan struct{}), reservationRelease: make(chan struct{})}
 	var ext Extensions
 	var srv *httptest.Server
 	if remote {
@@ -272,6 +296,7 @@ func newArchiveSwitchRigMode(t *testing.T, remote bool, mode string, oldPeer boo
 	t.Cleanup(func() {
 		node.unblock()
 		delayed.unblock()
+		store.releaseReservation()
 		if len(drop) > 0 && drop[0] != nil {
 			drop[0].release.Do(func() { close(drop[0].reconnect) })
 		}
@@ -436,6 +461,85 @@ func TestIMessageUncertainOffRetiresPendingPage(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.e.Store.Dir, "cursors", "imessage.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the earlier generation advanced its cursor: %v", err)
+	}
+}
+
+func TestIMessageCancelledRetireWhileReservationStoreIsBusy(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		enable    bool
+		reenable  bool
+		waitWrite bool
+	}{
+		{name: "off timeout"},
+		{name: "off timeout then on", reenable: true},
+		{name: "on write failure", enable: true},
+		{name: "on write failure then on", enable: true, reenable: true},
+		{name: "on write deadline then on", enable: true, reenable: true, waitWrite: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newArchiveSwitchRigMode(t, false, "begin", false)
+			archived := r.startArchive()
+			waitArchiveSwitch(t, r.node.entered, "archive node read")
+			r.node.unblock()
+			waitArchiveSwitch(t, r.delayed.returned, "old page before commit")
+			changes, handled, err := r.h.AppCall(r.ctx, assistantwire.AppCall{AppID: assistantwire.AppConnectors,
+				Method: assistantwire.ConnectorsChanges, Params: json.RawMessage(`{"id":"imessage","cursor":"","fence_version":1}`)})
+			var page assistantwire.ChangesResult
+			if !handled || err != nil || json.Unmarshal(changes, &page) != nil || page.Generation == "" {
+				t.Fatalf("read another synthetic page: %s %v", changes, err)
+			}
+			req := assistantwire.ArchiveFence{ID: "imessage", Generation: page.Generation, Token: strings.Repeat("a", 32)}
+			raw, _ := json.Marshal(req)
+			r.store.stallReservation.Store(true)
+			r.store.failAIRead.Store(true)
+			if tc.waitWrite {
+				r.store.waitAIContext.Store(true)
+			} else if tc.enable {
+				r.store.failAfterWrite.Store(true)
+			}
+			beginDone := make(chan error, 1)
+			go func() {
+				_, _, err := r.h.AppCall(r.ctx, assistantwire.AppCall{AppID: assistantwire.AppConnectors,
+					Method: assistantwire.ConnectorsArchiveBegin, Params: raw})
+				beginDone <- err
+			}()
+			waitArchiveSwitch(t, r.store.reservationEntered, "stalled reservation store")
+			deadline, cancel := context.WithTimeout(r.ctx, 300*time.Millisecond)
+			response := r.setAsync(deadline, tc.enable)
+			select {
+			case w := <-response:
+				if w.Code == http.StatusOK {
+					t.Fatalf("a timed-out settings change returned success: %s", w.Body.String())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("settings change ignored its deadline")
+			}
+			cancel()
+			r.store.waitAIContext.Store(false)
+			r.store.releaseReservation()
+			select {
+			case <-beginDone:
+			case <-time.After(10 * time.Second):
+				t.Fatal("stalled reservation did not return")
+			}
+			// End the synthetic reservation without changing its generation.
+			if _, handled, err := r.h.AppCall(r.ctx, assistantwire.AppCall{AppID: assistantwire.AppConnectors,
+				Method: assistantwire.ConnectorsArchiveEnd, Params: raw}); !handled || err != nil {
+				t.Fatalf("release synthetic reservation: handled=%v err=%v", handled, err)
+			}
+			if tc.reenable {
+				waitArchiveSetting(t, r.setAsync(r.ctx, true), true)
+			}
+			r.delayed.unblock()
+			waitArchiveSwitch(t, archived, "old page after cancelled setting")
+			if chat, ok := r.e.Store.Chat(kb.ChatID("imessage", "0123456789ab")); ok {
+				t.Fatalf("cancelled retirement allowed the old page to commit: %+v", chat)
+			}
+			if _, err := os.Stat(filepath.Join(r.e.Store.Dir, "cursors", "imessage.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("cancelled retirement advanced the cursor: %v", err)
+			}
+		})
 	}
 }
 

@@ -423,8 +423,8 @@ func TestIMessageArchiveFenceDeadlineWhileReservationStoreIsBusy(t *testing.T) {
 		t.Fatal("disable ignored its deadline while waiting for the store")
 	}
 	release.Do(func() { close(store.release) })
-	if err := <-begun; err != nil {
-		t.Fatal(err)
+	if err := <-begun; !errors.Is(err, errIMessageArchiveRetired) {
+		t.Fatalf("the stalled admission was not retired: %v", err)
 	}
 	if err := f.end(context.Background(), token); err != nil {
 		t.Fatal(err)

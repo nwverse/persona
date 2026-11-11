@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector/imessage"
@@ -58,6 +59,7 @@ func (l *imessageContextLock) unlock() { l.token <- struct{}{} }
 type imessageArchiveFence struct {
 	once       sync.Once
 	mu         imessageContextLock
+	revoked    atomic.Bool
 	enabled    bool
 	generation string
 	store      Store
@@ -69,6 +71,7 @@ type imessageArchiveFence struct {
 func (f *imessageArchiveFence) init(enabled bool, store Store) {
 	f.once.Do(func() {
 		f.enabled = enabled
+		f.revoked.Store(!enabled)
 		f.generation = randomHex(16)
 		f.store = store
 		f.active = make(map[string]struct{})
@@ -149,7 +152,7 @@ func (f *imessageArchiveFence) snapshot(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if !f.enabled || f.generation == "" {
+	if f.revoked.Load() || !f.enabled || f.generation == "" {
 		return "", errIMessageArchiveRetired
 	}
 	return f.generation, nil
@@ -166,7 +169,7 @@ func (f *imessageArchiveFence) begin(ctx context.Context, generation, token stri
 	if err := f.loadLocked(ctx); err != nil {
 		return err
 	}
-	if !f.enabled || generation == "" || generation != f.generation || token == "" {
+	if f.revoked.Load() || !f.enabled || generation == "" || generation != f.generation || token == "" {
 		return errIMessageArchiveRetired
 	}
 	if _, exists := f.active[token]; exists {
@@ -183,6 +186,9 @@ func (f *imessageArchiveFence) begin(ctx context.Context, generation, token stri
 		f.drained = make(chan struct{})
 	}
 	f.active[token] = struct{}{}
+	if f.revoked.Load() {
+		return errIMessageArchiveRetired
+	}
 	return ctx.Err()
 }
 
@@ -237,6 +243,9 @@ func (f *imessageArchiveFence) abort(ctx context.Context, generation, token stri
 }
 
 func (f *imessageArchiveFence) retire(ctx context.Context) (<-chan struct{}, error) {
+	// Invalidate admissions before waiting for a database write holding mu.
+	// A cancelled request cannot leave its previous generation usable.
+	f.revoked.Store(true)
 	if err := f.mu.lock(ctx); err != nil {
 		return nil, err
 	}
@@ -276,7 +285,12 @@ func (f *imessageArchiveFence) enable(ctx context.Context) error {
 		return err
 	}
 	defer f.mu.unlock()
+	if f.revoked.Load() {
+		// A previous retirement may have timed out before it acquired mu.
+		f.generation = randomHex(16)
+	}
 	f.enabled = true
+	f.revoked.Store(false)
 	return nil
 }
 
