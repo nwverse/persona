@@ -253,6 +253,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.Model != "" {
+		params["model"] = p.Model // picked with the first message, as with a message (sendModel): a typed id too
+	}
 	if p.ConfigDir != "" {
 		params["config_dir"] = p.ConfigDir
 	}
@@ -277,6 +280,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusal
 		case mainChatGone:
 			delete(params, "launcher")
+			delete(params, "model") // picked for the launcher that is gone, not for the one it falls back to
 		}
 	}
 	if err := s.applyModel(ctx, purpose, params); err != nil {
@@ -289,6 +293,12 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
+	if model, _ := params["model"].(string); p.Model != "" && model == p.Model {
+		// A launcher that sets its own --model, or whose agent takes none, would not run it (model_pick.go).
+		if err := s.pickedModelRefusal(ctx, machine, used, model); err != nil {
+			return proto.Session{}, refusePick(http.StatusBadRequest, err)
+		}
+	}
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
@@ -303,6 +313,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: p.PermissionMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
+	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
 }
 
@@ -612,6 +623,7 @@ func (s *Service) startRoutes() {
 			Prompt         string        `json:"prompt"`
 			Images         []proto.Image `json:"images"`
 			Launcher       string        `json:"launcher"`
+			Model          string        `json:"model"` // the first message's model (#5033): a model id, typed or listed
 			PermissionMode string        `json:"permission_mode"`
 			Effort         string        `json:"effort"`
 			Main           bool          `json:"main"` // becomes the main conversation
@@ -640,6 +652,10 @@ func (s *Service) startRoutes() {
 		}
 		if in.Space != "" && in.Space != SpaceHealth {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", in.Space))
+			return
+		}
+		if in.Model = strings.TrimSpace(in.Model); checkModelID(in.Model) != nil {
+			apierr.Write(w, http.StatusBadRequest, checkModelID(in.Model))
 			return
 		}
 		if in.Space != "" && in.Main {
@@ -671,12 +687,20 @@ func (s *Service) startRoutes() {
 		}
 		// The main conversation is the assistant's, on its machine.
 		ctx, note := withLauncherNote(ctx)
-		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, PermissionMode: in.PermissionMode,
+		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, Model: in.Model, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
 			OpenedBy: requestOpener(r), GuestTools: guestTools})
-		if err != nil {
+		var refused *pickError
+		switch {
+		case errors.As(err, &refused):
+			apierr.Write(w, refused.status, refused.err)
+			return
+		case err != nil:
 			apierr.Call(w, err)
 			return
+		}
+		if in.Purpose == "" && in.Guest == nil {
+			s.keepStartPick(ctx, &sess, in.Launcher, in.Model, in.Effort) // its later messages keep what it started on
 		}
 		if in.ReportTasks && !in.Main {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)

@@ -272,6 +272,29 @@ func (s *Service) pickedModelRefusal(ctx context.Context, machine, launcher, mod
 	return nil
 }
 
+// keepStartPick keeps the launcher / model / effort a new conversation was started with (POST
+// /api/v1/assistant/conversations) as its pick, so its later messages keep them, and shows it on sess. Nothing is kept
+// when none was named, or when the start fell back to another launcher than the one named (or than the one the model
+// was for); an effort a pick can't carry is left out.
+func (s *Service) keepStartPick(ctx context.Context, sess *proto.Session, launcher, model, effort string) {
+	launcher, effort = strings.TrimSpace(launcher), strings.TrimSpace(effort)
+	switch {
+	case launcher == "" && model == "" && effort == "", sess.Launcher == "":
+		return
+	case launcher != "" && launcher != sess.Launcher, model != "" && model != sess.Model:
+		return // it fell back: the pick is not what runs
+	}
+	if !slices.Contains(pickEfforts, effort) {
+		effort = ""
+	}
+	p := modelPick{MachineID: sess.MachineID, Launcher: sess.Launcher, Model: model, Effort: effort, At: time.Now().UTC()}
+	if err := s.setModelPick(ctx, sess.SessionID, &p); err != nil {
+		s.logf("[%s] %s: keep the model it started on: %v", sess.MachineID, short(sess.SessionID), err)
+		return
+	}
+	sess.ModelPick = p.wire()
+}
+
 // storedPickRefused: err refuses a pick, or a message on its conversation's pick, and carries a code the hub words and
 // the apps act on (launcher_out_of_scope, launcher_own_service, launcher_missing, launcher_other_kind): it goes on as it
 // is (409 with the code).
