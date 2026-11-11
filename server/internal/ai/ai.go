@@ -186,10 +186,15 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	if c.cfg.ReasoningEffort != "" {
 		switch strings.ToLower(strings.TrimSpace(c.cfg.ReasoningEffort)) {
 		case "off", "none", "disabled":
-			if messagesThinkingDisabledUnsupported(c.cfg.Model) {
+			switch {
+			case strings.Contains(strings.ToLower(c.cfg.Model), "sonnet-5-5"):
+				// Sonnet 5.5 disables up-front thinking with between_tools; low also limits any between-tool work.
+				bodyMap["thinking"] = map[string]any{"type": "between_tools"}
+				bodyMap["output_config"] = map[string]any{"effort": "low"}
+			case messagesThinkingDisabledUnsupported(c.cfg.Model):
 				// These models reject thinking.disabled; the issue's off-or-lowest contract uses low effort instead.
 				bodyMap["output_config"] = map[string]any{"effort": "low"}
-			} else {
+			default:
 				bodyMap["thinking"] = map[string]any{"type": "disabled"}
 			}
 		case "low", "medium", "high", "xhigh", "max":
@@ -248,7 +253,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 // anywhere so provider-prefixed and dated variants follow the same rule; Fable/Mythos 5.x always require thinking.
 func messagesThinkingDisabledUnsupported(model string) bool {
 	model = strings.ToLower(model)
-	for _, id := range []string{"opus-5-5", "sonnet-5-5", "fable-5", "mythos-5"} {
+	for _, id := range []string{"opus-5-5", "sonnet-5-5", "fable-5", "mythos-5", "mythos-preview"} {
 		if strings.Contains(model, id) {
 			return true
 		}

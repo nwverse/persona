@@ -100,25 +100,34 @@ func TestMessagesAPIWithThinkingDisabled(t *testing.T) {
 	}
 }
 
-func TestMessagesAPIWithThinkingDisabledUsesLowEffortWhenRequired(t *testing.T) {
-	for _, model := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"} {
-		t.Run(model, func(t *testing.T) {
+func TestMessagesAPIWithThinkingDisabledUsesSupportedFallback(t *testing.T) {
+	for _, tc := range []struct{ model, thinking string }{
+		{model: "claude-opus-5-5"},
+		{model: "claude-sonnet-5-5", thinking: "between_tools"},
+		{model: "claude-fable-5-1"},
+		{model: "claude-mythos-preview"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
 			var gotBody map[string]any
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_ = json.NewDecoder(r.Body).Decode(&gotBody)
 				_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
 			}))
 			defer srv.Close()
-			c := New(Config{BaseURL: srv.URL, APIKey: "k", Model: model, ReasoningEffort: "off"})
+			c := New(Config{BaseURL: srv.URL, APIKey: "k", Model: tc.model, ReasoningEffort: "off"})
 			if text, err := c.Complete(context.Background(), "sys", "user", 16); err != nil || text != "ok" {
 				t.Fatalf("Complete = %q, %v", text, err)
 			}
-			if _, present := gotBody["thinking"]; present {
-				t.Fatalf("%s rejects disabled thinking, got %+v", model, gotBody["thinking"])
+			thinking, present := gotBody["thinking"].(map[string]any)
+			if tc.thinking == "" && present {
+				t.Fatalf("%s rejects disabled thinking, got %+v", tc.model, gotBody["thinking"])
+			}
+			if tc.thinking != "" && (!present || thinking["type"] != tc.thinking) {
+				t.Fatalf("expected %s for %s, got %+v", tc.thinking, tc.model, gotBody["thinking"])
 			}
 			outputConfig, _ := gotBody["output_config"].(map[string]any)
 			if outputConfig == nil || outputConfig["effort"] != "low" {
-				t.Fatalf("expected low effort fallback for %s, got %+v", model, gotBody["output_config"])
+				t.Fatalf("expected low effort fallback for %s, got %+v", tc.model, gotBody["output_config"])
 			}
 		})
 	}
