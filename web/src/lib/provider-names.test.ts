@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { launcherTitle, namedLauncher, providerIdNote, providerLabel, providerTitle } from "./provider-names";
+import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle } from "./provider-names";
 
 describe("provider names", () => {
   it("leads with the display name and keeps the ID as the note", () => {
@@ -28,5 +28,19 @@ describe("provider names", () => {
     expect(launcherTitle("gone", list)).toBe("gone");
     expect(launcherTitle("glm", undefined)).toBe("glm");
     expect(namedLauncher("glm", list)).toEqual({ name: "glm", display_name: "Zhipu GLM" });
+  });
+});
+
+describe("names from the model configuration", () => {
+  it("takes launcher providers, the hub's name as the display name", () => {
+    const providers = [
+      { id: "launcher.relay-example-com", name: "我的中转 站" },
+      { id: "launcher.cc_glm", name: "cc_glm" },
+      { id: "launcher.claude", name: "Claude Code default" },
+      { id: "legacy.ai", name: "Processing" },
+      { id: "plugin.voice", name: "Voice" },
+    ];
+    expect(namesFromProviders(providers)).toEqual([{ name: "relay-example-com", display_name: "我的中转 站" }, { name: "cc_glm" }]);
+    expect(namesFromProviders(undefined)).toEqual([]);
   });
 });

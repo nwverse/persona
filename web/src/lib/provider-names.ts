@@ -2,6 +2,12 @@
 // display name, in any language, with the startup ID (`name`, what a launch, a preset or the model settings refer to)
 // as secondary text. A launcher without a display name (an rc alias, an older hub) keeps showing its ID. Every picker
 // that names one goes through these, so a provider reads the same everywhere.
+// A place that holds only a launcher's ID (a task, a schedule, a recent setup) looks the title up in useProviderNames:
+// the model configuration's providers (GET /model-config, whose `name` the hub sets to the display name), read once a
+// minute at most and shared by every place on the page.
+import { useEffect, useState } from "react";
+import { api } from "./api";
+import { MANAGER_HEADER } from "./manager-choice";
 
 /** Anything with a startup ID and maybe a display name: a `Launcher` (GET /machines/{mid}/launchers), a `ProviderView`
  *  (GET /launchers), a preset's add result. */
@@ -37,4 +43,53 @@ export function namedLauncher(name: string, list: readonly Named[] | null | unde
 /** The title of the launcher with startup ID `name`, looked up in `list` (the ID itself when it is not there). */
 export function launcherTitle(name: string, list: readonly Named[] | null | undefined): string {
   return providerTitle(namedLauncher(name, list));
+}
+
+/** The launcher providers of GET /model-config as `Named`: `launcher.<id>` with the hub's name for it. The hub's own
+ *  "Claude Code default" stand-in for plain `claude` is a label, not a display name, so it is left out. */
+export function namesFromProviders(providers: readonly { id: string; name?: string }[] | null | undefined): Named[] {
+  const out: Named[] = [];
+  for (const p of providers ?? []) {
+    if (!p.id.startsWith("launcher.")) continue;
+    const name = p.id.slice("launcher.".length);
+    if (!name || name === "claude") continue;
+    out.push(p.name?.trim() && p.name.trim() !== name ? { name, display_name: p.name.trim() } : { name });
+  }
+  return out;
+}
+
+const NAMES_TTL_MS = 60_000;
+const namesCache = new Map<string, { at: number; list: Promise<Named[]> }>();
+
+/** The providers' names as `useProviderNames` reads them, shared by every caller for a minute; a failure (an older hub,
+ *  no model configuration) is an empty list, so places show IDs as before. */
+export function loadProviderNames(manager = ""): Promise<Named[]> {
+  const hit = namesCache.get(manager);
+  if (hit && Date.now() - hit.at < NAMES_TTL_MS) return hit.list;
+  const list = api<{ providers?: { id: string; name?: string }[] }>("/model-config", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined })
+    .then((r) => namesFromProviders(r.providers))
+    .catch(() => {
+      namesCache.delete(manager);
+      return [];
+    });
+  namesCache.set(manager, { at: Date.now(), list });
+  return list;
+}
+
+/** Forget the names read so far (a provider added, renamed or removed): the next reader asks the hub again. */
+export function forgetProviderNames(): void {
+  namesCache.clear();
+}
+
+/** The providers' names for a place that holds only launcher IDs; [] until they are in. */
+export function useProviderNames(manager = ""): Named[] {
+  const [list, setList] = useState<Named[]>([]);
+  useEffect(() => {
+    let live = true;
+    void loadProviderNames(manager).then((l) => live && setList(l));
+    return () => {
+      live = false;
+    };
+  }, [manager]);
+  return list;
 }
