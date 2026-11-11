@@ -137,7 +137,8 @@ class RealAssistantRepository(
                     val choice = AssistantManagerChoice.current.value
                     val request = Request(transport, choice)
                     if (restoredScope != request.key || current.value.managerId != request.owner) return@withLock
-                    val owned = updates.filter { choice.owns(it.manager) }
+                    // A health chat is the health space's (docs/assistant/health.md): never on the assistant's own list.
+                    val owned = updates.filter { choice.owns(it.manager) && !it.isHealth }
                     val byKey = owned.associateBy { it.key }
                     current.update { snapshot ->
                         snapshot.copy(conversations = (snapshot.conversations.map { byKey[it.key] ?: it } +
@@ -200,6 +201,21 @@ class RealAssistantRepository(
         }
     }
 
+    override suspend fun spaceConversations(space: String): List<Session> {
+        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
+        val data = transport.assistantIn(space)
+        check(connection.current.value === transport) { CoreText.of(Key.ConnectionSwitched).shown }
+        return spaceConversationsOf(data, space)
+    }
+
+    override suspend fun startConversationIn(space: String): SessionKey {
+        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
+        val result = transport.createConversationIn(space)
+        val session = JsonCodec.decodeFromJsonElement<Session>(result.getValue("session"))
+        check(connection.current.value === transport) { CoreText.of(Key.ConnectionSwitched).shown }
+        return session.key
+    }
+
     private suspend fun start(launcher: String?): SessionKey {
         // Capture identity before waiting behind another creation.
         val request = request()
@@ -235,6 +251,17 @@ class RealAssistantRepository(
         return session.key
     }
 
+}
+
+/**
+ * A space's chats from `GET /api/v1/assistant?space=` (docs/assistant/health.md): each named for [space] and its machine
+ * even where the hub leaves them out (the list's `machine_id`, as iOS does).
+ */
+internal fun spaceConversationsOf(data: JsonObject, space: String): List<Session> {
+    val machine = data.string("machine_id")
+    return data.array("conversations").map { JsonCodec.decodeFromJsonElement<Session>(it) }.map {
+        it.copy(space = it.space ?: space, machineId = it.machineId.ifEmpty { machine })
+    }
 }
 
 /** `assistant.leaders`: the leader conversations' ids in the hub's order, never the main one. */
