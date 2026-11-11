@@ -385,13 +385,20 @@ struct AssistantTopBar: View {
         .connectionDetails($showLink)
     }
 
-    /// The pill's name: the persona's (Persona's) on the main conversation and the new-conversation page, a side
-    /// conversation's title.
+    /// The pill's name: the assistant's on the main conversation and the new-conversation page, a side conversation's
+    /// title.
     private var name: String {
-        let persona = model.persona.name
-        guard let key, key != model.assistantMain else { return persona }
+        let own = ownName
+        guard let key, key != model.assistantMain else { return own }
         let t = session?.title ?? ""
-        return t.isEmpty || t == "Claude Code" ? persona : t
+        return t.isEmpty || t == "Claude Code" ? own : t
+    }
+
+    /// Whose page it is: the current assistant's name on a hub with several (the face stays the persona's, picked in
+    /// Appearance), the persona's with one; another assistant's conversation opened from elsewhere names its own.
+    private var ownName: String {
+        if let key, let other = model.otherAssistant(of: key) { return other.name }
+        return model.assistantManager?.name ?? model.persona.name
     }
 
     nonisolated static func visibleTitle(showsIdentity: Bool, persona: String, conversation: String?, isMain: Bool) -> String? {
@@ -401,7 +408,8 @@ struct AssistantTopBar: View {
     }
 
     private var menuName: String? {
-        Self.visibleTitle(showsIdentity: model.showsAssistantIdentity, persona: model.persona.name,
+        // With several assistants the name is the current one's, or that of the assistant whose conversation this is.
+        Self.visibleTitle(showsIdentity: model.showsAssistantIdentity, persona: ownName,
                           conversation: session?.title, isMain: key == nil || key == model.assistantMain)
     }
 
@@ -603,7 +611,7 @@ struct AssistantTopBar: View {
     private var baseMenuTitle: String {
         guard let key else { return String(localized: "New chat · \(launcher)") }
 
-        let title = name == model.persona.name && key == model.assistantMain ? String(localized: "Main Chat") : name
+        let title = name == ownName && key == model.assistantMain ? String(localized: "Main Chat") : name
         return [title, launcher, Fmt.model(pickedModel ?? session?.model)].compactMap { $0 }.joined(separator: " · ")
     }
 

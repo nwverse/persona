@@ -440,6 +440,8 @@ nonisolated enum Theme {
     /// inbox's Select, #2059; the web uses the same 45%).
     enum Fade {
         static let unavailable: Double = 0.45
+        /// An offline assistant's row in the switcher's list: the whole row, still pickable (the web and Android use 55%).
+        static let offline: Double = 0.55
     }
 
     /// How much of a rich card must intersect the scroll viewport before its isolated content runs.

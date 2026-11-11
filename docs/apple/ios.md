@@ -1749,10 +1749,37 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 
 ## The Persona page's manager (#2664)
 
-[managers.md](../assistant/managers.md) "Clients": with more than one installed manager the Persona page (iPhone, iPad and the
-Mac) has a row of chips under its top bar (`ManagerSwitcher`, `Views/Assistant/ManagerSwitcher.swift`), one per manager, the default
-first and then roster order; an offline one is dimmed with the offline symbol. It starts on the default; the pick is per group and
-kept only for this run (`AppModel.assistantPicks`), and a pick whose manager leaves the roster goes back to the default.
+[managers.md](../assistant/managers.md) "Clients": the interface calls a manager an **assistant**, and one of them is the
+**current assistant**, picked in the sidebar's header (`AssistantSwitcherHeader`, `Views/Assistant/AssistantSwitcher.swift`; iPhone,
+iPad and the Mac, where the header is one line in the title bar's row). The header shows the Persona face chosen in Appearance
+with the state's dot at its foot, the current assistant's name with an arrow, and "Online · <host>" / "Offline · last synced …".
+It opens a popover (`AssistantSwitcherList`): one row per manager, the installed ones (the default first, then roster order) and
+then those still installing, each with its first letter on a disc in its color (`AssistantSwitcherText.hue`: the default's is
+`Theme.ai`, any other's the sum of its id's UTF-8 bytes modulo five over blue, green, orange, pink, indigo, the same on every
+client; the letter in the panel's color) and the state's dot at the disc's foot, its state line, a Default chip and a check on
+the current one, on a solid panel (`Theme.card`); an offline row is dimmed as a whole (`Theme.Fade.offline`) and can still be
+picked. The dot (`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
+Settings › Assistants keeps its dot beside the words. Under them **New Assistant** (asks for a
+name, then the install code sheet of Settings › Assistants) and **Manage Assistants…** (Settings › Assistants). A row still
+installing opens its install code: the one this header made while it lasts, else a new one (`ManagersModel.showCode`; the hub
+keeps no code to show again). What the list presents (the name alert, the code sheet, Settings) waits until the popover is
+gone (its `onDisappear`), not for a fixed delay: UIKit refuses a presentation while the popover is still leaving. At the
+accessibility text sizes the header leaves out the face so the name fits, and the list gives way to the screen's width. The
+header and its list show from two installed assistants on (an offline one counts, one still installing doesn't); with one, or on
+a hub without a roster, the sidebar keeps the look without assistant identity (#3975, `AppModel.showsAssistantIdentity`), as the
+web app and Android do.
+
+The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
+the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster goes back to the default, and one
+that becomes the default stays picked. Each group's snapshot keeps the roster and the picked manager's settings, so a launch
+starts on the current assistant before the hub answers. Switching closes the Persona page's pushed pages (`assistantSwitches`:
+they read the assistant before and would write to the next); re-reading the same assistant (back online, the default moving
+under a pick) doesn't. While another assistant is current, the default's settings are read once a run all the same
+(`defaultAssistantReads`), since Health and the channels follow the default.
+
+CarPlay's voice follows the conversation open in the app, else the current assistant's main conversation (it extends the app's
+screen, `CarPlayVoiceSession`); Siri and Shortcuts, the Watch, widgets, Live Activities and the Health page keep following the
+default assistant.
 
 - **Requests**: `AppModel.api` and `api(_:)` carry the pick (`APIClient.showing(_:)`); a request names it in `X-Persona-Manager`
   only on the assistant's own routes (`APIClient.assistantRoute`): not one conversation's (`/api/v1/assistant/conversations/{id}/…`,
@@ -1774,19 +1801,25 @@ kept only for this run (`AppModel.assistantPicks`), and a pick whose manager lea
   can be sent once it's back.", `ManagerOfflineNote`) and every composer is off; suggestions are hidden and Ask Persona says so
   instead of sending. A conversation of an offline manager opened anywhere has its composer off with the same note
   (`AppModel.offlineManager(of:)`).
-- **From elsewhere**: opening a conversation (a link, a notification, the Inbox's hand-off to Persona) shows its manager's page
-  first, by the item's manager for one not listed yet; a health conversation leaves the pick alone. A hand-off sent as a plain
-  message goes to the item's manager's main conversation. A summary started from an extension's chat page stays on the default
+- **From elsewhere**: opening a conversation (a link, a notification, the Inbox's hand-off to Persona) opens that conversation
+  and leaves the current assistant alone (`AppModel.openAssistantConversation`); its requests go to its own manager, as the hub
+  routes a conversation's. The top bar names that assistant (`otherAssistant(of:)`); one not listed yet keeps the item's manager
+  (`assistantItemManagers`) for its links, its offline note and that name. It stays on screen through later pushes and re-reads,
+  and gives way to the current assistant's main conversation only when the user switches. A hand-off sent as a plain message goes to the item's manager's main conversation. A summary started from an extension's chat page stays on the default
   manager.
-- **Tests**: `ManagerSwitchTests` (the route rule and real requests, the pick's start, fallback and one manager, each manager's
-  settings held, a manager leaving the roster, the lists, opening a conversation from elsewhere, an offline manager). By hand,
-  against the mock hub (`MOCK_MANAGER_NAS=1`): `-openAssistantManager m-3fa21c` (工作, no main conversation yet) or `m-8b04d2`
-  (家里, offline) opens the page on that manager once the roster is in.
+- **Tests**: `ManagerSwitchTests` (the route rule and real requests, the pick's start, fallback and one manager, the pick kept
+  across launches and through a change of the default, each manager's settings held, a manager leaving the roster, the lists,
+  another assistant's conversation opened without switching, an offline manager) and `AssistantSwitcherTests` (the rows and
+  their words, the colors, the kept roster, a row still installing); UI suite `AssistantSwitcherUITests` (New Assistant → name →
+  code sheet, Manage Assistants… → Settings › Assistants, a row still installing → code sheet; against the mock hub with
+  `TEST_RUNNER_PERSONA_SWITCHER_HUB`). By hand, against the mock hub (`MOCK_MANAGER_NAS=1`):
+  `-openAssistantManager m-3fa21c` (工作, no main conversation yet) or `m-8b04d2` (家里, offline) makes that manager the current
+  assistant once the roster is in; `-openAssistantSidebar YES -showAssistantSwitcher YES` opens the sidebar with the list.
 
 ## DEBUG launch arguments (Debug only; Release checks exclude these strings)
 
 `-pairURL persona://pair?...` (pair without scanning a QR code, no notification permission prompt), `-openSession <machine>/<session>`,
-`-showNewChat YES`, `-tab dev|mail|settings`, `-openAssistant <machine>/<session>`, `-newAssistant YES`, `-openAssistantSidebar YES|0.5` (Persona tab sidebar open / halfway open), `-openAssistantManager <id>` (the Persona page on that manager once the roster is in), `-openFirstImage YES` (open the viewer for the first image in the chat), `-showScrollState YES|visible` (chat-list position and following state, readable by UI tests; `visible` draws it), `-openTerminalPane YES`, `-showPad YES`, `-showKeyMods locked,once,held` (set the terminal key bar's ctrl / alt / shift to these states), `-terminalWrap NO`, `-terminalTheme ink|midnight|persona|solarized`, `-terminalInputMode direct|field` (terminal direct typing / input field), `-terminalTipsSeen YES` (skip "Terminal tips"), `-openTerminalTips YES` (show them again), `-focusTerminalInput YES` (shows the keyboard in direct-typing mode), `-openShortcutsPanel YES`, `-openTerminalSettings YES`, `-showLark YES` (go directly to Inbox), `-larkFocus <messageId>` (scroll to that message), `-larkProfile <userId>` (show this person's profile card in the chat), `-larkPicker YES` (show the reaction picker for the last message), `-larkMoments <postId>` (open a Moments post), `-openInboxFirst YES` (open the first unhandled Inbox item), `-larkTop YES` (show the Lark chat from its earliest message, for screenshots of long cards), `-addMail YES` (open Manage email accounts › Add email account), `-tab settings -openHubUpdate YES` (Settings › hub, `docs/operations/hub-update.md`), `-tab settings -openSkills YES` (Settings › Assistant › Skills), `-tab settings -openAssistantPage assistant|routines|routine|intervalTask|cronTask|followup|bypassTask|newRoutine|memory|memoryFile|memoryEdit|places|place|newPlace|deletePlace|about` (pages under Settings › Assistant; `routine` opens the first scheduled task, `intervalTask` / `cronTask` / `followup` the first interval / cron / one-time task, `bypassTask` shows the "Allow everything?" confirmation in the editor, `newRoutine` shows the creation sheet with the "End-of-day review" template, `memoryFile` / `memoryEdit` opens the first memory / its editor; `places` is Saved Places, `place` opens the first place's editor, `newPlace` the new-place sheet, `deletePlace` the list's Delete confirmation for the first place). `scripts/app/sim.sh` wraps building, installation, pairing and launch (`SIM=<udid>` changes the simulator; concurrent agents must use separate simulators or overwrite each other's installs).
+`-showNewChat YES`, `-tab dev|mail|settings`, `-openAssistant <machine>/<session>`, `-newAssistant YES`, `-openAssistantSidebar YES|0.5` (Persona tab sidebar open / halfway open), `-openAssistantManager <id>` (that manager as the current assistant once the roster is in), `-showAssistantSwitcher YES` (the sidebar's assistant list open, several assistants), `-openFirstImage YES` (open the viewer for the first image in the chat), `-showScrollState YES|visible` (chat-list position and following state, readable by UI tests; `visible` draws it), `-openTerminalPane YES`, `-showPad YES`, `-showKeyMods locked,once,held` (set the terminal key bar's ctrl / alt / shift to these states), `-terminalWrap NO`, `-terminalTheme ink|midnight|persona|solarized`, `-terminalInputMode direct|field` (terminal direct typing / input field), `-terminalTipsSeen YES` (skip "Terminal tips"), `-openTerminalTips YES` (show them again), `-focusTerminalInput YES` (shows the keyboard in direct-typing mode), `-openShortcutsPanel YES`, `-openTerminalSettings YES`, `-showLark YES` (go directly to Inbox), `-larkFocus <messageId>` (scroll to that message), `-larkProfile <userId>` (show this person's profile card in the chat), `-larkPicker YES` (show the reaction picker for the last message), `-larkMoments <postId>` (open a Moments post), `-openInboxFirst YES` (open the first unhandled Inbox item), `-larkTop YES` (show the Lark chat from its earliest message, for screenshots of long cards), `-addMail YES` (open Manage email accounts › Add email account), `-tab settings -openHubUpdate YES` (Settings › hub, `docs/operations/hub-update.md`), `-tab settings -openSkills YES` (Settings › Assistant › Skills), `-tab settings -openAssistantPage assistant|routines|routine|intervalTask|cronTask|followup|bypassTask|newRoutine|memory|memoryFile|memoryEdit|places|place|newPlace|deletePlace|about` (pages under Settings › Assistant; `routine` opens the first scheduled task, `intervalTask` / `cronTask` / `followup` the first interval / cron / one-time task, `bypassTask` shows the "Allow everything?" confirmation in the editor, `newRoutine` shows the creation sheet with the "End-of-day review" template, `memoryFile` / `memoryEdit` opens the first memory / its editor; `places` is Saved Places, `place` opens the first place's editor, `newPlace` the new-place sheet, `deletePlace` the list's Delete confirmation for the first place). `scripts/app/sim.sh` wraps building, installation, pairing and launch (`SIM=<udid>` changes the simulator; concurrent agents must use separate simulators or overwrite each other's installs).
 Check history rendering: `-loadAll YES` (load all history and scroll to the top), `-showFromSeq <seq>` (display from the turn containing this user message; scroll positioning can drift in long histories),
 `-dropUsers YES` (hide that turn's user bubbles to fit its process rows and answer on one screen). `-openPane terminal|git|files` opens the chat page's terminal (from the bottom) / Git / Files;
 `-simulateTap <machine>/<session>` runs the notification-tap handler 4 seconds after launch; `-tab settings -openNotificationSettings YES` (Settings › Notifications; add `-openIslandSettings YES` for Dynamic Island); `-tab settings -openSentAsYou YES` (Settings › Sent as You, #5278); `-showFleetSample needsYou|working|done` (`-fleetDetails YES`, `-fleetIsland b|c|custom:<left>,<right>`) starts a Live Activity with fake data; `-showTestNotification permission|plan` shows a local notification matching an interaction push 3 seconds after backgrounding (UI tests use it to test buttons); `-openFilePath <path>` (open this file after opening the chat; `-openFileLine <line>` jumps to that line), `-showFilePerf YES` (write file-open timings and per-second frame rates to Caches/file-perf.log; `-showFileAutoScroll YES` scrolls the file at constant speed, `-showFileAutoScrollSpeed 1500` changes the speed); `-showMenu YES` opens the long-press action bar on the last reply (with `-showFromSeq`, that turn's reply); `-openWelcome YES` forgets pairing and exits demo mode at launch, stopping on the pairing page (`DemoModeTests`); `-openChangeAnswer YES` opens Change Answer on the first **Answered by the assistant** card (#544).

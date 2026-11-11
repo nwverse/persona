@@ -236,6 +236,19 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
   (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
+## A new private profile and `--setting-sources project` both drop the login (2026-11-11, #3862)
+
+A meeting room (an assistant guest started with `--setting-sources project` so none of the owner's setup reaches it)
+answered every question "Not logged in · Please run /login" on a machine whose launcher is a shell function and whose
+gateway and token sit in `~/.claude/settings.json`'s `env`. Two things dropped that login: since #4310 a new assistant
+conversation that names no `config_dir` runs in `<PERSONA_HOME>/profiles/<launcher>`, a fresh config directory with no
+credentials and no `settings.json`; and `--setting-sources project` leaves the user's settings file out even in the right
+profile. A conversation that must sign in as the assistant does asks for `config_dir: "legacy"` and, when it limits the
+setting sources, carries the login keys (`env`, `apiKeyHelper`, the AWS and `forceLogin…` keys, `model`) of the profile's
+`settings.json` in its own `--settings`. The synthetic reply is an ordinary assistant text item (`isApiErrorMessage`,
+model `<synthetic>`, error `authentication_failed` only in the transcript); read the session row's `turn_error` before
+taking the turn's last words as an answer.
+
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
 After each turn, Claude Code puts a suggested next message in dim text (SGR 2), such as `❯ 现在部署一下 hub` ("deploy the hub now"). Plain-text screen reads can't distinguish it from typed text.
@@ -741,6 +754,22 @@ either one.
   presses nothing. Saying "update Claude Code" sent the user after a fix that didn't exist.
 - To check that a key really arrives, run a control: a plain Enter on the empty prompt left the queue as it was, while `ctrl+enter`
   (herdr's key name, or the CSI u bytes `ESC [13;5u`) sent it. Confirm in the transcript (`queue-operation remove`), not only on screen.
+
+## A fullscreen Claude Code scrolled up has its hints off screen (2026-11-11, #4537, 2.1.321)
+
+"Send now" was refused as `send_now_unrecognized` although 2.1.321 still draws `ctrl+enter to send now`. Every machine runs
+Claude Code with `"tui": "fullscreen"`, where the queued message and its hint scroll with the transcript. Scrolled up, the
+screen shows only `Jump to bottom (ctrl+End) ↓` and `❯ Press up to edit queued messages`, so the node, which reads the visible
+screen, saw a queue in the transcript and no hint.
+
+- Before concluding a hint changed, read the version's bundled code and capture the screen. Here the text was built from the
+  binding (`${keys} to send now`) and was unchanged from 2.1.311; what differed was where it was drawn.
+- A screen-reading check has to consider that the user may have scrolled. In fullscreen, Claude Code's own `scroll:bottom`
+  (ctrl+End, the key the pill names on Linux) brings the end back without sending anything, and the node reads again.
+- herdr 0.9's `send-keys` rejects End, Home and the page keys (`invalid_key`). `pane.send_text` writes their xterm bytes as
+  they are (`ESC [1;5F` for ctrl+End), which Claude Code reads as the key.
+- Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
+  that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
 
 ## Antigravity planner message completion can be progress narration (#3389)
 
