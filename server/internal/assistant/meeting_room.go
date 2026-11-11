@@ -242,7 +242,8 @@ func (s *Service) roomCreate(ctx context.Context, machine, sid string, r kb.Reco
 		"guest":          map[string]any{"tools": meetingRoomToolNames(), "kind": guestKindMeeting},
 		"message_source": &proto.MessageSource{Kind: proto.SourceMeeting, Title: feedMeetingName(r, s.location(ctx))},
 		"client_msg_id":  "meeting-" + r.ID}
-	if err := s.applyModel(ctx, "assistant", params); err != nil {
+	// The main chat's launcher and model, on the CLI even when the main chat runs on the Agent SDK: a room never does.
+	if err := s.applyModelCLI(ctx, "assistant", params); err != nil {
 		return "", "", err
 	}
 	delete(params, "permission_mode")
