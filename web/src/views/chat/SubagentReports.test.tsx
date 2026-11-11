@@ -7,7 +7,6 @@ vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
-vi.mock("./useTranscript", () => ({ useTranscript: () => ({ items: [], loading: false }) }));
 vi.mock("../../lib/api", async (original) => ({ ...await original<typeof import("../../lib/api")>(), fullItem: vi.fn() }));
 import { fullItem } from "../../lib/api";
 import { agentStatus, agentsWorking, buildTaskIndex, terminalCalls } from "../../lib/tasks";
@@ -50,30 +49,31 @@ async function click(selector: string) {
 }
 
 describe("associated subagent reports", () => {
-  it("keeps launch and interim reports running, then shows a terminal result under the collapsed original tool", async () => {
+  it("keeps launch and interim reports running in the open, then folds the card with its terminal result (#5030)", async () => {
     const started = { ...receipt, task: note("running") };
     expect(agentStatus(started, { ...meta, running: false }, false)).toBe("running");
     await draw([...initial.slice(0, 2), started, progress]);
-    expect(host.querySelector("[data-work-group] > button")?.getAttribute("aria-expanded")).toBe("false");
-    expect(host.querySelector("[data-subagent-card]")).toBeNull();
-    await click("[data-work-group] > button");
+    // a running subagent is never folded into the work summary: its card stands in the open
     expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("running");
     expect(host.querySelector("[data-subagent-card] button")?.getAttribute("aria-expanded")).toBe("false");
-    await click("[data-subagent-card] button");
-    expect(host.querySelector("[data-report]")?.getAttribute("data-report")).toBe("folded");
     expect(host.textContent).not.toContain("The fictional checks are still running.");
-    await click("[data-report-line]");
+    await click("[data-subagent-card] button");
+    // the interim report is what it has said so far
     expect(host.textContent).toContain("The fictional checks are still running.");
     const running = [...initial, progress];
     expect(agentsWorking([meta], terminalCalls(running))).toEqual({ count: 1, doing: ["Checking fictional tests"] });
     const terminal = [...running, done, item(7, "tool_result", { tool_use_id: "launch", task: note("completed") })];
     await draw(terminal);
+    // finished, it folds into the summary with the rest of the turn's work
+    expect(host.querySelector("[data-subagent-card]")).toBeNull();
+    await click("[data-work-group] > button");
     expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("completed");
-    expect(host.querySelectorAll("[data-report]")).toHaveLength(2); // status-only pointer adds no duplicate report
-    expect(host.querySelector('[data-items="example-4#0"] [data-report]')?.getAttribute("data-report")).toBe("open");
-    expect(host.querySelector('[data-items="example-6#0"] [data-report]')?.getAttribute("data-report")).toBe("folded");
-    await click('[data-items="example-6#0"] [data-report-line]');
+    // opened before, opened still (remembered per card), with only its latest report
+    expect(host.querySelector("[data-subagent-card] button")?.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelectorAll("[data-subagent-summary]")).toHaveLength(1);
+    expect(host.querySelector('[data-items="example-6#0"]')).not.toBeNull();
     expect(host.textContent).toContain("Every fictional check passed.");
+    expect(host.textContent).not.toContain("The fictional checks are still running.");
     expect(agentsWorking([meta], terminalCalls(terminal))).toBeNull();
     expect(host.querySelectorAll("[data-subagent-card]")).toHaveLength(1);
     expect(host.textContent).not.toContain("Async agent launched");
@@ -90,7 +90,6 @@ describe("associated subagent reports", () => {
     await click("[data-work-group] > button");
     expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("completed");
     await click("[data-subagent-card] button");
-    await click("[data-report-line]");
     expect(host.textContent).toContain("The original report remains readable.");
     expect(host.textContent).toContain("An unrelated peer message");
     expect(host.textContent).not.toContain("Agent finished");
@@ -121,9 +120,8 @@ describe("associated subagent reports", () => {
     expect(host.querySelectorAll("[data-subagent-card]")).toHaveLength(1);
     expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("completed");
     await click("[data-subagent-card] button");
-    expect(host.querySelectorAll("[data-report]")).toHaveLength(2);
+    expect(host.querySelectorAll("[data-subagent-summary]")).toHaveLength(1);
     expect(host.querySelector(`[data-items="${completion.id}"]`)?.closest("[data-subagent-card]")).not.toBeNull();
-    await click(`[data-items="${completion.id}"] [data-report-line]`);
     expect(host.textContent).toContain("Every fictional check passed.");
     expect(host.textContent).toContain("The background checks are now complete.");
     expect(host.textContent).not.toContain("Agent completed");
@@ -136,14 +134,36 @@ describe("associated subagent reports", () => {
     expect(terminalCalls([...initial, current]).has("launch")).toBe(status !== "waiting");
   });
 
-  it.each([false, true])("preserves a foreground report with an agentId warning tail (metadata=%s)", async (metadata) => {
+  it.each([false, true])("preserves a foreground report without its agentId tail (metadata=%s)", async (metadata) => {
     const foreground = item(3, "tool_result", { tool_use_id: "launch", text: "## Foreground findings\nThe complete report is still readable.\nagentId: example-agent (This is an internal ID for your use)", ...(metadata ? { task: note("completed") } : {}) });
     await draw([...initial.slice(0, 2), foreground], false);
     await click("[data-work-group] > button");
     expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("completed");
     await click("[data-subagent-card] button");
-    await click("[data-report-line]");
     expect(host.textContent).toContain("The complete report is still readable.");
+    expect(host.querySelector("[data-subagent-summary]")?.textContent).not.toContain("agentId");
+  });
+
+  it("drops Claude Code's hand-back frame from a report", async () => {
+    const framed = item(3, "tool_result", { tool_use_id: "launch", text: "[Subagent hand-back] The text below is the final report of a subagent. The report follows:\n## Findings\nAll fictional checks passed." });
+    await draw([...initial.slice(0, 2), framed], false);
+    await click("[data-work-group] > button");
+    await click("[data-subagent-card] button");
+    const summary = host.querySelector("[data-subagent-summary]")?.textContent ?? "";
+    expect(summary).toContain("All fictional checks passed.");
+    expect(summary).not.toContain("hand-back");
+  });
+
+  it("folds a long result to four lines until Show full result (#5030)", async () => {
+    const long = item(3, "tool_result", { tool_use_id: "launch", text: ["## Findings", "one", "two", "three", "four", "five"].join("\n") });
+    await draw([...initial.slice(0, 2), long], false);
+    await click("[data-work-group] > button");
+    await click("[data-subagent-card] button");
+    const text = () => host.querySelector("[data-subagent-summary] p");
+    expect(text()?.className).toContain("line-clamp-4");
+    await click("[data-subagent-summary] button");
+    expect(text()?.className).not.toContain("line-clamp-4");
+    expect(host.querySelector("[data-subagent-summary] button")?.textContent).toBe("收起结果");
   });
 
   it("fetches full text by the report item's parent-session identity, not the task's 4KB preview", async () => {
@@ -154,7 +174,6 @@ describe("associated subagent reports", () => {
     await click("[data-subagent-card] button");
     expect(host.textContent).toContain("Final findings");
     expect(host.textContent).not.toContain("Compatibility preview only");
-    await click("[data-report-line]");
     expect(fullItem).not.toHaveBeenCalled();
     await click("[data-full-text]");
     expect(fullItem).toHaveBeenCalledWith("m", "s", cut.id);

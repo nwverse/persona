@@ -37,6 +37,9 @@ interface WorkGroupOptions {
   streaming?: boolean;
   /** Stable conversational exchange identity, independent of which text/tool/fold is currently first. */
   identity?: string;
+  /** Steps that are never folded into the summary and split it where they stand (#5030, cindy's visible anchors): a
+   *  running subagent's card (its time is not over, so no "Worked" may claim it) and a workflow run's card. */
+  inTheOpen?: (s: Step) => boolean;
 }
 
 /** History that was never loaded between two steps: further apart than this, they do not share a group. */
@@ -119,27 +122,47 @@ function createGroup(run: Step[], next: Step | undefined, live: boolean, prevBou
 }
 
 /** One summary plus one text slot, irrespective of tool kind, text length or Markdown shape.
- *  A streamed text segment supersedes the persisted text, but the persisted words remain inspectable in the summary. */
-function groupTurn(items: Step[], turnStart: number | null, live: boolean, streaming: boolean, identity?: string): WorkNode[] {
+ *  A streamed text segment supersedes the persisted text, but the persisted words remain inspectable in the summary.
+ *  A step in the open (`inTheOpen`) stands between the summaries before and after it; the first keeps the exchange's
+ *  identity, the last is the live one. */
+function groupTurn(items: Step[], turnStart: number | null, live: boolean, streaming: boolean, identity?: string, inTheOpen?: (s: Step) => boolean): WorkNode[] {
   let latest = -1;
   if (!streaming) items.forEach((s, i) => isAnswer(s) && (latest = i));
-  const work: Step[] = [];
+  const answer = latest >= 0 ? items[latest] : undefined;
+  const out: WorkNode[] = [];
   const kept: WorkNode[] = [];
+  let run: Step[] = [];
+  let tail: Step[] = [];
+  // where the next summary's clock starts: the exchange's start, then nothing known (a card is no boundary)
+  let boundary = turnStart;
+  const flush = (next: Step | undefined, last: boolean) => {
+    if (!run.length) return;
+    const group = createGroup(run, next, live && last, boundary);
+    if (identity && !out.some((n) => n.kind === "group")) group.id = `work-turn-${identity}`;
+    // A text before the last tool result is still the newest text, not the group's duration endpoint.
+    if (last && group.startedAt !== undefined) {
+      const end = tail.reduce((latest, s) => Math.max(latest, stepEnd(s) ?? latest), group.startedAt);
+      group.durationMs = Math.max(0, end - group.startedAt);
+    }
+    out.push(group);
+    run = [];
+  };
   for (let i = 0; i < items.length; i++) {
     const s = items[i];
+    if (i !== latest && inTheOpen?.(s)) {
+      flush(s, false);
+      out.push({ kind: "step", step: s });
+      boundary = null;
+      tail = [];
+      continue;
+    }
+    tail.push(s);
     if (i === latest) continue;
-    if (!isCompactStep(s)) work.push(s);
+    if (!isCompactStep(s)) run.push(s);
     else kept.push({ kind: "step", step: s });
   }
-  const answer = latest >= 0 ? items[latest] : undefined;
-  const group = work.length ? createGroup(work, answer, live, turnStart) : undefined;
-  if (group && identity) group.id = `work-turn-${identity}`;
-  // A text before the last tool result is still the newest text, not the group's duration endpoint.
-  if (group && group.startedAt !== undefined) {
-    const end = items.reduce((latest, s) => Math.max(latest, stepEnd(s) ?? latest), group.startedAt);
-    group.durationMs = Math.max(0, end - group.startedAt);
-  }
-  return [...(group ? [group] : []), ...kept, ...(answer ? [{ kind: "step" as const, step: answer }] : [])];
+  flush(answer, true);
+  return [...out, ...kept, ...(answer ? [{ kind: "step" as const, step: answer }] : [])];
 }
 
 /** One exchange's steps (the answer among them, in order) as what the chat draws. */
@@ -150,7 +173,7 @@ export function workBlocks(steps: Step[], opts: WorkGroupOptions): WorkNode[] {
   let prevEnd = turnStart;
   const flush = (activeTail: boolean) => {
     if (!turn.length) return;
-    out.push(...groupTurn(turn, turnStart, activeTail && opts.live, activeTail && opts.live && Boolean(opts.streaming), activeTail ? opts.identity : undefined));
+    out.push(...groupTurn(turn, turnStart, activeTail && opts.live, activeTail && opts.live && Boolean(opts.streaming), activeTail ? opts.identity : undefined, opts.inTheOpen));
     turn = [];
   };
   for (const s of steps) {
