@@ -61,6 +61,12 @@ internal data class TreeTabEntry(val tab: AgentTab, val depth: Int, val first: B
     override val key: String get() = "tab:${tab.key}"
 }
 
+/**
+ * Whether Collapse All is done: every section folded. It leaves the computer headings as they are (#4338 A11), so they
+ * say nothing about it.
+ */
+internal val AgentListResult.allCollapsed: Boolean get() = groups.isNotEmpty() && groups.all { it.folded }
+
 /** A section's run of rows past [AgentRowCap]: "Show All [count]", or "Collapse" once they all show ([expanded]). */
 internal data class TreeShowAllEntry(val group: AgentListGroup, val count: Int, val depth: Int, val expanded: Boolean) : AgentTreeEntry {
     override val key: String get() = "all:${group.id}"
