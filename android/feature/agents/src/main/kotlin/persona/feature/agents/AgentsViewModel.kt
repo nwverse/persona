@@ -266,8 +266,13 @@ internal class AgentsViewModel(
             val counts = status.counts
             val machineCounts = status.machineCounts
             val quickCounts = AgentQuickFilter.entries.associateWith { filter ->
-                filter.state?.let { counts.state[it.wire] ?: 0 }
-                    ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
+                when (filter) {
+                    // The hub counts them among working and apart too (#6045): Working leaves them out, as iOS.
+                    AgentQuickFilter.BackgroundWaiting -> counts.backgroundWaiting
+                    AgentQuickFilter.Working -> ((counts.state[AgentState.Working.wire] ?: 0) - counts.backgroundWaiting).coerceAtLeast(0)
+                    else -> filter.state?.let { counts.state[it.wire] ?: 0 }
+                        ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
+                }
             }
             fun count(id: String): SessionListCounts? = metadata[id]?.takeIf {
                 it.revision == status.counts.revision && it.filter.query == projected.settings.query.take(256) &&
@@ -517,6 +522,9 @@ internal class AgentsViewModel(
         ?.let { it.isLive && it.canTerminal } ?: page.value.sessions.isEmpty()
     /** "Join live": join a Codex app-server thread live; the list refreshes after it. */
     fun attach(session: Session) = change(session.machineId, R.string.agents_notice_attached) { it.attach(session) }
+    /** Stop its turn from the list (iOS's row menu Interrupt): felt once it went through. */
+    fun interrupt(session: Session) = change(session.machineId, R.string.agents_notice_interrupted,
+        onDone = { _haptics.tryEmit(Haptic.Tap) }) { it.interrupt(session) }
     fun stopLoop(session: Session) = sendOperation("loop:${session.key.path}") {
         if (hubGroups.groups.value.stateFor(session.machineId, connection.state.value) != ConnectionState.Online) { _notice.value = AgentText(R.string.agents_notice_stop_loop_offline); return@sendOperation }
         sendOnce("loop:${session.key.path}", session.key, STOP_LOOP_PROMPT)
@@ -627,6 +635,10 @@ internal class AgentsViewModel(
                 folded = current.folded - group.id + if (group.folded) emptySet() else setOf(group.id),
                 expandedIdle = if (group.folded) current.expandedIdle + TodoNoneOpened else current.expandedIdle - TodoNoneOpened,
             )
+            // By Status's Seen starts folded: opening it is kept ([StateSeenOpened]), folding it again forgets that.
+            else if (group.id == StateSeenGroup) current.copy(
+                folded = current.folded - group.id - StateSeenOpened + if (group.folded) setOf(StateSeenOpened) else emptySet(),
+            )
             else current.copy(folded = if (group.folded) current.folded - group.id else current.folded + group.id)
         }
         saveFolds()
@@ -638,15 +650,21 @@ internal class AgentsViewModel(
     fun foldAll(fold: Boolean) {
         previous = null
         settings.update { it.copy(
-            folded = if (fold) (page.value.list.groups.map { group -> group.id } + page.value.list.machines.map { machine -> machine.id }).toSet() else emptySet(),
+            // The sections, on top of what is folded: a computer heading stays as it is, as iOS's Collapse All (#4338 A11).
+            folded = if (fold) it.folded + page.value.list.groups.map { group -> group.id }
+                else if (page.value.settings.grouping == AgentGrouping.State) setOf(StateSeenOpened) else emptySet(),
             expandedQuiet = if (fold) emptySet() else page.value.list.groups.filter { group -> group.parent == "quiet" }.map { group -> group.id }.toSet(),
         ) }
         saveFolds()
         if (!fold) localChange { preferences.openAllTabs() }
     }
+    /** A section's rows past [AgentRowCap]: all of them ([open]), or the first ones again. */
+    fun showAll(group: AgentListGroup, open: Boolean) {
+        val key = AgentRowCap.key(group.id)
+        settings.update { it.copy(expandedIdle = if (open) it.expandedIdle + key else it.expandedIdle - key) }
+    }
     fun showIdle(group: AgentListGroup) {
         val key = when {
-            group.id == "state/idle" -> "state-idle"
             group.id.startsWith("machine/") -> "machine-${group.id.removePrefix("machine/")}"
             else -> group.id
         }

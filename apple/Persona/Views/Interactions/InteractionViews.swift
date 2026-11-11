@@ -7,7 +7,7 @@ extension InteractionKind {
         switch self {
         case .question: String(localized: "Claude Has a Question")
         case .plan: String(localized: "Plan Awaiting Approval")
-        case .permission: String(localized: "Needs Your Permission")
+        case .permission: String(localized: "Waiting for Your Approval")
         case .screen: String(localized: "Terminal Needs You")
         case .elicitation: String(localized: "MCP Request")
         }
@@ -36,7 +36,7 @@ extension Interaction {
         if let name = agentName {
             switch kind {
             case .question: return String(localized: "\(name) Has a Question")
-            case .permission: return String(localized: "\(name) Needs Your Permission")
+            case .permission: return String(localized: "\(name) Is Waiting for Your Approval")
             default: break
             }
         }
@@ -761,12 +761,16 @@ struct PermissionForm: View {
                 ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
                 Text(interaction.toolDisplayName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
-            Text(interaction.permissionSubject ?? "")
-                .font(Theme.Font.code)
-                .padding(Theme.Space.m)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                .textSelection(.enabled)
+            if let diff = PermissionDiff(interaction) {
+                PermissionDiffView(diff: diff, key: interaction.id)
+            } else {
+                Text(interaction.permissionSubject ?? "")
+                    .font(Theme.Font.code)
+                    .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                    .textSelection(.enabled)
+            }
             HStack {
                 Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
                     Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
@@ -827,12 +831,16 @@ struct AgentPermissionForm: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(interaction.permissionSubject ?? "")
-                .font(Theme.Font.code)
-                .padding(Theme.Space.m)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                .textSelection(.enabled)
+            if let diff = PermissionDiff(interaction) {
+                PermissionDiffView(diff: diff, key: interaction.id)
+            } else {
+                Text(interaction.permissionSubject ?? "")
+                    .font(Theme.Font.code)
+                    .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                    .textSelection(.enabled)
+            }
             HStack {
                 Button { Task { await model.resolve(interaction, Resolution(allow: false)) } } label: {
                     Text("Deny").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
@@ -1728,7 +1736,12 @@ struct BUIPermissionForm: View {
         }
     }
 
-    private var command: some View {
+    /// A file tool's change as the chat draws it (`PermissionDiffView`); any other tool's command or path in a box.
+    @ViewBuilder private var command: some View {
+        if let diff = PermissionDiff(interaction) { PermissionDiffView(diff: diff, key: interaction.id) } else { subject }
+    }
+
+    private var subject: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
             Text(interaction.permissionSubject ?? "")
