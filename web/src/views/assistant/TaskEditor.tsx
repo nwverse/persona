@@ -72,7 +72,9 @@ export function TaskEditor({
     };
   }, [saved?.id, saved?.last_run]);
 
-  const problem = validateTask(draft, now);
+  /** What the hub said is wrong with the cron expression being typed ("" while it is fine or not checked yet). */
+  const [cronProblem, setCronProblem] = useState("");
+  const problem = validateTask(draft, now) || (draft.repeat === "cron" && cronProblem ? cronProblem : null);
   const changed = !saved || !sameTask(saved, draft);
   const set = (patch: Partial<Task>) => setDraft((d) => ({ ...d, ...patch }));
   const working = busy !== "";
@@ -222,7 +224,7 @@ export function TaskEditor({
               {draft.repeat === "once" && <OnceWhen draft={draft} now={now} onChange={(at) => set({ at })} />}
               {draft.repeat === "daily" && <DailyWhen draft={draft} onChange={set} />}
               {draft.repeat === "interval" && <IntervalWhen minutes={draft.every_minutes ?? 0} onChange={(m) => set({ every_minutes: m })} />}
-              {draft.repeat === "cron" && <CronWhen cron={draft.cron ?? ""} onChange={(cron) => set({ cron })} />}
+              {draft.repeat === "cron" && <CronWhen cron={draft.cron ?? ""} onChange={(cron) => set({ cron })} onProblem={setCronProblem} />}
               {draft.repeat !== "once" && <UntilWhen draft={draft} now={now} onChange={(until) => set({ until })} />}
             </div>
             <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
@@ -608,10 +610,11 @@ function cronMoment(iso: string, zone: string): string {
   }
 }
 
-function CronWhen({ cron, onChange }: { cron: string; onChange: (cron: string) => void }) {
+function CronWhen({ cron, onChange, onProblem }: { cron: string; onChange: (cron: string) => void; onProblem: (problem: string) => void }) {
   const [preview, setPreview] = useState<CronPreview | null>(null);
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
+  useEffect(() => onProblem(error), [error, onProblem]);
   useEffect(() => {
     const expr = cron.trim();
     setError("");

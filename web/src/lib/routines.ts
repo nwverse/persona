@@ -193,7 +193,8 @@ export function taskTitle(task: Pick<Task, "title" | "prompt">): string {
   return first.trim() || t("lib-routines.scheduled_follow_up");
 }
 
-/** The rule in words: "Every weekday 9:00 AM" / "Every 30 minutes" / "Once · New chat" / "At 10:00, on day 1 of the month · 0 10 1 * *". */
+/** The rule in words: "Every weekday 9:00 AM" / "Every 30 minutes" / "Once · New chat" / "0 10 1 * * · At 10:00, on day 1 of the month"
+ *  (a cron task's expression first, so a one-line row always shows it). */
 export function ruleText(task: Task): string {
   if (task.repeat === "interval") return everyLabel(task.every_minutes ?? 0);
   if (task.repeat === "cron") {

@@ -179,7 +179,7 @@ describe("the editor", () => {
 
   it("edits a cron task: says its rule, checks, compares and saves its expression", () => {
     const cron = task({ repeat: "cron", cron: "*/30 9-18 * * 1-5", cron_text: "每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五", at: "0001-01-01T00:00:00Z" });
-    expect(ruleText(cron)).toBe("每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五 · */30 9-18 * * 1-5");
+    expect(ruleText(cron)).toBe("*/30 9-18 * * 1-5 · 每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五");
     expect(ruleText({ ...cron, cron_text: "" })).toBe("Cron */30 9-18 * * 1-5"); // the hub has no words for it
     expect(validateTask(cron, now)).toBeNull();
     expect(validateTask({ ...cron, cron: "  " }, now)).toBe("请写一个 cron 表达式，比如 0 9 * * 1-5");
