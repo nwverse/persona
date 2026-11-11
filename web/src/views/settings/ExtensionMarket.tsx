@@ -16,7 +16,7 @@ import {
 import { extensionDetail, extensionUpgrades, listExtensions, pointText, setExtensionUpgrades, type ExtensionPermission } from "../../lib/extensions";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { dependentError, dependencyText, previewBlocked, type Dependent, type PackMember } from "../../lib/extension-model";
+import { dependentError, dependencyText, partialUninstall, previewBlocked, type Dependent, type PackMember, type PartialUninstall } from "../../lib/extension-model";
 import { Group, Pill, Row, settingsInputClass as inputClass, Switch } from "./SettingsParts";
 import { agreeTo, cancelOperation, forget, getOperation, isActive, opGone, operationsOn, retryOperation, startFromMarket, wantsSignIn } from "../../lib/extension-operations";
 import { askSignIn } from "../../lib/extension-auth";
@@ -611,6 +611,15 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
   const [members, setMembers] = useState(false);
   const [packMembers, setPackMembers] = useState(pack);
   useEffect(() => { if (!pack) void extensionDetail(id).then((d) => setPackMembers(d.extension_pack), () => {}); }, [id, pack]);
+  // A pack's members by the names they're installed under (#4072); one not installed keeps its id.
+  const [names, setNames] = useState<Record<string, string>>({});
+  const hasMembers = !!packMembers?.length;
+  useEffect(() => {
+    if (hasMembers) void listExtensions().then((list) => setNames(Object.fromEntries(list.map((x) => [x.id, x.name || x.id]))), () => {});
+  }, [hasMembers]);
+  const named = (ids: string[]) => ids.map((m) => names[m] || m).join(t("settings-extensionmarket.list_separator"));
+  // Uninstalled part way: which members went, which didn't and why, which weren't tried. Uninstall tries again.
+  const [partial, setPartial] = useState<PartialUninstall | null>(null);
   const [dependents, setDependents] = useState<Dependent[] | null>(null);
   const [cascade, setCascade] = useState(false);
   const [keep, setKeep] = useState(true);
@@ -621,6 +630,7 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
     if (busy || warnings) return;
     setBusy(true);
     setError("");
+    setPartial(null);
     try {
       const result = await uninstallExtension(id, keep, cascade, members);
       if (result.warnings?.length) setWarnings(result.warnings);
@@ -631,7 +641,9 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
     } catch (e) {
       const deps = dependentError(e);
       if (deps) { setDependents(deps); setCascade(false); }
-      setError(errorText(e));
+      const part = partialUninstall(e);
+      if (part) setPartial(part);
+      else setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -669,8 +681,18 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
         </span>
       </label>
       {dependents && <label className="mt-3 flex items-start gap-2.5 text-ink-2"><input type="checkbox" checked={cascade} onChange={(e) => setCascade(e.target.checked)} />{t("settings-extensionmarket.disable_dependents", { names: dependents.map((d) => d.name).join(t("settings-extensionmarket.list_separator")) })}</label>}
-      {!!packMembers?.length && <label className="mt-3 flex items-start gap-2.5 text-ink-2"><input type="checkbox" checked={members} onChange={(e) => { setMembers(e.target.checked); setCascade(false); setDependents(null); }} />{t("settings-extensionmarket.uninstall_members", { names: packMembers.map((p) => p.id).join(t("settings-extensionmarket.list_separator")) })}</label>}
+      {!!packMembers?.length && <label className="mt-3 flex items-start gap-2.5 text-ink-2"><input type="checkbox" checked={members} onChange={(e) => { setMembers(e.target.checked); setCascade(false); setDependents(null); }} />{t("settings-extensionmarket.uninstall_members", { names: named(packMembers.map((p) => p.id)) })}</label>}
       {error && <p className="mt-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12px] break-words text-red">{t("settings-extensionmarket.not_uninstalled", { error })}</p>}
+      {partial && <div role="alert" data-partial-uninstall className="mt-2 rounded-[8px] bg-orange-tint px-3 py-2.5 text-[12px] leading-relaxed break-words text-orange">
+        <p className="font-medium">{t("settings-extensionmarket.partial_title")}</p>
+        <p className="mt-1">{t("settings-extensionmarket.partial_body", { name })}</p>
+        <ul className="mt-1.5 space-y-1">
+          {!!partial.removed.length && <li>{t("settings-extensionmarket.partial_removed", { names: named(partial.removed) })}</li>}
+          {!!partial.failed.length && <li>{t("settings-extensionmarket.partial_failed", { names: partial.failed.map((f) => f.error
+            ? t("settings-extensionmarket.partial_failed_item", { name: names[f.id] || f.id, error: f.error }) : names[f.id] || f.id).join(t("settings-extensionmarket.list_separator")) })}</li>}
+          {!!partial.remaining.length && <li>{t("settings-extensionmarket.partial_remaining", { names: named(partial.remaining) })}</li>}
+        </ul>
+      </div>}
       </>}
     </Dialog>
   );
