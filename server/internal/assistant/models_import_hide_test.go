@@ -36,8 +36,8 @@ func hideTestHub(t *testing.T, aliases []zshrcAlias, rc map[string][]proto.Launc
 	return s, s
 }
 
-// previewSources is the preview's sources of its first provider.
-func previewSources(t *testing.T, mux http.Handler) []importSource {
+// previewProviders is the preview's providers.
+func previewProviders(t *testing.T, mux http.Handler) []importedProvider {
 	t.Helper()
 	r := importRequest(mux, "GET", "")
 	if r.Code != 200 {
@@ -49,7 +49,13 @@ func previewSources(t *testing.T, mux http.Handler) []importSource {
 	if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil || len(out.Providers) == 0 {
 		t.Fatalf("%s: %v", r.Body.String(), err)
 	}
-	return out.Providers[0].Sources
+	return out.Providers
+}
+
+// previewSources is the preview's sources of its first provider.
+func previewSources(t *testing.T, mux http.Handler) []importSource {
+	t.Helper()
+	return previewProviders(t, mux)[0].Sources
 }
 
 func importAnswer(t *testing.T, mux http.Handler, body string) importResult {
@@ -250,7 +256,8 @@ func TestImportHideCheck(t *testing.T) {
 // A body from before hide_aliases (iOS, Android, an older web) merges the group and hides nothing.
 func TestImportWithoutHideHidesNothing(t *testing.T) {
 	_, mux := hideTestHub(t, []zshrcAlias{hideAlias}, map[string][]proto.Launcher{"m1": {{Name: "acc", BaseURL: "https://a.example.com"}}})
-	if got := previewSources(t, mux); got[0].Hide != "ok" {
+	// The alias is listed, so its name is taken: the preview says the name the import really gives.
+	if got := previewProviders(t, mux)[0]; got.Name != "acc" || got.CreateAs != "acc-2" || got.Sources[0].Hide != "ok" {
 		t.Fatalf("%+v", got)
 	}
 	r := importRequest(mux, "POST", `{"machine":"m1","providers":["acc"]}`)
@@ -319,6 +326,10 @@ func TestImportSplitGroup(t *testing.T) {
 		v[1].Sources[0].Hide != "in_use" || v[0].Sources[0].Hide != "ok" || v[2].Sources[0].Hide != "ok" {
 		t.Fatalf("variants: %+v", v)
 	}
+	// The names the import gives: the listed aliases' are taken; one that lands in a stored provider creates none.
+	if v := g.Variants; g.CreateAs != "" || v[0].CreateAs != "fast-2" || v[1].CreateAs != "deep-2" || v[2].CreateAs != "" {
+		t.Fatalf("create_as: %q %q %q %q", g.CreateAs, v[0].CreateAs, v[1].CreateAs, v[2].CreateAs)
+	}
 
 	res := importAnswer(t, mux, `{"machine":"m1","providers":["fast"],"split":["fast"],"hide_aliases":true}`)
 	if !slices.Equal(res.Created, []string{"fast-2", "deep-2"}) || !slices.Equal(res.Updated, []string{"again-old"}) ||
@@ -347,6 +358,35 @@ func TestImportSplitGroup(t *testing.T) {
 	}
 	if b, _ := s.modelRecord(ctx, "agent.new"); b.Binding.Provider != "launcher.deep" {
 		t.Fatalf("a purpose moved: %+v", b)
+	}
+}
+
+// create_as is the name the import gives, as the import counts what is taken: the launchers Persona lists on every
+// computer, the stored providers, and the names given earlier in the same import (groups and variants in order).
+func TestImportPreviewSaysTheNameItCreates(t *testing.T) {
+	alias := func(name, base, key string) zshrcAlias {
+		return zshrcAlias{Alias: name, Command: "claude", Env: map[string]string{"ANTHROPIC_BASE_URL": base, "ANTHROPIC_API_KEY": key, "ANTHROPIC_MODEL": "m"}}
+	}
+	aliases := []zshrcAlias{
+		alias("a.cc", "https://one.example.com", importKeyA), // named a-cc, which another alias is
+		alias("a-cc", "https://two.example.com", importKeyA),
+		alias("fresh", "https://three.example.com", importKeyA), // listed nowhere under that name
+		alias("kept", "https://four.example.com", importKeyB),   // its name is a stored provider's
+	}
+	rc := map[string][]proto.Launcher{"m1": {{Name: "a.cc"}, {Name: "a-cc"}}, "m2": {{Name: "kept"}}}
+	s, mux := hideTestHub(t, aliases, rc)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "fresh-old", BaseURL: "https://other.example.com", Model: "x"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "kept-2", BaseURL: "https://other.example.com", Model: "x"}})
+	var names, createAs []string
+	for _, p := range previewProviders(t, mux) {
+		names, createAs = append(names, p.Name), append(createAs, p.CreateAs)
+	}
+	if !slices.Equal(names, []string{"a-cc", "a-cc", "fresh", "kept"}) || !slices.Equal(createAs, []string{"a-cc-2", "a-cc-3", "", "kept-3"}) {
+		t.Fatalf("names %v create_as %v", names, createAs)
+	}
+	res := importAnswer(t, mux, `{"machine":"m1","providers":["fresh","kept"]}`)
+	if !slices.Equal(res.Created, []string{"fresh", "kept-3"}) {
+		t.Fatalf("%+v", res)
 	}
 }
 

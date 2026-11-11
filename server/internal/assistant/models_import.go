@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -44,7 +45,10 @@ type importedProvider struct {
 	SkippedEnv []skippedEnv `json:"skipped_env,omitempty"`
 	Aliases    []string     `json:"aliases"`
 	// Existing: the stored provider it lands in: the same base URL and key; for a variant, also made from its alias.
-	Existing string         `json:"existing,omitempty"`
+	Existing string `json:"existing,omitempty"`
+	// CreateAs: the name a provider it creates is saved under when that is not Name (the name is taken: the alias
+	// itself is listed, importNames). Name stays what POST takes.
+	CreateAs string         `json:"create_as,omitempty"`
 	Sources  []importSource `json:"sources"` // one per alias, in Aliases' order
 	// Differs: what the aliases of a group set differently, the model aside (importSettings' names); Variants: each
 	// alias as its own provider, for a group of two or more.
@@ -358,6 +362,52 @@ func (s *Service) sealImported(g importGroup, now time.Time) (storedLauncher, er
 	return l, nil
 }
 
+// importTaken are the names a provider an import creates cannot take: every launcher Persona lists (the rc-file ones
+// of every computer, the stored providers).
+func (s *Service) importTaken(ctx context.Context, rc []zshrcLaunchers, stored []storedLauncher) map[string]bool {
+	taken := map[string]bool{}
+	for _, v := range s.launcherViewsFrom(ctx, rc, stored) {
+		taken[v.Name] = true
+	}
+	return taken
+}
+
+// claimImportName is the name a new provider called name is saved under: the first of name, name-2, name-3… not
+// taken, which is taken from then on. The preview (importNames) and the import (importLaunchers) both name with it.
+func claimImportName(taken map[string]bool, name string) string {
+	out := name
+	for n := 2; taken[out]; n++ {
+		out = fmt.Sprintf("%s-%d", name, n)
+	}
+	taken[out] = true
+	return out
+}
+
+// importNames fills create_as of the groups and variants the preview would create, naming them in its order as the
+// import does when every group is picked: a group whose aliases differ (Differs) as its variants, as the web offers
+// by default, any other merged.
+func importNames(groups []importGroup, taken map[string]bool) {
+	createAs := func(taken map[string]bool, g *importGroup) {
+		if g.Existing == "" {
+			if name := claimImportName(taken, g.Name); name != g.Name {
+				g.CreateAs = name
+			}
+		}
+	}
+	for i := range groups {
+		g := &groups[i]
+		merged, split := maps.Clone(taken), maps.Clone(taken)
+		createAs(merged, g)
+		for j := range g.variants {
+			createAs(split, &g.variants[j])
+		}
+		taken = merged
+		if len(g.variants) > 0 && len(g.Differs) > 0 {
+			taken = split
+		}
+	}
+}
+
 // importTarget is the provider g lands in: the stored one it merges into, else the one it makes.
 func importTarget(g importGroup, stored []storedLauncher) storedLauncher {
 	if i := slices.IndexFunc(stored, func(l storedLauncher) bool { return l.Name == g.Existing }); g.Existing != "" && i >= 0 {
@@ -424,10 +474,7 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 	if err != nil {
 		return res, err
 	}
-	taken := map[string]bool{}
-	for _, v := range s.launcherViewsFrom(ctx, s.zshrcLaunchers(ctx, false), list) {
-		taken[v.Name] = true
-	}
+	taken := s.importTaken(ctx, s.zshrcLaunchers(ctx, false), list)
 	now := time.Now().UTC()
 	var landed [][2]string // alias, the provider it landed in
 	for _, name := range in.Providers {
@@ -456,15 +503,11 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 					res.Updated = append(res.Updated, target)
 				}
 			} else {
-				base := g.Name
-				for n := 2; taken[g.Name]; n++ {
-					g.Name = fmt.Sprintf("%s-%d", base, n)
-				}
+				g.Name = claimImportName(taken, g.Name)
 				l, err := s.sealImported(g, now)
 				if err != nil {
 					return res, err
 				}
-				taken[l.Name] = true
 				list = append(list, l)
 				res.Created = append(res.Created, l.Name)
 				target = l.Name
@@ -531,6 +574,7 @@ func (s *Service) launcherImportRoutes() {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
+		importNames(groups, s.importTaken(ctx, f.rc, stored))
 		providers := make([]importedProvider, 0, len(groups))
 		for _, g := range groups {
 			if err := s.withImportSources(ctx, f, &g); err != nil {
