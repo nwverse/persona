@@ -490,6 +490,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/minutes
 -                    POST /api/v1/recordings/{id}/minutes/todos
 -                    POST /api/v1/recordings/{id}/photos
+-                    POST /api/v1/recordings/{id}/segments
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach

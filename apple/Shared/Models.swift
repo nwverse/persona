@@ -750,6 +750,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// When the hub saw it enter its current state (`state_since`).
     var stateSince: Date? = nil
     var queued: [String]?
+    /// The last this many queued messages came from other conversations and arrive when this turn ends (#4342).
+    var queuedRelayed: Int? = nil
+    /// The user's own messages come first; only these can be edited, reordered, deleted or sent now.
+    var ownQueuedCount: Int {
+        let count = queued?.count ?? 0
+        return count - min(max(queuedRelayed ?? 0, 0), count)
+    }
     /// Shells / subagents Claude left running in the background.
     var background: [BackgroundTask]?
     /// Bounded list summaries supply scalars instead of chat-only arrays. Nil means a complete/legacy row.
@@ -985,6 +992,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case queuedRelayed = "queued_relayed"
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
@@ -1075,6 +1083,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         seenAt = try c.decodeIfPresent(Date.self, forKey: .seenAt)
         stateSince = try c.decodeIfPresent(Date.self, forKey: .stateSince)
         queued = try c.decodeIfPresent([String].self, forKey: .queued)
+        queuedRelayed = try c.decodeIfPresent(Int.self, forKey: .queuedRelayed)
         background = try c.decodeIfPresent([BackgroundTask].self, forKey: .background)
         listWaiting = try c.decodeIfPresent(Bool.self, forKey: .listWaiting)
         listBackgroundCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundCount)
