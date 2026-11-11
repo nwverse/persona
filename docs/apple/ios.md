@@ -82,8 +82,8 @@ Chat page:
     thread, at most 1600 px), and the composer keeps it beside the photo (`ComposerAttachments.edited`), so a photo tapped in the strip opens with its
     crop, turn and marks as they were, still undoable; the photo removed or sent, its edits go. From the viewer, Add to Message adds the result as
     next-message attachment (`AppModel.composerInbox`), ready to send with a note; only available when opened from a chat. Pending input images (a
-    conversation's and the Persona tab's) can be tapped to edit before sending. Turned, the row of tools that does not fit at large text sizes shows icons;
-    the options row scrolls.
+    conversation's and the Persona tab's) can be tapped to edit before sending. Turned, the row of tools that does not fit at large text sizes shows icons,
+    and scrolls (Clear staying put) where even the icons don't fit; the options row scrolls.
   - Screenshots: `-openFirstImage YES` / `-openViewedImage N`, `-showViewerChromeHidden YES` hides bars, `-showViewerInfo YES` opens info.
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
   Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` prefetch into the disk cache only for chats not retained in memory,
