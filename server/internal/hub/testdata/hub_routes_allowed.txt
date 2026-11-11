@@ -172,6 +172,7 @@ POST /api/v1/sessions/{mid}/{sid}/modes
 POST /api/v1/sessions/{mid}/{sid}/queue
 POST /api/v1/sessions/{mid}/{sid}/queue/send-now
 POST /api/v1/sessions/{mid}/{sid}/rename
+POST /api/v1/sessions/{mid}/{sid}/restore-model # a relay to the node (session.restore_model, #2528)
 POST /api/v1/sessions/{mid}/{sid}/rewind
 POST /api/v1/sessions/{mid}/{sid}/screen/before
 POST /api/v1/sessions/{mid}/{sid}/seen
