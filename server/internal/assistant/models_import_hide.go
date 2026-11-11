@@ -5,6 +5,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -36,23 +37,40 @@ type importSource struct {
 
 // importHideFacts is what the hide check reads, once a request.
 type importHideFacts struct {
-	machine  string           // the computer imported from
-	rc       []zshrcLaunchers // every computer's rc-file launchers, as last seen
-	hidden   []string
-	stored   []storedLauncher // the providers, as saved (the import: as it saves them)
-	devices  []Device
-	profiles []ModelProfile
-	tasks    []taskLauncher
-	uses     map[string][]string // aliasUses by alias: a group's aliases are asked again for its variants
+	machine     string           // the computer imported from
+	rc          []zshrcLaunchers // every computer's rc-file launchers, as last seen
+	hidden      []string
+	stored      []storedLauncher // the providers, as saved (the import: as it saves them)
+	machineKeys []machineKey     // the providers' keys for single computers
+	devices     []Device
+	profiles    []ModelProfile
+	tasks       []taskLauncher
+	uses        map[string][]string // aliasUses by alias: a group's aliases are asked again for its variants
+	// remote: another computer's own aliases (launchers.zshrc), asked once a request and only when needed.
+	remote map[string]remoteAliases
 }
 
 // taskLauncher is a scheduled task whose own record names a provider.
 type taskLauncher struct{ label, provider string }
 
+// remoteAliases is what a computer answered for its aliases: they hold keys, so they are compared and never kept.
+type remoteAliases struct {
+	aliases []zshrcAlias
+	err     error
+}
+
+// remoteAliasWait is how long the hide check waits for another computer's aliases: past it, that computer is elsewhere.
+var remoteAliasWait = 5 * time.Second
+
 // importHideFacts reads what aliasHide needs. rc is s.zshrcLaunchers, stored the provider list it judges against.
 func (s *Service) importHideFacts(ctx context.Context, machine string, rc []zshrcLaunchers, stored []storedLauncher) (importHideFacts, error) {
 	f := importHideFacts{machine: machine, rc: rc, hidden: s.hiddenLaunchers(ctx), stored: stored, devices: s.devices(ctx),
-		uses: map[string][]string{}}
+		uses: map[string][]string{}, remote: map[string]remoteAliases{}}
+	keys, err := s.readMachineKeys(ctx)
+	if err != nil {
+		return f, err
+	}
+	f.machineKeys = keys
 	ps, _, err := s.readModelProfiles(ctx) // the templates made when none is stored copy the purposes, checked anyway
 	if err != nil {
 		return f, err
@@ -74,6 +92,11 @@ func (s *Service) importHideFacts(ctx context.Context, machine string, rc []zshr
 	return f, nil
 }
 
+// listed says whether Persona lists alias on any computer (listsAlias): only then is there anything to hide.
+func (f importHideFacts) listed(alias string) bool {
+	return slices.ContainsFunc(f.rc, func(m zshrcLaunchers) bool { _, ok := f.listsAlias(m, alias); return ok })
+}
+
 // listsAlias is the launcher named alias in m's rc-file list the way Settings › Model providers lists one
 // (launcherViewsFrom): a provider of that name hides it, plain claude and a runtime's own launcher are not listed.
 func (f importHideFacts) listsAlias(m zshrcLaunchers, alias string) (proto.Launcher, bool) {
@@ -87,12 +110,11 @@ func (f importHideFacts) listsAlias(m zshrcLaunchers, alias string) (proto.Launc
 	return m.Launchers[i], true
 }
 
-// aliasHide is whether hiding alias is safe once provider l stands in for it: none, in_use, elsewhere or ok (in that
-// order). It changes nothing.
-func (s *Service) aliasHide(ctx context.Context, f importHideFacts, alias string, l storedLauncher) (importSource, error) {
+// aliasHide is whether hiding alias is safe once provider l, with key (the alias's own: an existing provider was
+// matched by it), stands in for it: none, in_use, elsewhere or ok (in that order). It changes nothing.
+func (s *Service) aliasHide(ctx context.Context, f importHideFacts, alias string, l storedLauncher, key string) (importSource, error) {
 	src := importSource{Alias: alias, Hide: hideNone}
-	if slices.Contains(reservedLauncherNames, alias) || slices.Contains(f.hidden, alias) ||
-		!slices.ContainsFunc(f.rc, func(m zshrcLaunchers) bool { _, ok := f.listsAlias(m, alias); return ok }) {
+	if slices.Contains(reservedLauncherNames, alias) || slices.Contains(f.hidden, alias) || !f.listed(alias) {
 		return src, nil
 	}
 	uses, err := s.aliasUses(ctx, f, alias)
@@ -103,7 +125,7 @@ func (s *Service) aliasHide(ctx context.Context, f importHideFacts, alias string
 		src.Hide, src.Uses = hideInUse, uses
 		return src, nil
 	}
-	if elsewhere := s.aliasElsewhere(ctx, f, alias, l); len(elsewhere) > 0 {
+	if elsewhere := s.aliasElsewhere(ctx, f, alias, l, key); len(elsewhere) > 0 {
 		src.Hide, src.Elsewhere = hideElsewhere, elsewhere
 		return src, nil
 	}
@@ -151,10 +173,12 @@ func (s *Service) aliasUses(ctx context.Context, f importHideFacts, alias string
 	return uses, nil
 }
 
-// aliasElsewhere are the computers (their names) that list alias and would not get provider l in its place: out of
-// its scope, every one when it skips a computer with a service of its own (the alias stays in the file, so the
-// computer keeps counting as having one), and another computer whose alias reaches a different or unknown address.
-func (s *Service) aliasElsewhere(ctx context.Context, f importHideFacts, alias string, l storedLauncher) []string {
+// aliasElsewhere are the computers (their names) that list alias and would not get provider l in its place, with the
+// same account: out of its scope, every one when it skips a computer with a service of its own (the alias stays in
+// the file, so the computer keeps counting as having one), one whose key for l (a key of its own, else key) is not
+// key, and another computer whose own alias of that name does not reach l's address with key (asked of its node:
+// offline, too old, no such alias there, or a function, all count as not).
+func (s *Service) aliasElsewhere(ctx context.Context, f importHideFacts, alias string, l storedLauncher, key string) []string {
 	var out []string
 	add := func(id string) {
 		name := id
@@ -166,18 +190,49 @@ func (s *Service) aliasElsewhere(ctx context.Context, f importHideFacts, alias s
 		}
 	}
 	mine := func(id string) bool { return id == f.machine || s.sameMachine(id, f.machine) }
-	stays := func(id string) bool { return s.scopeReason(l, id) != "" || l.SkipsOwnService() }
+	stays := func(id string) bool {
+		return s.scopeReason(l, id) != "" || l.SkipsOwnService() || !s.sameKeyOn(f, l, id, key)
+	}
 	if stays(f.machine) { // the alias is in its file, whatever its last list said
 		add(f.machine)
 	}
 	for _, m := range f.rc {
-		rc, ok := f.listsAlias(m, alias)
-		if !ok || mine(m.MachineID) {
+		if _, ok := f.listsAlias(m, alias); !ok || mine(m.MachineID) {
 			continue
 		}
-		if base := proto.MessagesBaseURL(rc.BaseURL); stays(m.MachineID) || base == "" || base != l.LaunchBaseURL() {
+		if stays(m.MachineID) || !s.sameAliasOn(ctx, f, m.MachineID, alias, l.LaunchBaseURL(), key) {
 			add(m.MachineID)
 		}
 	}
 	return out
+}
+
+// sameKeyOn: provider l runs on machine with key: its key for that computer, when it has one, opens to key.
+func (s *Service) sameKeyOn(f importHideFacts, l storedLauncher, machine, key string) bool {
+	sealed := s.keySealedFor(l, f.machineKeys, machine)
+	if sealed == "" || sealed == l.KeySealed {
+		return true // the provider's own key: the one the import matched (or will seal)
+	}
+	own, err := s.openKey(sealed)
+	return err == nil && own == key
+}
+
+// sameAliasOn: machine's own alias reaches base with key (importKey), as its node says now.
+func (s *Service) sameAliasOn(ctx context.Context, f importHideFacts, machine, alias, base, key string) bool {
+	got, ok := f.remote[machine]
+	if !ok {
+		cctx, cancel := context.WithTimeout(ctx, remoteAliasWait)
+		got.aliases, got.err = zshrcAliases(cctx, s, machine)
+		cancel()
+		f.remote[machine] = got
+	}
+	if got.err != nil {
+		return false
+	}
+	i := slices.IndexFunc(got.aliases, func(a zshrcAlias) bool { return a.Alias == alias })
+	if i < 0 || (got.aliases[i].Command != "" && got.aliases[i].Command != "claude") {
+		return false
+	}
+	theirs, _ := importKey(got.aliases[i].Env)
+	return proto.MessagesBaseURL(got.aliases[i].Env["ANTHROPIC_BASE_URL"]) == base && theirs == key
 }

@@ -3,26 +3,46 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The alias every hide case imports from m1 ("Laptop"): its own gateway and key.
 var hideAlias = zshrcAlias{Alias: "acc", Command: "claude", File: "~/.bashrc", Env: map[string]string{
 	"ANTHROPIC_BASE_URL": "https://a.example.com", "ANTHROPIC_API_KEY": importKeyA, "ANTHROPIC_MODEL": "a1"}}
 
+// hideRemote is what another computer's node answers for its own aliases (err: no answer).
+type hideRemote struct {
+	aliases []zshrcAlias
+	err     error
+}
+
 // hideTestHub is an import hub with four computers: the assistant's (server), m1 (Laptop, imported from), m2 (Studio)
 // and the work computer w1 (Work PC); rc are their rc-file launchers.
 func hideTestHub(t *testing.T, aliases []zshrcAlias, rc map[string][]proto.Launcher) (*Service, http.Handler) {
 	t.Helper()
-	s, f, _ := modelService(t)
+	s, mux, _ := hideTestHubOn(t, &downStore{memStore: &memStore{}}, aliases, rc, nil)
+	return s, mux
+}
+
+// hideTestHubOn is hideTestHub on store st, the other computers answering their own aliases from remote (none: they
+// have none); asked are the computers other than m1 asked for theirs.
+func hideTestHubOn(t *testing.T, st Store, aliases []zshrcAlias, rc map[string][]proto.Launcher, remote map[string]hideRemote) (*Service, http.Handler, *[]string) {
+	t.Helper()
+	f := newFakeHub().withMachine()
+	f.ownModels = true
+	s := newServiceOn(t, f, st)
 	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true}, {ID: "m1", Name: "Laptop", Online: true, Reachable: true},
 		{ID: "m2", Name: "Studio", Online: true, Reachable: true}, {ID: "w1", Name: "Work PC", Online: true, Reachable: true}}
 	for _, d := range f.devices {
@@ -30,10 +50,20 @@ func hideTestHub(t *testing.T, aliases []zshrcAlias, rc map[string][]proto.Launc
 	}
 	f.hello.Assistant.WorkMachines = []string{"w1"}
 	f.zshrc = rc
+	var mu sync.Mutex
+	asked := []string{}
 	old := zshrcAliases
-	zshrcAliases = func(context.Context, *Service, string) ([]zshrcAlias, error) { return aliases, nil }
+	zshrcAliases = func(_ context.Context, _ *Service, machine string) ([]zshrcAlias, error) {
+		if machine == "m1" {
+			return aliases, nil
+		}
+		mu.Lock()
+		asked = append(asked, machine)
+		mu.Unlock()
+		return remote[machine].aliases, remote[machine].err
+	}
 	t.Cleanup(func() { zshrcAliases = old })
-	return s, s
+	return s, s, &asked
 }
 
 // previewProviders is the preview's providers.
@@ -85,11 +115,27 @@ func sealedKey(t *testing.T, s *Service, key string) string {
 func TestImportHideCheck(t *testing.T) {
 	laptop := []proto.Launcher{{Name: "acc", BaseURL: "https://a.example.com", Model: "a1"}}
 	lang := func(s *Service) i18n.Lang { return s.requestCtxLang(context.Background()) }
+	// studio is m2's own acc: env over hideAlias's.
+	studio := func(env map[string]string) map[string]hideRemote {
+		a := hideAlias
+		a.Env = maps.Clone(hideAlias.Env)
+		for k, v := range env {
+			if v == "" {
+				delete(a.Env, k)
+				continue
+			}
+			a.Env[k] = v
+		}
+		return map[string]hideRemote{"m2": {aliases: []zshrcAlias{a}}}
+	}
+	onStudio := map[string][]proto.Launcher{"m1": laptop, "m2": {{Name: "acc", BaseURL: "https://a.example.com"}}}
 	cases := []struct {
-		name  string
-		rc    map[string][]proto.Launcher
-		setup func(t *testing.T, s *Service)
-		want  func(s *Service) importSource
+		name   string
+		rc     map[string][]proto.Launcher
+		remote map[string]hideRemote
+		setup  func(t *testing.T, s *Service)
+		want   func(s *Service) importSource
+		asked  []string // the other computers asked for their aliases (nil: none)
 	}{
 		{
 			name: "listed only where it comes from",
@@ -97,26 +143,100 @@ func TestImportHideCheck(t *testing.T) {
 			want: func(*Service) importSource { return importSource{Alias: "acc", Hide: "ok"} },
 		},
 		{
-			name: "another computer reaches the same address",
-			rc:   map[string][]proto.Launcher{"m1": laptop, "m2": {{Name: "acc", BaseURL: "https://a.example.com/v1/"}}},
-			want: func(*Service) importSource { return importSource{Alias: "acc", Hide: "ok"} },
+			name:   "another computer's alias reaches the same address with the same key",
+			rc:     onStudio,
+			remote: studio(map[string]string{"ANTHROPIC_BASE_URL": "https://a.example.com/v1/", "ANTHROPIC_MODEL": "other"}),
+			want:   func(*Service) importSource { return importSource{Alias: "acc", Hide: "ok"} },
+			asked:  []string{"m2", "m2"}, // the preview's request, then the import's
 		},
 		{
-			name: "another computer reaches another address",
-			rc:   map[string][]proto.Launcher{"m1": laptop, "m2": {{Name: "acc", BaseURL: "https://b.example.com"}}},
+			name:   "the same key as a bearer token",
+			rc:     onStudio,
+			remote: studio(map[string]string{"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": "Bearer " + importKeyA}),
+			want:   func(*Service) importSource { return importSource{Alias: "acc", Hide: "ok"} },
+			asked:  []string{"m2", "m2"},
+		},
+		{
+			name:   "another computer's alias reaches another address",
+			rc:     onStudio,
+			remote: studio(map[string]string{"ANTHROPIC_BASE_URL": "https://b.example.com"}),
 			want: func(*Service) importSource {
 				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Studio"}}
 			},
+			asked: []string{"m2", "m2"},
 		},
 		{
-			name: "another computer's address is unknown",
-			rc:   map[string][]proto.Launcher{"m1": laptop, "m2": {{Name: "acc"}}},
+			name:   "another computer's alias has the same address and another key: hiding it would switch accounts",
+			rc:     onStudio,
+			remote: studio(map[string]string{"ANTHROPIC_API_KEY": importKeyB}),
 			want: func(*Service) importSource {
 				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Studio"}}
 			},
+			asked: []string{"m2", "m2"},
 		},
 		{
-			name: "a work computer is out of the new provider's scope",
+			name:   "another computer's alias has no address",
+			rc:     onStudio,
+			remote: studio(map[string]string{"ANTHROPIC_BASE_URL": ""}),
+			want: func(*Service) importSource {
+				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Studio"}}
+			},
+			asked: []string{"m2", "m2"},
+		},
+		{
+			name: "another computer lists it but has no such alias (a shell function)",
+			rc:   onStudio,
+			want: func(*Service) importSource {
+				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Studio"}}
+			},
+			asked: []string{"m2", "m2"},
+		},
+		{
+			name:   "another computer is offline",
+			rc:     onStudio,
+			remote: map[string]hideRemote{"m2": {err: apierr.ErrOffline}},
+			want: func(*Service) importSource {
+				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Studio"}}
+			},
+			asked: []string{"m2", "m2"},
+		},
+		{
+			name:   "another computer's node is too old to say",
+			rc:     onStudio,
+			remote: map[string]hideRemote{"m2": {err: &rpc.Error{Message: "unknown method launchers.zshrc"}}},
+			want: func(*Service) importSource {
+				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Studio"}}
+			},
+			asked: []string{"m2", "m2"},
+		},
+		{
+			name:   "the existing provider has another computer's own key: that computer would switch accounts",
+			rc:     onStudio,
+			remote: studio(nil),
+			setup: func(t *testing.T, s *Service) {
+				putLaunchers(t, s, storedLauncher{KeySealed: sealedKey(t, s, importKeyA), ManagedLauncher: proto.ManagedLauncher{
+					Name: "gw-a", BaseURL: "https://a.example.com", Model: "a1"}})
+				putMachineKeys(t, s, machineKey{Launcher: "gw-a", Machine: "m2", KeySealed: sealedKey(t, s, importKeyB)})
+			},
+			want: func(*Service) importSource {
+				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Studio"}}
+			},
+			// its own key differs: not asked
+		},
+		{
+			name: "the existing provider's own key for this computer is another: it would switch accounts here",
+			rc:   map[string][]proto.Launcher{"m1": laptop},
+			setup: func(t *testing.T, s *Service) {
+				putLaunchers(t, s, storedLauncher{KeySealed: sealedKey(t, s, importKeyA), ManagedLauncher: proto.ManagedLauncher{
+					Name: "gw-a", BaseURL: "https://a.example.com", Model: "a1"}})
+				putMachineKeys(t, s, machineKey{Launcher: "gw-a", Machine: "m1", KeySealed: sealedKey(t, s, importKeyB)})
+			},
+			want: func(*Service) importSource {
+				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Laptop"}}
+			},
+		},
+		{
+			name: "a work computer is out of the new provider's scope (not asked)",
 			rc:   map[string][]proto.Launcher{"m1": laptop, "w1": {{Name: "acc", BaseURL: "https://a.example.com"}}},
 			want: func(*Service) importSource {
 				return importSource{Alias: "acc", Hide: "elsewhere", Elsewhere: []string{"Work PC"}}
@@ -134,8 +254,8 @@ func TestImportHideCheck(t *testing.T) {
 			},
 		},
 		{
-			name: "the existing provider is out of another computer's scope",
-			rc:   map[string][]proto.Launcher{"m1": laptop, "m2": {{Name: "acc", BaseURL: "https://a.example.com"}}},
+			name: "the existing provider is out of another computer's scope (not asked)",
+			rc:   onStudio,
 			setup: func(t *testing.T, s *Service) {
 				putLaunchers(t, s, storedLauncher{KeySealed: sealedKey(t, s, importKeyA), Share: shareSelected, ScopeMachines: []string{"m1"},
 					ManagedLauncher: proto.ManagedLauncher{Name: "gw-a", BaseURL: "https://a.example.com", Model: "a1", OwnService: proto.OwnServiceUse}})
@@ -192,8 +312,8 @@ func TestImportHideCheck(t *testing.T) {
 			},
 		},
 		{
-			name: "in use wins over elsewhere",
-			rc:   map[string][]proto.Launcher{"m1": laptop, "m2": {{Name: "acc", BaseURL: "https://b.example.com"}}},
+			name: "in use wins over elsewhere, and no other computer is asked",
+			rc:   onStudio,
 			setup: func(t *testing.T, s *Service) {
 				putProfiles(t, s, ModelProfile{ID: "performance", Name: "Performance", Tiers: map[string]ModelTier{"fast": {Launcher: "acc"}}})
 			},
@@ -220,10 +340,15 @@ func TestImportHideCheck(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s, mux := hideTestHub(t, []zshrcAlias{hideAlias}, c.rc)
+			s, mux, asked := hideTestHubOn(t, &downStore{memStore: &memStore{}}, []zshrcAlias{hideAlias}, c.rc, c.remote)
 			if c.setup != nil {
 				c.setup(t, s)
 			}
+			defer func() {
+				if !slices.Equal(*asked, c.asked) {
+					t.Errorf("asked %v, want %v", *asked, c.asked)
+				}
+			}()
 			want := c.want(s)
 			preview := want
 			preview.File = "~/.bashrc"
@@ -276,7 +401,7 @@ func TestImportNeverHidesClaude(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range append([]string{"claude"}, reservedLauncherNames...) {
-		src, err := s.aliasHide(ctx, f, name, importedLauncher(importGroup{}, time.Time{}))
+		src, err := s.aliasHide(ctx, f, name, importedLauncher(importGroup{}, time.Time{}), "")
 		if err != nil || src.Hide != "none" {
 			t.Fatalf("%s: %+v %v", name, src, err)
 		}
@@ -465,6 +590,13 @@ func addScheduledTask(t *testing.T, s *Service, task Task) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if err := s.saveLocked(sc, append(sc.tasks, task)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func putMachineKeys(t *testing.T, s *Service, keys ...machineKey) {
+	t.Helper()
+	if err := s.putSetting(context.Background(), launchersMachineKeysKey, keys); err != nil {
 		t.Fatal(err)
 	}
 }
