@@ -40,7 +40,7 @@ export const CardItem = createContext<{ id: string; text: string } | null>(null)
 /** How deep push goes (docs/assistant/assistant-views.md "Actions and multiple pages"). */
 const STACK_MOST = 4;
 
-/** Whether html components run here: WEB_HTML_RUNTIME_VERIFIED, which dev pages may turn on for themselves. */
+/** Whether html components run here: WEB_HTML_RUNTIME_VERIFIED (dev pages and tests may set it for themselves). */
 export const HtmlRuntime = createContext<boolean>(WEB_HTML_RUNTIME_VERIFIED);
 
 const HtmlCard = lazy(() => import("./HtmlCard"));
