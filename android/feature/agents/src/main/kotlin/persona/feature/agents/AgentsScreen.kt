@@ -470,7 +470,7 @@ internal fun AgentsScreen(
                                 machine.repoCount?.let { pluralStringResource(R.plurals.agents_count_repos, it, it) }
                                     ?: pluralStringResource(R.plurals.agents_count_spaces, machine.spaceCount, machine.spaceCount),
                                 pluralStringResource(R.plurals.agents_count_sessions, machine.sessionCount, machine.sessionCount)),
-                            counts = machine.headingCounts,
+                            counts = machine.headingCounts, waiting = machine.waitingInBackground,
                             onMonitor = { navigator.navigate(MachineDetailRoute(machine.machine.id)) }, tag = groups.tagFor(machine.machine.id))
                     }
                     is TreeGroupEntry -> item(entry.key, contentType = if (entry.space) "space" else "section") {
