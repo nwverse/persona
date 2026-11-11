@@ -674,17 +674,13 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	for _, r := range e.Store.Recordings() {
 		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() {
 			due[r.ID] = true
-			if retryWaits(e.recordingRetries, r.ID, recordingAbout(r), now) {
+			if e.retries().recordings.waits(r.ID, recordingAbout(r), now) {
 				continue
 			}
 			todo = append(todo, r)
 		}
 	}
-	for id := range e.recordingRetries { // summarized, trimmed or gone in the meantime
-		if !due[id] {
-			delete(e.recordingRetries, id)
-		}
-	}
+	e.retries().recordings.keep(due) // summarized, trimmed or gone in the meantime
 	sort.Slice(todo, func(i, j int) bool { return todo[i].StartedAt.After(todo[j].StartedAt) })
 	n, calls := 0, 0
 	for _, r := range todo {
@@ -699,11 +695,11 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 			if deferred(ctx, err) { // the connection is held, no model, or the run ended: they stay due
 				break
 			}
-			f := retryLater(&e.recordingRetries, r.ID, recordingAbout(r))
+			f := e.retries().recordings.fail(r.ID, recordingAbout(r))
 			e.logf("recording %s: %v (failed %d time(s) in a row, next try in %s)", r.ID, err, f.failures, retryWait(f.failures))
 			continue
 		}
-		delete(e.recordingRetries, r.ID)
+		e.retries().recordings.clear(r.ID)
 		if called {
 			n++
 		}
@@ -743,7 +739,7 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 		Transcript: clipMiddle(e.Store.renderTranscript(r, segs), recordingPromptChars)}
 	var out recordingSummary
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	err = e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBRecording(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBRecordingInput(in), 4000, &out)
+	err = e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBRecording(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBRecordingInput(in), 4000, &out)
 	cancel()
 	if err != nil {
 		return true, err
