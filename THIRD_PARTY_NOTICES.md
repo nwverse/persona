@@ -1,5 +1,13 @@
 # Third-party notices
 
+## Password login WebAssembly client
+
+`web/public/pake/client.wasm` uses `github.com/bytemare/opaque` v0.18.0 (MIT),
+its transitive cryptographic dependencies (MIT and BSD), and the Go runtime (BSD).
+The build collects their full license texts in
+`web/public/pake/THIRD_PARTY_NOTICES.txt`, deployed beside the WASM client at
+`/pake/THIRD_PARTY_NOTICES.txt`. The generated notices must accompany binary distributions.
+
 ## Brand marks
 
 `apple/Persona/Resources/Assets.xcassets/Brands` and `apple/PersonaWatch/Assets.xcassets/Brands` hold other products' marks

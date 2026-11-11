@@ -4,6 +4,49 @@ Last reviewed: 2026-10-31, against the routes, event emission and database recor
 
 All JSON fields are snake_case. Times are RFC3339 (UTC). HTTP `listen` defaults to `:18660`; TLS is turned on explicitly with `public.tls_listen` and serves HTTPS / WSS. Over the public internet IPv6 is preferred; see [network.md](../operations/network.md) for configuration and firewall rules.
 
+
+### 客户端密码登录
+
+管理员在「管理端 › 设备 › 客户端密码登录」设置连接密码并开启。连接密码与管理员密码分开，使用 RFC 9807 OPAQUE；
+密码只在输入它的浏览器中参与计算，注册和登录接口均拒绝 `password` 字段。服务端保存 OPAQUE 注册记录和服务器密钥材料，
+不保存密码原文或可直接用来登录的固定密码哈希。客户端密码长度规则由设置页面检查，服务端无法从盲化消息检查密码强度。
+
+服务端与浏览器 WebAssembly 共用 `github.com/bytemare/opaque` 的固定配置，协议标识
+`opaque-ristretto255-sha512-argon2id-v1`，上下文 `persona/client-password-login/v1`，客户端身份 `persona-client`，
+服务端身份 `persona-hub:<hub_id>`。浏览器在一次性 Worker 内计算，结束后销毁 Worker；密码不进入 URL、存储或网络请求。
+网页登录成功后继续使用浏览器设备 token。此功能只在中心 hub 提供，成员返回 `409 member_hub`，请连接中心的 HTTPS 地址。
+
+公开接口前缀 `/api/v1/auth/password`，需要 TLS，回环连接允许本地开发或本机 TLS 终止代理；不信任调用方传入的 `X-Forwarded-*`。
+写接口只接受同源 JSON，响应禁止缓存。每个来源及全局都限制登录发起次数，避免错误密码只在客户端被发现时绕过限流。
+
+| 接口 | 请求与响应 |
+| --- | --- |
+| `GET /state` | `{enabled,suite,hub_id,hub_name}` |
+| `POST /start` | `{message,name,kind,challenge?}`，`message` 为 base64 KE1；返回 `{session,message,identity,suite}`，响应消息为 KE2 |
+| `POST /finish` | `{session,message}`，消息为 base64 KE3；成功返回 `{token,id,hub_id,name}`，或移动端的 `{code}` |
+| `POST /exchange` | `{code,verifier}`，验证 RFC 7636 S256 PKCE 后返回设备凭据 |
+
+移动端先输入 HTTPS hub 地址，再在系统浏览器登录。`/login/device` 的 URL fragment 携带随机 `state`、PKCE `challenge`、
+设备 `name` 和 `kind`；`verifier` 只留在 App 内存。浏览器登录成功后通过 `persona://password-login?code=…&state=…` 返回，
+App 核对 state 并向原 HTTPS 地址兑换 code，禁止重定向。跳转链接不包含设备 token；Android 从经过系统证书验证的兑换连接取得公钥指纹，
+之后沿用现有钉扎连接。自签名证书部署仍使用扫码配对。
+
+验证状态与授权码只在内存保留，协议有效期为 5 分钟，重启即失效；不论验证成功还是失败都消耗一次。
+状态总量上限为 128 条。这些是协议和资源限制，实际性能未实测。
+改密码、开关登录均更换配置版本，旧验证流程与授权码不能继续签发设备凭据。关闭登录保留已有设备；管理员可同时撤销所有设备，
+事务提交后清鉴权缓存并断开已有连接。签发设备凭据与修改配置通过数据库行锁协调，避免旧密码在撤销后并发签发新凭据。
+
+管理接口沿用管理员会话与 CSRF 检查，前缀 `/api/v1/admin/password-login`：
+
+| 接口 | 请求与响应 |
+| --- | --- |
+| `GET /api/v1/admin/password-login` | `{enabled,configured,revision}`，不返回注册记录或密钥 |
+| `POST /register/start` | `{message,revision}`，注册盲化请求；返回 `{session,message,identity,suite}` |
+| `POST /register/finish` | `{session,message,revoke_devices}`，保存注册记录并开启登录；仅发起注册的管理员会话可完成 |
+| `PUT /api/v1/admin/password-login` | `{enabled,revision,revoke_devices}`，切换登录或同时撤销设备 |
+
+设置版本不匹配返回 `409 stale_settings`；错误密码、过期或重复验证返回 `401 bad_password`；未开启返回 `403 password_login_disabled`。
+
 ## Authentication
 
 - Prefer `Authorization: Bearer <token>`. The current implementation has not locked down URL tokens: when there is no Authorization value, every authenticated API (WebSocket included) still falls back to `?token=`, not only on loopback or for WS. Clients should use the header so credentials stay out of URLs.
@@ -2458,7 +2501,7 @@ the first one after connecting is `full: true` with the whole last 26 hours; `do
 node → manager / hub requests (`interaction.create`, `mcp.*`, `assistant.lark`, `lark.sent`, `mail.attachment` answered by the manager; `notify` answered by the hub):
 - `interaction.create {interaction}` → `{resolution}` (blocks until handled / expired; on expiry returns `{"dismiss":true}`). When the manager answers from an "Always allow in this session" it kept (or one a card answered meanwhile covers) rather than from an answer to this card, the resolution has `"remembered":true` next to `allow` and `always`; only the manager sets it, an App's answer never carries it (the sent-as-user ledger records such a write as `conversation_always`)
 - `mcp.tools {}` → `{tools}`; `mcp.call {name, args, session_id}` → `{content, is_error, error_kind?, retry_after?}` (`error_kind` is the failure category: `declined` the user or `connector_gate` didn't agree, `unavailable` the connector isn't signed in / can't connect, `rate_limited` rate limited; `retry_after` is how many seconds of rate limiting remain. Included only when the hub knows; `personad tool` sets its exit code from it, #3779)
-- `lark.sent {command?, method, path, text?, session_id?, message_ref?, let_through}` → `{}`: the node's gate proxy forwarded a write and the API answered with a 2xx; the manager keeps it in the sent-as-user ledger (`docs/extensions/connectors.md` "Sent as the user"). `let_through` is `{kind: "rule", rule: {method, path, body?, action}}`, `{kind: "conversation_always"}` or `{kind: "card", interaction_id, answered_by?}`; `text` is at most 4000 characters; `message_ref` is the id the API's answer gave for the message the write made (absent when there was none, the answer could not be read or the id was longer than 200 characters: it is not cut), which the manager keeps only for a route that creates one message in a conversation (`docs/extensions/connectors.md` "Sent as the user"). The computer is the connection's, never a field; `permission_denied` for a computer the manager does not know, `invalid_params` for a read or a `let_through` that is not one of these, `no_database` without a ledger; an older manager reports an unknown method, which the node only logs
+- `lark.sent {command?, method, path, text?, session_id?, message_ref?, let_through}` → `{}`: the node's gate proxy forwarded a write and the API answered with a 2xx; the manager keeps it in the sent-as-user ledger (`docs/extensions/connectors.md` "Sent as the user"). `let_through` is `{kind: "rule", rule: {method, path, body?, action}}`, `{kind: "conversation_always"}`, `{kind: "permission_mode"}` (a classified ordinary write allowed by assistant bypass), or `{kind: "card", interaction_id, answered_by?}`; `text` is at most 4000 characters; `message_ref` is the id the API's answer gave for the message the write made (absent when there was none, the answer could not be read or the id was longer than 200 characters: it is not cut), which the manager keeps only for a route that creates one message in a conversation (`docs/extensions/connectors.md` "Sent as the user"). The computer is the connection's, never a field; `permission_denied` for a computer the manager does not know, `invalid_params` for a read or a `let_through` that is not one of these, `no_database` without a ledger; an older manager reports an unknown method, which the node only logs
 - `mail.attachment {account_id, uid, mailbox?, attachment_id, session_id?, assistant?, guest?}` → `{filename, mime, size, data}` (`data` base64): the bytes of a mail attachment for `mail_save_attachment`, which the node answers itself and writes on its machine (`docs/extensions/mail.md` "Saving attachments"). The manager checks the caller as for `mcp.call` (work machine, assistant conversation, guest given the tool), then answers only while the mail connector offers `mail_save_attachment` to it; at most 25 MB (`attachment too large` otherwise). `filename` is the sender's, uncleaned. The computer is the connection's, never a field; an older manager reports an unknown method, which the node returns as the tool's error
 - `agents.closeout.check {session_id}` → `{reason?}`: an Agent is about to stop after a turn that did work, without a closeout; the manager answers with the reason to hold the stop with while its `closeout` triage switch is on, and with nothing otherwise (`docs/assistant/agent-work.md` "Closeout"). The node holds a stop at most once per turn (`stop_hook_active`).
 - `agents.closeout.brief {session_id, cwd?}` → `{context?}`: an Agent's session is starting (Claude Code's SessionStart hook, in a session with Persona's own hooks); the manager answers with the closeout's form to hand it as the hook's additional context while its `closeout` triage switch is on, and with nothing otherwise or for a review's reviewer (`docs/assistant/agent-work.md` "Closeout"). The node waits 1.5 seconds and asks once per session.
