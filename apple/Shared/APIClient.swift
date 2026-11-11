@@ -758,6 +758,13 @@ nonisolated struct APIClient: Sendable {
 
     private func sp(_ k: SessionKey) -> String { "/api/v1/sessions/\(k.machineID)/\(k.sessionID)" }
 
+    /// Genuine user-input identities and full-history ordinals, without loading transcript bodies.
+    func userInputIndex(_ k: SessionKey) async throws -> ChatUserInputIndex {
+        let index = try await getDecodedOffMain(sp(k) + "/items", query: ["user_inputs": "1", "lazy_images": "1"], as: ChatUserInputIndex.self)
+        guard index.isValid else { throw APIError(status: 0, message: "incomplete user input index") }
+        return index
+    }
+
     /// A page of history going back `turns` whole exchanges (user prompt + answer) before beforeSeq (nil: the latest
     /// page, with no before_seq at all: an empty one reached runtimes as 0, which some refuse).
     func items(_ k: SessionKey, beforeSeq: Int?, turns: Int = 2) async throws -> ItemsResponse {
@@ -1097,6 +1104,9 @@ nonisolated struct APIClient: Sendable {
         /// What the assistant is told about the user (Settings › Assistant › About Me).
         var notes: String?
         var timezone: String?
+        /// The user picked `timezone` by hand (#1855, Android's Time zone without Match phone): devices then leave it. nil
+        /// from a hub that was never told, or one without picking.
+        var timezonePicked: Bool?
         /// The main conversation's session id (the Persona tab opens it); nil until there is one.
         var main: String?
         /// Notify Main-Chat Tasks Only in the Main Chat (#1731): tasks the main conversation starts are quiet (`TodoItem.quiet`). The
@@ -1117,7 +1127,7 @@ nonisolated struct APIClient: Sendable {
             case launcher, cwd, conversations, timezone, main, leaders
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case mainBackgroundFolded = "main_background_folded"
-            case meetingAttendanceDefault = "meeting_attendance_default"
+            case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
         }
 
         /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
