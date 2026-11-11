@@ -47,11 +47,11 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 
 **A11. Smaller differences.**
 
-- A "Waiting in the background" quick filter, and the selected chip in its own state's color (Android always tints it like Needs You).
+- A "Waiting in the background" quick filter, and the selected chip in its own state's color (Android always tints it like Needs You). Done (11-12): `AgentQuickFilter.BackgroundWaiting` with its clock, out of Working's count (a paged list takes the hub's `background_waiting` out of working); the Glass home's chosen chip takes its state's color (`ByStatusTest`, `ByStatusShotsTest`). Its lighter tone is still to come.
 - Collapse All keeps the computer headings open.
 - A long list shows 20 rows, then "Show All N".
-- Sort only under By Status.
-- Interrupt in the row's long-press menu.
+- Sort not under By Status (iOS hides it there: the sections are the states). Done (11-12): the list settings leave Sort out under By Status (`AgentsHomeAffordancesTest`).
+- Interrupt in the row's long-press menu. Done (11-12): after Pin while the agent works or needs you and can be interrupted, on the list and the space page (`AgentOperations.interruptSession`, `AgentsHomeAffordancesTest`).
 - A tab with several agents shows as a tab row in By Repository too, not only by computer.
 - The space page: two-column cards by urgency, the computer opening its projects page, the path shortened with ~, a dashed "Open a new tab" card.
 - The Personal Agents pill beside the grouping pill.
@@ -116,6 +116,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 
 - Rename `MachineSpace` to By Project in the strings (en, zh-Hans, ja), keeping the stored value.
 - By To-do: flatten `AgentList.kt`'s to-do branch to iOS's order; hide the choice when the hub has no to-dos.
+- Done (11-12): By To-do is iOS's flat list (`TodosLogic.buildTodoAgentGroups`): a section per open to-do, its title, one count in the to-do's state color and the arrow to the to-do; then "Opened by hand" (open) and "No to-do", folded under any section above unless something in it needs you, open while searching (`TodoDataTest`, `AgentsTreeTest`, `AgentsTodoTreeShotsTest`). The project headings and their helpers are gone. Android keeps its rule that an agent's own to-do wins over a stale agents list.
 - By Status: add the background-waiting section, counts on every header, Seen folded.
 - Done (11-11): Android reads the hub's `background_waiting` (`AgentSession.waitsInBackground`) and By Status has iOS's eight sections in rank order (`AgentStateSections`); each header carries one count with its state's dot, Waiting in the background a clock; Seen starts folded and opens from its header (kept as `!state/idle` in the folds, `ByStatusTest`, `AgentsFoldAllTest`), with no "N more idle" row; rows under a section leave their state word out, Muted's keep it. The shared fixtures in `spec/fixtures/sort` follow. Still to do: the background-waiting agent counted apart from Working with its own quick filter (A9) and its lighter dot (Android has no such tone yet), and By To-do's layout.
 - Done (11-11): "By computer and space" reads By project (按项目, プロジェクト別), the stored value unchanged; the sheet offers By To-do only while the hub has to-dos (`offeredGroupings`, `AgentsListInfoTest`). The two layouts are still to change.

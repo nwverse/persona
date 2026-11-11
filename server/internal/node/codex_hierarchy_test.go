@@ -310,3 +310,67 @@ func TestCodexAppProjectsGoByTheAppsNames(t *testing.T) {
 		}
 	}
 }
+
+// A chat's project is numbered by where the App's sidebar lists it (space_index, from 1 down project-order): the first
+// place of an id the order repeats, ids of no project skipped over, a folder of two projects at the first of them. A
+// project the order does not list (a ChatGPT project) and a chat in no project have none. A subagent takes its chat's.
+func TestCodexAppProjectsAreNumberedInTheAppsOrder(t *testing.T) {
+	n := &Node{}
+	home := t.TempDir()
+	base := t.TempDir()
+	dir := func(name string) string {
+		p := filepath.Join(base, name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	site, tools, shared, chatgpt := dir("site"), dir("tools"), dir("shared"), dir(filepath.Join(".chatgpt-projects", "g-p-1"))
+	assign := func(project string) map[string]string { return map[string]string{"projectId": project} }
+	state := map[string]any{
+		"projectless-thread-ids": []string{"loose"},
+		"thread-project-assignments": map[string]any{
+			"site": assign("p1"), "tools": assign("p2"), "shared": assign("p3"), "chatgpt": assign("p5"),
+		},
+		"local-projects": map[string]any{
+			"p1": codexAppProject{Name: "Site", RootPaths: []string{site}},
+			"p2": codexAppProject{Name: "Tools", RootPaths: []string{tools}},
+			"p3": codexAppProject{Name: "Shared", RootPaths: []string{shared}},
+			"p4": codexAppProject{Name: "Shared too", RootPaths: []string{shared}},
+			"p5": codexAppProject{Name: "GenImageX", RootPaths: []string{chatgpt}},
+		},
+		"project-order": []string{"p2", "p1", "gone", "p4", "p3", "p2"},
+	}
+	raw, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		thread, cwd string
+		want        int
+	}{
+		{"tools", tools, 1},
+		{"site", site, 2},
+		{"shared", shared, 4},
+		{"chatgpt", chatgpt, 0},
+		{"loose", dir("loose"), 0},
+	} {
+		path := filepath.Join(home, c.thread+".jsonl")
+		if err := os.WriteFile(path, []byte(`{"type":"session_meta","payload":{"originator":"Codex Desktop","source":"vscode"}}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s := proto.Session{SessionID: c.thread, Cwd: c.cwd, Capabilities: &proto.SessionCapabilities{}}
+		n.decorateCodexSession(&s, codexSource{home: home, thread: c.thread, path: path}, home, map[string]string{})
+		if s.SpaceIndex != c.want {
+			t.Errorf("%s (%s) numbered %d, want %d", c.thread, s.SpaceName, s.SpaceIndex, c.want)
+		}
+	}
+	list := []proto.Session{
+		{SessionID: "chat", SpaceKind: "codex_app", SpaceID: "codex-project:" + site, SpaceName: "Site", SpaceIndex: 2},
+		{SessionID: "sub", IsSubagent: true, ParentSessionID: "chat", SpaceKind: "codex_app", SpaceID: "codex-chats:" + home},
+	}
+	resolveCodexHierarchy(list)
+	if list[1].SpaceID != list[0].SpaceID || list[1].SpaceIndex != 2 {
+		t.Errorf("the subagent is in %q numbered %d, want its chat's", list[1].SpaceID, list[1].SpaceIndex)
+	}
+}
