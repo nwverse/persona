@@ -5776,6 +5776,12 @@ struct WorkStepView: View, Equatable {
     private(set) lazy var openQuote: (ContextRef) -> Bool = { [weak self] in self?.handlers.openQuote($0) ?? false }
     /// Web links open in the in-app sheet (Feishu docs in the native reader); anything else as before.
     private(set) lazy var openURL = OpenURLAction { [weak self] url in
+        #if os(iOS)
+        if let code = CodeCopyURL.parse(url) { // inline code in a reply: copied (#2984)
+            CodeCopy.copy(code, said: String(localized: "Copied [Mac Hover 07d6bb]"))
+            return .handled
+        }
+        #endif
         if let ref = PathLinkURL.parse(url) { // a path in a message: the file viewer, at its line
             self?.handlers.openFileAt(ref.path, ref.line)
             return .handled

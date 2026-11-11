@@ -1322,7 +1322,8 @@ if os.environ.get("MOCK_AGENT_MARKS"):
                              "好的，我先看一下。", agent=agent, **extra))
 
 # MOCK_DESKTOP_APPS=1 (#3756): someone who works in the desktop apps on the MacBook, for the Agents list's By App. Claude's
-# desktop app and the Codex App each have running and offline sessions (the Codex App's chats in its projects), and two run
+# desktop app and the Codex App each have running and offline sessions (the Codex App's chats in its projects, Claude's in their
+# folders, one in the home directory: Other), and two run
 # from a terminal. Fields as the node sends them (claudebg.go, codex_registry.go).
 if os.environ.get("MOCK_DESKTOP_APPS"):
     DESKTOP_APPS = [  # (session id, agent, surface, title, status, state, project, minutes ago)
@@ -1335,15 +1336,19 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
         ("d3a0e7a0-0000-4000-8000-000000000007", "codex", "desktop", "写一个图片压缩脚本", "offline", "offline", "tools", 2880),
         ("d3a0e7a0-0000-4000-8000-000000000008", "claude", "cli", "跑一遍集成测试", "working", "working", "web-app", 8),
         ("d3a0e7a0-0000-4000-8000-000000000009", "codex", "cli", "清理旧的迁移文件", "offline", "offline", "billing", 900),
+        ("d3a0e7a0-0000-4000-8000-00000000000a", "claude", "desktop", "随手问个快捷键", "offline", "offline", "", 180),  # home: Other
+        # A Codex App chat in no project, in the folder the App makes for one: Other.
+        ("d3a0e7a0-0000-4000-8000-00000000000b", "codex", "desktop", "查一下这个报错", "offline", "offline", "~Documents/Codex/2026-11-06/w-i", 240),
     ]
     for sid, agent, surface, title, status, state, project, mins in DESKTOP_APPS:
         kw = dict(NO_SPACE, agent_surface=surface, started_by_persona=False)
+        cwd = "/Users/me/" + project[1:] if project.startswith("~") else f"/Users/me/code/{project}" if project else "/Users/me"
         if surface == "desktop" and agent == "codex":
-            kw.update(space_kind="codex_app", space_id=f"codex-project:/Users/me/code/{project}", space_name=project,
+            kw.update(space_kind="codex_app", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1],
                       agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True})
         elif surface == "desktop" and status != "offline":
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
-        SESSIONS.append(sess("macbook", sid, title, f"/Users/me/code/{project}", status, state, "", 0, "", 0, mins,
+        SESSIONS.append(sess("macbook", sid, title, cwd, status, state, "", 0, "", 0, mins,
                              "好的，我先看一下。", agent=agent, **kw))
     # The CSV chat's subagents (thread_spawn): the node lists each with its chat (codex_registry.go); the Agents list puts
     # them under that chat's Subtasks, as the Codex App does.
@@ -10957,6 +10962,21 @@ if os.environ.get("MOCK_SELECT_TEXT") == "1":
     ITEMS[SELECT_RICH] = [
         it("user", "text", 3, text="三个页面的请求怎么合？"),
         it("assistant", "text", 2, text=SELECT_RICH_REPLY),
+    ]
+
+# MOCK_REPLY_BLOCKS=1: a reply's code blocks, inline code and quotes as Telegram draws them (#2984): a fence with its
+# language and one without, inline code, a short quote and a long one that folds.
+REPLY_BLOCKS = "a1f3c2d4-0000-4000-8000-0000005e1ec9"
+if os.environ.get("MOCK_REPLY_BLOCKS") == "1":
+    SESSIONS.append(sess("macbook", REPLY_BLOCKS, "代码和引用", "/Users/me/code/weather", "done", "read", "weather", 1, "blocks", 2, 1, "好"))
+    ITEMS[REPLY_BLOCKS] = [
+        it("user", "text", 3, text="首页的缓存怎么清？"),
+        it("assistant", "text", 2, text="先跑 `npm run build`，再清掉 `.cache` 目录（改在 `server/handlers.go`）：\n\n```ts\nexport async function clear(page: string) {\n"
+                                        "  await caches.delete(`page:${page}`)\n  return reload(page)\n}\n```\n\n不带语言的也一样：\n\n```\n"
+                                        "rm -rf .cache && npm run build\n```\n\n> 缓存键改了以后，旧缓存要等一天才过期。\n\n"
+                                        "> 上线前请确认三件事：一是首页的请求已经合并，跑过一遍回归测试；二是价格页换成了新的缓存键，"
+                                        "旧键在 CDN 上的副本会在一天内过期；三是文档页最后做，它的请求最多，改动的风险最低。"
+                                        "如果中途发现首屏时间反而变长，先回滚价格页，再看是不是缓存没命中。\n\n有问题再找我。"),
     ]
 
 # MOCK_PORTS=1: an agent running a dev server (docs/operations/ports.md): its session lists the port, its reply links it (and a
