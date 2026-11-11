@@ -4,7 +4,6 @@ import { ApiError, errorText, isAbort, isTransient, sessionPath } from "./api";
 import { parseUserText } from "./turns";
 import { imagePayload, quotePath, releaseAttachments, sendFile, type LocalAttachment } from "./attachments";
 import { uuid } from "./format";
-import { showLauncherNote } from "./assistant-start";
 import { apiOp } from "./ops";
 import { currentPlatform, modName, type Platform } from "./shortcuts";
 import { href, navigate } from "./router";
@@ -79,8 +78,9 @@ async function launchOp<T>(path: string, opId: string, signal: AbortSignal, json
     const r = await apiOp<T & { state?: string; launcher_note?: string; session?: Session }>(path, { method: "POST", signal, json, opId });
     if (r.state === "unknown") throw new ApiError(202, t("lib-new-agent.outcome_unknown"), { delivered: "unknown" });
     if (r.state === "pending") continue;
-    // a default launcher the computer lacks gave way to another (#4661): said once, as for the main chat
-    showLauncherNote(`${r.session?.machine_id}/${r.session?.session_id}`, r.launcher_note);
+    // a default launcher the computer lacks gave way to another (#4661): said once, as for the main chat; loaded only
+    // then, so New Agent's first screen does not carry it
+    if (r.launcher_note) void import("./assistant-start").then((m) => m.showLauncherNote(`${r.session?.machine_id}/${r.session?.session_id}`, r.launcher_note));
     return r;
   }
 }
