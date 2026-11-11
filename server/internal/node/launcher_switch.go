@@ -687,7 +687,7 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 		Starting: true, StartedByPersona: had, UpdatedAt: time.Now().UTC(), WorkspaceID: plan.a.WorkspaceID, PendingSwitch: &ps}
 	if !n.switches().begin(id, row) {
 		n.logf("session %s: switch to launcher %s refused: another one is under way", id, ps.Launcher)
-		return "", false, n.switchingRefusal(id) // not typed into a pane that one is quitting and starting again
+		return "", false, switchUnderWay() // not typed into a pane that one is quitting and starting again (whether or not it ended since)
 	}
 	var serving *Node
 	defer func() {
@@ -798,6 +798,11 @@ func (n *Node) switchingRefusal(id string) error {
 	if !n.switches().busy(id) {
 		return nil
 	}
+	return switchUnderWay()
+}
+
+// switchUnderWay is the refusal of something that would type into a pane a launcher switch is quitting and starting again.
+func switchUnderWay() error {
 	return refusal(proto.CodeSwitchUnderWay, "the agent is moving to another launcher right now: try again once it runs", nil)
 }
 
