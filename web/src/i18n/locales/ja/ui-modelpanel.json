@@ -36,5 +36,9 @@
   "price_input": "入力",
   "price_output": "出力",
   "price_cache_read": "キャッシュ読取",
-  "configure": "モデルを設定"
+  "configure": "モデルを設定",
+  "presets": "プリセット",
+  "how_to_fix": "直し方",
+  "engine_via": "{provider} で実行",
+  "effort_unset": "モデルのデフォルト"
 }

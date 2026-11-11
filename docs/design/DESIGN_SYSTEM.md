@@ -382,6 +382,22 @@ The closeout card (web, #3612; `web/src/views/chat/CloseoutCard.tsx`) is a stopp
 
 The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a task is held to: on the plan card before **Start**, and on the to-do's page above its criteria. It adds no surface: it is the inset well the review checklist already uses (`rounded-control`, `bg-inset`, `shadow-hairline`), with the closeout card's label / value rows. Whose words a line holds is never left to styling: the owner's own are introduced as theirs with the date, work they did not ask for names who started it, and a brief made later says it was reconstructed and labels the hand-over prompt as that. Long text is held to a few lines with **Show all** in place (principle 2). On the plan card the whole brief is folded to who asked and one line that counts the rest, behind that one control, and the card's buttons stay at the bottom edge of the tray it scrolls in: added detail never puts a pending request's answer out of reach (section 4.8). The criteria keep one list, the review checklist's own (met, missing, open, not checked); under it a finished task adds only the criteria a scope change dropped (`--ink-3`, the undo mark, the criterion struck through, the word and the change that dropped it) and what was done beyond the brief. Overdue is a caution chip (`--orange` on `--orange-tint` with the clock) plus a sentence, not a tint over the box. Other clients that draw a brief keep the same first lines and add the dropped state to their one list of criteria.
 
+**Hand-off cards** (web, #5096; the owner asked that this part of the main chat follow cindy's `SessionHandoffCard` exactly, which replaces the "Dispatched: <title> · Open" line and the task side panel). Each Agent a dispatch started or a task took over is one full-width card in the chat (`views/assistant/Handoff.tsx`):
+- **Frame:** a bordered `rounded-xl` surface, 16 px padding and 14 px gaps (12 / 12 at phone width), whose border turns `--ink` on hover.
+- **Mark:** a 36 px round `--field` well with the ↳ mark (`cornerDownRight`), which inverts on hover.
+- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New and Resumed are filled `--ink`, Already active is outlined.
+- **Second line** (12 px): the history mark, "last active …" (the time alone at phone width), then ` · ` and the Agent's state from `StatusMark` and `lib/state-labels.ts`, in the attention color when it needs the user.
+- **End:** ↗ (`arrowUpRight`).
+- **Open:** the card opens the Agent's page. Before an Agent is up, the card has no ↗ unless the to-do can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone.
+
+Two departures from cindy, both from Persona's rules:
+- cindy shows a short session id on the card. The Assistant's chat keeps ids out of sight (super rule 4, section 5.6), so here it is only in the card's tooltip.
+- The state word is added, so an Agent that needs the user is visible without opening anything (section 3.4).
+
+The Agent's page opened from a card shows cindy's way-back strip above the chat (`views/chat/HandoffBack.tsx`): a 40 px `rounded-xl` bordered row at the chat column's width, ↰ (`cornerUpLeft`) and "Came from <conversation> · click to return", with ✕ to put it away. Returning goes back in the history, and the chat opens where it was left (`lib/handoff.ts`).
+
+No new token. The two icons are added to `ui/icons.tsx` in the existing stroke grammar. iOS and Android keep the dispatched line and task details for now (#5110).
+
 ### 3.4 Lists and rows
 
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.
@@ -450,7 +466,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - Busy sheets disable interactive dismissal. Detents and drag indicators are inconsistent (DS-22).
 - Confirmation sheets for Close and Delete agent exist because a system dialog was too wordy (`apple/Persona/DesignSystem/Components.swift:444`).
 - Web: dialog is a centered card, becomes a bottom sheet on phones. Android: `JSheet`.
-- **Image editor** (#4963, `ImageEditor`, tokens `Theme.ImageEdit`): a full-screen cover, dark in both appearances like the image viewer, Cancel and Done (or Select / Add to Message) in the top bar with Undo and Redo between them. Under the picture, a row of the shown tool's options (six ink swatches and a Line Width menu for Box and Pen; Rotate, an Aspect Ratio menu and Reset for Crop) over the tools row (Box, Pen, Crop as `.themedButton`, the one shown prominent, then Clear). Opened from the + panel, the panel's caption field and Send (`ComposerSurface`, `ComposerRoundButton`) sit under the tools. At large text sizes the tools show only their icons and the options row scrolls; no label wraps. One editor for the + panel, the composer's strip and the image viewer. Reason it is not a system sheet: the picture needs the whole screen and the drags in it must not pull a sheet down. The web's (#4991, `web/src/views/chat/ImageEditor.tsx`, measures `IMAGE_EDIT` in `web/src/lib/image-edit.ts`) has the same rows, tools and order: Undo and Redo as icons between Cancel and Done; Line Width shows the chosen line itself (the web has no line-weight glyph) and its menu rows lead with each width; Aspect Ratio shows the chosen shape's name; the tools and Crop's buttons drop their words when their row has no room (measured, as `ViewThatFits`); the menus are the web `Menu`, put inside the editor's layer (`container`) so they draw over it, dark.
+- **Image editor** (#4963, `ImageEditor`, tokens `Theme.ImageEdit`): a full-screen cover, dark in both appearances like the image viewer, Cancel and Done (or Select / Add to Message) in the top bar with Undo and Redo between them. Under the picture, a row of the shown tool's options (six ink swatches and a Line Width menu for Box and Pen; Rotate, an Aspect Ratio menu and Reset for Crop) over the tools row (Box, Pen, Crop as `.themedButton`, the one shown prominent, then Clear). Opened from the + panel, the panel's caption field and Send (`ComposerSurface`, `ComposerRoundButton`) sit under the tools. At large text sizes the tools show only their icons and the options row scrolls; at the largest, where even the icons are wider than the page, the tools scroll too and Clear stays put (#5131). No label wraps, and every row keeps the page margin. One editor for the + panel, the composer's strip and the image viewer. Reason it is not a system sheet: the picture needs the whole screen and the drags in it must not pull a sheet down. The web's (#4991, `web/src/views/chat/ImageEditor.tsx`, measures `IMAGE_EDIT` in `web/src/lib/image-edit.ts`) has the same rows, tools and order: Undo and Redo as icons between Cancel and Done; Line Width shows the chosen line itself (the web has no line-weight glyph) and its menu rows lead with each width; Aspect Ratio shows the chosen shape's name; the tools and Crop's buttons drop their words when their row has no room (measured, as `ViewThatFits`); the menus are the web `Menu`, put inside the editor's layer (`container`) so they draw over it, dark.
 
 ### 3.7 Buttons
 
@@ -1203,3 +1219,36 @@ it). Reason: the ID is an engineering detail that a person should not have to in
 rule for every place keeps a provider recognizable wherever it is picked (principle 4). This reuses the wizard's
 fields and More options disclosure and the existing row and chip styles; it adds no setting, style or motion. The chat
 page's composer chip and model panel adopt the same module in their own change; iOS and Android have not caught up yet.
+
+## New Agent's model choice (#5104)
+
+New Agent picks its model with the chat's model pill and unified model panel ("Model pill and unified model panel" in
+3.8), at the user's request (2026-11-12) to match Cindy's new task: the user picks a model and the launcher and its
+engine follow; the engine's mark stays on the pill and on every row. Who it serves: people starting coding Agents (the
+Agents side). The pill sits at the right of the first message box's bottom row; the Preset, Launcher, Model and Thinking
+effort fields are gone. What the panel gained for it, each part optional and absent from the chat's panel:
+
+- Follow row (`follow`): on top of the list in no group, a 1 px `--line` rule under it; a two-line row (its label, then
+  what the default runs in 12 px `ink-2`, after a 11 px `warning` icon in `--orange` when that can't start here), with
+  the selected fill and a 14 px check while followed. Keys and the hover glide as on a model row.
+- Presets (`presets`, `onPreset`): a group after Favorites, "Presets"; one row per preset named by the preset, its
+  description as the second line, the launcher's tile and the `[engine] effort` setup on the right; no star, no Customize,
+  never lit (a copy of a setup, like a favorite).
+- `state.starting`: no Recommended group, and the row lit shows the form's setup rather than a saved customization.
+- Engine pills in the flyout (`engines`): when the model runs with more than one engine on this computer, Cindy's engine
+  pills replace the static engine block: 26 px tall, no border, a 12 px `AgentMark` and the engine's name at 12 px, the
+  row's own on `--hover-2` with a check; another is a quiet pill that picks that launcher's row of the model, at 50 % with
+  its reason when that launcher can't start here.
+- "How to fix" (`onHelp`, a provider's `help`): after a launcher's reason under its group's name, 11 px medium
+  `--accent-ink`.
+- Effort with no level set (`EffortSlider` `unsetLabel`): no fill, the thumb a hollow ring (`--surface` with a
+  `--line-strong` border, no glow) at the start, the bubble and accessible value "Model default"; a click or key picks a
+  level.
+- Lines under the first message box: one 11.5 px line each, a 12 px icon first: a pick dropped on another computer
+  (`info`, `ink-3`), a list that couldn't be read (`warning`, `--orange`), what runs this time can't start here (`warning`,
+  `--orange`, the "Used this time" pill, How to fix), the preset picked (`layers`, `ink-3`; `warning` in `--orange` when
+  something of it can't be applied).
+
+Reason: one place to choose a model for chats and new Agents (principle 4), the engine visible without a field of its
+own (principle 2), the default as one row that can always be gone back to (principles 1 and 3). The deviations from
+Cindy are listed in `docs/web/web.md` "New Agent's model choice (#5104)"; iOS and Android follow in #5117.

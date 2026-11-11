@@ -9,7 +9,8 @@ import { Icon } from "../icons";
 import { ProviderMark } from "./ProviderMark";
 
 export function Rail({ providers, view, onView, disabled, quotas }: { providers: PanelProvider[]; view: PanelView; onView: (v: PanelView) => void; disabled?: boolean; quotas?: Readonly<Record<string, LauncherQuotaAnswer>> }) {
-  const cell = (v: PanelView, label: string, icon: React.ReactNode) => {
+  // `tip`: the tooltip when it says more than the name (a provider's startup ID, #5029)
+  const cell = (v: PanelView, label: string, icon: React.ReactNode, tip = label) => {
     const on = sameView(v, view);
     const quota = v.kind === "provider" ? weeklyQuota(quotas?.[v.provider]) : undefined;
     const detail = quota ? [t("ui-modelpanel.weekly_left", { label: quota.window.label, percent: quota.remaining }), quotaReset(quota.window.resets_at ?? "")].filter(Boolean).join("\n") : "";
@@ -20,7 +21,7 @@ export function Rail({ providers, view, onView, disabled, quotas }: { providers:
         disabled={disabled}
         aria-label={label}
         aria-pressed={on}
-        title={[label, detail].filter(Boolean).join("\n")}
+        title={[tip, detail].filter(Boolean).join("\n")}
         aria-description={detail || undefined}
         data-rail-cell={v.kind === "provider" ? v.provider : v.kind}
         onClick={() => onView(v)}
@@ -49,7 +50,7 @@ export function Rail({ providers, view, onView, disabled, quotas }: { providers:
       {cell({ kind: "favorites" }, t("ui-modelpanel.favorites"), <Icon name="star" size={16} className={view.kind === "favorites" ? "fill-current" : undefined} />)}
       <div aria-hidden className="my-[3px] w-[22px] shrink-0 border-t border-line" />
       {cell({ kind: "all" }, t("ui-modelpanel.all"), <Icon name="grid" size={16} />)}
-      {providers.map((p) => cell({ kind: "provider", provider: p.id }, p.name, <ProviderMark name={p.name} />))}
+      {providers.map((p) => cell({ kind: "provider", provider: p.id }, p.name, <ProviderMark name={p.name} />, p.idNote ? `${p.name} (${p.idNote})` : p.name))}
     </div>
   );
 }

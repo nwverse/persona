@@ -6000,6 +6000,13 @@ if MOCK_TASKS:
     # (#4253, kind notice, drawn by the clients since #4305), last in the conversation.
     if os.environ.get("MOCK_TASKS_NOTICE") == "1":
         TASK_FEED[ASK1].append(_feed("feed_notice", 0.5, "notice", None, {"text": "电脑和模型接好了，定时任务恢复运行，这次是「早报」"}))
+    # MOCK_TASKS_ADOPTED=1 (#5096): the main chat took over the /orders agent the user opened by hand (agent_supervise): a
+    # standalone task card whose body says the agent was running already, the web's Already active hand-off card.
+    if os.environ.get("MOCK_TASKS_ADOPTED") == "1":
+        _adopted = _task_todo("todo_task_adopted", "排查 /orders 接口变慢", "", "server", ORDERS, "/home/me/code/shop-api", 4, "")
+        TODOS_INIT.append(_adopted)
+        TODOS.append(copy.deepcopy(_adopted))
+        TASK_FEED[ASK1].append(_feed("feed_adopted", 4, "task", "todo_task_adopted", {"wake": "active"}))
     # MOCK_TASKS_MESSAGE=filed / sent: the message card's inbox item was handled elsewhere (filed_at, #4797), or its reply
     # went out from the card (sent_at): the apps draw it handled / sent, with no Send.
     _msg = os.environ.get("MOCK_TASKS_MESSAGE", "")
@@ -6920,6 +6927,25 @@ if os.environ.get("MOCK_SECRET_RUN") in ("pending", "ran", "withheld", "long"):
                          "truncated": True, "output_withheld": False}]},
             ensure_ascii=False), 1) + [
             it("assistant", "text", 0.5, text="第二条命令失败了（退出码 5）：launchd 没能加载这个任务。我先看看 plist 的权限再告诉你。")]
+
+# MOCK_SECRET_HANDOFF=1: the hand-off card (secret_handoff, #3962) in Persona's main conversation: the assistant asked to
+# start an Agent on the MacBook with two values from a made-up provider; nothing has been handed over. Its approval is
+# taken from the card alone (the app sends X-Persona-Features: secret_handoff with it).
+if os.environ.get("MOCK_SECRET_HANDOFF") == "1":
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2, text="在 MacBook 上开个 Agent 修发布的 CI，它要用 Example Vault 里的 registry token"),
+        it("assistant", "text", 1.5, text="我会把 token 交给这一个 Agent，你在卡片上批准后才会交出去，我这边看不到它。")]
+    INTERACTIONS.append(
+        {"id": "ix_secret_handoff", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+         "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=9),
+         "tool_name": "secret_handoff", "tool_title": "把密钥交给 Agent",
+         "tool_input": {"variables": [
+             {"name": "REGISTRY_TOKEN", "provider": "example-vault", "provider_name": "Example Vault", "title": "Registry token › credential"},
+             {"name": "DEPLOY_KEY", "provider": "example-vault", "provider_name": "Example Vault", "title": "Deploy key › private key"}],
+             "agent": "修发布的 CI", "machine_name": "MacBook", "cwd": "~/code/example-app",
+             "prompt": "修发布的 CI：publish 这一步登录 registry 失败。"},
+         "summary": "把 Example Vault › Registry token › credential（作为 REGISTRY_TOKEN）交给 MacBook 上的「修发布的 CI」，只用于这一次运行。请在 iPhone 或网页上批准。",
+         "always_label": "以后在你自己开的对话里，MacBook 上的 claude 用这些条目不再询问", "always_honored": True})
 
 # MOCK_SCREEN_DIALOG=1: a terminal dialog (screen interaction) as a newer hub reads it; MOCK_PROMPT_CHANGED=1 makes
 # answering it fail as if the dialog changed on the computer (409 prompt_changed).
@@ -10524,6 +10550,12 @@ LAUNCHER_MODELS = {
     ]},
 }
 LAUNCHER_MODELS["sonnetcc"] = dict(LAUNCHER_MODELS["claude"], locked="启动器固定了模型参数，不能覆盖具体模型")
+# MOCK_NEW_AGENT_PANEL=1 (#5104, web/e2e/new-agent-model.mjs): the gateway behind claude's glm-5.3 also serves Codex, so
+# codex lists the same model ID and New Agent's flyout offers that model under both engines; and the Mac Studio has no
+# codex launcher, so a Codex pick made on another computer falls back to the default there.
+NEW_AGENT_PANEL = os.environ.get("MOCK_NEW_AGENT_PANEL") == "1"
+if NEW_AGENT_PANEL:
+    LAUNCHER_MODELS["codex"]["models"].append({"id": "gateway/glm-5.3", "name": "glm-5.3", "description": "From gateway", "efforts": ["low", "medium", "high"], "default_effort": "medium"})
 
 # Typing a model ID (#1644, docs/assistant/model-config.md "Typing a model ID"): MOCK_CUSTOM_MODELS=1 lists the IDs typed
 # before after a Claude Code / Codex launcher's own models (`custom: true`, none for a locked one), takes Forget
@@ -10761,13 +10793,16 @@ def auto_named(b):
     return name, b
 
 
-def machine_launchers():
-    """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"), and under
-    MOCK_PROVIDERS the managed providers Agents can start, each with its display name."""
+def machine_launchers(mid=""):
+    """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"; not on the
+    Mac Studio under MOCK_NEW_AGENT_PANEL), and under MOCK_PROVIDERS the managed providers Agents can start, each with its
+    display name."""
     out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
            {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
     if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
+    if NEW_AGENT_PANEL and mid == "studio":
+        out = [l for l in out if l["name"] != "codex"]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
@@ -16865,6 +16900,28 @@ PLUGINS["example-gateway"] = {
             "icon": "chart", "badge": {"text": "3", "tone": "danger"}},
            # UI version 3's components and pages (docs/extensions/extensions.md "UI version 3"): -openPlugin example-gateway -openPluginPage notes
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
+# MOCK_SECRET_HANDOFF=1 (with MOCK_EXTENSIONS=1): secret references (docs/extensions/secret-providers.md). Example Notes'
+# API key holds a reference of a made-up provider, Example Vault, whose page lists who uses its references and one Always
+# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook.
+SECRET_HANDOFF = os.environ.get("MOCK_SECRET_HANDOFF") == "1"
+if SECRET_HANDOFF and PLUGINS_MODE:
+    PLUGINS["example-notes"]["secrets"][0].update({"set": True, "reference": {
+        "provider": "example-vault", "provider_name": "Example Vault", "reference": "op://Example/Notes API/credential",
+        "title": "Notes API › credential"}})
+    PLUGINS["example-vault"] = {
+        "id": "example-vault", "name": "Example Vault", "kind": "secret_providers", "status": "running", "version": "0.2.0",
+        "source": "installed", "enabled": True, "description": "把 Example Vault 里的条目以引用的方式交给 Persona。",
+        "contributes": {"secret_providers": ["vault"]}, "publisher": "example", "form": {"fields": []}, "config": {},
+        "secrets": [], "permissions": [_RUNS],
+        "secret_users": [
+            {"kind": "extension", "extension": "example-notes", "extension_name": "Example Notes", "secret": "api_key",
+             "secret_title": "API Key", "reference": "op://Example/Notes API/credential"},
+            {"kind": "launcher", "launcher": "gateway", "launcher_name": "Example 网关", "machine": "macbook",
+             "reference": "op://Example/Gateway/key"}],
+        "handoff_rules": [{"id": "0123456789abcdef", "reference": "op://Example/Registry token/credential", "launcher": "claude",
+                           "machine": "macbook", "by": "device:d1", "at": "2026-01-01T10:00:00Z"}]}
+
+
 # MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and
 # Linux) and launchers (format launcher) from the hub's lists, and steps whole numbers (#2385). Its auto-reply launcher
 # names one the hub no longer has, so its picker keeps it, marked.
@@ -18033,7 +18090,8 @@ _features_without_plugins = features
 def features():
     return _features_without_plugins() + (["plugins", "plugin_manager", "plugin_ui_slots", "plugin_auto_upgrade", "extension_ui_v3",
                                            "extension_widgets", "extension_shortcuts", "extension_notify_actions"] if PLUGINS_MODE else []) + (
-                                           ["extension_operations"] if EXT_OPS else [])
+                                           ["extension_operations"] if EXT_OPS else []) + (
+                                           ["plugin_secret_references"] if PLUGINS_MODE and SECRET_HANDOFF else [])
 
 
 def _plugin_needs(pl):
@@ -18113,6 +18171,19 @@ def plugins_route(handler, p, body):
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
+    elif len(rest) == 2 and rest[0] == "handoff-rules" and method == "DELETE":
+        rules = pl.get("handoff_rules") or []
+        if not any(r["id"] == rest[1] for r in rules):
+            handler.send_json({"error": "no such rule", "code": "no_rule"}, 404)
+            return True
+        pl["handoff_rules"] = [r for r in rules if r["id"] != rest[1]]
+    elif len(rest) == 2 and rest[0] == "secrets" and method == "PUT" and req.get("reference"):
+        for s in pl.get("secrets", []):
+            if s["name"] == rest[1]:
+                s["set"] = True
+                s.pop("hint", None)
+                s["reference"] = {"provider": "example-vault", "provider_name": "Example Vault", "reference": req["reference"],
+                                  "title": req["reference"].rsplit("/", 2)[-2] if req["reference"].count("/") >= 3 else req["reference"]}
     elif len(rest) == 2 and rest[0] == "secrets" and method in ("PUT", "DELETE"):
         value = req.get("value") or ""
         if pl["id"] == "example-gateway-quota" and method == "PUT":
@@ -18124,6 +18195,7 @@ def plugins_route(handler, p, body):
             if s["name"] == rest[1]:
                 s["set"] = method == "PUT"
                 s.pop("hint", None)
+                s.pop("reference", None)
                 if pl["id"] == "example-gateway-quota" and method == "PUT" and len(value) >= 12: s["hint"] = value[-4:]
     else:
         handler.send_json({"error": "not found"}, 404)
@@ -18409,7 +18481,7 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    out = {"launchers": machine_launchers(), "default": default}
+    out = {"launchers": machine_launchers(p.split("/")[4]), "default": default}
     if pid == "agent.new":
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
@@ -19345,7 +19417,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": machine_launchers()})
+            return self.send_json({"launchers": machine_launchers(p.split("/")[4])})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
