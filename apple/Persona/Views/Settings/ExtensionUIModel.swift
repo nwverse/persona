@@ -44,7 +44,7 @@ nonisolated extension ExtensionUIContext {
     /// This context drawn by the app's own renderer (a page or a card): at least the cards' version.
     func drawnByApp() -> Self {
         var c = self
-        c.uiVersion = max(c.uiVersion, Self.cardVersion)
+        c.uiVersion = max(c.uiVersion ?? 0, Self.cardVersion)
         return c
     }
 }
