@@ -1632,6 +1632,20 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_RECENT=1 (#4873): more of the user's own conversations, so the sidebar's Recent (the newest five that are not the main
+# conversation or a leader) has more than it lists and All chats holds the rest. Synthetic titles.
+if os.environ.get("MOCK_RECENT") == "1":
+    for i, (title, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles
+        ("1112 | 规划 | 周末去杭州的行程", 60 * 2, "两天的安排排好了。"),
+        ("1112 | 写作 | 给物业的报修邮件", 60 * 7, "邮件草稿在这里。"),
+        ("1111 | 研究 | 家用净水器怎么选", 60 * 26, "三款的对比如下……"),
+        ("1109 | 整理 | 孩子的疫苗时间表", 60 * 24 * 3, "下一针在 12 月。"),
+        ("1106 | 学习 | 每天 20 分钟西班牙语", 60 * 24 * 6, "第 6 课的单词表。"),
+    ]):
+        c = assistant_sess(f"mine{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
+        c["origin"] = "user"
+        ASSISTANT.append(c)
+
 # MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
 # /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
@@ -1651,26 +1665,12 @@ if os.environ.get("MOCK_LEADERS") == "1":
         MOCK_DIRECTION_NAMES[c["session_id"]] = name
 
 
-# Each leader's open tasks by state, as the direction tree counts them (#4352, assistant/direction_tree.go), synthetic.
-MOCK_LEADER_COUNTS = [{"working": 2, "needs_you": 1, "stuck": 0, "review": 0}, {"working": 1, "needs_you": 0, "stuck": 0, "review": 1},
-                      {"working": 0, "needs_you": 0, "stuck": 0, "review": 0}, {"working": 0, "needs_you": 2, "stuck": 1, "review": 0}]
-
-
 def mock_leaders_list():
     """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
     titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
     return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
                          "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
 
-
-def mock_direction_tree():
-    """GET /api/v1/assistant/directions/tree (#4352): the leaders in order with their names and counts (no tasks listed
-    here), then the secretary group."""
-    dirs = [{"id": sid, "name": MOCK_DIRECTION_NAMES.get(sid, ""), "counts": MOCK_LEADER_COUNTS[i % len(MOCK_LEADER_COUNTS)],
-             "tasks": []} for i, sid in enumerate(MOCK_LEADERS)]
-    main = next((c["session_id"] for c in ASSISTANT if c.get("title") == "Persona"), "")
-    return {"directions": dirs + [{"id": main, "name": "", "secretary": True,
-                                   "counts": {"working": 1, "needs_you": 1, "stuck": 0, "review": 0}, "tasks": []}]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -2457,7 +2457,98 @@ def _todo_list_fixture(variant):
 _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
+
+
+def _lead_supervision(leader, state=""):
+    return {"supervisor": leader, "done_when": [], "state": state, "round": 0, "reviews": [], "updated_at": ago(minutes=30)}
+
+
+# MOCK_LEADERS=1 also hands some to-dos to the directions (#4352, the direction tree): a task asking for you, one awaiting
+# review, one stuck for a day and some running under the four leaders; the rest have no leader and fall to the secretary.
+if MOCK_LEADERS:
+    _leads = {"todo_weather": 0, "todo_review": 0, "todo_photos": 1, "todo_orders": 1, "todo_blog": 2}
+    for _t in TODOS_INIT:
+        if _t["id"] in _leads:
+            _t["supervision"] = _lead_supervision(MOCK_LEADERS[_leads[_t["id"]]])
+    TODOS_INIT.extend([
+        {"id": "lead_review", "title": "首页卡片改版", "notes": "改完了，等你验收。", "done_at": None,  # i18n-ignore: mock data
+         "created_at": ago(hours=6), "updated_at": ago(minutes=20), "spaces": [], "agents": [],
+         "supervision": _lead_supervision(MOCK_LEADERS[0], "pending_review")},
+        {"id": "lead_stuck", "title": "对账差异排查", "notes": "上游的流水还没给到。", "done_at": None,  # i18n-ignore: mock data
+         "created_at": ago(days=3), "updated_at": ago(hours=30), "spaces": [], "agents": [],
+         "supervision": _lead_supervision(MOCK_LEADERS[3])},
+    ])
 TODOS = copy.deepcopy(TODOS_INIT)
+
+_DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3}
+
+
+def _direction_task_state(t, sessions):
+    """The mock's stand-in for the hub's one task-state rule (assistant/direction_tree.go): needs you, review, stuck, working."""
+    sup = t.get("supervision") or {}
+    states = [(sessions.get((a["machine_id"], a["session_id"])) or {}).get("state", "") for a in _direction_active_agents(t)]
+    if "needs_you" in states or sup.get("state") == "needs_user" or (TODO_ASKS.get(t["id"]) or {}).get("outcome") == "decide":
+        return "needs_you"
+    if sup.get("state") == "pending_review" and "working" not in states:
+        return "review"
+    if "working" not in states and (t.get("updated_at") or "") < ago(hours=24):
+        return "stuck"
+    return "working"
+
+
+def _direction_active_agents(t):
+    return [a for a in t.get("agents", []) if not a.get("released_at") and not a.get("dismissed_at")]
+
+
+def _direction_agents(t, sessions):
+    """A task's active agents, a spawned one under the agent it came from."""
+    active = _direction_active_agents(t)
+    refs = {f"{a['machine_id']}/{a['session_id']}" for a in active}
+    nodes = {}
+    for a in active:
+        s = sessions.get((a["machine_id"], a["session_id"]))
+        nodes[f"{a['machine_id']}/{a['session_id']}"] = {
+            "machine_id": a["machine_id"], "session_id": a["session_id"], "title": (s or {}).get("title") or a.get("title", ""),
+            "agent": a.get("agent", ""), "state": (s or {}).get("state", ""), "children": []}
+    roots = []
+    for a in active:
+        key = f"{a['machine_id']}/{a['session_id']}"
+        via = a.get("via", "")
+        if a.get("source") == "spawned" and via in refs and via != key:
+            nodes[via]["children"].append(nodes[key])
+        else:
+            roots.append(nodes[key])
+    return roots
+
+
+def mock_direction_tree():
+    """GET /api/v1/assistant/directions/tree (#4352): each current leader with the open to-dos it supervises, then the
+    secretary's group (the main conversation's id) with the rest. The real hub decides the states with the To-dos page's
+    triage; the mock with a simple stand-in."""
+    sessions = {(s["machine_id"], s["session_id"]): s for s in SESSIONS}
+    groups = {lid: [] for lid in MOCK_LEADERS}
+    secretary = []
+    for t in TODOS:
+        if t.get("done_at") or t.get("kind") in ("ask", "concern") or t.get("shelved_at"):
+            continue
+        sup = (t.get("supervision") or {}).get("supervisor", "")
+        if (t.get("supervision") or {}).get("state") in ("accepted", "cancelled"):
+            continue
+        task = {"id": t["id"], "title": t["title"], "state": _direction_task_state(t, sessions), "agents": _direction_agents(t, sessions),
+                "_at": t.get("updated_at") or ""}
+        (groups[sup] if sup in groups else secretary).append(task)
+
+    def direction(did, name, tasks, **extra):
+        tasks.sort(key=lambda x: x["id"])
+        tasks.sort(key=lambda x: x["_at"], reverse=True)
+        tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
+        counts = {k: sum(1 for x in tasks if x["state"] == k) for k in ("working", "needs_you", "stuck", "review")}
+        return {"id": did, "name": name, **extra, "counts": counts,
+                "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
+
+    out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]
+    out.append(direction(ASSISTANT_CONFIG.get("main") or "", "", secretary, secretary=True))
+    return {"directions": out}
 
 
 def active_todo_for_session(mid, sid):
@@ -2562,6 +2653,8 @@ def push_todos():
     for send, _ in list(LIVE):
         try:
             send(from_default({"type": "todos"}))
+            # the direction tree reads the to-dos (#4352): the hub says when it changed
+            send(from_default({"type": "directions"}))
         except Exception:
             pass
 
@@ -2713,6 +2806,7 @@ def recording_minutes(body, rid=None):
     out = {
         "title": cal.get("title") or body.get("title") or None,
         "when": "2027-01-15 16:00–17:00",
+        "start": "2027-01-15T16:00:00+08:00", "end": "2027-01-15T17:00:00+08:00",  # the same span, for the apps to format (#4713)
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
         "points": [item(x) for x in segs[:2]] + [
@@ -3172,7 +3266,8 @@ def meeting_answer(st, a):
         return
     zh = a["lang"].lower().startswith("zh")
     earlier = next((k for k, v in reversed(list(RECORDINGS.items())) if earlier_material(k, v) and k != st["id"]), None)
-    sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10"}]
+    sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10",
+                "start": "2026-11-03T14:00:00+08:00", "end": "2026-11-03T15:10:00+08:00"}]
                if earlier else []) + [{"kind": "projects", "id": "weather-app", "name": "天气 App"}]
     a.update(state="answered", sources=sources, answered_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
              answer="上次设计评审定了：这一版保留 4 MB 的导出上限，补充清楚的提示。回归测试由 Bo 负责，还没完成。" if zh else  # i18n-ignore: made-up model answer
@@ -6000,6 +6095,15 @@ def _long_lark_card(ix_id, machine, session, title, tool, verb, minutes, **extra
 # MOCK_ASK_LONG=perm: the main conversation waits on a long Feishu permission card instead.
 if os.environ.get("MOCK_ASK_LONG") == "perm":
     INTERACTIONS.append(_long_lark_card("ix_perm_long", "server", ASK1, "Persona", "mcp__lark__run", "list", 1))
+# MOCK_ASSISTANT_BASH=1: the main conversation's own first Bash waits for approval (#4883), its only card: the chat
+# shows it above the composer, "Waiting for your approval", not only in the closed Needs you tray.
+if os.environ.get("MOCK_ASSISTANT_BASH") == "1":
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["session_id"] != ASK1]
+    INTERACTIONS.append({"id": "ix_assistant_bash", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+                         "kind": "permission", "created_at": ago(minutes=3), "expires_at": later(minutes=27),
+                         "tool_name": "Bash", "summary": "ssh vps 'cat /etc/example/config.json'",
+                         "tool_input": {"command": "ssh vps 'cat /etc/example/config.json'",
+                                        "description": "Read the server config on the VPS"}})
 # MOCK_ASK_LONG=agent: two long Feishu permission cards on an agent's chat (the tests session on the MacBook) and no
 # other card there, whose cards a phone and a side panel fold under the composer (PendingCards): the first open, the
 # second behind "1 more".
@@ -7452,14 +7556,46 @@ MAIL_FLAGS = []  # POST …/mail/messages/{aid}/{uid}/flags, {"account_id", "uid
 QUEUE_EDITS = []  # bodies of …/queue ("Withdraw to edit" / "Delete" of a queued message; GET /mock/queue_edits)
 
 
-def queue_messages(text=None, clear=False):
+QUEUED_IMAGES = [0]  # Claude Code numbers the pictures pasted into a session: [Image #1], [Image #2]…
+
+
+def claude_queued(mid, text, images):
+    """What Claude Code's queue holds of a message the node typed while the agent works (the transcript's queue-operation
+    line, as the hub's applyQueue keeps it), seen in a real transcript (#3022): each photo saved under the machine's
+    ~/.persona/uploads (served back by …/file and …/file/download), the node's <attached_images> block with a `path: `
+    line per photo (keepImagePaths), each bare path turned into an `[Image #n]` up front by Claude's paste, and the
+    <pasted_content> wrapper around the rest dropped by the hub, its line breaks left."""
+    text = (text or "").strip()
+    if not images: return text
+    paths, day = [], datetime.now().strftime("%Y-%m-%d")
+    for img in images:
+        mime = img.get("mime") or "image/jpeg"
+        ext = {"image/png": ".png", "image/heic": ".heic", "image/gif": ".gif", "image/webp": ".webp"}.get(mime, ".jpg")
+        rel = ".persona/uploads/%s/%s%s" % (day, uuid.uuid4().hex[:8], ext)
+        MOCK_TREE[rel] = (mime, img.get("data") or "")
+        paths.append(mock_home(mid) + "/" + rel)
+    marks = []
+    for _ in paths:
+        QUEUED_IMAGES[0] += 1
+        marks.append("[Image #%d]" % QUEUED_IMAGES[0])
+    return (" ".join(marks) + "\n\n\n" + text + "\n<attached_images>\n" + "\n".join("path: " + p for p in paths)
+            + "\n</attached_images>")
+
+
+def queue_messages(text=None, clear=False, photos=0):
     """GET /mock/queue: messages typed while the first working agent works, not taken yet (Session.queued): `text`
-    adds one (none: two samples), `clear` empties it. Pushed like the real hub's sessions update."""
+    adds one (none: two samples), `clear` empties it; `photos=N` with it: N pictures went with that one, queued as
+    Claude Code holds them (claude_queued): a message from another device, no outbox copy on this one. Pushed like the
+    real hub's sessions update."""
     working = [s for s in SESSIONS if s["state"] == "working" and not s.get("assistant")]
     if not working: return {"error": "no working agent"}
     s = working[0]
     if clear: s["queued"] = []
-    elif text: s["queued"] = (s.get("queued") or []) + [text]
+    elif text or photos:
+        rgb = [(52, 120, 246), (255, 149, 0), (52, 199, 89), (175, 82, 222)]
+        images = [{"mime": "image/png", "data": base64.b64encode(_fs_png(240, 180, rgb[i % 4], (30, 30, 40))).decode()}
+                  for i in range(photos)]
+        s["queued"] = (s.get("queued") or []) + [claude_queued(s["machine_id"], text, images)]
     else: s["queued"] = (s.get("queued") or []) + ["测试跑完之后把截图也更新一下", "顺便检查一下深色模式下小组件的对比度\n不够的话调一下文字颜色"]
     push_machine(s["machine_id"])
     return {"key": s["machine_id"] + "/" + s["session_id"], "queue": s["queued"]}
@@ -9943,7 +10079,7 @@ LAUNCHER_PRESETS = [
 
 # MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and ~/.zshrc import. Two managed
 # providers (one with every advanced field), "Test connection" that passes or fails (a key or address with "bad" in it fails),
-# "Fetch models" with 3 models, and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
+# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
 # too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "import": None}
@@ -9996,11 +10132,21 @@ def _provider_apply(l, b):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered."""
-    if not MOCK_PROVIDERS: return False
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
+    "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
+    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route)."""
+    probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
+    if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
         h.send_json(PROVIDER_LOG); return True
-    b = json.loads(body or b"{}") if method != "GET" else {}
+    if MOCK_PROVIDERS:
+        b = json.loads(body or b"{}") if method != "GET" else {}
+    else:  # a body that is not a typed-in gateway's probe goes on to the routes after this one
+        try:
+            b = json.loads(body or b"{}")
+        except ValueError:
+            return False
+        if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/import":
         machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
         if machine == "studio":
@@ -10038,7 +10184,7 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
         if "bad" in (b.get("base_url") or ""):
-            h.send_json({"models": [], "error": "网关没有 /v1/models"}); return True
+            h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
@@ -11009,6 +11155,43 @@ def mock_tool_outcomes():
 
 if os.environ.get("MOCK_TOOL_OUTCOMES") == "1":
     mock_tool_outcomes()
+
+
+# MOCK_PERMISSION_DIFF=1 (#4621): two MacBook chats wait on a Claude Code permission card for a file tool, as a hub sends
+# it (the node's summary is the file's path, `tool_input` the call's own). The edit changes a function in several places,
+# more lines than the card shows before Show All; the write creates a short test file. Made-up content.
+PERM_DIFF = {"edit": "a1f3c2d4-0000-4000-8000-0000000c4621", "write": "a1f3c2d4-0000-4000-8000-0000000c4622"}
+
+
+def mock_permission_diff():
+    edit = {"file_path": "/Users/me/code/weather/export/csv.py",
+            "old_string": "def export(rows, out):\n    \"\"\"Write rows to out in batches of BATCH.\"\"\"\n    batch = []\n"
+                          "    for row in rows:\n        batch.append(row)\n        if len(batch) == BATCH:\n"
+                          "            flush(batch, out)\n    return len(rows)",
+            "new_string": "def export(rows, out):\n    \"\"\"Write rows to out in batches of BATCH, the last one possibly shorter.\"\"\"\n"
+                          "    batch, total = [], 0\n    for row in rows:\n        batch.append(row)\n        total += 1\n"
+                          "        if len(batch) == BATCH:\n            flush(batch, out)\n            batch = []\n"
+                          "    if batch:\n        flush(batch, out)\n    return total"}
+    write = {"file_path": "/Users/me/code/weather/export/test_last_batch.py",
+             "content": "from export.csv import BATCH, export\n\n\ndef test_last_batch_is_written():\n    out = []\n"
+                        "    assert export(range(BATCH * 2 + 3), out) == BATCH * 2 + 3\n    assert len(out) == 3\n    assert len(out[-1]) == 3\n"}
+    chats = [("edit", "Edit", edit, "Keep the last export batch", "The last batch is never flushed. I'll write it after the loop."),
+             ("write", "Write", write, "Test the last export batch", "I'll add a test that exports two batches and three rows.")]
+    for n, (name, tool_name, inp, title, say) in enumerate(chats):
+        sid, tid = PERM_DIFF[name], "toolu_perm_" + name
+        ITEMS[sid] = [it("user", "text", 3 + n, text=title),
+                      it("assistant", "text", 2.9 + n, text=say),
+                      it("assistant", "tool_use", 2.8 + n, tool_use_id=tid, tool_name=tool_name, tool_input=inp)]
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/weather", "blocked", "needs_you", "weather", 1, "perm-" + name,
+                             31 + n, 2.8 + n, say, pending=1))
+        INTERACTIONS.append({"id": "ix_perm_" + name, "machine_id": "macbook", "session_id": sid, "session_title": title,
+                             "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=2.8 + n),
+                             "expires_at": later(minutes=27), "tool_name": tool_name, "tool_use_id": tid,
+                             "summary": inp["file_path"], "tool_input": inp})
+
+
+if os.environ.get("MOCK_PERMISSION_DIFF") == "1":
+    mock_permission_diff()
 
 
 # MOCK_REPLY_MARKDOWN=1 (#3863): a reply with a table whose delimiter row aligns its columns (leading, trailing, centered;
@@ -12963,12 +13146,14 @@ def case_route(h, method, p, q, body):
         return True
     if p == "/mock/case/load" and method == "POST":  # another case in the same mock (its sockets closed first)
         try:
-            case = sync_case.load(json.loads(body or b"{}").get("case", ""))
+            asked = json.loads(body or b"{}")
+            case = sync_case.load(asked.get("case", ""))
         except (ValueError, KeyError, OSError) as e:
             case_json(h, {"error": str(e)}, 400)
             return True
         CASE.close()
-        CASE = sync_case.CaseHub(case)
+        # "now": its times moved to the present, for an app on the real clock (the iOS simulator's)
+        CASE = sync_case.CaseHub(case, shift=sync_case.shift_to(time.time()) if asked.get("now") else 0)
         case_json(h, CASE.state())
         return True
     if method == "GET" and MOCK_WEB and not p.startswith(("/api/", "/mock/")):
@@ -15933,6 +16118,26 @@ CATALOG = [
     {"market": _MARKET_B, "id": "team-windows", "name": "Windows 工具", "version": "0.2.0", "description": "只有 Windows 版的包。",
      "publisher": "team", "tags": [], "contributes": {"assistant": ["tools"]}, "permissions": [_RUNS], "problem": "没有这台 hub（linux-amd64）能用的包"},
 ]
+# MOCK_EXTENSION_PACK=1 (with MOCK_EXTENSIONS): extension packs (#4072, #4122). Example 合集 is installed from the first
+# market with four members: Example Notes, Example 助手 and example-gateway installed, example-mail not (it keeps its id).
+# Uninstalling it with its members answers 409 partial_uninstall (one member uninstalled, one not, with the hub's reason,
+# one not tried) and changes nothing, so a run can repeat; the real hub tries every member, so its "not tried" is
+# rarely more than the failed ones. Example 套件 isn't installed: its preview names Example Notes as installed and installs
+# Example 日历 together with it.
+if PLUGINS_MODE and os.environ.get("MOCK_EXTENSION_PACK") == "1":
+    PLUGINS["example-pack"] = {
+        "id": "example-pack", "name": "Example 合集", "kind": "extension_pack", "status": "running", "version": "1.0.0",
+        "source": "installed", "enabled": True, "description": "Example 的几个扩展，一起装。", "contributes": {}, "publisher": "example",
+        "origin": "market:%s/example-pack" % _MARKET_A, "form": {"fields": []}, "config": {}, "secrets": [], "permissions": [],
+        "extension_pack": [{"id": "example-notes", "version": ">=1.0.0"}, {"id": "example-helper", "market": "github:example/team-plugins"},
+                           {"id": "example-gateway"}, {"id": "example-mail", "version": ">=0.3.0"}]}
+    CATALOG += [
+        {"market": _MARKET_A, "id": "example-pack", "name": "Example 合集", "version": "1.0.0", "description": "Example 的几个扩展，一起装。",
+         "publisher": "example", "tags": ["合集"], "contributes": {}, "permissions": [], "extension_pack": PLUGINS["example-pack"]["extension_pack"]},
+        {"market": _MARKET_A, "id": "example-suite", "name": "Example 套件", "version": "1.0.0", "description": "笔记和日历，一起装。",
+         "publisher": "example", "tags": ["合集"], "contributes": {}, "permissions": [],
+         "extension_pack": [{"id": "example-notes", "version": ">=1.0.0"}, {"id": "example-calendar", "market": MARKETS[_MARKET_A]["spec"]}]},
+    ]
 _PREVIEWS = {}
 _PREVIEW_BODIES = {}
 
@@ -15957,6 +16162,12 @@ def _ext_make_preview(c):
         if renamed:  # the hub's notice leads the warnings (extension.Preview.In)
             pv["rename_from"] = renamed["id"]
             pv["warnings"] = ["此次更新会将扩展 ID 从 %s 更改为 %s，需要明确确认。设置和数据仍属于同一个安装。" % (renamed["id"], c["id"])]  # i18n-ignore: the hub's words
+    if c.get("extension_pack"):  # a pack: its members, and the ones not installed yet installed together (the bundle)
+        pv["manifest"]["extension_pack"] = c["extension_pack"]
+        ids = {m["id"] for m in c["extension_pack"]}
+        pv["bundle"] = [{"preview_id": "%s-%s" % (pid, b["id"]), "permissions_digest": "d-" + b["id"], "market": b["market"],
+                         "manifest": {"id": b["id"], "name": b["name"], "version": b["version"]}, "permissions": b["permissions"]}
+                        for b in CATALOG if b["id"] in ids and b["id"] not in PLUGINS]
     _PREVIEWS[pid] = c
     _PREVIEW_BODIES[pid] = pv
     return pv
@@ -16433,6 +16644,10 @@ def markets_route(handler, p, body):
         if not PLUGINS[parts[4]].get("origin", "").startswith("market:"):
             handler.send_json({"error": "这个扩展只能在 hub 机器上（personad extension …）或 hub 的管理界面里装、升级和卸载；手机上只能装扩展市场里的",
                                "code": "this_machine_only"}, 403); return True
+        if parts[4] == "example-pack" and q.get("members") == "1":  # MOCK_EXTENSION_PACK: stopped part way, nothing changed
+            handler.send_json({"ok": False, "code": "partial_uninstall", "error": "卸载未完成。已卸载成员：example-notes；未卸载：example-helper。合集仍保留，可以重试。",  # i18n-ignore: the hub's words
+                               "removed_members": ["example-notes"], "failed_members": [{"id": "example-helper", "error": "扩展还在运行，停不下来"}],  # i18n-ignore: the hub's words
+                               "remaining_members": ["example-helper", "example-gateway"]}, 409); return True
         if EXT_OPS:
             # Recorded as an operation either way; async answers at once, else when it is done (as the hub does).
             ext = parts[4]
@@ -16804,6 +17019,7 @@ MOCK_HELP = [
     "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
+    "MOCK_PERMISSION_DIFF=1  Two chats wait on a Claude Code permission card for an Edit (longer than the card's preview) and a Write; the card shows the change (#4621)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
@@ -17571,7 +17787,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/uploads": return self.send_json({"uploads": UPLOADS})
         if p == "/mock/keys": return self.send_json({"keys": KEYS})
         if p == "/mock/rewinds": return self.send_json({"rewinds": REWINDS})
-        if p == "/mock/queue": return self.send_json(queue_messages(q.get("text", [None])[0], "clear" in q))
+        if p == "/mock/queue": return self.send_json(queue_messages(q.get("text", [None])[0], "clear" in q, int(q.get("photos", ["0"])[0] or 0)))
         if p == "/mock/queue_edits": return self.send_json({"edits": QUEUE_EDITS})
         if p == "/mock/terminal_input": return self.send_json({"input": TERMINAL_INPUT})
         if p == "/mock/herdr_client": return self.send_json({"log": FULL_LOG})
@@ -17600,7 +17816,9 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
         if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
-        if p == "/api/v1/assistant/directions/tree": return self.send_json(mock_direction_tree())
+        if p == "/api/v1/assistant/directions/tree":
+            if os.environ.get("MOCK_LEGACY_HUB"): return self.send_json({"error": "not found"}, 404)
+            return self.send_json(mock_direction_tree())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
@@ -19000,6 +19218,11 @@ class H(BaseHTTPRequestHandler):
                         if body.get("images"):
                             QUEUED_PHOTOS[body.get("text") or ""] = [{"mime": i.get("mime"), "data": i.get("data")} for i in body["images"]]
                         push_machine(q["machine_id"])
+                # MOCK_QUEUE_SENDS=1: one to a working agent joins its own queue (#3022), as Claude Code holds it.
+                s = next((x for x in SESSIONS if len(parts) >= 7 and x["machine_id"] == parts[4] and x["session_id"] == parts[5]), None)
+                if os.environ.get("MOCK_QUEUE_SENDS") and s and s["state"] == "working" and not s.get("assistant"):
+                    s["queued"] = (s.get("queued") or []) + [claude_queued(s["machine_id"], body.get("text"), body.get("images") or [])]
+                    push_machine(s["machine_id"])
             return self.send_json({"ok": True})
         if p == "/api/v1/inbox/refresh": return self.send_json(inbox_list(parse_qs(urlparse(self.path).query)))
         if p == "/api/v1/inbox/done" and self.command == "POST":  # "Mark all as handled" / "Undo"
@@ -19667,9 +19890,12 @@ class H(BaseHTTPRequestHandler):
         # The live screen (#1184): macOS's Screen Sharing on this Mac's own 5900, for a Mac the plugin cua is on for.
         machine = next((m for m in MACHINES if m["id"] == mid), {})
         listed = listed or (port == 5900 and (machine.get("computer", {}).get("enabled") or machine.get("browser", {}).get("enabled")))  # cua or ego (#1507)
+        # MOCK_PREVIEW: a preview's running port is the made-up app's page server (scripts/mock/mock_preview.py).
+        preview_to = mock_preview.forward(port) if preview_route else None
+        listed = listed or preview_to is not None
         if not listed: return self.send_json({"error": "port %d is not an agent's and was not opened" % port}, 403)
         try:
-            to = FAKE_SCREEN["port"] if port == 5900 and FAKE_SCREEN["port"] else port
+            to = preview_to or (FAKE_SCREEN["port"] if port == 5900 and FAKE_SCREEN["port"] else port)
             tcp = socket.create_connection(("127.0.0.1", to), timeout=3)
             tcp.settimeout(None)
         except OSError:
@@ -20252,6 +20478,7 @@ def features():
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
+MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -20761,6 +20988,8 @@ def plugins_route(handler, p, body):
         return mock_showcase(handler, p.rsplit("/", 1)[-1], body)
     if p == "/mock/invalidate" and PLUGINS_MODE:
         return mock_invalidate(handler)
+    if p == "/mock/controls/reset" and PLUGINS_MODE:
+        return mock_controls_reset(handler)
     if p in ("/mock/motion/next", "/mock/motion/reset") and PLUGINS_MODE:
         return mock_motion(handler, reset=p.endswith("/reset"))
     if EXTENSIONS_API and (p == "/api/v1/extensions" or p.startswith("/api/v1/extensions/")):
@@ -20789,10 +21018,55 @@ def mock_showcase(handler, ui, body):
         handler.send_json({"error": "没有这个快照"}, 404)
         return True
     request = json.loads(body) if body else {}
+    if ui == "controls":
+        return _showcase_controls(handler, view, request)
     if request.get("action"):
         handler.send_json({"toast": "快照测试不执行写操作"})
     else:
         handler.send_json({"view": view})
+    return True
+
+
+# showcase › controls (UI version 6, #827): the controls keep what they were changed to while the mock runs, and each
+# change answers with just its row (`items`), as an extension best does. `fail` answers 502, so the app puts the switch
+# back. Two switches ask first (`confirm`), as the source subscription page's do. `GET /mock/controls/reset` forgets.
+_SHOWCASE_CONTROLS = {}
+_SHOWCASE_CONFIRMS = {"light.floor": (False, "打开落地灯？它在卧室门口，可能会吵醒家人。"),
+                      "purifier": (True, "关掉空气净化器？房间里的 PM2.5 会慢慢回升。")}
+
+
+def _showcase_controls(handler, view, request):
+    action = request.get("action")
+    if action == "fail":
+        handler.send_json({"error": "设备没有回应"}, 502)
+        return True
+    rows = [item for s in view["sections"] for item in s["items"] if item.get("control")]
+    changed = None
+    if action:
+        values = request.get("values") or {}
+        changed = next((row for row in rows if row["control"]["name"] in values), None)
+        if changed is None:
+            handler.send_json({"toast": "快照测试不执行写操作"})
+            return True
+        _SHOWCASE_CONTROLS[changed["control"]["name"]] = values[changed["control"]["name"]]
+    for row in rows:
+        c = row["control"]
+        saved = _SHOWCASE_CONTROLS.get(c["name"])
+        if saved is not None:
+            if c["kind"] == "switch": c["on"] = saved == "true"
+            else: c["value"] = float(saved) if "." in saved else int(saved)
+            c.pop("display", None)
+        # asked first only one way (turning the lamp on, the purifier off)
+        when, words = _SHOWCASE_CONFIRMS.get(c["name"], (None, ""))
+        if when is not None and bool(c.get("on")) == when:
+            c["action"]["confirm"] = words
+    handler.send_json({"items": [changed]} if changed else {"view": view})
+    return True
+
+
+def mock_controls_reset(handler):
+    _SHOWCASE_CONTROLS.clear()
+    handler.send_json({"ok": True})
     return True
 
 

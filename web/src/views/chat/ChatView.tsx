@@ -69,9 +69,10 @@ import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
-import { containsInput, indexedNavTicks, userInputRevision } from "../../lib/user-input-index";
-import { useUserInputs } from "./useUserInputs";
+import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, USER_INPUT_PAGE_SIZE } from "../../lib/user-input-index";
+import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
 import { NavRail } from "./NavRail";
+import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
 import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
@@ -532,6 +533,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // terminal to switch to) and React then draws the chat in another element, so listeners left on the first one stop
   // following the end (an agent's page opened by its address did not keep its live text in view, #1309)
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  useChatScrollbar(scrollEl);
   const scrollRef = useCallback((el: HTMLDivElement | null) => {
     scroller.current = el;
     if (el) setScrollEl(el);
@@ -780,6 +782,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
+    if (!first.current && !atEnd.current && el.scrollTop < 300) revealLoadedInputs();
     loadEarlierNearTop();
   };
 
@@ -1009,9 +1012,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
   // Only lightweight positions are fetched for navigation; older transcript bodies wait for a selection.
-  const loadedRailTicks = useMemo(() => (fine ? navRailTicks(lines) : NO_RAIL_TICKS), [fine, lines]);
+  const { seq: revealedSeq, reveal: revealLoadedInputs } = useRevealedInputSeq(`${mid}/${sid}/${tr.history ?? ""}`, tr.loading ? undefined : tr.items[0]?.seq);
+  const loadedRailTicks = useMemo(() => {
+    if (!fine) return NO_RAIL_TICKS;
+    const ticks = navRailTicks(lines);
+    return revealedSeq === undefined ? ticks.slice(-USER_INPUT_PAGE_SIZE) : ticks;
+  }, [fine, lines, revealedSeq]);
   const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
-  const inputIndex = useUserInputs(mid, sid, tr.history, inputRevision, fine && !tr.loading, tr.reload);
+  const completeInputIndex = useUserInputs(mid, sid, tr.history, inputRevision, fine && !tr.loading, tr.reload);
+  const inputIndex = useMemo(() => completeInputIndex ? windowUserInputs(completeInputIndex, revealedSeq) : null, [completeInputIndex, revealedSeq]);
   const railTicks = useMemo(() => inputIndex ? indexedNavTicks(inputIndex, lines, tr.items) : loadedRailTicks, [inputIndex, lines, tr.items, loadedRailTicks]);
   /** Brings a row (or a run of words) into view in the chat's own scroller (scrollIntoView would also scroll an opening
    *  group's clipped box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
@@ -1363,9 +1372,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       answered={answered}
       delegated={delegated}
       offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
-      // in the assistant's Pending tray (AssistantActionBar) the tray is the box that scrolls: a second scroll box of
-      // their own left the card's sticky answer row at its bottom, out of sight below the tray's fold
-      narrow={compactDock && (!assistant || voiceState === "live")}
+      narrow={compactDock}
       short={short}
       keyboard={keyboard}
       onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
@@ -1550,12 +1557,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {assistant && (
           <>
             {voiceState === "live" && <TaskQuestions conversation={sid} />}
-            {/* A call keeps its existing decision controls; otherwise decisions live in Pending. */}
-            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownPending={pendingCards} ownCount={interactions.length} />}
+            {/* The conversation's own cards are in the chat under the bar (#4883, as iOS): Needs you counts them and
+                lists a row for each that closes the tray onto its card. */}
+            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={interactions} />}
             {voiceState !== "live" && <RouteChip conversation={sid} />}
           </>
         )}
-        {(!assistant || voiceState === "live") && pendingCards}
+        {pendingCards}
         {!assistant && !readOnly && session?.model_fallback && <ModelFallbackCard session={session} headless={false} />}
         {assistant && session && <CompactionStrip session={session} />}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && !refusedNoRow && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
