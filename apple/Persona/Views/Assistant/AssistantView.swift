@@ -921,6 +921,10 @@ struct StarterComposer: View {
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    #if os(iOS)
+    /// Add as Context › (#3721): the kind whose picker is open.
+    @State private var contextPick: ContextPickKind?
+    #endif
     @State private var declarations = ExtensionTextContributions()
     #if os(iOS)
     /// The iPhone's 「+」 panel (`AttachSheet`), as in a conversation.
@@ -987,7 +991,8 @@ struct StarterComposer: View {
     /// the conversation exists, and an agent's quick commands are not Persona's.
     private var moreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: nil, camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
-                                                glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil, mention: { typeMention() })
+                                                glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil, mention: { typeMention() },
+                                                context: { contextPick = $0 })
         if let prompts = AttachMoreSection.prompts(declarations.prompts, fill: { prompt in
             text = ExtensionTextContributions.filling(prompt)
             selection = TextSelection(insertionPoint: text.endIndex)
@@ -1124,6 +1129,11 @@ struct StarterComposer: View {
         // The Photos library warmed off the main thread, as a conversation's composer does (#4250).
         .task { if attachOpener != nil { AttachLibrary.prewarm() } }
         .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses) { add($0) })
+        .sheet(item: $contextPick) { kind in
+            ContextPickerSheet(kind: kind) { ref in
+                if !quotes.contains(where: { $0.title == ref.title && $0.text == ref.text }) { quotes.append(ref) }
+            }
+        }
         // The hub's extensions' prompts for the shell's + list, as a conversation's composer reads them.
         .tabActiveTask(id: ExtensionTextSource(group: model.hubGroup, features: model.features(model.hubGroup),
                                                hub: model.api(model.hubGroup)?.config.url.absoluteString, active: phase == .active && shell != nil)) {

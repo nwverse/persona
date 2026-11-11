@@ -46,6 +46,8 @@ struct ChatView: View {
     @State private var macChromeHeight: CGFloat = 0
     #endif
     @State private var file: FileRef?
+    /// A knowledge note's block from Add as Context (#3721), opened from the bubble.
+    @State private var openedKnowledge: KBEntry?
     @State private var showActivity = false
     /// "All subagents" opened, from the header's status line or ⋯ (`SubagentTreeSheet`).
     @State private var showSubagents = false
@@ -725,6 +727,7 @@ struct ChatView: View {
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
         .sheet(item: $file) { ref in FileViewer(ref: ref, key: key) }
+        .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         #if DEBUG
         // Simulator automation: `-showComposerPhoto YES` puts a made-up picture in the composer, as if picked from
@@ -2126,11 +2129,30 @@ struct ChatView: View {
         }
     }
 
+    /// A note's or a to-do's block from Add as Context (#3721) leads back to it, as a card's link does
+    /// (`persona://kb/<kind>/<id>`, `persona://task/<id>`); false for any other block.
+    private func openContextLink(_ ref: ContextRef) -> Bool {
+        guard ref.kind == "context", let c = URLComponents(string: ref.url), c.scheme == "persona" else { return false }
+        let parts = c.percentEncodedPath.split(separator: "/").compactMap { String($0).removingPercentEncoding }
+        switch c.host {
+        case "task" where parts.count == 1:
+            TasksStore.shared.detailTask = parts[0]
+            return true
+        case "kb" where parts.count >= 2 && KBKind(rawValue: parts[0]) != nil:
+            let id = parts.dropFirst().joined(separator: "/")
+            openedKnowledge = KBEntry(kind: parts[0], id: id, name: id, relevance: 0)
+            return true
+        default:
+            return false
+        }
+    }
+
     /// From a quote in a sent bubble to the message it quotes (#986): brought to the middle of the list and lit up
     /// for a moment. False when it is not in the loaded chat (an older page, another conversation): the block shows
     /// its whole text instead.
     private func jumpToQuoted(_ ref: ContextRef) -> Bool {
         if ref.isForward { return openForwarded(ref) }
+        if openContextLink(ref) { return true }
         guard ref.kind == "quote", !ref.msg.isEmpty else { return false }
         var target: String?
         for line in currentLines() {
@@ -4397,6 +4419,10 @@ struct Composer: View, Equatable {
     @State private var showPhotos = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    #if os(iOS)
+    /// Add as Context › (#3721): the kind whose picker is open.
+    @State private var contextPick: ContextPickKind?
+    #endif
     /// The photos, videos and file uploads for the next message: the app keeps them per conversation, as it keeps the
     /// text (#2626), so a composer built again still has them.
     private var held: ComposerAttachments { model.composerAttachments(key) }
@@ -4976,6 +5002,11 @@ struct Composer: View, Equatable {
         #if os(iOS)
         .modifier(attachHost)
         .task { if attachOpener != nil { AttachLibrary.prewarm() } }
+        .sheet(item: $contextPick) { kind in
+            ContextPickerSheet(kind: kind) { ref in
+                if !contexts.wrappedValue.contains(where: { $0.title == ref.title && $0.text == ref.text }) { contexts.wrappedValue.append(ref) }
+            }
+        }
         #endif
         .fileUploadPicker(isPresented: $showFiles) { urls in
             uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
@@ -5063,7 +5094,7 @@ struct Composer: View, Equatable {
         var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
                                                 camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
-                                                mention: { typeMention() })
+                                                mention: { typeMention() }, context: { contextPick = $0 })
         if !shellChat {
             var rows = SlashCommand.commands(loop: canLoop).map { cmd in
                 AttachMoreRow(id: "attach-command-\(cmd.title)", title: cmd.title, symbol: cmd.symbol, word: cmd.word) {

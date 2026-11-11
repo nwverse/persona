@@ -988,7 +988,9 @@ extension AttachPanel {
 extension AttachMoreSection {
     /// The rows every composer's + offers besides photos and files, in their order (#3225, #3805): the calls and the
     /// camera, then Mention. A row whose action is nil is not there (no call before a conversation exists, no camera).
-    static func common(voice: (() -> Void)?, camera: (() -> Void)?, glasses: (() -> Void)?, mention: @escaping () -> Void) -> [AttachMoreSection] {
+    /// `context`: Add as Context › Knowledge Note… / To-do… / Inbox Item… (#3721), folded under Mention.
+    static func common(voice: (() -> Void)?, camera: (() -> Void)?, glasses: (() -> Void)?, mention: @escaping () -> Void,
+                       context: ((ContextPickKind) -> Void)? = nil) -> [AttachMoreSection] {
         var capture: [AttachMoreRow] = []
         if let voice { capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel, action: voice)) }
         if let camera { capture.append(AttachMoreRow(id: "composer-menu-camera", title: String(localized: "Take Photo [Chat View 6e3a10]"), symbol: Theme.Icon.camera, action: camera)) }
@@ -998,6 +1000,11 @@ extension AttachMoreSection {
         sections.append(AttachMoreSection(id: "mention", title: nil, rows: [
             AttachMoreRow(id: "composer-menu-mention", title: String(localized: "Mention a File or Session"), symbol: Theme.Icon.mention, action: mention),
         ]))
+        if let context {
+            sections.append(AttachMoreSection(id: "context", title: String(localized: "Add as Context"), rows: ContextPickKind.allCases.map { kind in
+                AttachMoreRow(id: "attach-context-\(kind.rawValue)", title: kind.menuTitle, symbol: kind.symbol) { context(kind) }
+            }, symbol: Theme.Icon.addContext))
+        }
         return sections
     }
 
