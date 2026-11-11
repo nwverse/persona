@@ -111,9 +111,9 @@ export function ModelPill({
     // Cindy's bare toolbar pill: no frame at rest, the capsule shows on hover and while its panel is open
     "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors duration-150",
     "@max-[600px]/composer:w-[148px] @max-[520px]/composer:text-[12px] @max-[520px]/composer:[--provider-mark:14.2px] @max-[420px]/composer:min-w-[64px]",
-    // under 420 px the tile and the chevron: 64 px; a clock, spinner or warning before them does not fit, so the pill
-    // grows to hold it
-    pending || (unknown && (loading || failed)) ? "@max-[420px]/composer:w-auto" : "@max-[420px]/composer:w-[64px]",
+    // under 420 px the tile and the chevron: 64 px, as the pill always was there; only a waiting switch's clock before
+    // them makes it grow to hold it
+    pending ? "@max-[420px]/composer:w-auto" : "@max-[420px]/composer:w-[64px]",
   );
   // the clip is inside, so the touch target (touch-hit) can reach past the pill's 30 px
   const inner = "flex min-w-0 flex-1 items-center gap-1 overflow-hidden";

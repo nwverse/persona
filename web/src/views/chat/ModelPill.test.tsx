@@ -78,6 +78,17 @@ describe("the pill's states", () => {
     expect(html).toContain(`title="Codex · 5.5 · gateway · 高 · ${t("chat-sessiondialogs.speed_fast")}"`);
   });
 
+  it("loading or failed, the pill keeps its 64 px under 420 px: only a waiting switch makes it grow there", () => {
+    for (const html of [
+      markup(<ModelPill current={{ engine: "claude", provider: "gateway" }} loading onOpen={() => {}} />),
+      markup(<ModelPill current={{ engine: "claude", provider: "gateway" }} failed onOpen={() => {}} />),
+    ]) {
+      const root = /^<button[^>]*class="([^"]*)"/.exec(html)![1];
+      expect(root).toContain("@max-[420px]/composer:w-[64px]");
+      expect(root).not.toContain("@max-[420px]/composer:w-auto");
+    }
+  });
+
   it("loading before a model is known: a spinner and Loading model…", () => {
     const html = markup(<ModelPill current={{ engine: "claude", provider: "gateway" }} loading onOpen={() => {}} />);
     expect(html).toContain('data-model-pill="loading"');
@@ -325,7 +336,7 @@ describe("an Agent's pill", () => {
     await open();
     expect(provider("claude").unavailable).toBeUndefined();
     expect(await act(() => panel.props!.onPick({ provider: "claude", model: "haiku", effort: "low" }))).toBe(true);
-    expect(modes()).toEqual([{ launcher: "claude", model: "haiku", effort: "low" }]);
+    expect(modes()).toEqual([{ launcher: "claude", from: "gateway", model: "haiku", effort: "low" }]);
     expect(getSession(s.machine_id, "s1")?.pending_switch).toMatchObject({ launcher: "claude", model: "haiku", effort: "low" });
     expect(toast).toHaveBeenCalledWith(t("chat-modelpanel.switch_scheduled", { target: "claude · Haiku 5.5" }), "ok");
     // the pill shows it waiting
@@ -352,7 +363,7 @@ describe("an Agent's pill", () => {
     expect(panel.props!.state.note).toBe(t("chat-modelpanel.pending_note", { provider: "claude" }));
     expect(panel.props!.state.pending).toMatchObject({ provider: "claude", model: "haiku" });
     expect(await act(() => panel.props!.onPick({ provider: "gateway", model: "opus", effort: "high" }))).toBe(true);
-    expect(modes()).toEqual([{ launcher: "gateway" }]);
+    expect(modes()).toEqual([{ launcher: "gateway", from: "gateway" }]);
     expect(getSession(s.machine_id, "s1")?.pending_switch).toBeUndefined();
   });
 

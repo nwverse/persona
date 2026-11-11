@@ -92,13 +92,13 @@ describe("a switch that waits for the next message", () => {
 
 describe("what a pick on another launcher sends", () => {
   it("one request recording the switch: the model unless it is that launcher's default, the effort when the setup has one", () => {
-    expect(pickPlan(session(), { provider: "work", model: "glm-5.3", effort: "low" }, raw, on)).toEqual([{ launcher: "work", model: "glm-5.3", effort: "low" }]);
-    expect(pickPlan(session(), { provider: "work", model: "default" }, raw, on)).toEqual([{ launcher: "work" }]);
+    expect(pickPlan(session(), { provider: "work", model: "glm-5.3", effort: "low" }, raw, on)).toEqual([{ launcher: "work", from: "claude", model: "glm-5.3", effort: "low" }]);
+    expect(pickPlan(session(), { provider: "work", model: "default" }, raw, on)).toEqual([{ launcher: "work", from: "claude" }]);
     // a model ID typed by hand goes as it is; one the hub would refuse doesn't go
-    expect(pickPlan(session(), { provider: "work", model: "~vendor/next" }, raw, on)).toEqual([{ launcher: "work", model: "~vendor/next" }]);
+    expect(pickPlan(session(), { provider: "work", model: "~vendor/next" }, raw, on)).toEqual([{ launcher: "work", from: "claude", model: "~vendor/next" }]);
     expect(pickPlan(session(), { provider: "work", model: "a;b" }, raw, on)).toBeNull();
     // the launcher that fixes its model takes its default only
-    expect(pickPlan(session(), { provider: "pinned", model: "default" }, raw, on)).toEqual([{ launcher: "pinned" }]);
+    expect(pickPlan(session(), { provider: "pinned", model: "default" }, raw, on)).toEqual([{ launcher: "pinned", from: "claude" }]);
     expect(pickPlan(session(), { provider: "pinned", model: "haiku" }, raw, on)).toBeNull();
   });
 
@@ -109,20 +109,20 @@ describe("what a pick on another launcher sends", () => {
     expect(pickPlan(codex, { provider: "work", model: "glm-5.3" }, raw, on)).toBeNull();
     const waiting = session({ pending_switch: { launcher: "work", model: "glm-5.3", effort: "low" } });
     expect(pickPlan(waiting, { provider: "work", model: "glm-5.3", effort: "low" }, raw, on)).toEqual([]);
-    expect(pickPlan(waiting, { provider: "work", model: "glm-5.3", effort: "high" }, raw, on)).toEqual([{ launcher: "work", model: "glm-5.3", effort: "high" }]);
+    expect(pickPlan(waiting, { provider: "work", model: "glm-5.3", effort: "high" }, raw, on)).toEqual([{ launcher: "work", from: "claude", model: "glm-5.3", effort: "high" }]);
   });
 
   it("the session's own launcher while a switch waits: drops it first, then the usual steps", () => {
     const waiting = session({ pending_switch: { launcher: "work" } });
-    expect(pickPlan(waiting, { provider: "claude", model: "opus", effort: "high" }, raw, on)).toEqual([{ launcher: "claude" }]);
-    expect(pickPlan(waiting, { provider: "claude", model: "haiku", effort: "low" }, raw, on)).toEqual([{ launcher: "claude" }, { model: "haiku" }, { effort: "low" }]);
+    expect(pickPlan(waiting, { provider: "claude", model: "opus", effort: "high" }, raw, on)).toEqual([{ launcher: "claude", from: "claude" }]);
+    expect(pickPlan(waiting, { provider: "claude", model: "haiku", effort: "low" }, raw, on)).toEqual([{ launcher: "claude", from: "claude" }, { model: "haiku" }, { effort: "low" }]);
     expect(pickPlan(session(), { provider: "claude", model: "haiku" }, raw, on)).toEqual([{ model: "haiku" }]);
   });
 });
 
 describe("a message the switch refused", () => {
   it("is a 409 with a switch_ code; others are not", () => {
-    expect(switchRefused(new ApiError(409, "busy", { code: "switch_busy", delivered: "none" }))).toBe(true);
+    expect(switchRefused(new ApiError(409, "gone", { code: "switch_launcher_missing", delivered: "none" }))).toBe(true);
     expect(switchRefused(new ApiError(409, "failed", { code: "switch_failed_stopped", delivered: "none" }))).toBe(true);
     expect(switchRefused(new ApiError(409, "draft", { code: "input_draft", delivered: "none" }))).toBe(false);
     expect(switchRefused(new Error("x"))).toBe(false);

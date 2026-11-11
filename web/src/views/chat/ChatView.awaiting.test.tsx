@@ -290,9 +290,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// #5035: a message that was to carry out a switch to another launcher first, refused by the node (the agent was busy, had
-// background work, did not come up there…): nothing went, so its words go back into the box with the hub's reason, as an
-// edit's refused send does, not into a failed bubble; any other refusal still leaves its failed bubble.
+// #5035: a message that was to carry out a switch to another launcher first, refused by the node (the launcher went, the
+// agent did not come up there…): nothing went, so its words go back into the box with the hub's reason, as an edit's
+// refused send does, not into a failed bubble; any other refusal still leaves its failed bubble. Only the user's message
+// from this chat carries a switch out: it says so (apply_switch) while one waits, and only then.
 describe("a message the launcher switch refused", () => {
   const box = () => host.querySelector<HTMLTextAreaElement>("textarea")!;
   const typeInto = (text: string) =>
@@ -300,9 +301,10 @@ describe("a message the launcher switch refused", () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), text);
       box().dispatchEvent(new Event("input", { bubbles: true }));
     });
-  const send = async (text: string, answer: Record<string, unknown>) => {
-    fetcher.mockImplementation(async (url) => (String(url).endsWith("/messages") ? new Response(JSON.stringify(answer), { status: 409 }) : new Response("{}")));
-    captured.session = { ...captured.session, pending_switch: { launcher: "work" } };
+  const sent = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith("/messages")).map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+  const send = async (text: string, answer: Record<string, unknown>, waits = true, status = 409) => {
+    fetcher.mockImplementation(async (url) => (String(url).endsWith("/messages") ? new Response(JSON.stringify(answer), { status }) : new Response("{}")));
+    captured.session = { ...captured.session, pending_switch: waits ? { launcher: "work" } : undefined };
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
     await flush();
     typeInto(text);
@@ -317,10 +319,19 @@ describe("a message the launcher switch refused", () => {
     return copy.textContent ?? "";
   };
 
-  it.each(["switch_busy", "switch_background", "switch_failed", "switch_failed_stopped"])("keeps the words in the box: %s", async (code) => {
-    await send("Carry on with the tests", { error: "The agent is working: send again when it stops", code, delivered: "none" });
+  it.each(["switch_launcher_missing", "switch_pick_model", "switch_failed", "switch_failed_stopped"])("keeps the words in the box: %s", async (code) => {
+    await send("Carry on with the tests", { error: "The agent did not come up there", code, delivered: "none" });
     expect(box().value).toBe("Carry on with the tests");
     expect(outsideBox()).not.toContain("Carry on with the tests"); // no failed bubble
+  });
+
+  it("asks for the switch with the user's message while one waits, and only then", async () => {
+    await send("Carry on", {}, true, 200);
+    expect(sent().at(-1)).toMatchObject({ text: "Carry on", apply_switch: true });
+    fetcher.mockClear();
+    await send("And then this", {}, false, 200);
+    expect(sent().at(-1)).toMatchObject({ text: "And then this" });
+    expect(sent().at(-1)).not.toHaveProperty("apply_switch");
   });
 
   it("any other refusal is the failed bubble it always was", async () => {

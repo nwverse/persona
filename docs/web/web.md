@@ -1525,8 +1525,8 @@ and components (`docs/design/DESIGN_SYSTEM.md` 3.1). A Persona chat keeps its la
   "Claude Code · Opus 5.5 · gateway · High[ · Fast]"; accessible name "Select model. Current: Opus 5.5, thinking effort: High".
 - **Widths**: the composer card is a container (`@container/composer`). From 600 px the pill takes 72–320 px; under 600 it
   is 148 px with the name at most 108 px; the name gives way first, the engine mark stays, and the effort truncates only
-  once the name has no room left (Cindy lets both shrink alike; her own rule says the name goes first); under 520 its text is 12 px and its marks a step smaller; under 420 it is 64 px: the tile and the chevron (and a
-  clock or a warning when there is one).
+  once the name has no room left (Cindy lets both shrink alike; her own rule says the name goes first); under 520 its text is 12 px and its marks a step smaller; under 420 it is 64 px: the tile and the chevron; only a
+  waiting switch's clock makes it grow there (a spinner or a warning stays within the 64 px).
 - **States**: reading the list for the first time with no model known: a spinner and "Loading model…"; that read failed: a
   warning in the error colour ("Model loading failed" in the tooltip); a switch to another launcher waiting for the next
   message (`pending_switch` on the session, #5035): a clock first, then the setup the next message runs on: that launcher's
@@ -1543,8 +1543,11 @@ and components (`docs/design/DESIGN_SYSTEM.md` 3.1). A Persona chat keeps its la
 - **Switching rules**: the session's own launcher switches its model at once. Its group "Recommended" is the model that
   runs, then its other models. On a hub with `launcher_switch` (#5035, docs/protocol/protocol.md "Switching a running
   Agent to another provider"), a Claude Code Agent in a terminal may also pick a model of another Claude Code launcher on
-  its computer: the pick is recorded and the next message carries it out (the node quits the agent and resumes the same
-  conversation through that launcher in the same terminal), so a pick never interrupts the agent. Those launchers keep
+  its computer: the pick is recorded and the user's next message from this chat carries it out (the node quits the agent
+  and resumes the same conversation through that launcher in the same terminal), so a pick never interrupts the agent.
+  Only that message does: the composer sends it with `apply_switch: true` while the session shows `pending_switch`;
+  every other sender's message goes on the launcher the agent runs on. A message sent while the agent works, waits on
+  you or has background work goes there too, and the switch waits for a later one. Those launchers keep
   their own groups (they don't switch at once, so they are not "Recommended"); one that fixes its own `--model` offers
   only its default entry. While a switch waits, the panel's list starts with a warning line: "Switches on your next
   message: the Agent restarts on work and keeps this conversation", and its target is the panel's `pending` setup.
@@ -1557,20 +1560,22 @@ and components (`docs/design/DESIGN_SYSTEM.md` 3.1). A Persona chat keeps its la
   the search ("Use “…”", #1644, `lib/model-id.ts`) in each launcher that can take a pick here, offered only when none of
   that launcher's models answers the search (a word that names a listed model is a search); IDs typed before are listed
   and can be forgotten.
-- **Applying**: a pick on the session's own launcher sends `POST …/modes {"launcher": <own>}` first when a switch waits
-  (it drops it), then `{"model"}`, then `{"effort"}`, then (Codex) `{"service_tier"}`, each only when it differs from the
-  session's. A pick on another launcher is one `POST …/modes {"launcher", "model"?, "effort"?}`: the model unless it is
-  that launcher's default entry, the effort the setup has. The model, the effort and the waiting switch are drawn at once
-  and put back with a toast in the hub's words if it says no (`switch_config_dir`, `switch_model_locked`…); a switch that
+- **Applying**: a pick on the session's own launcher sends `POST …/modes {"launcher": <own>, "from": <own>}` first when
+  a switch waits (it drops it), then `{"model"}`, then `{"effort"}`, then (Codex) `{"service_tier"}`, each only when it
+  differs from the session's. A pick on another launcher is one `POST …/modes {"launcher", "from", "model"?, "effort"?}`:
+  the model unless it is that launcher's default entry, the effort the setup has; `from` is the launcher the panel saw
+  the session on, so a pick on a session that switched meanwhile is refused (`switch_stale`). The model, the effort and
+  the waiting switch are drawn at once and put back with a toast in the hub's words if it says no (`switch_config_dir`,
+  `switch_model_locked`, `switch_pick_model` for a default entry whose model the computer cannot see…); a switch that
   was recorded is said by a toast: "Switch scheduled: your next message moves the Agent to work · GLM 5.3". The speed waits
   for the session's push (DESIGN_SYSTEM.md "Codex speed controls"). The panel closes once a pick applied and keeps the
   old setup when it did not. An Antigravity variant brings its own thinking level. `/model` Enter in the composer opens
   the panel (where the agent switches models). Claude Code's ultracode switch is in the flyout of the model that runs.
 - **The message that carries a switch out**: when the node refuses it (`409` with a `switch_*` code and `delivered: "none"`:
-  the agent was working, had background work, did not quit, did not come up on the new launcher…), nothing was typed and
-  the switch still waits, so the words go back into the box with the hub's reason in a toast, as an edit's refused send
-  does (`ChatView` `deliver`, `switchRefused` in `lib/session-models.ts`), not into a failed bubble. Sending again tries
-  the switch again; picking the session's own launcher drops it.
+  the launcher went, the agent did not quit, did not come up on the new launcher…), nothing was typed and the switch is
+  dropped (the pill loses its clock with the session's push), so the words go back into the box with the hub's reason in
+  a toast, as an edit's refused send does (`ChatView` `deliver`, `switchRefused` in `lib/session-models.ts`), not into a
+  failed bubble. Sending again sends it on the launcher the agent runs on.
 - **Kept in this browser**: favorites, the last five setups that applied (Recent) and per-model customizations (effort,
   Fast) live in `localStorage` (`persona.modelPanel.<base>.agent.*`, apart from a Persona chat's). The hub has no store for
   such preferences, so they do not follow you to another browser: a choice for this step.

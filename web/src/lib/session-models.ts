@@ -200,8 +200,8 @@ export interface PillView extends PillSetup {
 }
 
 /** A message refused because the switch to another launcher it was to carry out first could not be (#5035,
- *  docs/protocol/protocol.md "Switching a running Agent to another provider": `switch_busy`, `switch_background`,
- *  `switch_failed`…): nothing was typed and the switch still waits. */
+ *  docs/protocol/protocol.md "Switching a running Agent to another provider": `switch_launcher_missing`,
+ *  `switch_failed`…): nothing was typed and the switch was dropped. */
 export const switchRefused = (e: unknown): boolean => e instanceof ApiError && e.status === 409 && Boolean(e.code?.startsWith("switch_"));
 
 /** The switch to another launcher waiting for the next message (#5035), as the pill draws it: that launcher, the model

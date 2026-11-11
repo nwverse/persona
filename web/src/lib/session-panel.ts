@@ -117,9 +117,9 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
   return { providers, state };
 }
 
-/** One POST …/modes of a pick. `launcher`: a switch to another launcher with the next message (#5035), or the session's
- *  own to drop one that waits. */
-export type ModeStep = { model: string } | { effort: string } | { service_tier: string } | { launcher: string; model?: string; effort?: string };
+/** One POST …/modes of a pick. `launcher`: a switch to another launcher with the user's next message (#5035), or the
+ *  session's own to drop one that waits; `from` the launcher the session runs on as the panel saw it. */
+export type ModeStep = { model: string } | { effort: string } | { service_tier: string } | { launcher: string; from: string; model?: string; effort?: string };
 
 /** What applying `config` sends, in order. On the session's own launcher: a switch that waits is dropped first, then the
  *  model (the efforts a model takes depend on it), then the effort, then the speed; each only when it differs from the
@@ -136,7 +136,7 @@ export function pickPlan(s: Session, config: PanelConfig, listOf: (launcher: str
   const same = row ? row === current || isCurrentModel(row, s.model) : config.model === s.model;
   if (!same && (!canSwitchModel(s) || (!row && !validModelId(config.model)))) return null;
   const steps: ModeStep[] = [];
-  if (s.pending_switch?.launcher && s.pending_switch.launcher !== own) steps.push({ launcher: own });
+  if (s.pending_switch?.launcher && s.pending_switch.launcher !== own) steps.push({ launcher: own, from: own });
   if (!same) steps.push({ model: config.model });
   const effort = config.effort || (sessionEngine(s) === "agy" ? row?.default_effort : undefined);
   if (effort && effort !== s.effort) steps.push({ effort });
@@ -153,7 +153,7 @@ function switchPlan(s: Session, config: PanelConfig, list: LauncherModels | null
   if (!row && !validModelId(config.model)) return null;
   const model = row?.default ? undefined : config.model;
   if (model && list?.locked) return null;
-  const step: { launcher: string; model?: string; effort?: string } = { launcher: config.provider };
+  const step: { launcher: string; from: string; model?: string; effort?: string } = { launcher: config.provider, from: sessionLauncher(s) };
   if (model) step.model = model;
   if (config.effort) step.effort = config.effort;
   const ps = s.pending_switch;
