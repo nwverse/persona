@@ -21,7 +21,7 @@ The knowledge base currently holds no recordings at all, so nothing is being cap
 4. Once `complete: true` and the recording is a meeting, the assistant generates **minutes** with the model it already uses for knowledge-base compression. An ordinary recording still gets the short summary it gets today.
 5. Minutes are stored inside the recording's directory. Deleting the recording deletes them. When they are ready, the user gets one notification.
 6. Action items are **suggested to-dos**. Nothing is created until the user confirms.
-7. The web Knowledge › Recordings detail shows the minutes; the iOS (#2694) and Android (#2738) details do the same. Asking the assistant "what were the minutes of the meeting just now" resolves through `kb_get` / `kb_search`.
+7. The web Knowledge › Recordings detail shows the minutes; the iOS (#2694) and Android (#2738) details do the same, and all three offer Add to to-dos, Add all and Regenerate (iOS since #4062). Asking the assistant "what were the minutes of the meeting just now" resolves through `kb_get` / `kb_search`.
 
 ## Who does what
 
