@@ -77,7 +77,8 @@ internal class AgentsViewModel(
             // Restored offline history must be discoverable even when the list was showing only running agents.
             previous = null
             groupFilter.value = null
-            settings.update { it.copy(quick = AgentQuickFilter.All, query = "", machineFilter = "", kept = emptySet(), folded = emptySet()) }
+            settings.update { it.copy(quick = AgentQuickFilter.All, query = "", machineFilter = "", kept = emptySet(),
+                folded = if (it.query.isNotEmpty()) stashedFolds ?: it.folded else it.folded).also { stashedFolds = null } }
             preferences.range(pairingScope, AgentRange.All)
         }
         _notice.value = AgentText(if (archived) R.string.agents_notice_archived else R.string.agents_notice_restored)
@@ -434,10 +435,26 @@ internal class AgentsViewModel(
     }
     fun range(range: AgentRange) = localChange {
         previous = null
-        settings.update { it.copy(quick = AgentQuickFilter.All, kept = emptySet(), folded = emptySet()) }
+        settings.update { it.copy(quick = AgentQuickFilter.All, kept = emptySet()) }
         preferences.range(pairingScope, range)
     }
-    fun query(query: String) { previous = null; settings.update { it.copy(query = query, kept = emptySet(), folded = emptySet()) } }
+    /**
+     * A search opens every fold while it runs (iOS): the list's folds wait in [stashedFolds] and come back as they were when
+     * the query clears; what is folded during the search is forgotten with it (#4338 A6).
+     */
+    fun query(query: String) {
+        previous = null
+        val was = settings.value.query
+        if (was.isEmpty() && query.isNotEmpty()) stashedFolds = settings.value.folded
+        settings.update {
+            when {
+                was.isEmpty() && query.isNotEmpty() -> it.copy(query = query, kept = emptySet(), folded = emptySet())
+                was.isNotEmpty() && query.isEmpty() -> it.copy(query = query, kept = emptySet(), folded = stashedFolds ?: emptySet())
+                else -> it.copy(query = query, kept = emptySet())
+            }
+        }
+        if (query.isEmpty()) stashedFolds = null
+    }
     /** What the list would show for each group (the group chips), like the computer chips count. */
     private fun groupCounts(all: List<Session>, machines: List<Machine>, prefs: AgentsPreferencesSnapshot,
         settings: AgentListSettings, ops: AgentOperationsSnapshot): Map<String?, Int> {
@@ -458,7 +475,7 @@ internal class AgentsViewModel(
     }
     fun grouping(group: AgentGrouping) = localChange {
         previous = null
-        settings.update { it.copy(kept = emptySet(), folded = emptySet()) }
+        settings.update { it.copy(kept = emptySet()) }
         preferences.grouping(group)
     }
     fun compact() = localChange { preferences.compact(!page.value.preferences.compact) }
@@ -572,6 +589,31 @@ internal class AgentsViewModel(
         if (page.value.settings.quick != AgentQuickFilter.All) settings.update { it.copy(kept = it.kept + rows.map { row -> row.id }) }
         preferences.markSeen(rows.map { it.session })
     }
+    /** The grouping whose stored folds [settings] holds; folds are read again only when it changes (#4338 A6). */
+    private var foldsGrouping: AgentGrouping? = null
+    /** The list's folds while a search opens them ([query]). */
+    private var stashedFolds: Set<String>? = null
+
+    init {
+        // Folds come back after a relaunch and with each grouping, as iOS keeps them on the phone.
+        viewModelScope.launch {
+            preferences.snapshots(pairingScope).collect { prefs ->
+                if (prefs.grouping == foldsGrouping) return@collect
+                foldsGrouping = prefs.grouping
+                val stored = prefs.folds[prefs.grouping].orEmpty()
+                if (settings.value.query.isEmpty()) settings.update { it.copy(folded = stored) } else stashedFolds = stored
+            }
+        }
+    }
+
+    /** Keeps the current grouping's folds on this phone; a search's are not kept. */
+    private fun saveFolds() {
+        val grouping = foldsGrouping ?: return
+        if (settings.value.query.isNotEmpty()) return
+        val folded = settings.value.folded
+        localChange { preferences.folds(grouping, folded) }
+    }
+
     fun fold(group: AgentListGroup) {
         settings.update { current ->
             if (group.parent == "quiet") current.copy(
@@ -585,9 +627,11 @@ internal class AgentsViewModel(
             )
             else current.copy(folded = if (group.folded) current.folded - group.id else current.folded + group.id)
         }
+        saveFolds()
     }
     fun fold(machine: AgentMachineGroup) {
         settings.update { it.copy(folded = if (machine.folded) it.folded - machine.id else it.folded + machine.id) }
+        saveFolds()
     }
     fun foldAll(fold: Boolean) {
         previous = null
@@ -595,6 +639,7 @@ internal class AgentsViewModel(
             folded = if (fold) (page.value.list.groups.map { group -> group.id } + page.value.list.machines.map { machine -> machine.id }).toSet() else emptySet(),
             expandedQuiet = if (fold) emptySet() else page.value.list.groups.filter { group -> group.parent == "quiet" }.map { group -> group.id }.toSet(),
         ) }
+        saveFolds()
         if (!fold) localChange { preferences.openAllTabs() }
     }
     fun showIdle(group: AgentListGroup) {

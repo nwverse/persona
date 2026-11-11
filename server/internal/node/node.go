@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"io"
 	"log"
@@ -635,6 +636,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		NewSessionID   string          `json:"new_session_id"` // assistant.send: start the new conversation under this id
 		Raw            json.RawMessage `json:"-"`
 
+		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
+
 		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
 		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
@@ -646,10 +649,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == "assistant.permissions.reset") {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能判断操作目标；未读取或发送", nil)
 	}
-	if n.codexBlocked(p.ResumeSessionID) && method == "session.start" {
+	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能恢复", nil)
 	}
-	if method == "session.start" && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(p.ResumeSessionID) { // codex_resume.go
+	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(p.ResumeSessionID) { // codex_resume.go
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
 	}
 	if n.externalCodex(p.SessionID) {
@@ -925,7 +928,28 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
-	case "session.start":
+	case "session.start.options":
+		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
+	case "session.start", devicewire.MethodStartWorkSession:
+		var work workStartOptions
+		if method == devicewire.MethodStartWorkSession {
+			if p.ResumeSessionID != "" {
+				return nil, workStartRefused("work_target_required", "A work session must be new.")
+			}
+			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort)
+			if err != nil {
+				return nil, workStartRefused("work_project_unavailable", "The project folder or start options are no longer valid.")
+			}
+			p.Cwd = cwd
+			opts, err := n.workSessionOptions(ctx, p.Launcher, p.ConfiguredAgent, p.Host, p.Configured, p.Model != "")
+			if err != nil {
+				return nil, err
+			}
+			if err := opts.validate(p.AgentType, p.Model, p.Prompt, p.Async); err != nil {
+				return nil, err
+			}
+			work, p.Host = opts, opts.host
+		}
 		if p.CreationID != "" && p.ResumeSessionID == "" && p.SessionID != "" {
 			if _, exists := n.state.get(p.SessionID); exists {
 				return nil, errors.New("creation identifier requires a new session")
@@ -970,7 +994,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				return nil, refusal(secretEnvGoneCode, errSecretTicket.Error(), nil)
 			}
 		}
-		if p.ResumeSessionID == "" {
+		if work.runtime != nil {
+			rp.Model = work.runtimeModel // the runtime's configured default, never a caller override
+			s, err := n.runtimeStartOn(ctx, work.runtime, rp)
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		}
+		if method == "session.start" && p.ResumeSessionID == "" {
 			if s, err, ok := n.runtimeStart(ctx, rp); ok { // a runtime's launcher
 				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 			}
@@ -1733,9 +1762,9 @@ func nonNil(items []proto.Item) []proto.Item {
 // managedUser is the launcher a method runs (or asks a CLI about) that may need a managed provider's secrets.
 func managedUser(method, launcher, name string) string {
 	switch method {
-	case "session.start", "assistant.send", "assistant.warm", "session.send":
+	case "session.start", devicewire.MethodStartWorkSession, "assistant.send", "assistant.warm", "session.send":
 		return launcher
-	case "launchers.check", "claude.auth_status", "launchers.models", "launchers.http", "launchers.probe", "launchers.model.check":
+	case "session.start.options", "launchers.check", "claude.auth_status", "launchers.models", "launchers.http", "launchers.probe", "launchers.model.check":
 		return name
 	}
 	return ""

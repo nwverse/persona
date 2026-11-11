@@ -30,6 +30,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
 import persona.core.domain.answer.rowLine
@@ -771,6 +772,8 @@ internal fun SlotRow(
             }
         },
         flags = buildList {
+            // Claude Code's ultracode on (#582, iOS UltracodeMark): the workflow mark right after the title.
+            if (ultracodeMark(session)) add(RowFlag(stringResource(R.string.agents_row_ultracode), PersonaIcons.workflow, ai = true))
             if (pinned) add(RowFlag(stringResource(R.string.agents_row_pinned), PhIcons.PushPin))
             if (muted) add(RowFlag(stringResource(R.string.agents_row_muted), PhIcons.Prohibit))
             // Its closeout (#3612): the hub found a claim untrue (the line says which), or the turn is not finished.
