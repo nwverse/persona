@@ -104,6 +104,9 @@ The main conversation folds the rounds it did not start, as web and iOS do (rule
   at a user input whose message source (`sourceOf`) is `conversation`, `followup` or `patrol` and ends it at the next
   genuine input, a queued one included; a system hint inside it does not end it. Such a round stays in the conversation
   rather than going to the background record; supervision and the other quiet rounds keep going there as before.
+  A `followup` counts only as a scheduled follow-up: not a usage-limit continuation or a wake-up (injected
+  `limit_continue` / `wake`), and not one without a title; those stay shown. Until the hub's config is read, the page
+  uses the value it last read this run (in memory, `BackgroundFoldSetting.lastKnown`), else on.
 - **Folded**: the round's lines become one `ChatLine.Extra` carrying a `BackgroundRound`, drawn by `BackgroundRoundLine`
   with the work summary's own line (`AssistantFoldLine`): `@<source> · Background round`, `· Running in the background`
   while it runs. A tap opens it and its lines follow in place (the id `bg-<first input>` sits in the chat's open-line set,
