@@ -1919,8 +1919,8 @@ struct ChatView: View {
     }
 
     private var paneBadges: [SessionPane: String] {
-        guard let n = git?.files.count, n > 0 else { return [:] }
-        return [.git: n > 99 ? "99+" : String(n)]
+        guard let n = git?.files.count, let text = CountBadge.text(n) else { return [:] }
+        return [.git: text]
     }
 
     private func loadGit() async {

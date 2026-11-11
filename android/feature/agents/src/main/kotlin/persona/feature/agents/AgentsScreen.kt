@@ -470,7 +470,7 @@ internal fun AgentsScreen(
                                 machine.repoCount?.let { pluralStringResource(R.plurals.agents_count_repos, it, it) }
                                     ?: pluralStringResource(R.plurals.agents_count_spaces, machine.spaceCount, machine.spaceCount),
                                 pluralStringResource(R.plurals.agents_count_sessions, machine.sessionCount, machine.sessionCount)),
-                            counts = machine.headingCounts,
+                            counts = machine.headingCounts, waiting = machine.waitingInBackground,
                             onMonitor = { navigator.navigate(MachineDetailRoute(machine.machine.id)) }, tag = groups.tagFor(machine.machine.id))
                     }
                     is TreeGroupEntry -> item(entry.key, contentType = if (entry.space) "space" else "section") {
@@ -568,7 +568,7 @@ internal fun AgentsScreen(
                 checked = page.preferences.sort == sort, separatorBefore = index == 0, onClick = { model.sort(sort) })) }
         add(JAction(stringResource(R.string.agents_menu_compact), checked = page.preferences.compact, onClick = { if (!page.preferences.compact) model.compact() }))
         add(JAction(stringResource(R.string.agents_menu_detailed), checked = !page.preferences.compact, onClick = { if (page.preferences.compact) model.compact() }))
-        add(JAction(stringResource(R.string.agents_menu_collapse_all), checked = page.list.groups.isNotEmpty() && page.list.groups.all { it.folded } && page.list.machines.all { it.folded }, onClick = { model.foldAll(true) }))
+        add(JAction(stringResource(R.string.agents_menu_collapse_all), checked = page.list.allCollapsed, onClick = { model.foldAll(true) }))
         add(JAction(stringResource(R.string.agents_menu_expand_all), checked = page.list.groups.isNotEmpty() && page.list.groups.none { it.folded } && page.list.machines.none { it.folded } &&
             // under "By machine" a tab group folded by hand is not expanded either (#2792)
             (page.preferences.grouping != AgentGrouping.MachineSpace || page.preferences.foldedTabs.isEmpty()), onClick = { model.foldAll(false) }))

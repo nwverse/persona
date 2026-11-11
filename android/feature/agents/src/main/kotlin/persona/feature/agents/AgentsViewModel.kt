@@ -288,7 +288,7 @@ internal class AgentsViewModel(
             }
             val countedMachines = projected.list.machines.map { machine ->
                 count("machine:${machine.machine.id}")?.let { machine.copy(sessionCount = it.total, stateCounts = it.states(),
-                    repoCount = it.project.size, spaceCount = it.group.size) } ?: machine
+                    repoCount = it.project.size, spaceCount = it.group.size, waitingInBackground = it.backgroundWaiting) } ?: machine
             }
             projected.copy(
                 list = projected.list.copy(counts = quickCounts, groups = countedGroups, machines = countedMachines), allCount = counts.total,
