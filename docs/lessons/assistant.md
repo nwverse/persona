@@ -168,6 +168,14 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
   changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
   the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+- **What is handed out only once must not be dropped by a shortcut** (#4256). `plugins.assistant` gives a machine a
+  skill's files once and counts them as sent when it answers, but the minute refresh asked for them before deciding that
+  an unchanged CLAUDE.md needed no `assistant.prepare`, and dropped them: after an upgrade that changed only a skill, the
+  assistant's machine kept the old files for over an hour. The node then reported the skill missing
+  (`plugin_skills_need`), the files were queued to go again, and the next refresh dropped them the same way. Now the
+  refresh compares the skills' names and digests too, never skips an answer that brings files, and prepares a directory
+  again on its next round when the node reported skills missing there. For "the new skill has no effect", compare the
+  modification time of `~/.persona/plugin-skills/<name>/.persona-plugin` on the assistant's machine with the upgrade's.
 
 - Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.
 - **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
@@ -275,3 +283,14 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   it the same ending fields as the normal path.
 
 - **A model asked for an option's label copies whatever the input put next to it** (#3929). `delegate_input.md` lists an option as `label：description`, and with Chinese descriptions the delegation model often answered the whole line (`表驱动：和这个包现有的测试一致`): #3923's live runs saw it in 4 of 4, 2 of 5 and 1 of 4 runs of three cases. `interactionAnswers` found no such option, so a choice the assistant had decided to answer went to the user. `optionLabel` (`assistant/tools_apps.go`) now maps an answer to a label only when it writes out exactly one option, its label then a separator (`：`, `:`, a dash, or brackets) and that option's own description, with quotes or spaces; anything else is still refused. Don't widen it to prefixes or the model's own words after a label: those are free text, and a refused answer only costs the user one question. When a prompt shows options with extra text, expect it back and test the hub's check with the exact line the prompt renders.
+
+## Cancel confirmation-blocked Agents without granting approval (#4277)
+
+Keep force archive separate from ordinary busy checks. A cancellation path must close the provider or terminal,
+reject or withdraw pending cards, and keep other work protected. A cached blocked inventory after close can undo
+a newly saved archive unless the closed timestamp fences that old snapshot. Persist the archive and a future
+close timestamp in one write before closing, then replace it with the real close time. A failed close removes
+the provisional record with an independent bounded context, including when the request was cancelled.
+Paseo's CLI `archive --force` skips
+a client-side busy check; its archive request has no force field and closes the provider runtime. Check the actual
+archive receipt before removing the Agent from a bridge's local list.

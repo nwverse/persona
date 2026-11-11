@@ -1001,7 +1001,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		b.WriteString("\n")
 		if (state == "done" || state == "muted") && c.Work != nil && c.Work.Phase != proto.WorkWorking && c.Work.Line != "" {
-			fmt.Fprintf(&b, "    结论：%s\n", clip(oneLine(c.Work.Line), 200))
+			fmt.Fprintf(&b, "    结论：%s\n", clip(oneLine(c.Work.Line), 200)) // i18n-ignore: agents_list output for the model, as the lines around it
 		}
 		for _, w := range runningWorkflows(c, now) { // its turn ended to wait for them: not done (#2935)
 			fmt.Fprintf(&b, "    后台 workflow 在跑（在等它的结果，没做完）：%s\n", prompts.RenderSnapshotWorkflow(w))
