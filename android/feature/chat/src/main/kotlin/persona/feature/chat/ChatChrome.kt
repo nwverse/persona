@@ -7,10 +7,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import persona.core.contracts.*
 import persona.core.contracts.api.*
@@ -45,7 +43,7 @@ internal fun ChatHeader(
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var title by rememberSaveable { mutableStateOf("") }
     var tabName by rememberSaveable { mutableStateOf("") }
-    val clipboard = LocalClipboardManager.current
+    val copy = rememberCopy()
     val peers = remember(session, sessions) { spaceCompanions(session, sessions) }
     val places = remember(session, peers) { companionPlaces(session, peers) }
     val children = session?.subagents.orEmpty().filter { it.running && it.sessionId.isNotBlank() }
@@ -123,7 +121,7 @@ internal fun ChatHeader(
         // Only a session in a terminal resumes there; a Codex thread by its own thread id.
         session?.resumeCommand()?.let { command ->
             add(JAction(stringResource(R.string.chat_chrome_copy_resume), enabled = !readOnly) {
-                clipboard.setText(AnnotatedString(command)); state.notice = resumeCopied
+                copy(command, resumeCopied)
             })
         }
         // Persona's conversations are not agents in a pane, and a session without a terminal has no pane to close.
