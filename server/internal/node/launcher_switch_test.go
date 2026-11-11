@@ -234,12 +234,21 @@ func TestLauncherSwitchPickPreconditions(t *testing.T) {
 	if ps := n.pendingSwitch(sidA); ps != nil {
 		t.Fatalf("a stale pick was recorded: %+v", ps)
 	}
+	// while a switch is carried out (the session listed as starting), a pick or a cancel is refused at once, not held
+	// for the minutes it takes
+	if err := n.starts.add(sidA, &startRec{done: make(chan struct{})}); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := refusalOf(t, pick(t, n, map[string]any{"launcher": "claude", "from": "claude"})); code != proto.CodeSwitchStale {
+		t.Errorf("a cancel during a switch: %q", code)
+	}
+	n.starts.finish(sidA, nil)
 	if err := pick(t, n, map[string]any{"launcher": "work", "from": "claude", "model": "opus"}); err != nil {
 		t.Fatal(err)
 	}
-	err := pick(t, n, map[string]any{"launcher": "elsewhere", "from": "claude", "permission_mode": "sideways"})
-	if err == nil {
-		t.Fatal("a bad permission mode went through")
+	err := pick(t, n, map[string]any{"launcher": "work", "from": "claude", "model": "sonnet", "permission_mode": "sideways"})
+	if err == nil || !strings.Contains(err.Error(), "sideways") {
+		t.Fatalf("a bad permission mode: %v", err)
 	}
 	if ps := n.pendingSwitch(sidA); ps == nil || ps.Launcher != "work" || ps.Model != "opus" {
 		t.Fatalf("the switch before the failed request is not back: %+v", ps)

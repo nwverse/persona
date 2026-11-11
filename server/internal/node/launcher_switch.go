@@ -146,6 +146,11 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 		}
 		checked = true
 	}
+	// A switch being carried out right now (listed as starting) takes minutes: the pick is refused at once rather than
+	// held past the hub's wait, and made again against what the agent runs on then.
+	if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+		return true, refusal(proto.CodeSwitchStale, "the agent is being started again (a launcher switch, a resume): pick again once it runs", nil)
+	}
 	// One at a time with the messages: one carrying a switch out writes the record anew, and would drop a pick made
 	// meanwhile; this one waits for it, and is then taken against the launcher the agent runs on by then.
 	unlock := n.typing.lock(id)
