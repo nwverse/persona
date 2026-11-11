@@ -1107,7 +1107,8 @@ function TierSelect({ label, hint, value, ids, def, auto, onChange }: { label: s
   const options = value && !ids.includes(value) ? [...ids, value] : ids;
   return (
     <Labelled htmlFor={id} hint={hint} label={
-      <span className="inline-flex items-center gap-1.5">
+      // one height with or without the pill, so fields side by side line up
+      <span className="inline-flex min-h-5 items-center gap-1.5">
         {label}
         {auto && <Pill>{t("settings-providerwizard.tier_auto")}</Pill>}
       </span>
