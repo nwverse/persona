@@ -199,6 +199,7 @@ struct RecordingPersonaStrip: View {
                 } icon: {
                     ThemedIcon(attendance.role.attends ? Theme.Icon.voiceListening : Theme.Icon.attendanceOff).foregroundStyle(Theme.ai)
                 }
+                .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("meeting-attending")
                 Spacer(minLength: Theme.Space.s)
                 menu

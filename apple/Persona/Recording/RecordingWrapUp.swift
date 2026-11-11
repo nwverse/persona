@@ -127,7 +127,7 @@ struct RecordingWrapUp: View {
     }
 
     private func stepRow(_ step: RecordingPhase.Step) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
+        HStack(alignment: .top, spacing: Theme.Space.m) {
             mark(step.state)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
