@@ -23,7 +23,9 @@ import (
 // assistant's settings (askLaterKey): the card as raised, and, once it ended, the message, so a send that failed says
 // the same again. The card is resumable: a restart does not cancel it (db ExpireStaleInteractions), and the next
 // manager puts it back on the phone from the record (loadAskLater) without a second push. The owner writing in the
-// conversation does not take it back (withdrawAskUser): no turn is held behind it.
+// conversation does not take it back (withdrawAskUser): no turn is held behind it. Their words may have answered it
+// all the same, so that they wrote is kept (askLaterSpoke), and a card that then runs out unanswered makes no to-do
+// and takes no default: the conversation is told and asks again if it still needs the answer.
 
 const (
 	askLaterKey = "assistant.ask_later"
@@ -41,12 +43,16 @@ type askLater struct {
 	// Message is what the conversation is told, set once the card ended; EndedAt is when.
 	Message string    `json:"message,omitempty"`
 	EndedAt time.Time `json:"ended_at,omitzero"`
+	// SpokeAt is when the owner first wrote in the asking conversation while the card was up (askLaterSpoke).
+	SpokeAt time.Time `json:"spoke_at,omitzero"`
 }
 
 type askLaterBook struct {
-	mu     sync.Mutex
-	loaded bool
-	list   []askLater
+	mu sync.Mutex
+	// loaded: list was read from the settings. restored: the questions a manager before this one left were put back
+	// among the questions out (loadAskLater); reading the list for a new question does not do that.
+	loaded, restored bool
+	list             []askLater
 }
 
 // askLaterStart puts ix up without waiting for its answer: its record first (a card whose answer could reach nobody
@@ -54,6 +60,7 @@ type askLaterBook struct {
 func (s *Service) askLaterStart(ctx context.Context, ix proto.Interaction) (string, error) {
 	ix.Resumable = true // it outlives a manager restart and its node's connection: no call waits on it
 	ix = s.ownCard(ctx, ix)
+	s.loadAskLater(ctx) // the ones a manager before this one left go back first: this read must not stand in for theirs
 	b := &s.askLaters
 	b.mu.Lock()
 	if !s.loadAskLaterLocked(ctx) {
@@ -89,15 +96,14 @@ func (s *Service) askLaterStart(ctx context.Context, ix proto.Interaction) (stri
 func (s *Service) loadAskLater(ctx context.Context) {
 	b := &s.askLaters
 	b.mu.Lock()
-	if b.loaded || !s.loadAskLaterLocked(ctx) {
-		b.mu.Unlock()
+	defer b.mu.Unlock()
+	if b.restored || !s.loadAskLaterLocked(ctx) {
 		return
 	}
-	list := slices.Clone(b.list)
-	b.mu.Unlock()
+	b.restored = true
 	s.questions.mu.Lock()
 	defer s.questions.mu.Unlock()
-	for _, a := range list {
+	for _, a := range b.list {
 		if s.questions.m == nil {
 			s.questions.m = map[string]*question{}
 		}
@@ -135,6 +141,42 @@ func (s *Service) saveAskLaterLocked(ctx context.Context) error {
 		list = []askLater{}
 	}
 	return st.PutSetting(ctx, askLaterKey, list)
+}
+
+// askLaterSpoke notes that the owner wrote in session while its questions asked without waiting were up (UserSpoke).
+// The cards stay up and can still be answered; one that runs out unanswered after this is told as such
+// (renderAskLater), since what the owner wrote may have been the answer.
+func (s *Service) askLaterSpoke(ctx context.Context, session string) {
+	if session == "" {
+		return
+	}
+	b := &s.askLaters
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.loadAskLaterLocked(ctx) {
+		return
+	}
+	marked := false
+	for i := range b.list {
+		if a := &b.list[i]; a.Interaction.SessionID == session && a.SpokeAt.IsZero() && a.Message == "" {
+			a.SpokeAt, marked = time.Now().UTC(), true
+		}
+	}
+	if !marked {
+		return
+	}
+	if err := s.saveAskLaterLocked(context.WithoutCancel(ctx)); err != nil {
+		s.logf("ask_user without waiting: keep that the user wrote in %s: %v", short(session), err) // kept in memory
+	}
+}
+
+// askLaterSpokeOf: the owner wrote in the asking conversation while the question asked without waiting on card id
+// was up.
+func (s *Service) askLaterSpokeOf(id string) bool {
+	b := &s.askLaters
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.ContainsFunc(b.list, func(a askLater) bool { return a.Interaction.ID == id && !a.SpokeAt.IsZero() })
 }
 
 // askLaterEnded takes r, the end of q's card (a question asked without waiting), and tells the conversation that
@@ -233,6 +275,11 @@ func (s *Service) renderAskLater(ctx context.Context, ix proto.Interaction, r pr
 			}
 		}
 		m.Missing = len(m.Answers) < len(ix.Questions)
+	case s.askLaterExpired(ix, r) && s.askLaterSpokeOf(ix.ID):
+		// The owner wrote in the conversation while the card was up, which may have been their answer (a waiting
+		// question is taken back at that point): no to-do, and no default taken at a deadline.
+		m.Spoke = true
+		s.logf("ask_user %s: ran out unanswered after the user wrote in the conversation: no to-do", ix.ID)
 	case s.askLaterExpired(ix, r):
 		t, err := s.askExpired(ctx, ix)
 		if err != nil {

@@ -430,6 +430,7 @@ func TestGoldenAskLater(t *testing.T) {
 	golden(t, "ask_later.answered", e.s.renderAskLater(ctx, ix, proto.Resolution{Answers: map[string]string{"Merge the release PR now?": "Merge", "Tag it?": "No"}}))
 	golden(t, "ask_later.answered_in_part", e.s.renderAskLater(ctx, ix, proto.Resolution{Answers: map[string]string{"Tag it?": "No"}}))
 	golden(t, "ask_later.closed", e.s.renderAskLater(ctx, ix, proto.Resolution{Dismiss: true}))
+	golden(t, "ask_later.expired_after_user_wrote", prompts.RenderAskLater(prompts.AskLater{When: "11-08 15:04", Questions: []string{"Merge the release PR now?"}, Spoke: true}))
 	golden(t, "ask_later.expired", prompts.RenderAskLater(prompts.AskLater{When: "11-08 15:04", Questions: []string{"Merge the release PR now?"},
 		Expired: strings.TrimSpace(prompts.RenderQuestionMovedToTodo(prompts.QuestionMovedToTodo{TodoID: "todo_ask_0a1b2c", Title: "Merge the release PR now?"}))}))
 }

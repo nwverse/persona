@@ -731,6 +731,10 @@ func (s *Service) finished(p *pending) {
 		how = &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
 	}
 	s.fleet.mu.Unlock()
+	if how != nil && s.askLaterSpokeOf(p.ix.ID) {
+		// Asked without waiting, and the owner wrote in the conversation meanwhile: it makes no to-do (ask_later.go).
+		how.Reason = proto.DismissedInChat
+	}
 	s.channelsEnded(p.ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.hub.Tell(assistantwire.EventFleetResolved, done)

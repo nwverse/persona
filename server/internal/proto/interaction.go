@@ -28,6 +28,11 @@ const DismissedInChat = "replied_in_chat"
 // their Reason dropped (assistant/fleet_routes.go).
 const DismissedExpired = "expired"
 
+// AskedWithoutWaiting: ix is the assistant's ask_user raised with wait false (#4928, docs/assistant/assistant.md
+// "Asking without holding the turn"): its turn ended when the card went up, so no turn is held behind it. It is the
+// one ask_user card that is Resumable (a waiting one lives in the manager's memory and is not).
+func (ix Interaction) AskedWithoutWaiting() bool { return ix.ToolName == "ask_user" && ix.Resumable }
+
 // QuestionOptionDefer dismisses a triage question without sending an agent reply.
 // Other question runtimes do not interpret this triage-only action.
 const QuestionOptionDefer = "defer"

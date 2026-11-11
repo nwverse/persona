@@ -12,7 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// hasPending: a card of the conversation waits for an answer.
+// hasPending: a card of the conversation's turn waits for an answer. A question asked without waiting is no such
+// card: its turn ended when it went up, and that turn's closing words are the answer to send (ask_later.go).
 func (s *Service) hasPending(ctx context.Context, machine, session string) bool {
 	var res struct {
 		Interactions []proto.Interaction `json:"interactions"`
@@ -20,7 +21,9 @@ func (s *Service) hasPending(ctx context.Context, machine, session string) bool 
 	if err := s.call(ctx, DeviceAll, DeviceInteractionsList, map[string]any{}, &res); err != nil {
 		return false
 	}
-	return slices.ContainsFunc(res.Interactions, func(ix proto.Interaction) bool { return ix.MachineID == machine && ix.SessionID == session })
+	return slices.ContainsFunc(res.Interactions, func(ix proto.Interaction) bool {
+		return ix.MachineID == machine && ix.SessionID == session && !ix.AskedWithoutWaiting()
+	})
 }
 
 // pendingIDs are the cards waiting for an answer now (nil when the hub could not be asked).
