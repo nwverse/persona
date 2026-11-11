@@ -363,6 +363,11 @@ data class Session(
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
     /**
+     * The assistant space it runs in (docs/assistant/health.md "Which space"): "health" for a health chat; absent for the
+     * assistant's own chats and from older hubs.
+     */
+    @SerialName("space") val space: String? = null,
+    /**
      * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant chats", #3264): user, channel, inbox, task, spawned,
      * lark_agent, extension, or one this app doesn't know yet; null is the user's (older hubs never say).
      */
@@ -477,6 +482,8 @@ data class Session(
     @SerialName("background_working") val backgroundWorking: Boolean? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
+    /** A chat of the health space ([space]), which the assistant's own lists leave out. */
+    val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
     val agentState: AgentState get() = AgentState.of(state, status)
     /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
     val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
