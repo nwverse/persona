@@ -18,12 +18,12 @@ export function captureTaskTrustScope(manager: string): TaskTrustScope {
   return { manager, owner: credentialOwner(), token: getToken() };
 }
 
-function options(scope: TaskTrustScope) {
-  return { token: scope.token, tokenOwner: scope.owner, headers: { [MANAGER_HEADER]: scope.manager } };
+function options(scope: TaskTrustScope, isAuthContextCurrent: () => boolean) {
+  return { token: scope.token, tokenOwner: scope.owner, isAuthContextCurrent, headers: { [MANAGER_HEADER]: scope.manager } };
 }
 
-export async function listTaskTrust(scope: TaskTrustScope, signal: AbortSignal): Promise<TaskTrustRule[]> {
-  const response = await api<{ kinds?: unknown }>("/task-trust", { ...options(scope), signal });
+export async function listTaskTrust(scope: TaskTrustScope, signal: AbortSignal, isAuthContextCurrent: () => boolean): Promise<TaskTrustRule[]> {
+  const response = await api<{ kinds?: unknown }>("/task-trust", { ...options(scope, isAuthContextCurrent), signal });
   if (!Array.isArray(response.kinds) || !response.kinds.every((kind: unknown) => {
     if (!kind || typeof kind !== "object") return false;
     const row = kind as Record<string, unknown>;
@@ -33,8 +33,8 @@ export async function listTaskTrust(scope: TaskTrustScope, signal: AbortSignal):
   return response.kinds as TaskTrustRule[];
 }
 
-export async function revokeTaskTrust(scope: TaskTrustScope, key: string): Promise<void> {
-  const response = await api<{ ok?: unknown }>(`/task-trust?key=${encodeURIComponent(key)}`, { ...options(scope), method: "DELETE" });
+export async function revokeTaskTrust(scope: TaskTrustScope, key: string, isAuthContextCurrent: () => boolean): Promise<void> {
+  const response = await api<{ ok?: unknown }>(`/task-trust?key=${encodeURIComponent(key)}`, { ...options(scope, isAuthContextCurrent), method: "DELETE" });
   if (response.ok !== true) throw new Error("Unconfirmed task trust removal");
 }
 

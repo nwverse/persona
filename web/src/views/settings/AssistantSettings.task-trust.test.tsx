@@ -357,6 +357,36 @@ it("fences an old 401 and retained failure after credential replacement, but han
   expect(new Headers(fresh.init.headers).get("Authorization")).toBe("Bearer synthetic-b");
 });
 
+it.each(["manager", "manager-return", "navigation"])("does not let a retired %s read sign out the current view", async (mode) => {
+  const unauthorized = vi.fn(); handleUnauthorized(unauthorized);
+  await render(); await open(); const old = reads()[0];
+  await act(async () => {
+    if (mode === "manager") chooseManager("work");
+    if (mode === "manager-return") { chooseManager("work"); chooseManager(null); }
+    if (mode === "navigation") root.render(<p>Another page</p>);
+  });
+  if (mode !== "navigation") await open();
+  await answer(old, {}, 401);
+  expect(unauthorized).not.toHaveBeenCalled();
+  if (mode !== "navigation") {
+    await answer(reads().at(-1)!, {}, 401);
+    expect(unauthorized).toHaveBeenCalledOnce();
+  }
+});
+
+it.each(["manager", "navigation"])("does not let a retired %s removal sign out the current view", async (mode) => {
+  const unauthorized = vi.fn(); handleUnauthorized(unauthorized);
+  await load([first]); await confirm(); const old = deletes()[0];
+  await act(async () => {
+    if (mode === "manager") chooseManager("work");
+    else root.render(<p>Another page</p>);
+  });
+  await answer(old, {}, 401); expect(unauthorized).not.toHaveBeenCalled();
+  if (mode === "manager") {
+    await open(); await answer(reads().at(-1)!, {}, 401); expect(unauthorized).toHaveBeenCalledOnce();
+  }
+});
+
 it("does not transfer an old write failure to a new generation of the same credential", async () => {
   await load([first]); await confirm(); const old = deletes()[0];
   await act(async () => { setToken("synthetic-b"); setToken("synthetic-a"); }); await open();
@@ -377,4 +407,12 @@ it("survives StrictMode effect replay without admitting duplicate removals", asy
   await act(async () => { button("Remove rule").click(); button("Remove rule").click(); });
   expect(deletes()).toHaveLength(1);
   await answer(deletes()[0], { ok: true }); await answer(reads().at(-1)!, { kinds: [] });
+});
+
+it("does not sign out for an obsolete StrictMode read when the replacement is current", async () => {
+  const unauthorized = vi.fn(); handleUnauthorized(unauthorized);
+  await act(async () => root.render(<StrictMode><AssistantSettings /></StrictMode>)); await open();
+  expect(reads().length).toBeGreaterThan(1);
+  await answer(reads()[0], {}, 401); expect(unauthorized).not.toHaveBeenCalled();
+  await answer(reads().at(-1)!, {}, 401); expect(unauthorized).toHaveBeenCalledOnce();
 });

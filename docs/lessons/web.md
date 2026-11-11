@@ -9,8 +9,9 @@ and its retry context in session memory scoped to the assistant and credential g
 When a lost reply is followed by a not-remembered response, let the user dismiss the local warning without calling
 the removal confirmed; a later list can show the rule again. Include access type in each row action's spoken name.
 Synchronous admission prevents a second delete after reopening while the first is pending. Fence reads, confirmation,
-refresh and callbacks on manager changes (including a round trip), credential replacement and unmount; captured
-credentials retain the current-owner 401 policy. A successful removal does not rule out a matching plan remembering it
+refresh and callbacks on manager changes (including a round trip), credential replacement and unmount. A retired
+request's 401 must not sign out a later view, even when it uses the same credential; a current request keeps the normal
+401 policy. A successful removal does not rule out a matching plan remembering it
 again, and an older manager's empty response is not proof that storage was read successfully.
 
 ## Dismiss a draft, not its source item (#3743)

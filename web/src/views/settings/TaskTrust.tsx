@@ -80,7 +80,7 @@ function TaskTrustList({ manager, context, machineName }: { manager: string; con
     const controller = new AbortController(); l.controller = controller;
     l.reading = true; setReading(true); setProblem("");
     try {
-      const rows = await listTaskTrust(scope, controller.signal);
+      const rows = await listTaskTrust(scope, controller.signal, () => current() && seq === l.seq && revision === ledger.revision);
       if (current() && seq === l.seq && revision === ledger.revision) setData({ rows, revision });
     } catch (error) {
       if (current() && seq === l.seq && revision === ledger.revision && !isAbort(error)) setProblem(readProblem(error));
@@ -123,7 +123,7 @@ function TaskTrustList({ manager, context, machineName }: { manager: string; con
     ledger.pending = rule;
     emitTaskTrust(ledger, false); // Admission is synchronous, including across remounts.
     let failure: TrustFailure | null = null;
-    try { await revokeTaskTrust(scope, rule.key); }
+    try { await revokeTaskTrust(scope, rule.key, current); }
     catch (error) { failure = revokeProblem(error); }
     if (ledger.retired || credentialOwner() !== scope.owner) return;
     ledger.pending = null;
