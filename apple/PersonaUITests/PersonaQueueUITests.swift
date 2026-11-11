@@ -4,6 +4,11 @@ import XCTest
 /// The mock (`MOCK_PERSONA_QUEUE=1`, `PERSONA_MOCK_HUB`) has two of the user's messages, one with a photo, and one relayed.
 final class PersonaQueueUITests: XCTestCase {
     private var hub: String!
+    private struct QueueEdits: Decodable { var edits: [[String: [Int]]] }
+
+    private func queueEdits() throws -> [[String: [Int]]] {
+        try JSONDecoder().decode(QueueEdits.self, from: Data(contentsOf: URL(string: hub + "/mock/queue_edits")!)).edits
+    }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -89,9 +94,8 @@ final class PersonaQueueUITests: XCTestCase {
         XCTAssertTrue((field.value as? String)?.contains("请看图片") == true, "the words return to the composer")
         XCTAssertTrue(app.buttons["移除图片 1"].waitForExistence(timeout: 10),
                       "the queued photo returns to the composer too:\n\(app.debugDescription)")
-        struct Edits: Decodable { var edits: [[String: [Int]]] }
-        let edits = try JSONDecoder().decode(Edits.self, from: Data(contentsOf: URL(string: hub + "/mock/queue_edits")!))
-        XCTAssertEqual(edits.edits.last?["keep"], [0], "only the other own message is re-queued")
+        let edits = try queueEdits()
+        XCTAssertEqual(edits.last?["keep"], [0], "only the other own message is re-queued")
         try shot(app, "restored")
     }
 
@@ -108,19 +112,16 @@ final class PersonaQueueUITests: XCTestCase {
         down.tap()
         XCTAssertTrue(items.element(boundBy: 1).label.contains("下周三"), "the first own message moved down")
 
-        struct Edits: Decodable { var edits: [[String: [Int]]] }
-        var data = try Data(contentsOf: URL(string: hub + "/mock/queue_edits")!)
-        var edits = try JSONDecoder().decode(Edits.self, from: data)
-        XCTAssertEqual(edits.edits.last?["keep"], [1, 0], "the move re-queues only the user's own messages")
+        var edits = try queueEdits()
+        XCTAssertEqual(edits.last?["keep"], [1, 0], "the move re-queues only the user's own messages")
 
         items.element(boundBy: 0).tap()
         let delete = app.buttons["删除"]
         XCTAssertTrue(delete.waitForExistence(timeout: 5), app.debugDescription)
         delete.tap()
         XCTAssertTrue(items.element(boundBy: 0).label.contains("下周三"), "the other own message remains")
-        data = try Data(contentsOf: URL(string: hub + "/mock/queue_edits")!)
-        edits = try JSONDecoder().decode(Edits.self, from: data)
-        XCTAssertEqual(edits.edits.last?["keep"], [1], "delete leaves the other own message in place")
+        edits = try queueEdits()
+        XCTAssertEqual(edits.last?["keep"], [1], "delete leaves the other own message in place")
 
         let sendNow = app.buttons["queue-send-now"]
         XCTAssertTrue(sendNow.waitForExistence(timeout: 5), app.debugDescription)

@@ -51,4 +51,16 @@ struct QueueSteerTests {
         #expect(hub.sent("POST", "/api/v1/sessions/m/s/queue").isEmpty, "relayed messages are not queue-edit indexes")
         #expect(hub.sent("POST", "/api/v1/sessions/m/s/queue/send-now").isEmpty, "nothing of the user's own waits to send")
     }
+
+    @Test func queuePhotoMarksFollowTheOwnQueueAndOutbox() {
+        let store = ChatStore(key: SessionKey(machineID: "m", sessionID: "s"))
+        store.updateQueuePhotoMarks(queued: ["one", "relay"], own: 1)
+        #expect(store.queuePhotoMarks == [0])
+
+        store.pending = [PendingMessage(text: "one", images: [ImagePayload(mime: "image/png", data: "AA==")])]
+        #expect(store.queuePhotoMarks == [1], "the outbox change derives the mark once for the view")
+
+        store.updateQueuePhotoMarks(queued: ["relay"], own: 0)
+        #expect(store.queuePhotoMarks.isEmpty, "relayed rows never borrow a local pending message's photos")
+    }
 }
