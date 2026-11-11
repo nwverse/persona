@@ -23,8 +23,9 @@ final class ForwardMessageTests: XCTestCase {
     @MainActor private func launch(_ scheme: String) -> XCUIApplication {
         let url = hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? hub
         let app = XCUIApplication()
+        // Fresh chats: a forward cached by an earlier run would sit where the steps tap.
         app.launchArguments = ["-pairURL", "persona://pair?url=\(url)&token=mock", "-tab", "dev", "-openSession", review,
-                               "-ui.scheme", scheme]
+                               "-ui.scheme", scheme, "-openChatsFresh", "YES"]
         app.launchPinned()
         return app
     }
@@ -83,6 +84,12 @@ final class ForwardMessageTests: XCTestCase {
         field.typeText(note)
     }
 
+    /// The keyboard away: a tap on the chat's empty left margin, clear of any bubble or card (the mock keeps the light
+    /// pass's forwards for the dark one).
+    @MainActor private func hideKeyboard(_ app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.35)).tap()
+    }
+
     @MainActor private func send(_ app: XCUIApplication) {
         app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "shell-composer-send", "发送")).firstMatch.tap()
     }
@@ -132,7 +139,7 @@ final class ForwardMessageTests: XCTestCase {
             waitSent(note)
             let card = app.descendants(matching: .any)["bubble.forward"].firstMatch
             XCTAssertTrue(card.waitForExistence(timeout: 10), "the sent bubble has no forward card")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap() // the keyboard away
+            hideKeyboard(app)
             sleep(2)
             shot(app, "5-sent-agent-\(scheme)")
 
@@ -152,7 +159,7 @@ final class ForwardMessageTests: XCTestCase {
             send(app)
             waitSent(ask)
             XCTAssertTrue(app.descendants(matching: .any)["bubble.forward"].firstMatch.waitForExistence(timeout: 10))
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+            hideKeyboard(app)
             sleep(2)
             shot(app, "6-sent-persona-\(scheme)")
             app.terminate()
