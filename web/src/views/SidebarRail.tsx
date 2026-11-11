@@ -94,7 +94,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
           { name: "persona" },
           pending > 0 ? `Persona ${pending}` : "Persona",
           <AppMark size={20} radius={5} className="shadow-hairline" />,
-          pending > 0 ? <span aria-hidden className="absolute top-1 right-1 size-2 rounded-full bg-attention ring-2 ring-canvas" />
+          pending > 0 ? <span aria-hidden className="absolute top-1 right-1 size-2 rounded-full bg-needs ring-2 ring-canvas" />
             : st === "working" || st === "needs_you" || st === "unread" ? <span aria-hidden className="absolute top-0.5 right-0.5 flex rounded-full ring-2 ring-canvas"><StatusMark state={st} /></span> : null,
           bindings.persona ? `${t("sidebar.persona_main")} (${formatChord(bindings.persona)})` : t("sidebar.persona_main"),
         )}

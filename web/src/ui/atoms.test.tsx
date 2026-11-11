@@ -3,7 +3,7 @@ import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { stateColor } from "../lib/format";
 import type { AgentState } from "../lib/types";
-import { Button, Collapse, copyText, Dialog, IconButton, Loading, Menu, StatePill, useMenu } from "./atoms";
+import { Button, Collapse, copyText, CountBadge, Dialog, IconButton, Loading, Menu, StatePill, useMenu } from "./atoms";
 import { markOf } from "./StatusMark";
 import { STATE_LABEL } from "../lib/state-labels";
 
@@ -40,8 +40,23 @@ describe("state pill semantic fills", () => {
     expect(pending).toContain("bg-field text-green");
     expect(pending).not.toContain("bg-green-tint");
     const needs = renderToStaticMarkup(<StatePill state="needs_you" />);
-    expect(needs).toContain("bg-field text-attention");
+    expect(needs).toContain("bg-field text-needs-ink");
     expect(needs).not.toMatch(/bg-(red|orange|green)-tint/);
+  });
+});
+
+describe("count badge", () => {
+  it("hides at zero, caps at 99+ and says the exact number", () => {
+    expect(renderToStaticMarkup(<CountBadge count={0} />)).toBe("");
+    const big = renderToStaticMarkup(<CountBadge count={120} />);
+    expect(big).toContain(">99+</span>");
+    expect(big).toContain('<span class="sr-only">120</span>');
+    expect(renderToStaticMarkup(<CountBadge count={3} />)).toMatch(/data-count-badge="needs"[^>]*class="[^"]*bg-field text-needs-ink"[^>]*>3<\/span>$/);
+  });
+
+  it("takes a passive or accent tone and the dense size", () => {
+    expect(renderToStaticMarkup(<CountBadge count={4} tone="neutral" dense />)).toMatch(/h-4 min-w-4[^"]*bg-field text-ink-2/);
+    expect(renderToStaticMarkup(<CountBadge count={4} tone="accent" label={false} />)).toMatch(/aria-hidden="true"[^>]*bg-accent-ink text-surface/);
   });
 });
 

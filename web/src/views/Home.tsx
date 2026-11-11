@@ -308,7 +308,7 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
 }
 
 function Pill({ children }: { children: React.ReactNode }) {
-  return <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap text-attention">{children}</span>;
+  return <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap text-needs-ink">{children}</span>;
 }
 
 /** When a row last changed or how long it has worked: quiet text, its badge already says the state. */
@@ -562,7 +562,7 @@ function Badge({ state }: { state: AgentState }) {
     );
   if (state === "needs_you")
     return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-field text-attention" aria-label={STATE_LABEL[state]}>
+      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-field text-needs-ink" aria-label={STATE_LABEL[state]}>
         <Icon name="hand" size={13} stroke={2.2} />
       </span>
     );

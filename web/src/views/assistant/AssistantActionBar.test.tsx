@@ -381,7 +381,7 @@ describe("Assistant Needs you / In progress trays", () => {
     try {
       expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
       expect(entry("needs").textContent).toBe(`${label.needs}1`);
-      expect(entry("needs").querySelector("[aria-hidden]")?.classList).toContain("bg-attention");
+      expect(entry("needs").querySelector("[aria-hidden]")?.classList).toContain("bg-needs");
       // In progress counts what the To-dos page counts (#3331): the plan's tasks are no to-dos yet
       expect(entry("running").textContent).toBe(`${label.running}1`);
       act(() => entry("running").click());

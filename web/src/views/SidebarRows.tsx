@@ -14,7 +14,7 @@ import { useLeftDraft } from "../lib/drafts";
 import { planInRow, planLabel, planLine } from "../lib/plan";
 import { answeredSession, answerPending, lastAnsweredAt } from "./assistant/answered-lookup";
 import type { AgentState, Session } from "../lib/types";
-import { cx, EASE, Kbd, Menu, useMenu, useNow, type MenuItem } from "../ui/atoms";
+import { CountBadge, cx, EASE, Kbd, Menu, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
 import { ultracodeMarkShown } from "../lib/ultracode";
@@ -75,7 +75,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
       </span>
       {chord && <span aria-hidden data-persona-chord className={cx("hidden sm:inline-flex [@media(hover:none)]:hidden", aside)}><Kbd>{formatChord(chord)}</Kbd></span>}
       {pending > 0 ? (
-        <span className={cx("flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums", aside)}>{pending}</span>
+        <CountBadge count={pending} className={aside} />
       ) : st === "working" || st === "needs_you" || st === "unread" ? (
         <span className={cx("flex", aside)}><StatusMark state={st} /></span>
       ) : null}
@@ -215,11 +215,11 @@ function SourceTag({ s, className }: { s: Session; className?: string }) {
   return <span data-source={source} role="img" title={label} aria-label={label} className={cls}>{mark}</span>;
 }
 
-/** A row's line under its title (rowLine, or draftLine): the red lead, then the words. */
+/** A row's line under its title (rowLine, or draftLine): the lead in its color (Needs you's blue, Awaiting Reply's green, a draft's amber), then the words. */
 function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone?: "needs" | "reply" }; draft: boolean }) {
   return (
     <span data-row-line data-draft={draft ? "" : undefined} className="truncate text-[11.5px] leading-4 text-ink-3">
-      {line.lead && <span className={cx("font-medium", line.tone === "reply" ? "text-green" : "text-attention")}>{line.lead}</span>}
+      {line.lead && <span className={cx("font-medium", line.tone === "reply" ? "text-green" : draft ? "text-attention" : "text-needs-ink")}>{line.lead}</span>}
       {line.text}
     </span>
   );
@@ -375,7 +375,7 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
       {tailShown && <span className={cx("max-w-[72px] min-w-6 shrink-[20] truncate text-[11px] text-ink-3", aside)}>{tail}</span>}
       {ageAtEnd && <span data-row-age className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at, Date.now(), "narrow")}</span>}
-      {(s.pending_interactions ?? 0) > 0 && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", aside)}>{s.pending_interactions}</span>}
+      <CountBadge count={s.pending_interactions ?? 0} dense className={aside} />
     </a>
   );
   if (!onMenu) return link;

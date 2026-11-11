@@ -110,7 +110,7 @@ function Card({ title, kicker, onDismiss, busy, children, footer, looking = fals
       <div className="px-3.5 pt-3 pb-2.5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className={cx("mb-0.5 flex items-center gap-1.5 text-[11px] font-medium", looking ? "text-ink-3" : "text-attention")}>
+            <div className={cx("mb-0.5 flex items-center gap-1.5 text-[11px] font-medium", looking ? "text-ink-3" : "text-needs-ink")}>
               <StatusMark state={looking ? "working" : "needs_you"} size="sm" label={false} />
               {kicker}
               {/* the card stays a quiet surface: a neutral chip, the voice's color only on its mark */}
@@ -1191,7 +1191,7 @@ function FoldRow({ label, detail, onClick }: { label: string; detail: string; on
       className="flex h-11 shrink-0 items-center gap-2 rounded-card bg-surface px-3.5 text-left shadow-card transition-colors hover:bg-hover"
       style={{ animation: `fade-up 250ms ${EASE} both` }}
     >
-      <span className="size-1.5 shrink-0 rounded-full bg-attention" />
+      <span className="size-1.5 shrink-0 rounded-full bg-needs" />
       <span className="shrink-0 text-[13px] font-medium whitespace-nowrap text-ink">{label}</span>
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{detail}</span>
       <Icon name="chevronRight" size={14} stroke={2.2} className="shrink-0 text-ink-3" />
@@ -1218,7 +1218,7 @@ function NextWaitingRow({ mid, sid }: { mid: string; sid: string }) {
       className="flex h-11 shrink-0 items-center gap-2 rounded-card bg-surface px-3.5 shadow-card transition-colors hover:bg-hover"
       style={{ animation: `fade-up 250ms ${EASE} both` }}
     >
-      <span className="size-1.5 shrink-0 rounded-full bg-attention" />
+      <span className="size-1.5 shrink-0 rounded-full bg-needs" />
       <span className="shrink-0 text-[13px] font-medium whitespace-nowrap text-ink">{t("chat-interactions.next_waiting", { count })}</span>
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("chat-interactions.next_waiting_detail", { title, ask })}</span>
       <Icon name="chevronRight" size={14} stroke={2.2} className="shrink-0 text-ink-3" />

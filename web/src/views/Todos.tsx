@@ -789,7 +789,7 @@ function steadyViews(prev: ReadonlyMap<string, TodoRowView>, next: ReadonlyMap<s
 
 // ── Project Section ──────────────────────────────────────────
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-needs-ink", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** One project's open todos under a folding title with its Needs you / Working / Done (#2526). */
 const TodoProjectSection = memo(function TodoProjectSection({
@@ -843,7 +843,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
 // ── Status sections (#3156) ──────────────────────────────────
 
 const SECTION_TONE: Record<TriageSection, string> = {
-  waiting: "text-attention",
+  waiting: "text-needs-ink",
   working: "text-orange",
   just_done: "text-green",
   pr: "text-accent-ink",
@@ -1198,7 +1198,7 @@ const TodoListItem = memo(function TodoListItem({
         {/* Most Urgent Agent Line */}
         {view.urgentLine && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
-            {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
+            {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-needs-ink")}>{view.urgentLead}</span>}
             {view.urgentText}
           </div>
         )}
@@ -1558,7 +1558,7 @@ function TodoDetail({
   const toneClass = {
     red: "bg-red-tint text-red",
     green: "bg-green-tint text-green",
-    amber: status === "needs_you" ? "bg-field text-attention" : "bg-orange-tint text-orange",
+    amber: status === "needs_you" ? "bg-field text-needs-ink" : "bg-orange-tint text-orange",
     idle: "bg-hover text-ink-2",
     off: "bg-hover text-ink-3",
   }[statusInfo.tone];
@@ -1801,7 +1801,7 @@ function TodoDetail({
                     ) : now || (st === "needs_you" && askText(ix)) ? (
                       <div className="mt-1 line-clamp-2 text-[12.5px] text-ink-2">
                         {st === "needs_you" && (
-                          <span className="font-medium text-attention">{t("todos.kicker_line", { kicker })}</span>
+                          <span className="font-medium text-needs-ink">{t("todos.kicker_line", { kicker })}</span>
                         )}
                         {(st === "needs_you" && askText(ix)) || (now && (now.kind === "words" ? plainMarkdown(now.text) : now.text))}
                       </div>

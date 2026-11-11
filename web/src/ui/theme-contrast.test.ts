@@ -8,7 +8,7 @@ import { contrast } from "./extension-theme";
 // (#2804); the same backgrounds extension themes are checked against (extension-theme.ts).
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
-const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
+const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "needs-ink", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
 
 function tokens(scheme: "light" | "dark"): Record<string, string> {
   const block = (scheme === "light" ? /:root\s*\{([^}]+)\}/ : /\.dark\s*\{([^}]+)\}/).exec(css)?.[1] ?? "";
@@ -51,6 +51,9 @@ describe("default palette contrast", () => {
       }
       expect(css).toContain(".dark .bg-user-bubble { --ink-3: var(--ink-2); }");
       expect(css).toContain(".bg-user-bubble :is(button, a, summary):focus-visible { outline-color: var(--ink); --tw-ring-color: var(--ink); }");
+    });
+    it(`${scheme}: Needs you is the blue every client uses (spec/tokens/color.status.json)`, () => {
+      expect([t.needs, t["needs-ink"]]).toEqual(scheme === "light" ? ["#007aff", "#0064c8"] : ["#0a84ff", "#409cff"]);
     });
     it(`${scheme}: --ink-3 stays a step quieter than --ink-2`, () => {
       expect(contrast(t["ink-3"], t.surface)).toBeLessThan(contrast(t["ink-2"], t.surface));

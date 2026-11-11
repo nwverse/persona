@@ -1765,7 +1765,7 @@ function AttentionNote({ session }: { session: Session }) {
   if (!reason) return null;
   const link = externalLink(session);
   return (
-    <div role="status" data-testid="chat-attention" className="flex items-start gap-2 rounded-[12px] border-l-2 border-attention bg-inset px-3 py-2 text-[12.5px]" style={{ animation: "fade-up 200ms ease-out both" }}>
+    <div role="status" data-testid="chat-attention" className="flex items-start gap-2 rounded-[12px] border-l-2 border-needs bg-inset px-3 py-2 text-[12.5px]" style={{ animation: "fade-up 200ms ease-out both" }}>
       <span className="flex h-[18px] shrink-0 items-center"><StatusMark state="needs_you" /></span>
       <span className="line-clamp-3 min-w-0 flex-1 text-ink-2">{reason}</span>
       {link && (
@@ -2030,7 +2030,7 @@ export const Header = memo(function Header({
         >
           <Icon name="layers" size={13} />
           <span>{t("chat-chatview.same_space")}</span> {others.length}
-          {othersNeed && <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
+          {othersNeed && <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-needs shadow-[0_0_0_2px_var(--page)]" />}
         </button>
       )}
       {tabs.anchor && (
@@ -2062,7 +2062,7 @@ export const Header = memo(function Header({
       {view && onView && (
         <span className="relative flex shrink-0 sm:hidden">
           <IconButton icon={view === "chat" ? "terminal" : "chat"} label={t(view === "chat" ? "chat-chatview.terminal" : "chat-chatview.chat")} onClick={flipView} />
-          {view === "term" && viewDot && <span aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-attention" />}
+          {view === "term" && viewDot && <span aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-needs" />}
         </span>
       )}
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
@@ -2074,7 +2074,7 @@ export const Header = memo(function Header({
       {items.length > 0 && (
         <span className="relative flex shrink-0">
           <IconButton icon="more" label={t("chat-chatview.more")} onClick={menu.open} active={Boolean(menu.anchor)} />
-          {othersNeed && <span aria-hidden className="pointer-events-none absolute -top-0.5 -right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)] sm:hidden" />}
+          {othersNeed && <span aria-hidden className="pointer-events-none absolute -top-0.5 -right-0.5 size-2 rounded-full bg-needs shadow-[0_0_0_2px_var(--page)] sm:hidden" />}
         </span>
       )}
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}

@@ -9,7 +9,7 @@ import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL, stateCount } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
-import { Button, cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { Button, CountBadge, cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { StatusMark } from "../../ui/StatusMark";
@@ -335,8 +335,8 @@ function EarlierHeader({ count, needs, window, folded, onToggle }: { count: numb
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
       </button>
       {needs > 0 && (
-        <span title={stateCount("needs_you", needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
-          {needs}<span className="sr-only"> {t("sidebar.needs_you_suffix", { count: needs })}</span>
+        <span title={stateCount("needs_you", needs)} className="flex shrink-0">
+          <CountBadge count={needs} dense /><span className="sr-only"> {t("sidebar.needs_you_suffix", { count: needs })}</span>
         </span>
       )}
     </div>

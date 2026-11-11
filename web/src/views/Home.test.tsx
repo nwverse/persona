@@ -71,7 +71,7 @@ describe("the overview", () => {
   it("restores green unread success badges without tinting Needs you rows", () => {
     const html = render([agent(1, 0, "unread"), agent(2, 0, "needs_you")]);
     expect(html).toMatch(/class="[^"]*bg-green-tint text-green" aria-label="完成未看"/);
-    expect(html).toMatch(/class="[^"]*bg-field text-attention" aria-label="需要你"/);
+    expect(html).toMatch(/class="[^"]*bg-field text-needs-ink" aria-label="需要你"/);
     expect(html).not.toContain("bg-orange-tint");
     expect(html).not.toContain("bg-red-tint");
   });

@@ -58,10 +58,10 @@ describe("Header", () => {
   });
 
   it("marks ⋯ on a phone when a sibling needs you, as the 同空间 button does wider", () => {
-    expect(header()).toMatch(/aria-label="更多"[^]*?<span aria-hidden="true" class="[^"]*bg-attention[^"]*sm:hidden"/);
+    expect(header()).toMatch(/aria-label="更多"[^]*?<span aria-hidden="true" class="[^"]*bg-needs[^"]*sm:hidden"/);
     const calm = { ...sibling, state: "idle" } as Session;
     const quiet = { ...session, state: "idle" } as Session;
-    expect(header({ session: quiet, siblings: [quiet, calm] })).not.toMatch(/bg-attention[^"]*sm:hidden/);
+    expect(header({ session: quiet, siblings: [quiet, calm] })).not.toMatch(/bg-needs[^"]*sm:hidden/);
   });
 });
 
@@ -100,7 +100,7 @@ describe("Header, the 终端 | 对话 switch (#2419)", () => {
     expect(chat).toMatch(/<span class="relative flex shrink-0 sm:hidden"><button[^>]*aria-label="终端"/);
     const term = header({ view: "term", onView: () => {} });
     expect(term).toMatch(/<span class="relative flex shrink-0 sm:hidden"><button[^>]*aria-label="对话"/);
-    expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/aria-label="对话"[^]*?<\/button><span aria-hidden="true" class="pointer-events-none absolute[^"]*bg-attention"/);
+    expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/aria-label="对话"[^]*?<\/button><span aria-hidden="true" class="pointer-events-none absolute[^"]*bg-needs"/);
   });
   it("marks 对话 when the terminal shows and something wants an answer", () => {
     expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/对话<span aria-hidden="true" class="absolute/);
@@ -117,14 +117,14 @@ const cards = (o: { narrow: boolean; keyboard?: boolean; interactions?: Interact
 describe("PendingCards", () => {
   it("uses attention marks and neutral surfaces for questions, plans and permissions", () => {
     const html = cards({ narrow: false });
-    expect(html).toContain("text-attention");
+    expect(html).toContain("text-needs-ink");
     expect(html).toContain("bg-surface");
     expect(html).not.toMatch(/\b(?:bg-red|bg-red-tint|text-red)\b/);
     expect(html).not.toContain("bg-danger-fill");
   });
   it("keeps the attention mark when the pending cards fold", () => {
     const html = cards({ narrow: true, keyboard: true });
-    expect(html).toContain("bg-attention");
+    expect(html).toContain("bg-needs");
     expect(html).not.toContain("bg-red");
   });
   it("says what an answered card was about when its answer is one word (允许 / 批准)", () => {

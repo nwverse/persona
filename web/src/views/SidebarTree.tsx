@@ -15,7 +15,7 @@ import { useStore } from "../lib/store";
 import { treeStateLabel, type TodoTree, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
 import { findTodoForSpace, openTodoFromTag } from "../lib/todos";
 import type { AgentState, Machine, Session } from "../lib/types";
-import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
+import { Collapse, CountBadge, cx, sidebarFoldMotion } from "../ui/atoms";
 import { StatusMark, StateTally } from "../ui/StatusMark";
 import { foldedCounts, hasFoldedCounts } from "../lib/folded-counts";
 import { Icon } from "../ui/icons";
@@ -36,7 +36,7 @@ type TreeRowProps = { machineLabel: MachineLabel; showHost?: boolean; reg: RegFn
 /** A computer's name as an agent row shows it ("" with a single computer). */
 type MachineLabel = (machineId: string) => string;
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-needs-ink", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** "Needs you" / "Working" / "Done" at the end of a tree node's line. */
 const TreeStateText = memo(function TreeStateText({ state }: { state: TreeState }) {
@@ -185,8 +185,8 @@ export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, g
           <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {m.needs > 0 && !(folded && online) ? (
-          <span title={stateCount("needs_you", m.needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
-            {m.needs}<span className="sr-only"> {t("sidebar.needs_you_suffix", { count: m.needs })}</span>
+          <span title={stateCount("needs_you", m.needs)} className="flex shrink-0">
+            <CountBadge count={m.needs} dense /><span className="sr-only"> {t("sidebar.needs_you_suffix", { count: m.needs })}</span>
           </span>
         ) : !online ? (
           <span className="shrink-0 text-[10.5px] whitespace-nowrap text-ink-3">{neverConnected(m.machine) ? t("sidebar.not_connected_yet") : t("sidebar.offline")}</span>
@@ -434,8 +434,8 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
           <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {m.needs > 0 && !(folded && online) ? (
-          <span title={stateCount("needs_you", m.needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
-            {m.needs}<span className="sr-only"> {t("sidebar.needs_you_suffix", { count: m.needs })}</span>
+          <span title={stateCount("needs_you", m.needs)} className="flex shrink-0">
+            <CountBadge count={m.needs} dense /><span className="sr-only"> {t("sidebar.needs_you_suffix", { count: m.needs })}</span>
           </span>
         ) : !online ? (
           <span className="shrink-0 text-[10.5px] whitespace-nowrap text-ink-3">{neverConnected(m.machine) ? t("sidebar.not_connected_yet") : t("sidebar.offline")}</span>

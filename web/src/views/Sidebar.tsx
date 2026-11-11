@@ -30,7 +30,7 @@ import { conversationTitle } from "./assistant/conversations";
 import { buildTodoTree, shareTree, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
-import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, type MenuItem } from "../ui/atoms";
+import { Collapse, CountBadge, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon, type IconName } from "../ui/icons";
 import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
@@ -972,9 +972,7 @@ function isOpenAuto(conversations: readonly Session[] | undefined, activeKey: st
 function TallyMark({ tally }: { tally: OriginTally }) {
   if (tally.needsYou > 0) {
     return (
-      <span title={t("sidebar.auto_needs_you", { count: tally.needsYou })} className={cx("flex h-4.5 min-w-4.5 shrink-0 items-center justify-center whitespace-nowrap rounded-full px-1 text-[10.5px] font-semibold tabular-nums", BADGE_CLASS.attention)}>
-        {tally.needsYou}
-      </span>
+      <CountBadge count={tally.needsYou} title={t("sidebar.auto_needs_you", { count: tally.needsYou })} />
     );
   }
   if (tally.working > 0) {
@@ -1022,7 +1020,7 @@ function AutoConversations({ conversations, main, shown, activeKey, holds, reg, 
           {groups.map((g) => {
             const k = `auto:${g.origin}`;
             return (
-              <NavRow key={g.origin} k={k} reg={reg} hover={hover} active={activeKey === k || openGroup === g.origin} to={{ name: "history", origin: g.origin }} go={go} icon={ORIGIN_ICON[g.origin]} label={originLabel(g.origin)} hint={String(g.count)} badge={g.needsYou || undefined} badgeTone="attention" dot={!g.needsYou && g.working > 0 ? "working" : undefined} />
+              <NavRow key={g.origin} k={k} reg={reg} hover={hover} active={activeKey === k || openGroup === g.origin} to={{ name: "history", origin: g.origin }} go={go} icon={ORIGIN_ICON[g.origin]} label={originLabel(g.origin)} hint={String(g.count)} badge={g.needsYou || undefined} badgeTone="needs" dot={!g.needsYou && g.working > 0 ? "working" : undefined} />
             );
           })}
         </div>

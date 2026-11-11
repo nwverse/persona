@@ -30,7 +30,7 @@ export function AssistantAvatar({ id, name, isDefault, size = 24, status, waitin
         {avatarInitial(name)}
       </span>
       {status && <span data-avatar-status={status} className={cx("absolute -right-px -bottom-px rounded-full ring-2", ring, STATUS[status])} style={{ width: mark, height: mark }} />}
-      {waiting && <span data-avatar-waiting className={cx("absolute -top-px -right-px rounded-full bg-attention ring-2", ring)} style={{ width: mark, height: mark }} />}
+      {waiting && <span data-avatar-waiting className={cx("absolute -top-px -right-px rounded-full bg-needs ring-2", ring)} style={{ width: mark, height: mark }} />}
     </span>
   );
 }

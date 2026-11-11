@@ -112,7 +112,7 @@ describe("todo rows on a sessions push", () => {
     const { TODO_STATUS_INFO } = await import("../lib/todos");
     expect(host.querySelector(".bg-orange-tint.text-orange")?.textContent).toContain(TODO_STATUS_INFO.working.label);
     await act(async () => upsertSession(session("s1", { state: "needs_you", status: "blocked" })));
-    expect([...host.querySelectorAll(".bg-field.text-attention")].some((el) => el.textContent?.includes(TODO_STATUS_INFO.needs_you.label))).toBe(true);
+    expect([...host.querySelectorAll(".bg-field.text-needs-ink")].some((el) => el.textContent?.includes(TODO_STATUS_INFO.needs_you.label))).toBe(true);
     expect([...host.querySelectorAll(".bg-orange-tint")].some((el) => el.textContent?.includes(TODO_STATUS_INFO.needs_you.label))).toBe(false);
   });
 

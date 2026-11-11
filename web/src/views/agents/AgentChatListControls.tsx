@@ -422,7 +422,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
             (line?.lead || previewText) && (
               <span className="truncate text-[11.5px] leading-4 text-ink-3">
                 {line?.lead && (
-                  <span className={cx("mr-1 font-medium", line.tone === "reply" ? "text-green" : "text-attention")}>
+                  <span className={cx("mr-1 font-medium", line.tone === "reply" ? "text-green" : draft ? "text-attention" : "text-needs-ink")}>
                     {line.lead}
                   </span>
                 )}

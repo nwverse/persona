@@ -840,7 +840,7 @@ const AgentRow = memo(function AgentRow({ ix, off = false }: { ix: Interaction; 
   const glyph = IX_GLYPH[ix.kind];
   return (
     <a href={href(to)} onClick={(e) => onLinkClick(e, to)} inert={off} className={cx("flex gap-3 rounded-[14px] bg-surface p-3 shadow-card transition-[background-color,opacity] duration-150 hover:bg-inset", off && "opacity-45")}>
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-field text-attention">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-field text-needs-ink">
         {glyph === "list" || glyph === "terminal" ? <Icon name={glyph} size={18} stroke={2} /> : <Glyph name={glyph} size={18} stroke={2} />}
       </span>
       <span className="min-w-0 flex-1">
@@ -853,13 +853,13 @@ const AgentRow = memo(function AgentRow({ ix, off = false }: { ix: Interaction; 
           <>
             <span className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.5] text-ink">{ask}</span>
             <span className="mt-0.5 block truncate text-[11.5px]">
-              <span className="font-medium text-attention">{interactionTitle(ix)}</span>
+              <span className="font-medium text-needs-ink">{interactionTitle(ix)}</span>
               <span className="text-ink-3"> · {where}</span>
             </span>
           </>
         ) : (
           <>
-            <span className="mt-0.5 block truncate text-[12.5px] font-medium text-attention">{interactionTitle(ix)}</span>
+            <span className="mt-0.5 block truncate text-[12.5px] font-medium text-needs-ink">{interactionTitle(ix)}</span>
             <span className="mt-0.5 block truncate text-[11.5px] text-ink-3">{where}</span>
           </>
         )}

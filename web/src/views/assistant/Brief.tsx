@@ -204,11 +204,11 @@ export function BriefCard({ item }: { item: FeedItem }) {
       </div>
 
       {body.waiting_unknown ? (
-        <Section icon="hand" tint="bg-field text-attention" title={t("assistant-brief.waiting_head", { n: "?" })}>
+        <Section icon="hand" tint="bg-field text-needs-ink" title={t("assistant-brief.waiting_head", { n: "?" })}>
           <div className="py-1 text-[13px] text-ink-2">{t("assistant-brief.waiting_unknown")}</div>
         </Section>
       ) : (
-        <Section icon="hand" tint="bg-field text-attention" title={t("assistant-brief.waiting_head", { n: body.waiting.length })}>
+        <Section icon="hand" tint="bg-field text-needs-ink" title={t("assistant-brief.waiting_head", { n: body.waiting.length })}>
           {body.waiting.length === 0 && <div className="py-1 text-[13px] text-ink-2">{t("assistant-brief.none")}</div>}
           {body.waiting.map((r) => (
             <WaitingRow key={r.id} row={r} />

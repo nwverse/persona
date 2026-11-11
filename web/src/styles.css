@@ -56,6 +56,10 @@
   --red: #bd3038;
   --red-tint: #f7f8f9;
   --attention: #8f5c00;
+  /* Needs You (DECISIONS 11-11, #4538): the system blue every client uses for "your turn". --needs fills dots and
+     count badges; --needs-ink is the text shade that keeps 4.5:1 on every background token. */
+  --needs: #007aff;
+  --needs-ink: #0064c8;
   --danger-fill: #bd3038;
   /* The AI role (iOS Theme.ai): what the AI runs on its own, such as ultracode's workflow icon (#3428) and a
      workflow run (#3434). */
@@ -116,6 +120,8 @@
   --red: #ff9499;
   --red-tint: #1f2022;
   --attention: #f1b969;
+  --needs: #0a84ff;
+  --needs-ink: #409cff;
   --danger-fill: #bd3038;
   --ai: #9c94ff;
   --ai-tint: #9c94ff24;
@@ -196,6 +202,8 @@
   --color-red: var(--red);
   --color-red-tint: var(--red-tint);
   --color-attention: var(--attention);
+  --color-needs: var(--needs);
+  --color-needs-ink: var(--needs-ink);
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
   --color-ai-tint: var(--ai-tint);
@@ -253,7 +261,7 @@ body {
 
 
 /* ── Persona additions ──────────────────────────────────── */
-:root { --status-needs: var(--attention); --status-working: var(--orange); --status-waiting: color-mix(in srgb, var(--status-working) 55%, var(--ink-3)); --status-unread: var(--green); --status-idle: var(--ink-3); --user-bubble: #dceaff; --neutral-bubble: #f0f1f3; --term-magenta: #a347ba; --term-cyan: #0f8a9c; }
+:root { --status-needs: var(--needs); --status-working: var(--orange); --status-waiting: color-mix(in srgb, var(--status-working) 55%, var(--ink-3)); --status-unread: var(--green); --status-idle: var(--ink-3); --user-bubble: #dceaff; --neutral-bubble: #f0f1f3; --term-magenta: #a347ba; --term-cyan: #0f8a9c; }
 .dark { --user-bubble: #1d3557; --neutral-bubble: #2c2d31; --term-magenta: #c678dd; --term-cyan: #4fb6c4; }
 /* The chat's trace (aligned with cindy's defaults, #1963): tool rows and their chevrons, the work group's rail, thought
    text, diff counts and the running status bar's accent. */
@@ -384,9 +392,9 @@ button:disabled { cursor: default; }
 :root {
   --mochi-disc-top: #f4eadf; --mochi-disc-bottom: #e7d7c4; --mochi-body-top: #fff; --mochi-body-bottom: #e9e3de;
   --mochi-ink: #1d1816; --mochi-outline: #1d1816; --mochi-motion: #1d1816; --mochi-cheek: #f2703c; --mochi-shadow: rgb(0 0 0 / .14);
-  --mochi-sleep-top: #d9d4d0; --mochi-sleep-bottom: #bdb6b1; --mochi-sleep-ink: #6e6763; --mochi-sleep-cheek: #a59d98; --mochi-needs-you: var(--attention);
+  --mochi-sleep-top: #d9d4d0; --mochi-sleep-bottom: #bdb6b1; --mochi-sleep-ink: #6e6763; --mochi-sleep-cheek: #a59d98; --mochi-needs-you: var(--needs);
 }
-.dark { --mochi-disc-top: #332a26; --mochi-disc-bottom: #1d1816; --mochi-outline: #0e0b0a; --mochi-motion: #d6d1cd; --mochi-shadow: rgb(0 0 0 / .45); --mochi-needs-you: var(--attention); }
+.dark { --mochi-disc-top: #332a26; --mochi-disc-bottom: #1d1816; --mochi-outline: #0e0b0a; --mochi-motion: #d6d1cd; --mochi-shadow: rgb(0 0 0 / .45); --mochi-needs-you: var(--needs); }
 /* The faces' loops (.mochi-blink / -spin / -rock / -pulse) run as Web Animations (views/assistant/face-motion.ts): as CSS
    animations every cycle sent an animationiteration event to React's root listener and cost the page a style recalc and
    a layout, five faces in the persona picker kept /settings busy while idle. Here only where they turn from. */

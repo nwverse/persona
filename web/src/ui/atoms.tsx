@@ -89,7 +89,7 @@ export function Loading({ label = t("common.loading") }: { label?: string }) {
 /** A state as a word in a pill; `awaiting`: seen and awaiting the user's reply, a quiet pending mark (#5096). */
 export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
   const tone: Record<AgentState, string> = {
-    needs_you: "bg-field text-attention",
+    needs_you: "bg-field text-needs-ink",
     working: "bg-field text-orange",
     unread: "bg-green-tint text-green",
     idle: "bg-field text-ink-2",
@@ -251,6 +251,36 @@ export function Switch({ on, onChange, disabled, label, className, describedBy, 
 
 export function Kbd({ children }: { children: React.ReactNode }) {
   return <kbd className="inline-flex h-4.5 min-w-4.5 items-center justify-center rounded-[5px] bg-surface px-1 font-sans text-[10px] text-ink-3 shadow-hairline">{children}</kbd>;
+}
+
+export type CountTone = "needs" | "neutral" | "accent";
+const COUNT_TONE: Record<CountTone, string> = {
+  needs: "bg-field text-needs-ink",
+  neutral: "bg-field text-ink-2",
+  accent: "bg-accent-ink text-surface",
+};
+
+/** How many (#4538): `needs` counts what waits for the user, `neutral` a passive
+ *  total, `accent` the selected item's count or a mention. Nothing at zero, "99+" past 99. `dense`: 16 px for a dense row,
+ *  else 18. `label`: what a screen reader hears in place of the digits (by default the number, exact past 99); `false`
+ *  where the host control's own label already says it. */
+export function CountBadge({ count, tone = "needs", dense = false, label, className, ...rest }: { count: number; tone?: CountTone; dense?: boolean; label?: string | false; className?: string } & Omit<React.HTMLAttributes<HTMLSpanElement>, "children">) {
+  if (!(count > 0)) return null;
+  const capped = count > 99;
+  const spoken = label === false ? undefined : (label ?? (capped ? String(count) : undefined));
+  return (
+    <>
+      <span
+        {...rest}
+        data-count-badge={tone}
+        aria-hidden={label === false || spoken ? true : undefined}
+        className={cx("flex shrink-0 items-center justify-center whitespace-nowrap rounded-full px-1 font-semibold tabular-nums", dense ? "h-4 min-w-4 text-[10px]" : "h-4.5 min-w-4.5 text-[10.5px]", COUNT_TONE[tone], className)}
+      >
+        {capped ? "99+" : count}
+      </span>
+      {spoken && <span className="sr-only">{spoken}</span>}
+    </>
+  );
 }
 
 // Height-animating disclosure (grid 0fr → 1fr), the expand grammar every Beautiful UI trace uses.
@@ -785,8 +815,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
         <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
       )}
       {it.state && <StatePill state={it.state} />}
-      {!working && !!it.badge && <span data-menu-badge aria-hidden={it.badgeLabel ? true : undefined} className="flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold whitespace-nowrap text-attention tabular-nums">{it.badge > 99 ? "99+" : it.badge}</span>}
-      {!working && !!it.badge && it.badgeLabel && <span className="sr-only">{it.badgeLabel}</span>}
+      {!working && !!it.badge && <CountBadge data-menu-badge count={it.badge} label={it.badgeLabel} />}
       {working ? <Spinner size={12} /> : it.hint && <span className="shrink-0 text-[11px] text-ink-3">{it.hint}</span>}
       {it.checked !== undefined && <Icon name="check" size={13} stroke={2.5} className={cx("shrink-0", it.checked ? "text-ink" : "invisible")} />}
       {accel && !working && <span aria-hidden className={cx("w-3.5 shrink-0 text-center text-[11px]", it.danger ? "" : "text-ink-3")}>{accel}</span>}
