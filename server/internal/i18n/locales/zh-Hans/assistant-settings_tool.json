@@ -37,5 +37,7 @@
   "minutes_forever": "永久保留",
   "minutes_days_value": "{days} 天",
   "minutes_unchanged": "会议纪要保留设置未变：已保存 {saved}，当前生效为 {after}。",
-  "minutes_applied": "会议纪要保留已设为 {saved}，当前生效为 {after}。转写仍按录音保留时间清理。"
+  "minutes_applied": "会议纪要保留已设为 {saved}，当前生效为 {after}。转写仍按录音保留时间清理。",
+  "title_main_background_folded": "后台轮次默认折叠",
+  "change_main_background_folded": "「后台轮次默认折叠」：{before} → {after}"
 }
