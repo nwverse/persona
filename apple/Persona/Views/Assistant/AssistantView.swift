@@ -466,9 +466,13 @@ struct AssistantView: View {
     }
 
     private func deleteFailed() {
-        let m = shownFailure
-        withAnimation(Theme.Motion.standard) { failedStart.clear { $0 == m } }
         model.readiness.failure = nil
+        guard let m = shownFailure else { return }
+        withAnimation(Theme.Motion.standard) { failedStart.clear { $0 == m } }
+        // As a chat's Delete (#4626): Undo puts it back on its page.
+        model.toast = .messageDeleted { [failedStart] in
+            withAnimation(Theme.Motion.standard) { failedStart.fail(m) }
+        }
     }
 
     /// `space`: the space the conversation opens in (Health passes "health"; it never becomes the main conversation).
@@ -546,6 +550,7 @@ struct FirstMessagePending: View {
                 DayLine(date: failed.at)
                 PendingBubble(msg: PendingMessage(id: failed.op, text: failed.text, images: failed.images, state: .failed, createdAt: failed.at),
                               retry: resend, discard: delete)
+                    .chatMark("chat.outbox.failed.\(failed.op.uuidString)")
             } else {
                 DayLine(date: .now)
                 VStack(alignment: .trailing, spacing: Theme.Space.sm) {
@@ -558,6 +563,7 @@ struct FirstMessagePending: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                .chatMark("chat.outbox.sending.start")
                 TypingIndicator(text: String(localized: "\(name) is getting ready…"))
             }
         }

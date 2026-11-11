@@ -80,10 +80,10 @@ func TestHerdrRetire(t *testing.T) {
 	}
 }
 
-// A message to a Codex Persona started that is no longer running resumes it in a new tab of its directory's
-// workspace, named after its title: its launcher's words with the model it ran with, `resume <id>`, and the message
-// as the prompt (nothing typed). One whose launcher is not known stays refused.
-func TestHerdrSendResumesARetiredCodex(t *testing.T) {
+// A message to a Codex Persona started that is no longer running is refused (#4754: a stopped agent takes no
+// messages). The user's Resume (session.start) brings it back in a new tab of its directory's workspace, named after
+// its title: its launcher's words with the model it ran with, `resume <id>`, and the start's prompt (nothing typed).
+func TestHerdrResumeBringsBackAStoppedCodex(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"cx": {"codex", "-m", "gpt-6"}})
 	n, f, home := herdrNode(t)
 	cwd := mkdir(t, filepath.Join(home, "proj"))
@@ -95,9 +95,9 @@ func TestHerdrSendResumesARetiredCodex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"}); err == nil ||
-		!strings.Contains(err.Error(), "重新打开") {
-		t.Fatalf("resumed a Codex whose launcher is not known: %v", err)
+	_, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"})
+	if code, _ := refusalOf(t, err); code != agentStopped {
+		t.Fatalf("a message to a stopped Codex: %v", err)
 	}
 
 	n.state.put(startThread, sessionState{Launcher: "cx", Cwd: cwd, Model: "gpt-7"})
@@ -119,7 +119,7 @@ func TestHerdrSendResumesARetiredCodex(t *testing.T) {
 			f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", "", proto.StatusWorking, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
 		}
 	})
-	if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"}); err != nil {
+	if _, err := request(t, n, "session.start", map[string]any{"resume_session_id": startThread, "prompt": "go on"}); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -146,12 +146,14 @@ func TestOrcaRetireKeepsTheTerminal(t *testing.T) {
 	withStop(t, 1, orcaProcsMaxAge+time.Second) // the node reads Orca's processes at most this often
 	cn, co, procs := orcaSession(t)
 	go func() { // claude quits once Ctrl+C has been pressed twice: its process leaves the terminal
+		tick := time.NewTicker(10 * time.Millisecond) // the fake's trace signals nothing: looked at 200 times at most
+		defer tick.Stop()
 		for range 200 {
 			if len(co.Trace("terminal.send")) >= 2 {
 				procs.set("tab1:leaf1")
 				return
 			}
-			time.Sleep(10 * time.Millisecond)
+			<-tick.C
 		}
 	}()
 	res, err := request(t, cn, "session.retire", map[string]any{"session_id": sidA})

@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.AgentState
 import persona.core.contracts.Machine
+import persona.core.contracts.TodoState
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
@@ -60,6 +61,11 @@ internal data class TreeTabEntry(val tab: AgentTab, val depth: Int, val first: B
     override val key: String get() = "tab:${tab.key}"
 }
 
+/** A section's run of rows past [AgentRowCap]: "Show All [count]", or "Collapse" once they all show ([expanded]). */
+internal data class TreeShowAllEntry(val group: AgentListGroup, val count: Int, val depth: Int, val expanded: Boolean) : AgentTreeEntry {
+    override val key: String get() = "all:${group.id}"
+}
+
 /** Finished sessions of an active space that are tucked away until asked for. */
 internal data class TreeIdleEntry(val group: AgentListGroup, val hidden: Int, val depth: Int) : AgentTreeEntry {
     override val key: String get() = "idle:${group.id}"
@@ -81,6 +87,11 @@ internal fun agentTreeEntries(
     list: AgentListResult, machineFilter: String, tabs: Boolean = false, foldedTabs: Set<String> = emptySet(),
     mutes: AgentPreferences = AgentPreferences(),
     expandedTasks: Set<String> = emptySet(),
+    /**
+     * The sections showing all their rows ([AgentRowCap.key]); null: no section is capped (a search, a quick filter or a
+     * paged list shows every row it leaves, as iOS).
+     */
+    showAll: Set<String>? = null,
 ): List<AgentTreeEntry> {
     val entries = mutableListOf<AgentTreeEntry>()
     fun group(group: AgentListGroup, space: Boolean, depth: Int, first: Boolean) {
@@ -90,7 +101,10 @@ internal fun agentTreeEntries(
         // each line is a row of its own or a tab of several, in the group's order
         val lines = mutableListOf<Any>()
         val placed = mutableSetOf<String>()
-        group.visibleRows.forEach { row ->
+        val cap = showAll?.let { AgentRowCap.capped(group.visibleRows.size) }
+        val open = cap != null && AgentRowCap.key(group.id) in showAll.orEmpty()
+        val drawn = if (cap != null && !open) group.visibleRows.take(cap) else group.visibleRows
+        drawn.forEach { row ->
             val tab = row.session.tabKey?.let(byTab::get)
             if (tab == null) lines += row else if (placed.add(tab.key)) lines += tab
         }
@@ -113,7 +127,8 @@ internal fun agentTreeEntries(
                 }
             }
         }
-        val hidden = group.rows.size - shown
+        if (cap != null) entries += TreeShowAllEntry(group, group.visibleRows.size, depth, expanded = open)
+        val hidden = group.rows.size - shown - (group.visibleRows.size - drawn.size)
         if (hidden > 0) entries += TreeIdleEntry(group, hidden, depth)
     }
     val byId = list.groups.associateBy { it.id }
@@ -204,6 +219,19 @@ internal val AgentListGroup.stateSectionCounts: List<Pair<Status, Int>>?
             else -> return null
         }
         return listOf(status to (totalCount ?: rows.count { !it.isNestedSubtask }))
+    }
+
+/** "By to-do"'s "Opened by hand" and "No to-do": one count of their agents, as iOS's sections without a to-do. */
+internal val AgentListGroup.todoLooseCounts: List<Pair<Status, Int>>?
+    get() = if (id == TodoManualGroup || id == TodoNoneGroup) listOf(Status.Idle to rows.count { !it.isNestedSubtask }) else null
+
+/** A to-do's count in its state's color (iOS `todoTone`): needing you, unread, working, else plain. */
+internal val TodoState?.countTone: Status
+    get() = when (this) {
+        TodoState.NeedsYou -> Status.NeedsYou
+        TodoState.Unread -> Status.Unread
+        TodoState.Working -> Status.Working
+        else -> Status.Idle
     }
 
 internal val AgentListGroup.headingCounts: List<Pair<Status, Int>>
