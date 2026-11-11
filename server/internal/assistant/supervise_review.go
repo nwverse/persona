@@ -491,7 +491,11 @@ func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, 
 	if len(agents) == 0 {
 		return "", errors.New("the task has no agent")
 	}
-	c := pickTaskAgent(agents)
+	live, _ := liveTaskAgents(agents)
+	if len(live) == 0 { // stopped agents are read-only (#4754): Persona's follow-ups start nothing (tasks_successor.go)
+		return "", errTaskAgentsStopped
+	}
+	c := pickTaskAgent(live)
 	if _, ok := s.device(ctx, c.MachineID); !ok {
 		return "", errors.New("its machine is offline")
 	}
