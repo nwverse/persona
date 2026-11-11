@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.Machine
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import java.net.URI
 
@@ -193,7 +194,7 @@ private fun LazyListScope.newAgentItems(
         JSectionHeader(stringResource(R.string.agents_worktree_title))
         JGroupItem(GroupPosition.of(0, if (state.inWorktree) 2 else 1)) {
             JSwitchRow(stringResource(R.string.agents_worktree_switch), state.inWorktree, model::inWorktree,
-                leadingIcon = PhIcons.GitBranch, enabled = editable)
+                leadingIcon = PersonaIcons.gitBranch, enabled = editable)
         }
         if (state.inWorktree) JGroupItem(GroupPosition.of(1, 2)) {
             JTextField(state.worktreeBranch, model::worktreeBranch, placeholder = suggested,
