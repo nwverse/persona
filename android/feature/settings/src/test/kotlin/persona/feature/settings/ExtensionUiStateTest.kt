@@ -56,6 +56,22 @@ private class FakeUi : ExtensionApiStub() {
 class ExtensionUiStateTest {
     private val res get() = ApplicationProvider.getApplicationContext<android.content.Context>().resources
 
+    @Test fun dateFieldsReadInTheAppLanguageNotTheSystems() {
+        // #4105: an English phone with the app in Japanese or Chinese.
+        val saved = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.US)
+        try {
+            assertEquals("2026/11/11", ExtensionViewText.whenText("date", "2026-11-11", java.util.Locale.JAPANESE))
+            assertEquals("2026年11月11日", ExtensionViewText.whenText("date", "2026-11-11", java.util.Locale.SIMPLIFIED_CHINESE))
+            assertEquals("2026年11月11日 14:30", ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.SIMPLIFIED_CHINESE))
+            assertEquals("Nov 11, 2026", ExtensionViewText.whenText("date", "2026-11-11", java.util.Locale.ENGLISH))
+            assertEquals("14:30", ExtensionViewText.whenText("time", "14:30", java.util.Locale.JAPANESE))
+            assertEquals("soon", ExtensionViewText.whenText("date", "soon", java.util.Locale.JAPANESE))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
     @Test fun tonesLinksAndItemsTheAppDraws() {
         assertEquals(Tone.Positive, ExtensionViewText.tone("positive"))
         assertEquals(Tone.Danger, ExtensionViewText.tone("danger"))
