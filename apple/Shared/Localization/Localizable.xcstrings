@@ -119402,6 +119402,29 @@
       },
       "extractionState": "manual"
     },
+    "Subtasks (%lld)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subtasks (%lld)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サブタスク（%lld）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子任务（%lld）"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Succeeded": {
       "localizations": {
         "en": {
