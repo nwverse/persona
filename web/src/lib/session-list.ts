@@ -361,11 +361,7 @@ export class SessionList<T> {
       try { page = await this.page(generation, { cursor: this.cursor }); }
       catch (error) {
         if (!this.expired(error)) throw error;
-        // The hub keeps a frozen view 5 minutes (fewer when newer ones push it out), so reaching the end of a list
-        // left open that long always lands here. Emptying the list first collapsed it to its first page and threw the
-        // reader back to the top; keep the rows on screen and read a fresh view as deep as they have scrolled, plus
-        // the page they asked for.
-        await Promise.all([this.rebaseline(generation, this.prefixSize + PAGE_SIZE), this.readCounts(generation)]);
+        await this.reread(generation, this.prefixSize + PAGE_SIZE);
         return;
       }
       if (!page || !this.current(generation)) return;
@@ -378,28 +374,34 @@ export class SessionList<T> {
     this.publish({ rows: this.visible(), hasMore: !!this.cursor || this.candidateCount() > this.prefixSize });
   }
 
-  /** A fresh frozen view at least `depth` rows deep, swapped in at once; the old rows stay until then. */
-  private async rebaseline(generation: number, depth: number): Promise<void> {
-    const first = await this.page(generation);
+  /** An expired frozen cursor: read a fresh view at least `depth` rows deep and swap it in at once, so the rows on
+   * screen stay put instead of falling back to the first page (#4410). A revision change mid-read fails, without retry. */
+  private async reread(generation: number, depth: number): Promise<void> {
+    const frozen = new Map<string, T>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    const readRows = async (): Promise<ListPage<T> | null> => {
+      let first: ListPage<T> | null = null;
+      do {
+        const page = await this.page(generation, cursor ? { cursor } : {});
+        if (!page || !this.current(generation)) return null;
+        if (first && page.revision !== first.revision) throw new Error(t("paged-agents.inconsistent_page"));
+        first ??= page;
+        for (const row of page.sessions) frozen.set(this.identity(row), row);
+        cursor = page.has_more ? page.next_cursor : undefined;
+        if (cursor && cursors.has(cursor)) throw new Error(t("paged-agents.repeated_cursor"));
+        if (cursor) cursors.add(cursor);
+      } while (cursor && frozen.size < depth);
+      return first;
+    };
+    const [first] = await Promise.all([readRows(), this.readCounts(generation)]);
     if (!first || !this.current(generation)) return;
-    const frozen = new Map(first.sessions.map((row) => [this.identity(row), row]));
-    let cursor = first.has_more ? first.next_cursor : undefined;
-    let size = PAGE_SIZE;
-    while (cursor && size < depth) {
-      const page = await this.page(generation, { cursor });
-      if (!page || !this.current(generation)) return;
-      if (page.revision !== first.revision) throw new Error(t("paged-agents.inconsistent_page"));
-      for (const row of page.sessions) frozen.set(this.identity(row), row);
-      cursor = page.has_more ? page.next_cursor : undefined;
-      size += PAGE_SIZE;
-    }
     this.frozen = frozen;
     this.overlay = new Map();
-    this.prefixSize = size;
     this.cursor = cursor;
-    this.frozenRevision = first.revision;
-    this.checkpoint = first.revision;
-    this.publish({ rows: this.visible(), loaded: true, total: first.total, hasMore: !!cursor || this.candidateCount() > size });
+    this.frozenRevision = this.checkpoint = first.revision;
+    this.prefixSize = depth;
+    this.publish({ rows: this.visible(), total: first.total, hasMore: !!cursor || frozen.size > depth });
   }
 
   private candidates(): Map<string, T> {

@@ -343,7 +343,8 @@ import Observation
             page = try await fetch(query, next, nil)
             try Task.checkCancellation()
             guard generation == gen else { return }
-            guard page.revision == first.revision else { throw APIError(status: 409, message: "List snapshot changed") }
+            // Not a 409: the recovery below would start over from the first page and shrink the list after all.
+            guard page.revision == first.revision else { throw APIError(status: 0, message: "List snapshot changed") }
             let seen = Set(fresh.map(id))
             fresh += unique(page.sessions.filter { !seen.contains(id($0)) })
         }

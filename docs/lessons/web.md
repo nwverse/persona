@@ -890,5 +890,5 @@ Reaching the end of an Agents list open longer than that asked for the next page
 clients recovered by starting over: the web emptied the list (`clearBaseline`) and the iPhone replaced its rows with the
 first page. A list 300 rows deep became 50, the scroller clamped its offset, and the reader was thrown back near the top
 every time they reached the bottom. Recover by reading a fresh view as deep as the reader has scrolled plus one page,
-keeping the old rows on screen until it arrives (`SessionList.rebaseline`, `SessionListModel.rebaseline`); any
+keeping the old rows on screen until it arrives (web `SessionList.reread`, #4431; iOS `SessionListModel.rebaseline`); any
 recovery that publishes fewer rows than are on screen moves the reader.

@@ -149,6 +149,10 @@ func (n *Node) mergeManagedSettings(launcher string, l proto.ManagedLauncher, ou
 	}
 	mine["env"] = env
 	mine["enableArtifact"] = false // artifactsOff: a gateway cannot carry them
+	// A managed launcher brings its own gateway key, so the computer's user-global apiKeyHelper (~/.claude/settings.json)
+	// can only authenticate it against the wrong gateway: Claude Code runs the helper and sends its token in the other
+	// auth header, and the launcher's gateway answers 401. An empty string disables the helper for this start.
+	mine["apiKeyHelper"] = ""
 	out, err := json.MarshalIndent(mine, "", "  ")
 	if err != nil {
 		return "", err

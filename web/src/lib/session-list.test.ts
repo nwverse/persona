@@ -345,30 +345,45 @@ describe("retry, expiry and legacy capability handling", () => {
     expect(list.getSnapshot().loading).toBe(false);
   });
 
-  it("keeps the scrolled rows when the cursor expires at the end of a long list, and reloads as deep plus a page", async () => {
-    // Reaching the bottom of a list open longer than the hub keeps its frozen view: the list used to empty and come
-    // back with only its first page, so the browser clamped the scroll position and the reader jumped to the top.
+  it("swaps in a fresh view at least one page deeper on an expired cursor, never publishing fewer rows (#4410)", async () => {
+    const lengths: number[] = [];
+    const list = make((r) => lengths.push(r.length));
+    await list.load();
+    pages.mockResolvedValueOnce(page(rows(50, 50), { has_more: true, next_cursor: "frozen/two" }));
+    await list.more();
+    expect(ids(list)).toHaveLength(100);
+    pages.mockRejectedValueOnce(failure(409, "cursor_expired"))
+      .mockResolvedValueOnce(page(rows(50), { revision: "fresh", total: 400, has_more: true, next_cursor: "fresh/1" }))
+      .mockResolvedValueOnce(page(rows(50, 50), { revision: "fresh", total: 400, has_more: true, next_cursor: "fresh/2" }))
+      .mockResolvedValueOnce(page(rows(50, 100), { revision: "fresh", total: 400, has_more: true, next_cursor: "fresh/3" }));
+    lengths.length = 0;
+    await list.more();
+    expect(lengths).toEqual([150]);
+    expect(ids(list)).toEqual(rows(150).map((r) => r.id));
+    expect(list.getSnapshot()).toMatchObject({ total: 400, hasMore: true, error: null, loading: false });
+    expect(requestParams().slice(-4).map((p) => p.cursor)).toEqual(["frozen/two", undefined, "fresh/1", "fresh/2"]);
+    expect(aggregates).toHaveBeenCalledTimes(2);
+    pages.mockResolvedValueOnce(page(rows(50, 150), { revision: "fresh", total: 400 }));
+    await list.more();
+    expect(requestParams().at(-1)?.cursor).toBe("fresh/3");
+    expect(ids(list)).toHaveLength(200);
+    pages.mockResolvedValueOnce(page([], { revision: "later" }));
+    await list.load();
+    expect(requestParams().at(-1)?.since).toBe("fresh");
+  });
+
+  it("keeps the rows on screen and stops when the fresh view changes revision mid-read", async () => {
     const list = make();
     await list.load();
-    pages.mockResolvedValueOnce(page(rows(50, 50), { has_more: true, next_cursor: "two" }));
-    await list.more();
-    expect(list.getSnapshot().rows).toHaveLength(100);
-    const lengths: number[] = [];
-    list.subscribe(() => lengths.push(list.getSnapshot().rows.length));
-    pages
-      .mockRejectedValueOnce(failure(409, "cursor_expired"))
-      .mockResolvedValueOnce(page(rows(50), { revision: "fresh", has_more: true, next_cursor: "f1" }))
-      .mockResolvedValueOnce(page(rows(50, 50), { revision: "fresh", has_more: true, next_cursor: "f2" }))
-      .mockResolvedValueOnce(page(rows(50, 100), { revision: "fresh", has_more: true, next_cursor: "f3" }));
-    await list.more();
-    expect(Math.min(...lengths)).toBeGreaterThanOrEqual(100);
-    expect(list.getSnapshot().rows).toHaveLength(150);
-    expect(list.getSnapshot()).toMatchObject({ loaded: true, loading: false, error: null, hasMore: true });
-    expect(requestParams().slice(-4).map((p) => p.cursor)).toEqual(["two", undefined, "f1", "f2"]);
-    pages.mockResolvedValueOnce(page(rows(50, 150), { revision: "fresh" }));
-    await list.more();
-    expect(requestParams().at(-1)?.cursor).toBe("f3");
-    expect(list.getSnapshot().rows).toHaveLength(200);
+    const before = list.getSnapshot().rows;
+    pages.mockRejectedValueOnce(failure(409, "cursor_expired"))
+      .mockResolvedValueOnce(page(rows(50), { revision: "fresh", has_more: true, next_cursor: "fresh/1" }))
+      .mockResolvedValueOnce(page(rows(50, 50), { revision: "moved" }));
+    await expect(list.more()).rejects.toThrow(t("paged-agents.inconsistent_page"));
+    expect(pages).toHaveBeenCalledTimes(4);
+    expect(list.getSnapshot().rows).toBe(before);
+    expect(list.getSnapshot()).toMatchObject({ loaded: true, loading: false, hasMore: true });
+    expect(list.getSnapshot().error).toBeTruthy();
   });
 
   it("does not retry expiry forever if the replacement baseline fails", async () => {
