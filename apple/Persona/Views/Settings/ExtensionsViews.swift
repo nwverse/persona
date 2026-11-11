@@ -1091,7 +1091,7 @@ private struct SecretProviderSections: View {
             Section {
                 ForEach(rules) { r in
                     VStack(alignment: .leading, spacing: Theme.Space.lines) {
-                        Text("\(r.launcher) on \(machineName(r.machine))").lineLimit(1)
+                        Text("\(r.launcher) on \(machineName(r.machine)) [Handoff Rule]").lineLimit(1)
                         Text(verbatim: r.reference).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

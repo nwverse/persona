@@ -47,6 +47,29 @@
         }
       }
     },
+    "%@ on %@ [Handoff Rule]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ on %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@の%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 上的 %1$@"
+          }
+        }
+      }
+    },
     "%lld more waiting on you, not in %@": {
       "extractionState": "manual",
       "localizations": {
