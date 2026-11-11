@@ -2,7 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from android_i18n_check import count, literals, regressions, resource_problems, write_baselines, baselines, languages, language_problems
+from android_i18n_check import (count, literals, regressions, resource_problems, write_baselines, baselines, languages, language_problems,
+                                english, english_hits_by_file, ENGLISH_BASELINE)
 
 
 def write(root, path, text):
@@ -134,6 +135,87 @@ class I18nCheckTest(unittest.TestCase):
 
     def test_escaped_quotes_stay_inside_the_literal(self):
         self.assertEqual([(1, r'"a \" 中"')], literals(r'val x = "a \" 中"'))
+
+    def english_lines(self, *lines):
+        write(self.module, 'src/main/kotlin/A.kt', '\n'.join(lines))
+        return [line for line, _ in english_hits_by_file(self.root).get('feature/demo/src/main/kotlin/A.kt', [])]
+
+    def test_english_ui_text_in_compose_positions_is_found(self):
+        write(self.root, 'core/designsystem/build.gradle.kts', '')
+        write(self.root, 'core/designsystem/src/main/kotlin/J.kt', '\n'.join([
+            '@Composable',
+            'fun JButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {}',
+            '@Composable fun JTextField(value: String, onValueChange: (String) -> Unit, label: String? = null, placeholder: String? = null) {}',
+            '@Composable',
+            'internal fun DetailField(name: String, value: String, trailing: (@Composable () -> Unit)? = null) {}',
+        ]))
+        self.assertEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 11], self.english_lines(
+            'Text("Session")',
+            'Text(text = "Needs you", style = s)',
+            'JButton("Try again", { retry() })',
+            'JTextField(v, { }, label = "Base URL")',
+            'Icon(PhIcons.Copy, "Copy session")',
+            'Box(Modifier.semantics { contentDescription = "Close the page" })',
+            'DetailField("Session", session)',
+            'Text("Sent to ${name}")',
+            'JAction("Mark all as seen") { }',
+            'JButton(',
+            '    "Open settings",',
+            '    onClick = { })',
+        ))
+
+    def test_english_check_skips_what_is_not_ui_text(self):
+        write(self.root, 'core/designsystem/build.gradle.kts', '')
+        write(self.root, 'core/designsystem/src/main/kotlin/J.kt',
+              '@Composable fun JTextField(value: String, onValueChange: (String) -> Unit, label: String? = null, placeholder: String? = null) {}')
+        self.assertEqual([], self.english_lines(
+            'Text("Persona")',
+            'Text("Persona Link", style = s)',
+            'Text("HEAD")',
+            'Text("ok")',
+            'Text("%1$s · %2$s")',
+            'Text("${a} → ${b}")',
+            'Text("+$added")',
+            'Text("https://Example.com/Path")',
+            'JTextField(v, { }, placeholder = "https://hub.example.com")',
+            'JTextField("Hub Address", { })',
+            'Text("Retry") // i18n-ignore: matches the hub',
+            'Log.w("Persona", "Request failed")',
+            'Modifier.testTag("Send Button")',
+            'val alpha by animateFloatAsState(1f, label = "Fade In")',
+            'AnimatedContent(pages, label = "Proactive Pages")',
+            'throw IllegalStateException("Not connected")',
+            'Text("Hello " + name)',
+            'Text(if (on) "On" else "Off")',
+            'Text("""Raw Text""")',
+            'Text("MainActivity")',
+            'Text("Agents")',
+            'val label = "Session"',
+            '// Text("Commented out")',
+            'Text("需要你")',
+        ))
+
+    def test_english_check_skips_shared_test_source_sets(self):
+        write(self.module, 'src/sharedTest/kotlin/T.kt', 'Text("Pick one")')
+        write(self.module, 'src/test/kotlin/T.kt', 'Text("Pick one")')
+        self.assertEqual({}, english_hits_by_file(self.root))
+
+    def test_english_words(self):
+        for text in ['Session', 'Try again', 'API Key', 'Couldn’t sync', 'Open Persona settings']:
+            self.assertTrue(english(text), text)
+        for text in ['session', 'Persona', 'Claude Code', 'URL', 'SSH', 'name@example.com', 'Foo.bar', 'snake_case',
+                     'PascalCase', '·', '', '  ', '1/2', 'A']:
+            self.assertFalse(english(text), text)
+
+    def test_english_counts_have_their_own_baseline(self):
+        (self.module / 'src').mkdir(exist_ok=True)
+        write_baselines({'feature/demo/src/main/kotlin/A.kt': 1}, self.root, name=ENGLISH_BASELINE)
+        self.assertTrue((self.module / ENGLISH_BASELINE).exists())
+        self.assertFalse((self.module / 'i18n-baseline.json').exists())
+        self.assertEqual({'feature/demo/src/main/kotlin/A.kt': 1}, baselines(self.root, name=ENGLISH_BASELINE))
+        self.assertEqual({}, baselines(self.root))
+        self.assertIn('hardcoded English text', regressions({'a.kt': 2}, {'a.kt': 1}, 'English')[0])
+        self.assertIn('hardcoded Chinese / Japanese text', regressions({'a.kt': 2}, {'a.kt': 1})[0])
 
 
 if __name__ == '__main__':

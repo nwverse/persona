@@ -541,12 +541,12 @@ Shared conventions (language list, fallback, glossary, protocol fields) are defi
 - **Checks** (no Android SDK needed; also run in CI's Privacy and workflow checks):
 
 ```sh
-python3 scripts/app/android_i18n_check.py            # the three sets agree on keys / placeholders / plurals, key prefixes, no Chinese or Japanese in values/, hard-coded Chinese / Japanese doesn't exceed the baseline
+python3 scripts/app/android_i18n_check.py            # the three sets agree on keys / placeholders / plurals, key prefixes, no Chinese or Japanese in values/, hard-coded Chinese / Japanese and English UI text don't exceed the baselines
 python3 scripts/app/android_i18n_check.py --update   # record the lower count after moving copy into strings.xml
 (cd scripts/app && python3 test_android_i18n_check.py)
 ```
 
-  Each module's `i18n-baseline.json` records its hardcoded text counts so modules can migrate independently. Counts can only decrease; the goal is to remove every baseline. Tests and the design system's developer catalog at `core/designsystem/src/debug/kotlin/persona/core/designsystem/catalog/` are excluded. Other `src/debug` client code and XML are checked normally; debug source sets must not bypass localization checks. Non-UI literals (hub text that must match, prompts sent to a model) explain their purpose on the same line with `// i18n-ignore: <reason>`.
+  Each module's `i18n-baseline.json` records its hardcoded text counts so modules can migrate independently; `i18n-english-baseline.json` does the same for English literals in Compose text positions (`Text("…")`, `contentDescription`, a composable's `title` / `label` / `text` … String parameter), and the check lists every recorded line. Counts can only decrease; the goal is to remove every baseline. Tests and the design system's developer catalog at `core/designsystem/src/debug/kotlin/persona/core/designsystem/catalog/` are excluded. Other `src/debug` client code and XML are checked normally; debug source sets must not bypass localization checks. Non-UI literals (hub text that must match, prompts sent to a model) explain their purpose on the same line with `// i18n-ignore: <reason>`.
 
 ## What the main chat is still missing (#4032)
 
