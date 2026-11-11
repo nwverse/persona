@@ -107,7 +107,7 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
 - **Repository** (#2840): Agents in Git repositories carry `repo_root` (the main repository directory for a worktree, or the checkout itself for a main checkout), as its physical
   directory (symbolic links resolved, #4492), the way node names a session's working tree. "By repository" on all three clients uses it to group
   Paseo worktrees under the main repository. Paseo worktrees live at `~/.paseo/worktrees/<project hash>/<name>`; the path alone does not identify the repository.
-  On the web and Android, "By repository" names a Paseo worktree by its workspace's title (the `slot_name` its Agents share) instead of its branch; the main checkout keeps its name (#4497).
+  On all three clients, "By repository" names a Paseo worktree by its workspace's title (the `slot_name` its Agents share) instead of its branch; the main checkout keeps its name (#4497; iOS #4768).
 - **Streaming**: while the phone is viewing a session, the bridge subscribes to that Agent's timeline and shows text as it is written. Unviewed sessions have no bridge subscription. If a session changes Agents (the original closes and another resumes it), the bridge subscribes to the new one. Non-Claude sessions use the new history to make the phone refetch the whole page.
 
 ## Capabilities

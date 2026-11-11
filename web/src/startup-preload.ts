@@ -124,14 +124,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * session's model lists it reads for its name, the composer card's width modes and their words; the model panel, its
  * data and its words load on the pill's first tap). And 192 B for provider display names (#5029 added 165 B to ja:
  * plan task chips name their launcher by the provider's display name through lib/provider-names.ts, the shared cache of
- * the providers' names and the hook that reads them again after a rename). main was already 652 B over its budget at
- * 56f871fcb (ja 593,242 B against 592,590 B); that overage is kept here, not new room. And 800 B for the main chat's
- * hand-off cards (#5096 added 764 B to ja, 593,242 B to 594,006 B: a card for each dispatched Agent, a task's or an
- * Agent's page opened from the chat with the chat's place kept, their words; the task side panel and the dispatched
- * line they replace go, and the way-back strip on the Agent's page loads on its own). Raise it on purpose, in the
- * change that needs it.
+ * the providers' names and the hook that reads them again after a rename). And 448 B for clearing the main chat's context
+ * (#5095 added 405 B to ja, 593,185 B to 593,590 B: /clear in the main chat's command list, its ⋯ row, the cleared page's
+ * state in lib/main-clear.ts and their words); main was already 595 B over its budget at 286d88fb2 (ja 593,185 B against
+ * 592,590 B), and that overage is kept here, not new room. And 640 B for the main chat's hand-off cards (#5096 added 929 B
+ * to ja, 593,323 B at 9d3f343d3 to 594,252 B, 310 B of it in the room left: a card for each dispatched Agent, a task's
+ * or an Agent's page opened from the chat with the chat's place kept, their words; the task side panel and the
+ * dispatched line they replace go, and the way-back strip on the Agent's page loads on its own). Raise it on purpose,
+ * in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 594_042;
+export const FIRST_SCREEN_BUDGET = 594_273;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

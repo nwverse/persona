@@ -35,7 +35,7 @@ def features():
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
-                ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
+                ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
@@ -6414,7 +6414,8 @@ def tasks_area(h, method, p, raw):
 # MOCK_MAIN_ACTIONS=1: the hub can compact the main conversation and start a new one (#1727, the apps' side #1762):
 # the features assistant_compact / assistant_main_new; POST …/compact runs for MOCK_COMPACT_SECONDS (default 3) and
 # ends done (MOCK_COMPACT_FAIL=1: failed); POST /api/v1/assistant/main/new archives the main one (409 main_changed when
-# `expect` is not it). MOCK_COMPACTION=running|done|failed: the main conversation starts in that state (screenshots).
+# `expect` is not it); POST /api/v1/assistant/main/clear (assistant_main_clear, #5095) does the same with nothing carried
+# and a turn it is on stopped. MOCK_COMPACTION=running|done|failed: the main conversation starts in that state (screenshots).
 MAIN_ACTIONS = os.environ.get("MOCK_MAIN_ACTIONS") == "1"
 
 
@@ -6466,6 +6467,20 @@ def main_actions_area(h, method, p, raw):
                 push_machine(s["machine_id"])
         ASSISTANT_CONFIG["main"] = None
         h.send_json({"ok": True, "archived": old, "carried": body.get("carry") == "summary"})
+        return True
+    if p == "/api/v1/assistant/main/clear":
+        body = json.loads(raw or b"{}")
+        old = ASSISTANT_CONFIG["main"]
+        if body.get("expect") and body.get("expect") != old:
+            h.send_json({"code": "main_changed", "error": "主对话已经在别的设备上换过了"}, 409)
+            return True
+        today = datetime.now()
+        for s in ASSISTANT:
+            if old and s["session_id"] == old:
+                s.update(title="旧主对话 · 至 %d月%d日" % (today.month, today.day), archived=True, status="idle", state="idle")
+                push_machine(s["machine_id"])
+        ASSISTANT_CONFIG["main"] = None
+        h.send_json({"ok": True, "archived": old or ""})
         return True
     return False
 

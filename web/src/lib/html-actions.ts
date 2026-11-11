@@ -2,7 +2,7 @@
 // the user confirmed goes to POST …/views/{key}/html-actions. Its own module, loaded with the html card (ui/HtmlCard.tsx),
 // so the first screen doesn't carry it.
 import { ApiError, api, enc } from "./api";
-import type { HtmlActionRequest } from "./assistant-html";
+import type { HtmlActionRequest } from "./html-bridge";
 import { applyAction, applyView, isCardVersion, type CardKey, type SubmitOutcome } from "./assistant-views";
 import type { ViewAction, ViewChangedError } from "./extension-wire";
 

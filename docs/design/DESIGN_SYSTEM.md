@@ -490,6 +490,15 @@ The web Recordings retention setting (#3780 / #3862) reuses the settings select 
 returning to Forever sends `0`. Only the hub-confirmed value is shown after a save, and transcript days stay separate.
 This is a requested default and interaction change, not a new style or component.
 
+The web Agent naming settings (#4812) reuse Settings › Assistant's Agents group, `Row`, `Switch`, the numeric
+settings input and `SettingsHint`. The default corrects only recognizable placeholder or instruction-template
+names, once per Agent; periodic updates default off. The per-Agent limit counts successful name changes, including
+periodic refreshes. The periodic switch reveals hours (24 when first enabled) and a plain note that refresh needs
+new output and remains subject to that limit; a limit of one shows why another refresh cannot happen. Turning off
+automatic naming hides the advanced controls without losing their values. Saves use the selected assistant and
+show only confirmed values. Native custom titles and manual renames are protected; task names and tab labels are
+separate objects and unchanged. This is a requested feature, with no new visual style, component or motion.
+
 ### 3.8 Chips, badges, avatars, marks
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
@@ -675,6 +684,8 @@ Severity ladder to adopt:
 In-meeting typed questions (#4486) are the exception to rung 4: they use an inline input row in the live recording sheet's bottom bar (`apple/Persona/Recording/RecordingLiveBar.swift`), not a system text-entry alert. The question usually refers to what was just said, and a modal alert hid the live lines and the earlier answers while the user typed. It also allowed only one line and no reference back. The keyboard button beside Ask Persona opens the row (at accessibility sizes, More › Type a Question opens it). The row shows a hint, then a field and send button that reuse the composer's `ComposerSurface` and `ComposerRoundButton` (3.1). The field grows to `Theme.Recording.askLines` lines (`askLinesLargeType` at accessibility sizes, where the hint also steps aside while the keyboard is up and the field's spoken hint carries it). Send stays in place but is dimmed and disabled until there is non-whitespace text, and Return sends too. While the row is open, the keyboard button becomes Cancel, which drops the draft as the alert's Cancel did. While the field has the keyboard, Pause, Stop and Bookmark step aside so the timeline keeps the room. Sending goes through the same `MeetingAsk.ask(_:text:)`, then clears the field and closes the row. It is not a fifth composer (DS-19): it has no attachments, dictation (the microphone is recording), model menu or full-page editor.
 
 The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
+
+Clearing the main chat's context (**Clear context** in its ⋯ menu and `/clear`, #5095; the web first, iOS and Android in #5100) is on the reversible rung without an Undo toast, a user-requested alignment with Cindy's `/clear`: it runs at once from the menu or the command, and its only feedback is the chat emptying in place (the same top bar, an empty middle, the composer still at the bottom; no jump to the centered new-chat page). Nothing is deleted: the old chat is archived as "Old main chat · until <date>" and comes back when it is sent to. Failure is a toast with the reason, and the `/clear` goes back into the box. **New main chat…** keeps its sheet, since it has a choice to make (carry a summary).
 
 A blocked terminal card on the web offers **Close Agent**, including when no choices can be parsed from the screen.
 Its footer reuses `Button`, explains that the pending confirmation is cancelled and the conversation kept, and
