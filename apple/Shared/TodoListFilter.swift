@@ -34,7 +34,32 @@ nonisolated enum TodoListSort: String, CaseIterable, Sendable {
     }
 }
 
+/// The list under a filter: the triage of what it shows, and how many to-dos it leaves out that wait on the owner.
+nonisolated struct TodoFilteredList: Sendable {
+    var result: TodoTriageResult
+    /// To-dos waiting on the owner that the filter leaves out (the line over the list).
+    var hiddenWaiting: Int
+}
+
 nonisolated enum TodoListLogic {
+    /// `searched` (the to-dos the search keeps) under `filter`, placed in sections. Whether a failed start was superseded
+    /// (#3713) is decided on `all`, every to-do: a search or a filter that leaves its finished work out never puts it back
+    /// in Needs you, nor in the count of those left out.
+    static func list(_ all: [TodoItem], searched: [TodoItem], filter: TodoListFilter, lookup: TodosLogic.SessionLookup?,
+                     now: Date, restored: [String: Date], calendar: Calendar) -> TodoFilteredList {
+        let superseded = TodoTriageLogic.supersededFailedStarts(all)
+        let shown = searched.filter { matches($0, filter, now: now, calendar: calendar) }
+        let result = TodoTriageLogic.triageTodos(shown, lookup: lookup, now: now, restored: restored, superseded: superseded)
+        guard filter != .all else { return TodoFilteredList(result: result, hiddenWaiting: 0) }
+        let ids = Set(shown.map(\.id))
+        let hidden = searched.filter { td in
+            !ids.contains(td.id)
+                && TodoTriageLogic.triage(td, lookup: lookup, now: now, restoredAt: restored[td.id],
+                                          superseded: superseded.contains(td.id)).section == .waiting
+        }.count
+        return TodoFilteredList(result: result, hiddenWaiting: hidden)
+    }
+
     /// Whether `todo` is in `filter` at `now`. The week is `calendar`'s (the calendar view's, `TodoCalendar.userCalendar`);
     /// a due day counts by its start, a due moment by itself.
     static func matches(_ todo: TodoItem, _ filter: TodoListFilter, now: Date, calendar: Calendar) -> Bool {

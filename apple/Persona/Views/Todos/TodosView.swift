@@ -38,27 +38,10 @@ struct TodosView: View {
 
     /// What the list draws: the to-dos by status section (#3206, docs/assistant/todo-status-sop.md), related ones merged
     /// into one row. A search and the filter (#3740) narrow the to-dos first, then the sections place what is left.
-    private struct ListState {
-        var result: TodoTriageResult
-        /// To-dos waiting on the owner that the filter leaves out (the line over the list).
-        var hiddenWaiting: Int
-    }
-
-    private func listState() -> ListState {
-        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
-        let calendar = TodoCalendar.userCalendar
-        let searched = store.todos.filter(matchesQuery)
-        let shown = searched.filter { TodoListLogic.matches($0, listFilter, now: clock, calendar: calendar) }
-        let result = TodoTriageLogic.triageTodos(shown, lookup: lookup, now: clock, restored: restored)
-        var hidden = 0
-        if listFilter != .all {
-            let ids = Set(shown.map(\.id))
-            hidden = searched.filter { td in
-                !ids.contains(td.id)
-                    && TodoTriageLogic.triage(td, lookup: lookup, now: clock, restoredAt: restored[td.id]).section == .waiting
-            }.count
-        }
-        return ListState(result: result, hiddenWaiting: hidden)
+    private func listState() -> TodoFilteredList {
+        TodoListLogic.list(store.todos, searched: store.todos.filter(matchesQuery), filter: listFilter,
+                           lookup: TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront)),
+                           now: clock, restored: restored, calendar: TodoCalendar.userCalendar)
     }
 
     private func matchesQuery(_ todo: TodoItem) -> Bool {

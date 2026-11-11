@@ -106,4 +106,30 @@ struct TodoListFilterTests {
         #expect(TodoListLogic.sorted(rows, by: .due, calendar: calendar).map(\.key) == ["lead", "other"])
         #expect(TodoListLogic.sorted(rows, by: .priority, calendar: calendar).map(\.key) == ["lead", "other"])
     }
+
+    /// A failed start (#3713) whose finished work a filter or a search leaves out is still superseded (decided on every
+    /// to-do): not back in Needs you, not in the line about those the filter leaves out.
+    @Test func aFilterNeverPutsASupersededFailedStartBackInNeedsYou() {
+        var failed = todo("failed", day: "2026-11-11", done: true)       // due today: shown under Today
+        failed.planID = "p"; failed.startError = "no launcher"
+        var finished = todo("finished", done: true)                      // its plan's work, no due date: left out
+        finished.planID = "p"
+        var hiddenFailed = todo("hidden-failed", done: true)
+        hiddenFailed.planID = "q"; hiddenFailed.startError = "no launcher"
+        var hiddenFinished = todo("hidden-finished", done: true)
+        hiddenFinished.planID = "q"
+        var waiting = todo("waiting", done: true)                        // nothing finished beside it: waits
+        waiting.startError = "no launcher"
+        let all = [failed, finished, hiddenFailed, hiddenFinished, waiting]
+
+        let today = TodoListLogic.list(all, searched: all, filter: .today, lookup: nil, now: now, restored: [:], calendar: calendar)
+        #expect(today.result.groups(.waiting).isEmpty)
+        #expect(today.result.groups(.justDone).flatMap { $0.members.map(\.id) } == ["failed"])
+        #expect(today.hiddenWaiting == 1)
+
+        let searched = TodoListLogic.list(all, searched: [failed, waiting], filter: .all, lookup: nil, now: now, restored: [:],
+                                          calendar: calendar)
+        #expect(searched.result.groups(.waiting).flatMap { $0.members.map(\.id) } == ["waiting"])
+        #expect(searched.hiddenWaiting == 0)
+    }
 }
