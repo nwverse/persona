@@ -802,6 +802,10 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		}
 	}
 	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params); err != nil {
+		var other *launcherOtherKind
+		if errors.As(err, &other) {
+			return nil, other.rpcError(s.appLang(ctx, p.Lang)) // 409 launcher_other_kind, with the kinds for the app
+		}
 		return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
 	if text, ok := params["text"].(string); ok {
@@ -842,6 +846,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	}
 	l, _ := p["launcher"].(string)
 	asked := l != "" // picked in the chat's menu for this message
+	if asked {
+		if err := s.otherKindPick(ctx, machine, sid, l); err != nil {
+			return err // another agent kind can't resume this conversation: refused, not swapped on the node
+		}
+	}
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
 			l = c.Launcher // no launcher picked: the one this conversation runs
