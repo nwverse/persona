@@ -217,9 +217,10 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			switch {
 			case card != "":
 				err = s.botUpdateAnswerCard(ctx, card, c)
-			case end == channel.EndDone:
+			case end != channel.EndRecalled:
 				// A held run has no card left (it gave it back with its message): the ending goes out as a card of its
-				// own, so the follow-up it was told to expect is never left silent. A recalled message says nothing.
+				// own, so the follow-up it was told to expect is never left silent — and it says how the run ended,
+				// done or not (#4228). A recalled message says nothing.
 				var mid string
 				mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, foot, "")
 				if err == nil && to.ChatID == "" {
