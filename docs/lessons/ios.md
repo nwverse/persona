@@ -23,7 +23,9 @@ does not compile): read it where it is set from (`StyleSpec.current.fontDesign`)
 `AssistantPickStore` (#3413) reads its picks from UserDefaults in the app and from a file only in a test's own state
 folder, but it read that file with its own `Data(contentsOf:)`, which `scripts/test/test_apple_perf_patterns.py` counts
 (P1) wherever it runs. A model's state-folder files go through `StateCache.load` (one counted read); a write that a test
-reads back at once stays synchronous, since `StateCache.save` writes later.
+reads back at once stays synchronous, since `StateCache.save` writes later. The same issue's other half: `ManagersModel`, a
+`@State` initial value in the switcher's header, read its clock in `init`; the time it last read is now optional and
+`now` reads the clock while nothing has set it, so the `init` only assigns (P3).
 
 ## The first Photos query in a process loads the Photos database (#4250)
 
