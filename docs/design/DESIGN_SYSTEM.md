@@ -345,6 +345,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
+- Model change divider (web, #5034, `ModelChangeDivider`): where an exchange's reply came from another model than the
+  previous visible reply, between that exchange's message and its reply: two `--line-strong` hairlines and a centered
+  pill chip (`⇄` 12 px, "Opus 5.5 → Sonnet 4.5", 11 px `--ink-3`, `--line-strong` border, `bg-page/50`, padding 10 × 4),
+  `role="separator"` with "Model changed from … to …"; not a control. Only the transcript's record of the replying model
+  counts, never the picker (`docs/web/web.md`, "Model change divider"). Follows cindy's model-only switch chip at the
+  user's request (2026-11-12), with model names instead of raw ids.
 
 ### 3.3 Cards and surfaces
 
