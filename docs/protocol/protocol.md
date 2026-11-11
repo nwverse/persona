@@ -551,6 +551,7 @@ session that is starting or offline) otherwise.
 | Code | When | From |
 | --- | --- | --- |
 | `switch_stale` | `from` names another launcher than the session runs on, or a switch (or a start) of the session is being carried out right now | `POST …/modes` |
+| `switch_under_way` | A switch of the session is being carried out right now: what would type into its pane or press its keys (`POST …/modes` with a model, mode or effort, a rewind, keys, an interrupt, a close) is refused with nothing done | the other requests |
 | `switch_unsupported` | Not a Claude Code Agent in a terminal Persona can type into (Codex or another CLI, a runtime's session, an assistant conversation, botmux); a launcher Persona cannot tell (a session it did not start whose environment names none); a folder of the conversation it cannot tell; and, from a message, another failed check (a provider's secrets that could not be fetched…) | both |
 | `switch_launcher_missing` | The launcher is not on that computer | both |
 | `switch_other_agent` | The launcher runs another agent than Claude Code | both |

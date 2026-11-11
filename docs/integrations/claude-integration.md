@@ -97,7 +97,10 @@ running Agent to another provider".
   the record keeps its folder.
 - **Nothing else restarts it meanwhile**: from the moment the message takes the switch up (before its checks) until it
   ends, a pick or cancel is refused at once as `switch_stale`, and a stop or archive at once as still starting, rather
-  than held for the minutes the message holds the session's typing lock.
+  than held for the minutes the message holds the session's typing lock. Whatever else would type into the pane or
+  press its keys (a model, mode or effort change, a rewind, a dialog answer, keys, an interrupt, a close) is refused as
+  `switch_under_way`: on a resident node's next connection the switch may run on the last connection's Node, whose
+  typing lock this one does not hold.
 - **From the first Ctrl+C on, on its own clock** (`context.WithoutCancel`, at most 5 minutes): a hub redeploy that ends
   the connection does not leave the agent quit and not started again. The start on the new launcher gets 90 seconds.
   The hub waits 7 minutes for a message with `apply_switch`. A resident node (`personad node --attach`, Persona Link)
@@ -105,7 +108,11 @@ running Agent to another provider".
   (`switch_share.go`, handed over as the background scans are): the next connection's Node lists a switch still under
   way as starting, its messages and the user's Resume wait for it, picks and stops are refused; the records the switch
   writes once its connection is gone go to the next Node, over the copy it loaded from the hub, and through it to the
-  hub. The computer stays reachable meanwhile: nothing waits for the old Node.
+  hub, in the order the switch wrote them, and only the fields the switch owns (launcher, model, folder, start time, plan
+  mode, pane, pending switch), so what the new claude's hooks recorded on the new connection stays. When the switch
+  ends the serving Node pushes its list (the row leaves starting) and shows the model and modes it started with. After
+  the quit the switch needs nothing from the hub (the launchers' secrets were fetched by the checks before it). The
+  computer stays reachable meanwhile: nothing waits for the old Node.
 - **A failed switch is dropped and rolled back.** Whatever fails (the checks when the message comes, an agent that does
   not quit, a start that does not come up), the pending switch is cleared, so nothing tries it again on every message,
   and the message is refused with nothing typed. After a start that did not come up, the record goes back to what it was
