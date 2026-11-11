@@ -22,8 +22,9 @@ func codexArgs(bin, key string, windows ...int) []string {
 	return codexArgsForHome(bin, key, "", true, windows...)
 }
 
-func (n *Node) codexAssistantArgs(key, home string, windows ...int) []string {
-	return codexArgsForHome(n.bin, key, home, !n.hubSupportsPersonaContracts(), windows...)
+func (n *Node) codexAssistantArgs(key, home string, windows ...int) ([]string, bool) {
+	personaMCPOnly := n.hubSupportsPersonaContracts()
+	return codexArgsForHome(n.bin, key, home, !personaMCPOnly, windows...), personaMCPOnly
 }
 
 // codexArgsForHome: windows[0] is a compact limit to pass (a managed launcher's declared one, #3066); none or 0 passes
@@ -91,7 +92,8 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 		return nil, err
 	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, "", execution)
-	cmd := exec.Command(shell, append([]string{"-ic", codexShell(n.launcherCommand(launcher)), "persona"}, n.codexAssistantArgs(key, n.dir, compaction.codexLimit())...)...)
+	args, personaMCPOnly := n.codexAssistantArgs(key, n.dir, compaction.codexLimit())
+	cmd := exec.Command(shell, append([]string{"-ic", codexShell(n.launcherCommand(launcher)), "persona"}, args...)...)
 	cmd.Dir = root
 	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process
@@ -122,7 +124,7 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 	started = true
 	p := &assistantProc{id: id, agent: "codex", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}),
 		born: time.Now(), lastActive: time.Now(), model: execution, fingerprint: n.executionFingerprint(launcher, execution),
-		instructions: instructions, personaMCPOnly: n.hubSupportsPersonaContracts()}
+		instructions: instructions, personaMCPOnly: personaMCPOnly}
 	c := &codexConn{n: n, p: p, key: key, memDir: memDir, pending: map[int64]chan codexReply{}, asks: map[string]context.CancelFunc{}, files: map[string][]string{},
 		nameGates: nameGates}
 	p.cx = c

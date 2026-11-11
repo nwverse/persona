@@ -151,11 +151,14 @@ func TestCodexAssistantMCPRegistrationAtStart(t *testing.T) {
 		for _, start := range []string{"new", "resume"} {
 			t.Run(tc.name+"/"+start, func(t *testing.T) {
 				n.hubPersonaContracts.Store(tc.persona)
-				args := strings.Join(n.codexAssistantArgs("proc-test", n.dir), " ")
-				persona := strings.Contains(args, "mcp_servers.persona.command")
-				jarvis := strings.Contains(args, "mcp_servers."+compat.MCPServer+".command")
-				if !persona || jarvis != !tc.persona {
-					t.Fatalf("persona=%v jarvis=%v, negotiated=%v: %s", persona, jarvis, tc.persona, args)
+				args, started := n.codexAssistantArgs("proc-test", n.dir)
+				// A hub switch after this start's one decision must not split the args from the spare's recorded policy.
+				n.hubPersonaContracts.Store(!tc.persona)
+				joined := strings.Join(args, " ")
+				persona := strings.Contains(joined, "mcp_servers.persona.command")
+				jarvis := strings.Contains(joined, "mcp_servers."+compat.MCPServer+".command")
+				if started != tc.persona || !persona || jarvis != !tc.persona {
+					t.Fatalf("started=%v persona=%v jarvis=%v, negotiated=%v: %s", started, persona, jarvis, tc.persona, joined)
 				}
 			})
 		}
