@@ -17,7 +17,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -321,50 +320,6 @@ type humanSend struct {
 	at    time.Time
 	line  string // the transcript line it counted for (handoffLine), once one was read
 	void  bool   // sent again by someone else, or with other words: it counts for nothing
-}
-
-// contextTagRe is a context block's opening tag in a message, with its attributes.
-var contextTagRe = lazyre.New(`<` + compat.ContextPattern() + `\b([^>]*)>`)
-
-// kindAttrRe is a context tag's own kind="…" attribute (not data-kind="…" and the like).
-var kindAttrRe = lazyre.New(`(?:^|\s)kind="([^"]*)"`)
-
-// ownWords: text, a message a person's own app sent, holds only their own words. A context block the app put in it
-// carries someone else's (a mail or a Lark message handed on from the Inbox, a page's selection used as context or for
-// an AI edit, another conversation's message, a document, what the old main conversation left): such a message is not
-// the user's asking, whoever sent it (the decision on #3962: what the inbox, mail or channels bring gets the card). Only
-// workspace mentions the manager writes anew are theirs, so it checks just what withWorkspaces replaces: the blocks at
-// the text's start, each naming only the kind "workspace" and a computer and folder the manager knows; no other block
-// anywhere.
-func (s *Service) ownWords(ctx context.Context, text string) bool {
-	rest := text
-	for {
-		m := leadingContextRe.FindStringSubmatchIndex(rest)
-		if m == nil {
-			break
-		}
-		if !s.resolvedWorkspace(ctx, rest[m[2]:m[3]]) {
-			return false
-		}
-		rest = rest[m[1]:]
-	}
-	return !contextTagRe.MatchString(rest)
-}
-
-// resolvedWorkspace: tag (a context tag's attributes) is a workspace mention withWorkspaces fills in: every kind it
-// names is "workspace" (as its own attribute, not data-kind), and its computer and folder are known.
-func (s *Service) resolvedWorkspace(ctx context.Context, tag string) bool {
-	kinds := kindAttrRe.FindAllStringSubmatch(tag, -1)
-	if len(kinds) == 0 {
-		return false
-	}
-	for _, k := range kinds {
-		if k[1] != "workspace" {
-			return false
-		}
-	}
-	_, _, ok := s.workspaceDevice(ctx, contextAttrs(tag))
-	return ok
 }
 
 // handoffLine is the transcript line an item belongs to: its id before the last "#", as the node ties a send to a line
