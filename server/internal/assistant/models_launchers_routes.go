@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -22,12 +23,16 @@ import (
 
 func (s *Service) launcherRoutes() {
 	s.handle("GET /api/v1/launchers", func(w http.ResponseWriter, r *http.Request) {
-		// Each machine gets launcherSyncTimeout: one that is slow or gone never holds the page (sync says which).
 		ctx, cancel := context.WithTimeout(r.Context(), launcherSyncTimeout+5*time.Second)
 		defer cancel()
-		// A launcher just added to an rc file shows up (the node caches a minute).
-		zshrc := s.zshrcLaunchers(ctx, true)
-		views := s.launcherViewsOf(ctx, zshrc)
+		// A last-seen snapshot answers at once; a first-ever list still fills before it answers.
+		zshrc, cached := s.zshrcLaunchersLastSeen(ctx)
+		if cached {
+			s.refreshZshrcLaunchers(r.Context())
+		} else {
+			zshrc = s.zshrcLaunchers(ctx, true)
+		}
+		views := s.withKeyMachines(ctx, s.launcherViewsOf(ctx, zshrc))
 		if b, ok := s.builtinClaude(ctx, zshrc); ok {
 			views = append(views, b)
 		}
@@ -41,7 +46,7 @@ func (s *Service) launcherRoutes() {
 			apierr.WriteJSON(w, map[string]any{"launcher": b})
 			return
 		}
-		for _, v := range s.launcherViews(ctx) {
+		for _, v := range s.withKeyMachines(ctx, s.launcherViews(ctx)) {
 			if v.Name != name {
 				continue
 			}
@@ -142,20 +147,28 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		if err := s.checkScope(ctx, in.scopeInput); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		if taken(in.Name) {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-models_launchers.err_name_taken", i18n.Args{"name": in.Name}))
+			return
+		}
+		if err := s.sealKeyReferences(ctx, &in, false); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
 		l, err := s.saveLauncher(ctx, in, nil)
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) {
+			if errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) || errors.Is(err, errScopeEmpty) {
 				status = http.StatusBadRequest
 			}
 			apierr.Write(w, status, err)
 			return
 		}
-		out := map[string]any{"launcher": launcherView(l)}
+		out := map[string]any{"launcher": s.withKeyMachines(ctx, []LauncherView{launcherView(l)})[0]}
 		if in.Assign != nil {
 			assigned, kept := s.assignIfDefault(ctx, launcherProvider(l.Name), in.Assign)
 			out["assigned"], out["kept"] = assigned, kept
@@ -193,16 +206,27 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-models_launchers.err_not_managed"))
 			return
 		}
+		if err := s.checkScope(r.Context(), in.scopeInput); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := s.sealKeyReferences(r.Context(), &in, true); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		saved, err := s.saveLauncher(r.Context(), in, old)
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errChatProtocolChange) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) {
+			if errors.Is(err, errChatProtocolChange) || errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) || errors.Is(err, errScopeEmpty) {
 				status = http.StatusBadRequest
 			}
 			apierr.Write(w, status, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"launcher": launcherView(saved)})
+		if launcherSetupChanged(*old, saved) {
+			s.forgetLauncherFailures(r.Context(), saved.Name)
+		}
+		apierr.WriteJSON(w, map[string]any{"launcher": s.withKeyMachines(r.Context(), []LauncherView{launcherView(saved)})[0]})
 	})
 	s.handle("DELETE /api/v1/launchers/{name}", func(w http.ResponseWriter, r *http.Request) {
 		ctx, name := r.Context(), r.PathValue("name")
@@ -228,15 +252,14 @@ func (s *Service) launcherRoutes() {
 				apierr.Write(w, 409, i18n.Err("assistant-models_launchers.err_in_use", i18n.Args{"uses": strings.Join(uses, i18n.T(s.requestCtxLang(r.Context()), "assistant-models_launchers.list_sep"))}))
 				return
 			}
+			s.forgetLauncherSecrets(name) // what was kept of its keys (launcher_secrets.go)
 			apierr.WriteJSON(w, map[string]any{"ok": true, "deleted": true})
 			return
 		}
 		s.models.mu.Unlock()
-		if name == "claude" { // plain claude is every machine's default launcher: there is nothing to hide
-			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-models_launchers.err_builtin_hide"))
-			return
-		}
-		hidden := s.hiddenLaunchers(ctx) // an rc-file launcher: hidden in Persona, the file is not touched
+		// an rc-file launcher, or plain claude (#4384): hidden in Persona, the file is not touched; a start that names it,
+		// or a default that runs it, still runs it
+		hidden := s.hiddenLaunchers(ctx)
 		if !slices.Contains(hidden, name) {
 			hidden = append(hidden, name)
 		}
@@ -275,10 +298,17 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errors.New("no machine to test on"))
 			return
 		}
+		if err := s.launcherScopeErr(ctx, machine, r.PathValue("name")); err != nil { // out of that computer's scope
+			apierr.Call(w, err)
+			return
+		}
 		var res proto.LauncherCheck
 		if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": r.PathValue("name")}, &res); err != nil {
 			apierr.Call(w, err)
 			return
+		}
+		if res.OK {
+			s.recordTestPassed(ctx, machine, r.PathValue("name"), res)
 		}
 		apierr.WriteJSON(w, map[string]any{"machine": machine, "check": res})
 	})
@@ -336,6 +366,31 @@ func sessionLaunchers(discovered, configured []ConfiguredLauncher) []ConfiguredL
 
 var errUnknownMachine = errors.New("unknown machine")
 
+// pickerTier is one of the New Agent form's presets: a tier of the profile in use whose launcher this machine starts.
+type pickerTier struct {
+	ModelTier
+	Name string `json:"name"`
+}
+
+// pickerTiers are the presets the New Agent form offers on a machine with these launchers: the tiers of the profile
+// in use, by name, but those whose launcher the machine does not have (a direct API provider is in no machine's list)
+// or the list leaves out because its latest check failed. None when no profile is in use or it cannot be read: the
+// form then has no preset row.
+func (s *Service) pickerTiers(ctx context.Context, launchers []ConfiguredLauncher) (*ModelProfile, []pickerTier) {
+	p, _, err := s.activeModelProfile(ctx)
+	if err != nil || p == nil {
+		return nil, nil
+	}
+	var out []pickerTier
+	for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
+		t := p.Tiers[name]
+		if slices.ContainsFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == t.Launcher }) {
+			out = append(out, pickerTier{ModelTier: t, Name: name})
+		}
+	}
+	return p, out
+}
+
 // machineLauncherRoutes are "New Agent"'s pickers on one machine: its launchers with the agent each starts
 // (sessionLaunchers), and a launcher's /model list (node/launcher_models.go; the node keeps a list 10 minutes,
 // ?refresh=1 asks the CLI again) with the ids the user typed for it before (models_custom.go).
@@ -348,17 +403,30 @@ func (s *Service) machineLauncherRoutes() {
 			apierr.Write(w, http.StatusNotFound, errUnknownMachine)
 			return
 		}
-		ls, err := s.machineLaunchers(ctx, mid)
+		list, err := s.pickerLaunchers(ctx, mid)
+		if err == nil && r.URL.Query().Get("purpose") == "assistant" { // the main chat's menu, and the scheduled tasks' that follow it
+			list, err = s.assistantLaunchersOf(ctx, mid, list)
+		}
 		if err != nil {
 			apierr.Call(w, err)
 			return
 		}
-		discovered := make([]ConfiguredLauncher, 0, len(ls))
-		for _, l := range ls {
-			discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+		// A launcher whose latest check failed is left out of the pickers and of the presets that name it; the launcher
+		// the configuration runs with no pick stays, with its record, so the form can still say why this start may fail.
+		def := s.pickerDefault(ctx, r)
+		keep, _ := def["provider"].(string)
+		shown := s.withHealth(ctx, mid, list, keep)
+		out := map[string]any{"launchers": shown, "default": def}
+		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
+			usable := make([]ConfiguredLauncher, 0, len(shown))
+			for _, l := range shown {
+				usable = append(usable, l.ConfiguredLauncher)
+			}
+			if p, tiers := s.pickerTiers(ctx, usable); len(tiers) > 0 {
+				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
+			}
 		}
-		apierr.WriteJSON(w, map[string]any{"launchers": s.withHealth(ctx, mid, sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[mid])),
-			"default": s.pickerDefault(ctx, r)})
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("GET /api/v1/machines/{mid}/launchers/{name}/models", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 70*time.Second)
@@ -405,7 +473,7 @@ func (s *Service) pickMachine(ctx context.Context, has []string, want string) (s
 }
 
 // providerModels is GET /api/v1/model-config/providers/{id}/models: a launcher provider's /model list for Model configuration
-// (docs/assistant/model-config.md "Picking a model in Model configuration"). Model configuration is not one machine's, so the list comes from a machine that has the
+// (docs/assistant/model-config.md "Choosing a model in model configuration"). Model configuration is not one machine's, so the list comes from a machine that has the
 // launcher (pickMachine), and the answer says which. Other providers have no list to ask for: a plugin's comes with
 // it, an API connection has none.
 func (s *Service) providerModels(w http.ResponseWriter, r *http.Request) {
@@ -427,7 +495,17 @@ func (s *Service) providerModels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		found = true
-		everywhere = everywhere || compat.Source(v.Source) == "persona" || len(v.Machines) == 0 // personad launch runs on every machine
+		if compat.Source(v.Source) == "persona" { // personad launch runs on every computer in the provider's scope
+			if l, ok := s.managedNamed(ctx, name); ok {
+				for _, d := range s.devices(ctx) {
+					if s.scopeReason(l, d.ID) == "" {
+						has = append(has, d.ID)
+					}
+				}
+				continue
+			}
+		}
+		everywhere = everywhere || len(v.Machines) == 0
 		has = append(has, v.Machines...)
 	}
 	if !found {

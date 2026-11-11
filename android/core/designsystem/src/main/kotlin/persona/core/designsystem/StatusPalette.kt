@@ -63,7 +63,17 @@ data class PersonaPalette(
         else StatusColors(Color(0xFF1D5FD6), Color(0xFF1C52BA), Color(0x1A1D5FD6)),
     val sourceTerminal: StatusColors = if (dark) StatusColors(Color(0xFFBEA3FF), Color(0xFFBEA3FF), Color(0x29BEA3FF))
         else StatusColors(Color(0xFF6A46C2), Color(0xFF6A46C2), Color(0x1A6A46C2)),
+    /** A fixed colour for [codeString] / [codeNumber] in place of the role (only the default look keeps its original ones). */
+    val codeStringOverride: Color? = null,
+    val codeNumberOverride: Color? = null,
+    /** Words on the accent are white, as on iOS (Glass); otherwise whichever of black and white reads better. */
+    val whiteOnAccent: Boolean = false,
 ) {
+    /** Strings in a Lark code block (#934): the style's added-line green, so it follows light / dark and the style. */
+    val codeString: Color get() = codeStringOverride ?: diffAdd
+    /** Numbers in a Lark code block (#934): the style's caution text, so it follows light / dark, the style and theme packages. */
+    val codeNumber: Color get() = codeNumberOverride ?: cautionText
+
     /** Neutral backing for state, advice and outcome content. Color belongs to its mark or words, not its area. */
     val statusSurface: Color get() = surfaceOpaque
 
@@ -76,10 +86,16 @@ data class PersonaPalette(
     /** Media overlays stay readable over a photograph/video, independent of the page's appearance. */
     val mediaBackdrop: Color get() = Color.Black
     val onMediaBackdrop: Color get() = Color.White
+    /** Outside the circle an avatar crop keeps (New from photo, #2407): dimmed in every style and appearance, as iOS `Theme.Crop.outside`. */
+    val cropOutside: Color get() = mediaBackdrop.copy(alpha = 0.5f)
+    /** The crop circle's edge, as iOS `Theme.Crop.edge`. */
+    val cropEdge: Color get() = onMediaBackdrop.copy(alpha = 0.9f)
     val mediaScrim: Color get() = mediaBackdrop.copy(alpha = 0.85f)
     val mediaControlFill: Color get() = mediaBackdrop.copy(alpha = 0.6f)
     val mediaLabelFill: Color get() = mediaBackdrop.copy(alpha = 0.7f)
-    val onAccent: Color get() = ExtensionThemeColors.on(accent)
+    val onAccent: Color get() = if (whiteOnAccent) Color.White else ExtensionThemeColors.on(accent)
+    /** Words on a fill that stands for the accent (the compact sidebar's): white in Glass, as on iOS, else whichever reads. */
+    fun onAccentFill(fill: Color): Color = if (whiteOnAccent) onAccent else ExtensionThemeColors.on(fill)
 
     fun source(kind: SourceKind): StatusColors = when (kind) {
         SourceKind.Feishu -> sourceFeishu
@@ -98,41 +114,72 @@ data class PersonaPalette(
 }
 
 internal object Palettes {
-    // Glass: night blue with three status lights; panels are frosted white.
+    /**
+     * Glass keeps the iPhone's colours as they are (#4209, decision 2 of #4194): iOS holds them to its own floors (white on
+     * the accent 3.5:1, links 3:1, words on the bubble 4.5:1), not 4.5:1 for every word. Only the words on a state's fill
+     * are chosen here: white on Needs You's blue, as on the accent, else whichever of black and white reads better.
+     */
+    private fun PersonaPalette.glassFills(): PersonaPalette {
+        fun StatusColors.onFill() = copy(onDot = ExtensionThemeColors.on(dot))
+        return copy(needsYou = needsYou.copy(onDot = Color.White), working = working.onFill(), done = done.onFill(),
+            idle = idle.onFill(), offline = offline.onFill(), danger = danger.onFill(),
+            positiveRole = positiveRole?.onFill(), cautionRole = cautionRole?.onFill(), whiteOnAccent = true)
+    }
+
+    // Liquid Glass on the system's white/black pages. The translucent fill retains the Android glass fallback.
+    // State dots and texts come from the generated iPhone StatusPalette; every state keeps the neutral tint (Offline's).
     val GlassDark = PersonaPalette(
-        background = Color(0xFF060A14), surface = Color(0x14FFFFFF), surfaceOpaque = Color(0xFF151C2C),
-        surfaceStrong = Color(0x24FFFFFF), sunken = Color(0x47000000), line = Color(0x17FFFFFF),
+        background = Tokens.Semantic.Glass.Dark.pageBackground,
+        surface = Tokens.Semantic.Glass.Dark.card.copy(alpha = 0x14 / 255f),
+        surfaceOpaque = Tokens.Semantic.Glass.Dark.card,
+        surfaceStrong = Tokens.Common.Dark.Fill.pressed, sunken = Tokens.Common.Dark.Fill.well,
+        line = Tokens.Semantic.Glass.Dark.cardStroke,
         strokeTop = Color(0x40FFFFFF), strokeBottom = Color(0x0DFFFFFF),
-        ink = Color(0xFFF4F7FC), ink2 = Color(0xFFAAB4C9), ink3 = Color(0xFFAAB4C9),
-        action = Color(0xFFF4F7FC), onAction = Color(0xFF0A0F1C), accent = Color(0xFF7DB2FF), accentSoft = Color(0x295A95FF),
-        marker = Color(0x295A95FF), onMarker = Color(0xFFF4F7FC),
-        needsYou = StatusColors(Color(0xFFFFB547), Color(0xFFFFC56E), Color(0x2EFFB547), Color(0xFF2B1A00)),
-        working = StatusColors(Color(0xFF5A95FF), Color(0xFF8DB6FF), Color(0x2E5A95FF), Color(0xFF091A35)),
-        done = StatusColors(Color(0xFF3CD9AE), Color(0xFF6FE6C5), Color(0x2E3CD9AE), Color(0xFF032A20)),
-        idle = StatusColors(Color(0xFF7A859C), Color(0xFFAAB4C9), Color(0x1F7A859C)),
-        offline = StatusColors(Color(0xFF5C667C), Color(0xFFAAB4C9), Color(0x1A5C667C)),
-        danger = StatusColors(Color(0xFFFF6B6B), Color(0xFFFF8F8F), Color(0x2EFF6B6B), Color(0xFF2B0808)),
-        positive = Color(0xFF3CD9AE), caution = Color(0xFFFFB547), cautionText = Color(0xFFFFC56E),
-        diffAdd = Color(0xFF3CD9AE), diffDel = Color(0xFFFF8F8F),
-        terminalBackground = Color(0xFF05070D), terminalText = Color(0xFFE6E3DA), scrim = Color(0x99000000), dark = true,
-    )
+        ink = Tokens.Semantic.Glass.Dark.text,
+        ink2 = Tokens.Semantic.Glass.Dark.secondaryText, ink3 = Tokens.Semantic.Glass.Dark.secondaryText,
+        action = Tokens.Semantic.Glass.Dark.text, onAction = Tokens.Semantic.Glass.Dark.pageBackground,
+        accent = Tokens.Semantic.Glass.Dark.accent, accentSoft = Tokens.Semantic.Glass.Dark.accent.copy(alpha = 0.16f),
+        marker = Tokens.Semantic.Glass.Dark.accent.copy(alpha = 0.16f), onMarker = Tokens.Semantic.Glass.Dark.text,
+        needsYou = StatusColors(Tokens.Status.Dark.NeedsYou.dot, Tokens.Status.Dark.NeedsYou.text, Tokens.Status.Dark.Offline.tint, Color.Black),
+        working = StatusColors(Tokens.Status.Dark.Working.dot, Tokens.Status.Dark.Working.text, Tokens.Status.Dark.Offline.tint, Color.Black),
+        done = StatusColors(Tokens.Status.Dark.Unread.dot, Tokens.Status.Dark.Unread.text, Tokens.Status.Dark.Offline.tint, Color.Black),
+        idle = StatusColors(Tokens.Status.Dark.Idle.dot, Tokens.Status.Dark.Idle.text, Tokens.Status.Dark.Idle.tint),
+        offline = StatusColors(Tokens.Status.Dark.Offline.dot, Tokens.Status.Dark.Offline.text, Tokens.Status.Dark.Offline.tint),
+        danger = StatusColors(Tokens.Common.Dark.danger, Tokens.Common.Dark.danger, Tokens.Common.Dark.danger.copy(alpha = 0.12f), Color.Black),
+        positive = Tokens.Common.Dark.positive, caution = Tokens.Common.Dark.caution, cautionText = Tokens.Common.Dark.cautionText,
+        diffAdd = Tokens.Common.Dark.Diff.add, diffDel = Tokens.Common.Dark.Diff.del,
+        terminalBackground = Tokens.Common.Dark.terminalBackground, terminalText = Tokens.Common.Dark.terminalText,
+        scrim = Color.Black.copy(alpha = 0.45f), dark = true, ai = Tokens.Common.Dark.ai,
+        positiveRole = StatusColors(Tokens.Common.Dark.positive, Tokens.Common.Dark.positive, Tokens.Common.Dark.positive.copy(alpha = 0.12f), Color.Black),
+        cautionRole = StatusColors(Tokens.Common.Dark.caution, Tokens.Common.Dark.cautionText, Tokens.Common.Dark.caution.copy(alpha = 0.12f), Color.Black),
+    ).glassFills()
     val GlassLight = PersonaPalette(
-        background = Color(0xFFE9EEF6), surface = Color(0x9EFFFFFF), surfaceOpaque = Color(0xFFF7F9FC),
-        surfaceStrong = Color(0xD1FFFFFF), sunken = Color(0x0F0B1222), line = Color(0x170B1222),
+        background = Tokens.Semantic.Glass.Light.pageBackground,
+        surface = Tokens.Semantic.Glass.Light.card.copy(alpha = 0x9E / 255f),
+        surfaceOpaque = Tokens.Semantic.Glass.Light.card,
+        surfaceStrong = Tokens.Common.Light.Fill.chip, sunken = Tokens.Common.Light.Fill.well,
+        line = Tokens.Semantic.Glass.Light.cardStroke,
         strokeTop = Color(0xFFFFFFFF), strokeBottom = Color(0x80FFFFFF),
-        ink = Color(0xFF0B1222), ink2 = Color(0xFF4D586E), ink3 = Color(0xFF4D586E),
-        action = Color(0xFF0B1222), onAction = Color(0xFFFFFFFF), accent = Color(0xFF1C52BA), accentSoft = Color(0x1A2F6FE8),
-        marker = Color(0x1A2F6FE8), onMarker = Color(0xFF0B1222),
-        needsYou = StatusColors(Color(0xFFE69100), Color(0xFF8A5100), Color(0x24E69100), Color(0xFF2B1A00)),
-        working = StatusColors(Color(0xFF2F6FE8), Color(0xFF1C52BA), Color(0x1F2F6FE8)),
-        done = StatusColors(Color(0xFF12A579), Color(0xFF086B4E), Color(0x1F12A579), Color(0xFF032A20)),
-        idle = StatusColors(Color(0xFF8590A5), Color(0xFF4D586E), Color(0x1A8590A5)),
-        offline = StatusColors(Color(0xFFA0A9BA), Color(0xFF4D586E), Color(0x14A0A9BA)),
-        danger = StatusColors(Color(0xFFE5484D), Color(0xFFA8232A), Color(0x1FE5484D), Color(0xFF2B0808)),
-        positive = Color(0xFF12A579), caution = Color(0xFFE69100), cautionText = Color(0xFF8A5100),
-        diffAdd = Color(0xFF086B4E), diffDel = Color(0xFFA8232A),
-        terminalBackground = Color(0xFF0D121D), terminalText = Color(0xFFE6E3DA), scrim = Color(0x590B1222), dark = false,
-    )
+        ink = Tokens.Semantic.Glass.Light.text,
+        ink2 = Tokens.Semantic.Glass.Light.secondaryText, ink3 = Tokens.Semantic.Glass.Light.secondaryText,
+        action = Tokens.Semantic.Glass.Light.text, onAction = Tokens.Semantic.Glass.Light.pageBackground,
+        accent = Tokens.Semantic.Glass.Light.accent, accentSoft = Tokens.Semantic.Glass.Light.accent.copy(alpha = 0.12f),
+        marker = Tokens.Semantic.Glass.Light.accent.copy(alpha = 0.12f), onMarker = Tokens.Semantic.Glass.Light.text,
+        needsYou = StatusColors(Tokens.Status.Light.NeedsYou.dot, Tokens.Status.Light.NeedsYou.text, Tokens.Status.Light.Offline.tint, Color.Black),
+        working = StatusColors(Tokens.Status.Light.Working.dot, Tokens.Status.Light.Working.text, Tokens.Status.Light.Offline.tint, Color.Black),
+        done = StatusColors(Tokens.Status.Light.Unread.dot, Tokens.Status.Light.Unread.text, Tokens.Status.Light.Offline.tint, Color.Black),
+        idle = StatusColors(Tokens.Status.Light.Idle.dot, Tokens.Status.Light.Idle.text, Tokens.Status.Light.Idle.tint),
+        offline = StatusColors(Tokens.Status.Light.Offline.dot, Tokens.Status.Light.Offline.text, Tokens.Status.Light.Offline.tint),
+        danger = StatusColors(Tokens.Common.Light.danger, Tokens.Common.Light.danger, Tokens.Common.Light.danger.copy(alpha = 0.12f)),
+        positive = Tokens.Common.Light.positive, caution = Tokens.Common.Light.caution, cautionText = Tokens.Common.Light.cautionText,
+        diffAdd = Tokens.Common.Light.Diff.add, diffDel = Tokens.Common.Light.Diff.del,
+        terminalBackground = Tokens.Common.Light.terminalBackground, terminalText = Tokens.Common.Light.terminalText,
+        scrim = Color.Black.copy(alpha = 0.2f), dark = false, ai = Tokens.Common.Light.ai,
+        positiveRole = StatusColors(Tokens.Common.Light.positive, Tokens.Common.Light.positive, Tokens.Common.Light.positive.copy(alpha = 0.12f)),
+        cautionRole = StatusColors(Tokens.Common.Light.caution, Tokens.Common.Light.cautionText, Tokens.Common.Light.caution.copy(alpha = 0.12f), Color.Black),
+        // the default look keeps the Lark code block's original colours (#4228, #934)
+        codeStringOverride = Color(0xFF2E7D32), codeNumberOverride = Color(0xFFE65100),
+    ).glassFills()
 
     // Brief: paper and ink; the highlighter is the only colour and only marks advice and what needs you.
     val BriefLight = PersonaPalette(

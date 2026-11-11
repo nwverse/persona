@@ -53,10 +53,13 @@ struct ProviderWizard: View {
     @State private var link: LinkTarget?
     /// The preset whose Sign Up page is open: once it closes, its key is next.
     @State private var signingUp: String?
+    /// The Computers page, pushed without its row (`showComputers`, DEBUG screenshots).
+    @State private var computersOpen = false
 
     init(existing: LauncherView? = nil, start: ProviderWizardStep? = nil, saved: @escaping () async -> Void = {},
-         wizard: ProviderWizardModel? = nil, imports: LauncherImportModel? = nil) {
+         wizard: ProviderWizardModel? = nil, imports: LauncherImportModel? = nil, showComputers: Bool = false) {
         self.saved = saved
+        _computersOpen = State(initialValue: showComputers)
         let first = start ?? (existing == nil ? .pick : .connect)
         self.start = first
         _step = State(initialValue: first)
@@ -82,6 +85,7 @@ struct ProviderWizard: View {
                     }
                 }
                 .pluginLinks($link)
+                .navigationDestination(isPresented: $computersOpen) { computersPage }
                 .onChange(of: link) { _, now in
                     // Back from a Sign Up page: its key is next.
                     guard now == nil, let id = signingUp else { return }
@@ -111,6 +115,15 @@ struct ProviderWizard: View {
             .macSheet()
             #endif
         }
+    }
+
+    /// The Computers page of the provider being edited: the preset's kind on the key step, else the stored provider's.
+    private var computersPage: some View {
+        @Bindable var wizard = wizard
+        let presetStep = step == .key
+        return ProviderComputersPage(scope: $wizard.scope, old: presetStep ? nil : wizard.existing,
+                                     kind: presetStep ? wizard.preset?.kind ?? "launcher" : wizard.existing?.kind ?? "launcher",
+                                     agent: presetStep ? nil : wizard.existing?.agent, assign: presetStep && wizard.preset?.runsClaude != false && wizard.assign)
     }
 
     private var title: String {
@@ -346,12 +359,24 @@ struct ProviderWizard: View {
             } header: { Text("Test") } footer: {
                 if p.testable { Text("Once pasted, it's tested once: a very short request that may cost a little.") }
             }
-            Section {
-                Toggle(isOn: Binding(get: { wizard.assign }, set: { wizard.assignChoice = $0 })) {
-                    Text("Use it for the main conversation and new agents").lineLimit(2)
+            if p.runsClaude {
+                Section {
+                    Toggle(isOn: Binding(get: { wizard.assign }, set: { wizard.assignChoice = $0 })) {
+                        Text("Use it for the main conversation and new agents").lineLimit(2)
+                    }
+                    .accessibilityIdentifier("wizard.assign")
+                } footer: { Text("Only changes what nobody has set; models you picked stay.") }
+            } else {
+                Section {
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary)
                 }
-                .accessibilityIdentifier("wizard.assign")
-            } footer: { Text("Only changes what nobody has set; models you picked stay.") }
+            }
+            if wizard.scopeShown {
+                Section {
+                    ProviderComputersRow(scope: $wizard.scope, old: nil, kind: p.kind, assign: p.runsClaude && wizard.assign)
+                } footer: { Text("Which computers can run it and get its key.") }
+            }
             Section {
                 DisclosureGroup(isExpanded: $showPresetMore) { presetMoreFields(p) } label: {
                     HStack {
@@ -370,7 +395,7 @@ struct ProviderWizard: View {
 
     @ViewBuilder private func keyTestRow(_ p: LauncherPreset) -> some View {
         if !p.testable {
-            Text("A Responses API key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
+            Text("This API protocol's key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
         } else if wizard.keyTesting {
             HStack(spacing: Theme.Space.s) {
                 ProgressView()
@@ -433,7 +458,10 @@ struct ProviderWizard: View {
                 ForEach(summary.kept, id: \.self) { k in
                     Text(k).font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                if summary.assigned.isEmpty {
+                if let p = wizard.preset, !p.runsClaude {
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                } else if summary.assigned.isEmpty {
                     Text("To use it for the main conversation or agents, pick it in Model Settings.").font(Theme.Font.secondary).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -722,6 +750,11 @@ struct ProviderWizard: View {
                 }
                 .lineLimit(1)
             }
+            // Where it runs and when its key travels (#2333), the same kind of row; only on a hub that takes scopes.
+            if wizard.scopeShown {
+                ProviderComputersRow(scope: $wizard.scope, old: wizard.existing, kind: wizard.existing?.kind ?? "launcher",
+                                     agent: wizard.existing?.agent)
+            }
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 TextField(wizard.hasStoredHeaders ? String(localized: "Headers set (hidden; leave empty to keep)") : String(localized: "Headers, one Name: value per line"),
                           text: $wizard.headers, axis: .vertical)
@@ -781,7 +814,8 @@ struct ProviderWizard: View {
     }
 
     #if DEBUG
-    /// `-openProviderWizard connect|models` fills the form in with made-up values (screenshots); `key` / `done` take the
+    /// `-openProviderWizard connect|models` fills the form in with made-up values (screenshots; `-openProviderComputers new`
+    /// then opens its Computers page); `key` / `done` take the
     /// first built-in preset (`-wizardPreset <id>` another) with a made-up key (`-wizardKey <key>`: the mock hub
     /// refuses one with "bad" in it), `done` saves it; `claude` tries the main conversation.
     private func debugFill() async {
@@ -803,6 +837,8 @@ struct ProviderWizard: View {
         wizard.baseURL = "https://gateway.example.com"
         wizard.apiKey = "sk-test-demo"
         if want == "models" { await toModels() }
+        // `-openProviderComputers new` on top: the new provider's Computers page.
+        if want == "models", ProviderComputersDemo.state == "new" { computersOpen = true }
     }
     #endif
 }

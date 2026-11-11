@@ -45,7 +45,7 @@ type Fold struct {
 	SupervisionUser bool `json:"supervision_user,omitempty"`
 }
 
-// FoldImage is an image a tool call of a folded run looked at (docs/protocol/protocol.md "Images looked at this turn"): one its result
+// FoldImage is an image a tool call of a folded run looked at (docs/protocol/protocol.md "Images viewed this turn"): one its result
 // carried (ItemID, fetched from GET …/items/{item id}/image), or a picture file Read opened whose result carried none
 // (only Path; the file's thumbnail is GET /machines/{mid}/file/thumb).
 type FoldImage struct {
@@ -137,6 +137,9 @@ type Item struct {
 	IsError   bool            `json:"is_error,omitempty"`
 	Image     *Image          `json:"image,omitempty"`
 	Queued    bool            `json:"queued,omitempty"` // user input typed while the agent worked, absorbed mid-turn
+	// Outcome: what a tool_result's call came to (status, exit code, patch, git…), set by the node from the
+	// runtime's record; absent on other items and from older nodes (ToolOutcome).
+	Outcome *ToolOutcome `json:"outcome,omitempty"`
 	// ClientMsgID: this item came from the message an app sent with this client_msg_id (session.send): its words,
 	// its pictures, or the notice it became (/compact). Set by the node, which ties the transcript's line to the send
 	// (node/echo.go); absent for anything else and from older nodes. docs/protocol/protocol.md "Matching pending messages".
@@ -151,14 +154,88 @@ type Item struct {
 	From string `json:"from,omitempty"`
 	// Injected: this user line is a message Persona put into the conversation for the model (a task's notice, a
 	// scheduled run, a wake-up…), not something the user wrote. Set by the hub from the line's text
-	// (prompts.ParseInjected) on its way to the apps; docs/protocol/protocol.md "Messages Persona injects".
+	// (prompts.ParseInjected) on its way to the apps; docs/protocol/protocol.md "Messages injected by Persona".
 	Injected *Injected `json:"injected,omitempty"`
-	Fold     *Fold     `json:"fold,omitempty"`
-	// Task: this notice is a background task reporting back (a command, a Monitor, a subagent, or a workflow).
+	// Source is the author of an automated input, independent of its model role.
+	// Unknown nonempty kinds are still not user-authored input.
+	Source *MessageSource `json:"source,omitempty"`
+	Fold   *Fold          `json:"fold,omitempty"`
+	// Task: a background task notice, or a subagent tool result associated with its launching call.
 	Task         *TaskNote     `json:"task,omitempty"`
 	TurnDuration *TurnDuration `json:"turn_duration,omitempty"`
 	// Compact: this notice is where the context was compacted (Claude Code's compact_boundary).
 	Compact *Compact `json:"compact,omitempty"`
+	// ModelRefusal preserves Claude Code's refusal record on a notice.
+	ModelRefusal *ModelRefusal `json:"model_refusal,omitempty"`
+}
+
+// ModelRefusal is a Claude Code model_refusal_* record as clients see it: its known fields, values kept as recorded
+// (unknown subtypes, categories and scopes included), and Text, the refusal's own words (the record's string
+// content). Nothing else of the record leaves the node (#2528): the line may carry fields no one reviewed.
+type ModelRefusal struct {
+	Subtype       string `json:"subtype"`
+	OriginalModel string `json:"original_model,omitempty"`
+	FallbackModel string `json:"fallback_model,omitempty"`
+	Category      string `json:"category,omitempty"`
+	Scope         string `json:"scope,omitempty"`
+	Explanation   string `json:"explanation,omitempty"`
+	Text          string `json:"text,omitempty"`
+	// Raw is the whole JSONL line, for the node's own use only (telling one record from another): never encoded, so
+	// no RPC, REST answer, push or snapshot carries it. Older builds sent it as "raw"; clients must not show that.
+	Raw string `json:"-"`
+}
+
+// ModelRestore is a pending "back to the configured model" (node session.restore_model, #2528): State
+// ModelRestoreNextStart says the session's idle headless process was closed (or none ran), so its next start asks for
+// To, the model the conversation is configured with as the node read it at At. Nothing about which model runs.
+type ModelRestore struct {
+	State string    `json:"state"`
+	To    string    `json:"to,omitempty"`
+	At    time.Time `json:"at"`
+}
+
+// ModelRestoreNextStart: the next start of the session's process uses the configured model.
+const ModelRestoreNextStart = "next_start"
+
+// MessageSource preserves an input's provenance without changing the model's role.
+// ConversationID is a stable session id, never a peer's display name (Item.From).
+type MessageSource struct {
+	Kind           string `json:"kind"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	Title          string `json:"title,omitempty"`
+	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
+	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
+	Push string `json:"push,omitempty"`
+}
+
+const (
+	SourceConversation = "conversation"
+	SourcePatrol       = "patrol"
+	SourceFollowup     = "followup"
+	SourceSupervision  = "supervision"
+	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
+	// the attending session"): other people's words, never the user's; Title is the meeting's name.
+	SourceMeeting = "meeting"
+)
+
+// SourceFromInjected upgrades existing metadata without guessing from ordinary text.
+func SourceFromInjected(in *Injected) *MessageSource {
+	if in == nil {
+		return nil
+	}
+	kind := ""
+	switch {
+	case in.Kind == InjectedFollowup && (in.State == "daily" || in.State == "interval"):
+		kind = SourcePatrol
+	case in.Kind == InjectedFollowup:
+		kind = SourceFollowup
+	case in.Kind == InjectedSystem && in.State == "supervise":
+		kind = SourceSupervision
+	}
+	if kind == "" {
+		return nil
+	}
+	return &MessageSource{Kind: kind, Title: in.Title}
 }
 
 // Injected says what a message Persona wrote for the model is, for the apps to show one line instead of it.
@@ -216,7 +293,7 @@ type TurnDuration struct {
 // subagent finishing. Title, Detail and Text come decoded (Claude Code writes &gt; &lt; &amp; in them).
 type TaskNote struct {
 	Kind   string `json:"kind"`             // shell | monitor | agent | workflow | task (anything else)
-	Status string `json:"status,omitempty"` // completed | failed | killed | stopped | event | ended | waiting
+	Status string `json:"status,omitempty"` // running | completed | failed | killed | stopped | event | ended | waiting
 	// Title: the call's description, or the first line of its command when it had none.
 	Title      string `json:"title"`
 	TaskID     string `json:"task_id,omitempty"`

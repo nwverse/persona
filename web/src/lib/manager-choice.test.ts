@@ -7,7 +7,7 @@ import {
   chooseManager, conversationManager, defaultKnown, defaultManager, fromDefaultManager, fromShownManager, itemHeaders, managerHeaderFor, noteConversation, noteItemManager,
   onDefaultManager, ownedSub, ownerHeaders, parseOwnedSub, pinManager, resetManagerChoice, setRosterDefault, settleRosterDefault, shownManager, withManager,
 } from "./manager-choice";
-import { groupByManager, lastSyncedText, managerOrder, multiManager, offlineManagerOf, ownerIn, type ManagerList } from "./managers";
+import { lastSyncedText, managerOrder, multiManager, offlineManagerOf, ownerIn, type ManagerList } from "./managers";
 
 afterEach(() => resetManagerChoice());
 
@@ -77,6 +77,19 @@ describe("whose a request is", () => {
     setRosterDefault("m-1"); // m-1 became the default after the list was read
     expect(managerHeaderFor("/inbox/x/done")).toBeUndefined();
     expect(managerHeaderFor("/inbox/y/done")).toBe("assistant");
+  });
+
+  it("routes todos under /todos/:id and sub-routes to their noted manager", () => {
+    resetManagerChoice();
+    noteItemManager("/todos/t1", "assistant"); // default manager
+    noteItemManager("/todos/t2", "m-2");       // non-default manager
+    expect(managerHeaderFor("/todos/t2")).toBe("m-2");
+    expect(managerHeaderFor("/todos/t2/retry")).toBe("m-2");
+    expect(managerHeaderFor("/todos/t2/accept")).toBe("m-2");
+    expect(managerHeaderFor("/todos/t2/decisions")).toBe("m-2");
+    expect(managerHeaderFor("/todos/t2/agents/box/s1")).toBe("m-2");
+    expect(managerHeaderFor("/todos/t1")).toBeUndefined();
+    expect(managerHeaderFor("/todos/t1/retry")).toBeUndefined();
   });
 
   it("one conversation's routes go to its manager, never to the page's pick", () => {
@@ -223,20 +236,13 @@ describe("grouping by manager", () => {
     expect(multiManager(null)).toBe(false);
     expect(multiManager({ default: "assistant", managers: [ROSTER.managers[0], ROSTER.managers[3]] })).toBe(false);
     expect(multiManager(ROSTER)).toBe(true);
-    expect(groupByManager([{ id: "x" }], { default: "assistant", managers: [ROSTER.managers[0]] }, () => undefined)).toBeNull();
   });
 
-  it("the default first, then the roster's order, empty groups left out, unknown and none to the default", () => {
+  it("the default first, then the roster's order; none and unknown are the default's", () => {
     const list = { ...ROSTER, default: "m-1" };
     expect(managerOrder(list).map((m) => m.id)).toEqual(["m-1", "assistant", "m-2"]);
-    const items = [{ id: "a", manager: "assistant" }, { id: "b" }, { id: "c", manager: "m-2" }, { id: "d", manager: "m-9" }, { id: "e", manager: "m-1" }];
-    const groups = groupByManager(items, list, (x) => x.manager)!;
-    expect(groups.map((g) => [g.manager.id, g.items.map((x) => x.id)])).toEqual([
-      ["m-1", ["b", "d", "e"]],
-      ["assistant", ["a"]],
-      ["m-2", ["c"]],
-    ]);
     expect(ownerIn(list, undefined)).toBe("m-1");
+    expect(ownerIn(list, "m-9")).toBe("m-1");
     expect(ownerIn(list, "m-3")).toBe("m-1"); // still installing: nothing of its own is shown yet
   });
 

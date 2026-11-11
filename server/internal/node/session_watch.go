@@ -4,19 +4,41 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// watch streams new transcript items of a session to the hub.
+// watch streams new transcript items of a session to the hub, and a working Claude's status line (claudestatus.go).
+// The shared pump (watchPump) reads it; a watch still waiting for its transcript (n.waiting) has only cancel.
 type watch struct {
 	cancel context.CancelFunc
+
+	ctx context.Context // ends with session.unwatch or the hub connection (watchFor)
+	id  string
+	f   *transcript.File
+	// armed: the watch's first read and catch-up are done, so the pump may read it (the first read of a file is the
+	// subscriber's backlog, not news to push).
+	armed atomic.Bool
+	ticks int // the pump's ticks since the watch was armed; only the pump touches it
+	// reading: new lines are being read and pushed in a goroutine of their own; the pump skips the watch meanwhile.
+	reading atomic.Bool
+	live    liveWatch
+	// codex: a Codex thread's, whose transcript may come from the Codex App's database (codex_apphistory.go).
+	codex bool
 }
 
-// maxSubagentWatches bounds the subagent transcripts followed at once (a page open on one follows it, 4 reads a second
-// each): sessions are few, but every subagent a person opens would be one more reader for as long as its page stays.
+// watchEvery is how often the pump reads the watched transcripts; every followEvery ticks it also follows the copy
+// the session list reads (followCopy), and every liveTicks it checks the status line.
+var watchEvery = 250 * time.Millisecond
+
+const followEvery = 4
+
+// maxSubagentWatches bounds the subagent transcripts followed at once (a page open on one follows it, a stat on every
+// tick of the watch pump and a read when it grew): sessions are few, but every subagent a person opens would be one
+// more file to follow for as long as its page stays.
 const maxSubagentWatches = 16
 
 // subagentWatches counts the followed subagent transcripts. Callers hold n.mu.
@@ -92,6 +114,7 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 		}()
 		return nil
 	}
+	_, codex := n.codexSource(id)
 	n.mu.Lock()
 	if _, ok := n.watches[id]; ok {
 		n.mu.Unlock()
@@ -102,13 +125,18 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 		return fmt.Errorf("too many subagent conversations followed (%d): close one first", maxSubagentWatches)
 	}
 	ctx, cancel := context.WithCancel(parent)
-	w := &watch{cancel: cancel}
+	w := &watch{cancel: cancel, ctx: ctx, id: id, f: f, codex: codex}
 	n.watches[id] = w
+	if !n.pumping {
+		n.pumping = true
+		go n.watchPump()
+	}
 	n.mu.Unlock()
+	context.AfterFunc(ctx, func() { n.watchEnded(w) })
 
 	// Catch up on lines appended after the hub's last seen seq, then stream. Without a seq (the hub has not seen this
-	// session since it started) the lines this Refresh appends still go out — watchLoop only pushes what later
-	// Refreshes find — unless it is the first read of the file: that is the whole history, the subscriber's backlog.
+	// session since it started) the lines this Refresh appends still go out — the watch pump only pushes what
+	// later Refreshes find — unless it is the first read of the file: that is the whole history, the subscriber's backlog.
 	mu := n.pushLock(id)
 	mu.Lock()
 	readBefore := f.LastSeq() > 0
@@ -121,8 +149,7 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 	}
 	n.liveRecheck(id) // a reply Claude is showing now, after what the transcript has (livereply.go)
 	mu.Unlock()
-	go n.watchLoop(ctx, id, f, w)
-	go n.watchLive(ctx, id) // claudestatus.go
+	w.armed.Store(true)
 	return nil
 }
 
@@ -184,13 +211,13 @@ func (n *Node) unwatch(id string) {
 // refresh parses new transcript lines and pushes them to the hub when the session is watched — also when the new
 // lines hold no items (titles, modes): the batch still tells clients they have everything up to its to_seq, so the
 // next one does not look like it skipped something.
-func (n *Node) refresh(id string, f *transcript.File) {
+func (n *Node) refresh(id string, f *transcript.File) error {
 	mu := n.pushLock(id)
 	mu.Lock()
 	defer mu.Unlock()
 	fresh, span, err := f.RefreshSpan()
 	if err != nil || span.To == span.From {
-		return
+		return err
 	}
 	n.mu.Lock()
 	_, watched := n.watches[id]
@@ -198,32 +225,88 @@ func (n *Node) refresh(id string, f *transcript.File) {
 	if watched {
 		n.pushItems(id, fresh, span)
 	}
+	return nil
 }
 
-// watchLoop pushes new transcript lines four times a second. (It used to read the pane's screen every 400 ms too, a
-// herdr call per watched session, for a live preview no view showed; the terminal pane reads the screen itself.)
-// About once a second it follows the copy the session list reads (followCopy): a stream that only refreshed the file
-// it opened kept pushing an old copy while the list's rev went on with the new one (#1423).
-func (n *Node) watchLoop(ctx context.Context, id string, f *transcript.File, w *watch) {
-	t := time.NewTicker(250 * time.Millisecond)
+// watchPump reads every watched session on one ticker while any is watched, and ends when none is left. It used to be
+// two tickers per watch, each in a goroutine of its own (250 ms for the transcript, 1 s for the status line): four
+// watched sessions at rest woke the node twenty times a second, about 65 ms of CPU a minute each. A tick only stats
+// each transcript (transcript.File.Changed); reading new lines and reading a screen run in goroutines of their own,
+// one at a time per session, so a slow parse or a slow herdr never holds up another session.
+func (n *Node) watchPump() {
+	t := time.NewTicker(watchEvery)
 	defer t.Stop()
-	for tick := 1; ; tick++ {
-		select {
-		case <-ctx.Done():
-			// Drop the entry so the session is not left looking watched; a watch that ended with its connection has
-			// nobody to send to, and an unwatch for it never comes. Only drop our own: after an unwatch, a new watch
-			// may already hold the id, and deleting it would silently stop that stream.
-			n.mu.Lock()
-			if n.watches[id] == w {
-				delete(n.watches, id)
-			}
+	live := liveTicks()
+	var ws []*watch
+	for range t.C {
+		n.mu.Lock()
+		if len(n.watches) == 0 {
+			n.pumping = false
 			n.mu.Unlock()
 			return
-		case <-t.C:
-			if tick%4 == 0 { // the path is cached: a lookup and a stat, a search at most every 30 s
-				n.followCopy(id, f)
-			}
-			n.refresh(id, f)
 		}
+		for _, w := range n.watches {
+			ws = append(ws, w)
+		}
+		n.mu.Unlock()
+		for _, w := range ws {
+			n.pumpWatch(w, live)
+		}
+		clear(ws)
+		ws = ws[:0]
 	}
+}
+
+// pumpWatch is one tick of a watch: new transcript lines four times a second. (The watch used to read the pane's
+// screen every 400 ms too, a herdr call per watched session, for a live preview no view showed; the terminal pane reads
+// the screen itself.) About once a second it follows the copy the session list reads (followCopy): a stream that only
+// refreshed the file it opened kept pushing an old copy while the list's rev went on with the new one (#1423).
+func (n *Node) pumpWatch(w *watch, live int) {
+	if !w.armed.Load() || w.ctx.Err() != nil { // not caught up yet, or ended (watchEnded drops it)
+		return
+	}
+	w.ticks++
+	if w.ticks%live == 0 {
+		n.pumpLive(w) // claudestatus.go
+	}
+	if w.reading.Load() { // still reading: this tick is skipped, as a busy ticker's was
+		return
+	}
+	// The path is cached: a lookup and a stat, a search at most every 30 s. A file being read (Changed says true without
+	// waiting for it) is followed in the goroutine that reads it, so the pump never waits for another's parse.
+	follow := w.ticks%followEvery == 0
+	// A Codex thread: if it is an App chat with no rollout (or the App deleted its rollout meanwhile), the App's new turns
+	// are written into its transcript in the reading goroutine (codex_apphistory.go), then read as any growth or followed
+	// to the new file.
+	appChat := follow && w.codex
+	if !w.f.Changed() && !appChat {
+		if !follow || !n.followCopy(w.id, w.f) {
+			return // at rest
+		}
+		follow = false // moved: what the new path has is read below
+	}
+	w.reading.Store(true)
+	go func() {
+		defer w.reading.Store(false)
+		if appChat {
+			n.refreshCodexAppHistory(w.id)
+		}
+		if follow {
+			n.followCopy(w.id, w.f)
+		}
+		_ = n.refresh(w.id, w.f)
+	}()
+}
+
+// watchEnded: the watch's context ended (session.unwatch, or its hub connection closed). Drop the entry so the session
+// is not left looking watched: a watch that ended with its connection has nobody to send to, and an unwatch for it
+// never comes. Only drop our own: after an unwatch, a new watch may already hold the id, and deleting it would silently
+// stop that stream. A status line that was out ends with null (claudestatus.go).
+func (n *Node) watchEnded(w *watch) {
+	n.mu.Lock()
+	if n.watches[w.id] == w {
+		delete(n.watches, w.id)
+	}
+	n.mu.Unlock()
+	n.endLive(w)
 }

@@ -32,16 +32,38 @@ func (s *Service) agentRoutes() {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change the triage"))
 			return
 		}
-		var in TriageSwitches
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
+		var request struct {
+			TriageSwitches
+			ToolLoop *bool `json:"tool_loop"`
+			Closeout *bool `json:"closeout"`
+			// CloseoutAsk shadows the embedded switch, as the two above do: left out is not "off".
+			CloseoutAsk *bool `json:"closeout_ask"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&request); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
 		// An app that does not know the reminder's switch (#5096) leaves it as it was. While the saved switches cannot be
 		// read, a PUT still goes through (it saves the whole set): then the reminder's switch it leaves out is the default.
 		prev, _ := s.readTriageSwitches(r.Context())
+		in := request.TriageSwitches
+		in.ToolLoop = prev.ToolLoop
+		if request.ToolLoop != nil {
+			in.ToolLoop = *request.ToolLoop
+		}
+		in.Closeout = prev.Closeout // an app that does not know it leaves it as it was
+		if request.Closeout != nil {
+			in.Closeout = *request.Closeout
+		}
+		in.CloseoutAsk = prev.CloseoutAsk
+		if request.CloseoutAsk != nil {
+			in.CloseoutAsk = *request.CloseoutAsk
+		}
 		if in.ReplyReminder == nil {
 			in.ReplyReminder = prev.ReplyReminder
+		}
+		if in.TransientRetry == nil {
+			in.TransientRetry = prev.TransientRetry // an app that does not know it (#3208) leaves it as it was
 		}
 		switch {
 		case in.ReplyReminderMinutes == 0:
@@ -87,15 +109,24 @@ func (s *Service) agentRoutes() {
 
 // workStats is GET /api/v1/agents/work/stats: how the triage did over the last hours (docs/assistant/agent-work.md "Evaluation").
 type workStats struct {
-	Hours    int            `json:"hours"`
-	Triaged  map[string]int `json:"triaged"` // "done", "blocked/user", … "unsure", "failed"
-	By       map[string]int `json:"by"`      // rule, model
-	Actions  map[string]int `json:"actions"` // continued, woke, asked, answered, withdrawn
+	Hours   int            `json:"hours"`
+	Triaged map[string]int `json:"triaged"` // "done", "blocked/user", … "unsure", "failed"
+	By      map[string]int `json:"by"`      // rule, model
+	// Actions: continued, limit_continued, woke, asked, answered, withdrawn, auto_approved; closeout_asked (a stop
+	// held for a closeout); closeout_ask_sent (a status question) and, for the turn after one, closeout_ask_answered
+	// (it carried a closeout) or closeout_ask_ignored (it did not).
+	Actions  map[string]int `json:"actions"`
 	Resumed  map[string]int `json:"resumed"` // by user / hub after a triaged turn
 	Unread   sampleStats    `json:"unread"`  // "Unread" over the hours
 	NeedsYou sampleStats    `json:"needs_you"`
 	// Waits: how long a triaged turn waited for the user's first look or reply (seconds), by what it was.
 	Waits map[string]waitStats `json:"waits"`
+	// OwnerCannotAnswer: the decisions the owner answered "I can't answer this" (decision.go, #3804), by the supervisor
+	// conversation that asked and then by answer (decide_yourself, not_what_i_asked, explain_first).
+	OwnerCannotAnswer map[string]map[string]int `json:"owner_cannot_answer"`
+	// WrongDone: cheap labels for a wrong "done" (#2586): to-dos the hub's judge closed that were reopened within 24
+	// hours, and supervised tasks the judge found done that task_review sent back; each to-do counted once.
+	WrongDone wrongDoneStats `json:"wrong_done"`
 }
 
 type sampleStats struct {
@@ -117,6 +148,8 @@ func summarizeWork(hours int, events []db.WorkEvent) workStats {
 		Waits: map[string]waitStats{}}
 	waits := map[string][]float64{}
 	firstLook := map[string]bool{} // machine/session/turn handled already
+	// The to-dos of a wrong "done" (agents_work_wrong_done.go).
+	reopened, rework := map[string]bool{}, map[string]bool{}
 	var unread, needs []int
 	for _, e := range events {
 		str := func(k string) string { v, _ := e.Detail[k].(string); return v }
@@ -133,7 +166,8 @@ func summarizeWork(hours int, events []db.WorkEvent) workStats {
 			s.By[str("by")]++
 		case "failed":
 			s.Triaged["failed"]++
-		case "continued", "limit_continued", "woke", "asked", "answered", "withdrawn":
+		case "continued", "limit_continued", "woke", "asked", "answered", "withdrawn", "auto_approved",
+			"closeout_asked", closeoutAskSentEvent, closeoutAskAnsweredEvent, closeoutAskIgnoredEvent:
 			s.Actions[e.Kind]++
 		case "resumed", "seen":
 			if e.Kind == "resumed" {
@@ -157,9 +191,19 @@ func summarizeWork(hours int, events []db.WorkEvent) workStats {
 			u, _ := e.Detail[proto.StateUnread].(float64)
 			n, _ := e.Detail[proto.StateNeedsYou].(float64)
 			unread, needs = append(unread, int(u)), append(needs, int(n))
+		case todoReopenedEvent:
+			if judge, _ := e.Detail["judge"].(bool); judge && num("after") <= wrongDoneWithin.Seconds() {
+				reopened[str("todo")] = true
+			}
+		case reviewReworkEvent:
+			if judged, _ := e.Detail["judged_done"].(bool); judged {
+				rework[str("todo")] = true
+			}
 		}
 	}
+	s.WrongDone = wrongDoneStats{Reopened: len(reopened), Rework: len(rework)}
 	s.Unread, s.NeedsYou = samples(unread), samples(needs)
+	s.OwnerCannotAnswer = ownerCannotStats(events)
 	for k, v := range waits {
 		slices.Sort(v)
 		s.Waits[k] = waitStats{N: len(v), Median: v[len(v)/2], P90: v[min(len(v)-1, len(v)*9/10)]}

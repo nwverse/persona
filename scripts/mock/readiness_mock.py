@@ -28,9 +28,11 @@ DEFAULT_LANG = "zh-Hans"  # i18n.Default: the hub's words were Chinese before i1
 SCENARIOS = {
     "zero": {"machine": "none", "start": "no_machine"},
     "offline": {"machine": "offline", "start": "node_unreachable"},
-    "pending": {"machine": "pending", "start": "no_machine"},
+    "pending": {"machine": "pending", "start": "machine_pending"},
     "no_claude": {"machine": "ok", "claude": "missing", "start": "claude_missing"},
     "not_logged_in": {"machine": "ok", "model": "not_logged_in"},
+    # The same signed-out launcher, with other launchers on the machine to switch the main chat to (#4355).
+    "not_logged_in_switch": {"machine": "ok", "model": "not_logged_in", "switch": True},
     "bad_key": {"machine": "ok", "model": "auth_failed"},
     "full": {"machine": "ok", "model": "ok", "answered": True},
     # full on the mock's usual data (the assistant on server, every page filled), for screenshots of a hub in use.
@@ -130,10 +132,12 @@ def blocks(st):
 
 def readiness(sc, machine, lang, launcher="claude", dismissed=False, probe=None):
     """GET /api/v1/assistant/readiness for scenario sc on machine (the main conversation's: a dict with id, name,
-    online, claude_version, node_outdated; None when there is none). probe: the one-word check's result, already run."""
+    online, pending, claude_version, node_outdated; None when there is none). probe: the one-word check's result, already run."""
     out = {"version": 1, "mode": "full", "ready": True, "next": None, "machine": None, "launcher": launcher}
     if machine is None:
         computer = step(lang, "computer", "todo", "no_machine", "", launcher, "add_computer")
+    elif machine.get("pending"):
+        computer = step(lang, "computer", "todo", "machine_pending", machine["name"], launcher, "confirm_computer")
     elif not machine.get("online"):
         computer = step(lang, "computer", "problem", "node_unreachable", machine["name"], launcher, "wake_computer")
     elif machine.get("node_outdated"):
@@ -160,6 +164,10 @@ def readiness(sc, machine, lang, launcher="claude", dismissed=False, probe=None)
             model = with_machine(step(lang, "model", "problem", model_code, name, launcher, action), mid)
             if alt:
                 model["alt_actions"] = [{"id": alt}]
+            if model_code == "not_logged_in" and sc.get("switch"):
+                # The machine has other launchers: offer switching the main chat to one (#4355).
+                model["alt_actions"] = model.get("alt_actions", []) + [{"id": "main_chat_model"}]
+                model["detail"] = t(lang, "assistant-readiness.model_not_logged_in_switch_detail", machine=name)
         else:
             model = with_machine(step(lang, "model", "unknown", "model_unverified", name, launcher, "test_assistant"), mid)
         model_ok = model["state"] == "ok"

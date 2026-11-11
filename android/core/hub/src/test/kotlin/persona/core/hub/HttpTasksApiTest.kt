@@ -45,6 +45,50 @@ class HttpTasksApiTest {
         }
     }
 
+    @Test fun aDecisionIsAnsweredThroughTheAcceptRouteWithItsOptionOrResponse() = runBlocking {
+        MockWebServer().use { server ->
+            val askedAt = "2026-11-01T09:00:00.123Z"
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).answerTask("todo/one", askedAt, persona.core.contracts.api.AskAnswer.Option("Ship it"))
+            val option = server.takeRequest()
+            assertEquals("POST", option.method)
+            assertEquals("/api/v1/todos/todo%2Fone/accept", option.path)
+            assertEquals("""{"asked_at":"$askedAt","option":"Ship it"}""", option.body.readUtf8())
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).answerTask("todo/one", askedAt, persona.core.contracts.api.AskAnswer.Response("explain_first"))
+            assertEquals("""{"asked_at":"$askedAt","response":"explain_first"}""", server.takeRequest().body.readUtf8())
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"Already handled"}"""))
+            try { api(server).answerTask("todo/one", askedAt, persona.core.contracts.api.AskAnswer.Option("Ship it")); fail("a stale answer was not refused") }
+            catch (error: HubFailure) { assertEquals(409, error.status) }
+        }
+    }
+
+    @Test fun acceptanceCarriesTheCapturedRoundAndRetainsAStaleRefusal() = runBlocking {
+        MockWebServer().use { server ->
+            val askedAt = "2026-11-01T09:00:00.123Z"
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).acceptTask("todo/one", askedAt)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/todos/todo%2Fone/accept", request.path)
+            assertEquals("""{"asked_at":"$askedAt"}""", request.body.readUtf8())
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"Already handled"}"""))
+            try { api(server).acceptTask("todo/one", askedAt); fail("stale acceptance was not refused") }
+            catch (error: HubFailure) { assertEquals(409, error.status) }
+        }
+    }
+
+    @Test fun laterHandlingEscapesTheExactQuestion() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).markLaterHandled("question/one")
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/later/question%2Fone/handled", request.path)
+            assertEquals("{}", request.body.readUtf8())
+        }
+    }
+
     @Test fun retryPostsAndAnswersTheReopenedTodo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo_1","title":"设置页按钮对齐","origin":"c","plan_id":"p","agents":[]}}"""))
@@ -79,6 +123,132 @@ class HttpTasksApiTest {
             assertEquals("POST", (req.method).zhAny())
             assertTrue(req.path.orEmpty(), req.path.orEmpty().endsWith("/reply"))
             assertEquals("""{"text":"修好了","card":"feed_1"}""", (req.body.readUtf8()).zhAny())
+        }
+    }
+
+    @Test fun dismissAndUndoCarryExactDraftAndTokenWithCapturedManager() = runBlocking {
+        val choice = persona.core.contracts.api.AssistantManagerChoice
+        choice.choose(null, "assistant-one", "assistant")
+        choice.noteItem(listOf("assistant", "conversations", "conversation-one"), "assistant-one")
+        try {
+            MockWebServer().use { server ->
+                val api = api(server)
+                val original = "  Original draft\nNo edits  "
+                val body = kotlinx.serialization.json.buildJsonObject { put("draft", kotlinx.serialization.json.JsonPrimitive(original)) }
+                val item = persona.core.contracts.FeedItem("card/one", "conversation-one", kind = "message", ref = "inbox-one", body = body)
+                val json = persona.core.contracts.JsonCodec.encodeToString(persona.core.contracts.FeedItem.serializer(), item)
+                server.enqueue(MockResponse().setBody("{\"items\":[$json]}"))
+                api.feed("conversation-one", null); server.takeRequest()
+                choice.pick("assistant-two")
+                val dismissed = item.copy(body = kotlinx.serialization.json.JsonObject(body + mapOf(
+                    "dismissed_at" to kotlinx.serialization.json.JsonPrimitive("2026-11-11T10:00:00Z"),
+                    "dismissal_id" to kotlinx.serialization.json.JsonPrimitive("receipt-one"))))
+                val dismissedJson = persona.core.contracts.JsonCodec.encodeToString(persona.core.contracts.FeedItem.serializer(), dismissed)
+                server.enqueue(MockResponse().setBody("{\"item\":$dismissedJson,\"dismissal_id\":\"receipt-one\"}"))
+                val receipt = api.dismissMessage(item.id, original)
+                assertEquals(dismissed, receipt.item)
+                assertEquals("receipt-one", receipt.dismissalId)
+                val request = server.takeRequest()
+                assertEquals("POST", request.method)
+                assertEquals("/api/v1/assistant/feed/card%2Fone/dismiss", request.requestUrl?.encodedPath)
+                assertEquals("assistant-one", request.requestUrl?.queryParameter("manager"))
+                assertEquals(kotlinx.serialization.json.buildJsonObject { put("draft", kotlinx.serialization.json.JsonPrimitive(original)) }.toString(), request.body.readUtf8())
+                server.enqueue(MockResponse().setBody("{\"item\":$json}"))
+                assertEquals(item, api.undoDismissMessage(item.id, receipt.dismissalId))
+                val undo = server.takeRequest()
+                assertEquals("POST", undo.method)
+                assertEquals("/api/v1/assistant/feed/card%2Fone/undo-dismiss", undo.requestUrl?.encodedPath)
+                assertEquals("assistant-one", undo.requestUrl?.queryParameter("manager"))
+                assertEquals("{\"dismissal_id\":\"receipt-one\"}", undo.body.readUtf8())
+            }
+        } finally { choice.reset(); choice.forgetItems() }
+    }
+
+    @Test fun websocketOnlyDraftsPinExplicitAndBuiltInOwnersAcrossSelectionChanges() = runBlocking {
+        val choice = persona.core.contracts.api.AssistantManagerChoice
+        try {
+            for (owner in listOf(null, "assistant-one")) MockWebServer().use { server ->
+                choice.choose(null, "unrelated-assistant", "assistant")
+                val api = api(server)
+                val managerField = owner?.let { ",\"manager\":\"$it\"" }.orEmpty()
+                val rawItem = """{"id":"live-card","conversation":"live-conversation","kind":"message","ref":"source","body":{"draft":"Live original"}}"""
+                val event = persona.core.contracts.ServerEvent.decode("""{"type":"assistant_feed","conversation":"live-conversation"$managerField,"item":$rawItem}""")
+                    as persona.core.contracts.AssistantFeedEvent
+                assertEquals(owner, event.manager)
+                api.noteFeedOwner(event.item, event.manager)
+                choice.pick("another-assistant")
+                server.enqueue(MockResponse().setBody("""{"item":$rawItem,"dismissal_id":"receipt-live"}"""))
+                val receipt = api.dismissMessage("live-card", "Live original")
+                assertEquals(persona.core.contracts.pushManager(owner), server.takeRequest().requestUrl?.queryParameter("manager"))
+                choice.pick("yet-another-assistant")
+                server.enqueue(MockResponse().setBody("""{"item":$rawItem}"""))
+                api.undoDismissMessage("live-card", receipt.dismissalId)
+                assertEquals(persona.core.contracts.pushManager(owner), server.takeRequest().requestUrl?.queryParameter("manager"))
+                assertEquals(2, server.requestCount)
+            }
+        } finally { choice.reset(); choice.forgetItems() }
+    }
+
+    @Test fun paginatedFeedUsesOpaqueContinuationAndPinsBothDefaultAndExplicitOwners() = runBlocking {
+        val choice = persona.core.contracts.api.AssistantManagerChoice
+        try {
+            for (owner in listOf(null, "assistant-one")) MockWebServer().use { server ->
+                choice.choose(null, "shown-assistant", "assistant")
+                val api = api(server)
+                api.noteFeedOwner(persona.core.contracts.FeedItem("live", "conversation/one"), owner)
+                val reader = api.feedPages("conversation/one")
+                choice.pick("another-assistant")
+                val since = "2026-11-11T08:00:00+09:00"
+                val cursor = "opaque /+?&="
+                server.enqueue(MockResponse().setBody("""{"items":[],"next_cursor":"$cursor"}"""))
+                assertEquals(cursor, reader.read(since, null).nextCursor)
+                val first = server.takeRequest()
+                assertEquals("GET", first.method)
+                assertEquals("/api/v1/assistant/conversations/conversation%2Fone/feed", first.requestUrl?.encodedPath)
+                assertEquals("1", first.requestUrl?.queryParameter("paginate"))
+                assertEquals(since, first.requestUrl?.queryParameter("since"))
+                assertNull(first.requestUrl?.queryParameter("cursor"))
+                assertEquals(persona.core.contracts.pushManager(owner), first.requestUrl?.queryParameter("manager"))
+                choice.choose(null, "third-assistant", "different-default")
+                server.enqueue(MockResponse().setBody("""{"items":[],"next_cursor":""}"""))
+                assertEquals("", reader.read(since, cursor).nextCursor)
+                val next = server.takeRequest()
+                assertEquals(cursor, next.requestUrl?.queryParameter("cursor"))
+                assertNull(next.requestUrl?.queryParameter("since"))
+                assertNull(next.requestUrl?.queryParameter("paginate"))
+                assertEquals(persona.core.contracts.pushManager(owner), next.requestUrl?.queryParameter("manager"))
+            }
+        } finally { choice.reset(); choice.forgetItems() }
+    }
+
+    @Test fun olderFeedResponsesRetainMissingCursorAndInvalidContinuationKeepsItsError() = runBlocking {
+        MockWebServer().use { server ->
+            val reader = api(server).feedPages("conversation")
+            server.enqueue(MockResponse().setBody("""{"items":[]}"""))
+            assertNull(reader.read(null, null).nextCursor)
+            server.takeRequest()
+            server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":"Invalid cursor"}"""))
+            try { reader.read("original-since", "invalid/cursor"); fail("invalid continuation was not refused") }
+            catch (error: HubFailure) { assertEquals(400, error.status) }
+            val request = server.takeRequest()
+            assertEquals("invalid/cursor", request.requestUrl?.queryParameter("cursor"))
+            assertNull(request.requestUrl?.queryParameter("since"))
+        }
+    }
+
+    @Test fun draftDismissalAndUndoKeepConflictAndMissingErrors() = runBlocking {
+        MockWebServer().use { server ->
+            val api = api(server)
+            for (status in listOf(409, 404)) {
+                server.enqueue(MockResponse().setResponseCode(status).setBody("{\"error\":\"Draft unavailable\"}"))
+                try { api.dismissMessage("card", "Original draft"); fail("dismissal was not refused") }
+                catch (error: HubFailure) { assertEquals(status, error.status) }
+                server.takeRequest()
+                server.enqueue(MockResponse().setResponseCode(status).setBody("{\"error\":\"Draft unavailable\"}"))
+                try { api.undoDismissMessage("card", "receipt"); fail("undo was not refused") }
+                catch (error: HubFailure) { assertEquals(status, error.status) }
+                server.takeRequest()
+            }
         }
     }
 
@@ -117,6 +287,41 @@ class HttpTasksApiTest {
             val req = server.takeRequest()
             assertEquals("DELETE", (req.method).zhAny())
             assertEquals("/api/v1/todos/todo_1", (req.path).zhAny())
+        }
+    }
+
+    // #2045: a moved to-do sends only the field it is due by; the hub clears the other.
+    @Test fun movingADueDateSendsOnlyTheMomentOrTheDay() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"t1","title":"Book the flight","due_at":"2026-11-19T10:00:00Z"}}"""))
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"t1","title":"Book the flight","due_date":"2026-11-19"}}"""))
+            val at = api(server).setTodoDue("t1", persona.core.contracts.TodoDue.At(java.time.Instant.parse("2026-11-19T10:00:00Z")))
+            val atReq = server.takeRequest()
+            assertEquals("PATCH", atReq.method)
+            assertEquals("/api/v1/todos/t1", atReq.path)
+            assertEquals("""{"due_at":"2026-11-19T10:00:00Z"}""", atReq.body.readUtf8())
+            assertEquals("2026-11-19T10:00:00Z", at.dueAt)
+            val day = api(server).setTodoDue("t1", persona.core.contracts.TodoDue.Day(java.time.LocalDate.parse("2026-11-19")))
+            assertEquals("""{"due_date":"2026-11-19"}""", server.takeRequest().body.readUtf8())
+            assertEquals("2026-11-19", day.dueDate)
+            assertNull(day.dueAt)
+        }
+    }
+
+    @Test fun directCompletionOnlyPatchesDoneAndDecodesTheUserCompletionReceipt() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo/one","title":"Review the sample release","done_at":"2026-11-04T10:00:00Z"}}"""))
+            val completed = api(server).patchTodo("todo/one", done = true)
+            val request = server.takeRequest()
+            assertEquals("PATCH", request.method)
+            assertEquals("/api/v1/todos/todo%2Fone", request.path)
+            assertEquals("""{"done":true}""", request.body.readUtf8())
+            assertEquals("todo/one", completed.id)
+            assertTrue(completed.isDone)
+            assertNull(completed.doneBy)
+            assertNull(completed.doneReason)
+            assertNull(completed.ask)
+            assertEquals(1, server.requestCount)
         }
     }
 
@@ -159,7 +364,37 @@ class HttpTasksApiTest {
         }
     }
 
-    // A card's action (docs/assistant/assistant-views.md "Persisted submits"): the key is one escaped path segment, the version goes with it.
+    // A to-do's decisions (#1618, #1853): every one with all=1 (the revised ones too); recording one sends what was typed, trimmed,
+    // without a blank reason, and with the decision it revises when there is one.
+    @Test fun decisionsAreReadWholeAndRecordedTrimmed() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"decisions":[{"id":"dec_1","todo_id":"todo_ask_1","question":"Merge now?","choice":"Wait",""" +
+                """"source":"manual","superseded_by":"dec_2","created_at":"2026-11-09T05:00:00Z","extra":1},""" +
+                """{"id":"dec_2","todo_id":"todo_ask_1","question":"Merge now?","choice":"Merge","supersedes_id":"dec_1","source":"manual"}]}"""))
+            val list = api(server).todoDecisions("todo_ask_1")
+            val read = server.takeRequest()
+            assertEquals("GET", read.method)
+            assertEquals("/api/v1/todos/todo_ask_1/decisions?all=1", read.path)
+            assertEquals(listOf("dec_1", "dec_2"), list.map { it.id })
+            assertEquals(listOf(false, true), list.map { it.isCurrent })
+            assertEquals("dec_1", list[1].supersedesId)
+
+            server.enqueue(MockResponse().setBody("""{"decision":{"id":"dec_3","todo_id":"todo_ask_1","question":"Merge now?","choice":"Merge"}}"""))
+            val added = api(server).addTodoDecision("todo_ask_1", "  Merge now? ", " Merge ", "  ")
+            val first = server.takeRequest()
+            assertEquals("POST", first.method)
+            assertEquals("/api/v1/todos/todo_ask_1/decisions", first.path)
+            assertEquals("""{"question":"Merge now?","choice":"Merge"}""", first.body.readUtf8())
+            assertEquals("dec_3", added.id)
+
+            server.enqueue(MockResponse().setBody("""{"decision":{"id":"dec_4","question":"Merge now?","choice":"Wait"}}"""))
+            api(server).addTodoDecision("todo_ask_1", "Merge now?", "Wait", "The review is not in", supersedesId = "dec_3")
+            assertEquals("""{"question":"Merge now?","choice":"Wait","reason":"The review is not in","supersedes_id":"dec_3"}""",
+                server.takeRequest().body.readUtf8())
+        }
+    }
+
+    // A card's action (docs/assistant/assistant-views.md "Persistent submission"): the key is one escaped path segment, the version goes with it.
     @Test fun aCardsActionEscapesItsKeyAndSendsTheVersion() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"action":{"key":"uuid#0/2","action":"choose-b","client_msg_id":"m1","status":"pending","revision":1,"at":"2026-11-05T10:00:00Z"}}"""))

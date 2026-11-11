@@ -5,6 +5,7 @@ package sessionlist
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"sync"
 	"time"
@@ -34,6 +35,11 @@ type Item struct {
 	// BackgroundWaiting: a working row that only waits on background commands (#6045). It stays in State's count
 	// (older apps call it working) and is counted apart in Counts.BackgroundWaiting too.
 	BackgroundWaiting bool
+	Assistant         bool
+	WorkExcluded      bool
+	Dimensions        Dimensions
+	Title             string
+	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	SearchText        string
 	Summary           any
@@ -47,19 +53,28 @@ type Item struct {
 type Options struct {
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
-	Summary                                                                            bool
+	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
+	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
+	// and who may ask for which.
+	Manager                              string
+	Summary                              bool
+	Facets, AgentsOnly, WorkOnly         bool
+	Sort, Direction, GroupBy             string
+	machines, projects, harnesses, scope string
 }
 
 // Page contains transport values rather than adapter-specific session types.
 // Total is the filtered membership at Revision, not the number of delta events.
 // Sessions and Remove together consume Limit slots in an incremental page.
 type Page struct {
-	Sessions   []any    `json:"sessions"`
-	Remove     []string `json:"remove"`
-	HasMore    bool     `json:"has_more"`
-	NextCursor string   `json:"next_cursor,omitempty"`
-	Revision   string   `json:"revision"`
-	Total      int      `json:"total"`
+	Sessions   []any         `json:"sessions"`
+	Remove     []string      `json:"remove"`
+	HasMore    bool          `json:"has_more"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+	Revision   string        `json:"revision"`
+	Total      int           `json:"total"`
+	Facets     *Facets       `json:"facets,omitempty"`
+	Groups     *[]GroupCount `json:"groups,omitempty"`
 }
 
 // Counts describes the complete filtered membership, ignoring page size.
@@ -74,8 +89,10 @@ type Counts struct {
 	PaneSource map[string]int `json:"pane_source,omitempty"`
 	// BackgroundWaiting: how many of State["working"] only wait in the background (#6045): a client that shows them
 	// apart takes them out of its Working count.
-	BackgroundWaiting int    `json:"background_waiting,omitempty"`
-	Revision          string `json:"revision"`
+	BackgroundWaiting int           `json:"background_waiting,omitempty"`
+	Revision          string        `json:"revision"`
+	Facets            *Facets       `json:"facets,omitempty"`
+	Groups            *[]GroupCount `json:"groups,omitempty"`
 }
 
 // Error lets adapters map invalid_query to HTTP 400 and cursor_expired or
@@ -92,6 +109,10 @@ func failure(code, message string) error { return &Error{Code: code, message: me
 type record struct {
 	item   Item
 	search string
+	title  string
+	// owner is the manager its batch was replaced with (ReplaceOwned), "" for none: what filters.Manager selects by.
+	// It is the batch's, not an Item attribute, so the items an adapter builds for every update stay the size they were.
+	owner string
 }
 
 type change struct{ before, after *record }
@@ -101,30 +122,36 @@ type journalEntry struct {
 }
 
 type filters struct {
-	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
+	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager string
+	machines, projects, harnesses, scope                                         string
+	agentsOnly, workOnly                                                         bool
 }
 
 type binding struct {
 	filters
 	Summary bool
 	Since   string
+	viewOptions
 }
 
 type cacheKey struct {
 	filters
 	Since string
+	viewOptions
 }
 
 type event struct {
 	id      string
 	updated time.Time
-	value   *record // nil means a removal
+	value   *record // the last matching record for a removal
+	removed bool
 }
 
 type result struct {
-	events  []event
-	counts  Counts
-	ordered bool // counts-only views must not be mistaken for an empty ordered list
+	events     []event
+	counts     Counts
+	dimensions *dimensionView
+	ordered    bool // counts-only views must not be mistaken for an empty ordered list
 }
 
 type cacheEntry struct {
@@ -197,7 +224,12 @@ func (i *Index) Revision() string {
 // Replace atomically replaces one owner's entire batch. Unchanged batches do
 // not advance Revision, even if their input order changes. IDs must be nonempty
 // and unique within and across owners; violating this adapter contract panics.
-func (i *Index) Replace(source string, items []Item) {
+func (i *Index) Replace(source string, items []Item) { i.ReplaceOwned(source, "", items) }
+
+// ReplaceOwned is Replace of a batch that belongs to owner (a manager's id, "" for none): Options.Manager selects
+// its rows. A batch whose owner changed is a change of every row of it, even when nothing else of them did: each
+// leaves the old owner's filtered list as a removal and enters the new owner's.
+func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.initialize()
@@ -217,14 +249,15 @@ func (i *Index) Replace(source string, items []Item) {
 		}
 		// Strip monotonic clock data and normalize zones before comparison.
 		item.UpdatedAt = item.UpdatedAt.Round(0).UTC()
+		item.CreatedAt = item.CreatedAt.Round(0).UTC()
 		previous := old[item.ID]
-		if previous != nil && reflect.DeepEqual(previous.item, item) {
+		if previous != nil && previous.owner == owner && sameItem(&previous.item, &item) {
 			next[item.ID] = previous
 			continue
 		}
 		item.Full = clone(item.Full)
 		item.Summary = clone(item.Summary)
-		r := &record{item: item, search: normalizeQ(item.SearchText)}
+		r := &record{item: item, search: normalizeQ(item.SearchText), title: normalizeQ(item.Title), owner: owner}
 		next[item.ID] = r
 		changes[item.ID] = change{before: previous, after: r}
 	}
@@ -270,8 +303,45 @@ func (i *Index) Replace(source string, items []Item) {
 	i.cache = make(map[cacheKey]*cacheEntry)
 }
 
+// sameItem is reflect.DeepEqual(*a, *b) without walking what is plainly the same: the attributes compared as values,
+// a payload that is the very bytes stored (an item Items returned, handed back) by its slice. Anything else, such as
+// a payload built again, is left to reflect.DeepEqual.
+func sameItem(a, b *Item) bool {
+	if !samePayload(a.Full, b.Full) || !samePayload(a.Summary, b.Summary) {
+		return false
+	}
+	x, y := *a, *b
+	x.Full, x.Summary, y.Full, y.Summary = nil, nil, nil, nil
+	return x == y || reflect.DeepEqual(x, y)
+}
+
+func samePayload(a, b any) bool {
+	if x, ok := a.(json.RawMessage); ok {
+		if y, ok := b.(json.RawMessage); ok && len(x) > 0 && len(x) == len(y) && &x[0] == &y[0] {
+			return true
+		}
+	}
+	return reflect.DeepEqual(a, b)
+}
+
 // RemoveSource removes an owner's entire batch in one revision.
 func (i *Index) RemoveSource(source string) { i.Replace(source, nil) }
+
+// Items returns the current items with the given IDs, in order, and the zero
+// Item for an ID the index does not hold, all under one lock. The items are
+// copies, but their Full and Summary are the index's own: callers only read
+// them, or hand them back to Replace unchanged, which then keeps the record.
+func (i *Index) Items(ids []string) []Item {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	out := make([]Item, len(ids))
+	for k, id := range ids {
+		if r := i.items[id]; r != nil {
+			out[k] = r.item
+		}
+	}
+	return out
+}
 
 func (i *Index) pruneSnapshots() {
 	now := i.now()

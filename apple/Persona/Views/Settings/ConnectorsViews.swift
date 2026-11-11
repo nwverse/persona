@@ -139,7 +139,7 @@ nonisolated struct LarkStatus: Codable, Hashable, Sendable {
     }
 }
 
-/// One of GET /api/v1/connectors: a source the hub reads (GitHub…) and how it is doing (docs/protocol/protocol.md「连接器 API」).
+/// One of GET /api/v1/connectors: a source the hub reads (GitHub…) and how it is doing (docs/protocol/protocol.md「Connector API」).
 /// Feishu and mail are in it too when asked for (`all`): `ConnectorRow` draws them as the rows they always had.
 nonisolated struct HubConnector: Codable, Hashable, Sendable, Identifiable {
     var id: String
@@ -371,7 +371,32 @@ nonisolated enum ConnectorRow: Hashable, Identifiable {
     }
 }
 
-/// The Connectors section of Settings: one row per connector with what it has now; with several managers the hub's
+/// Settings › Connectors: the existing sources followed by the sent ledger, never a top-level Settings entry.
+struct ConnectorsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        SettingsForm {
+            ConnectorsSection()
+            if !model.isDemo {
+                Section {
+                    NavigationLink(value: SettingsPage.sent) {
+                        SettingsRow(title: String(localized: "Records sent as you"), symbol: Theme.Icon.sentAsYou, tint: Theme.Hue.orange)
+                            .lineLimit(1)
+                    }
+                    .accessibilityIdentifier("connectors.sent")
+                } footer: {
+                    Text("What Persona sent in your name, and why it was allowed")
+                }
+            }
+        }
+        .accessibilityIdentifier("connectors-list")
+        .themedPage()
+        .detailTitle(String(localized: "Connectors"))
+    }
+}
+
+/// The Connectors section: one row per connector with what it has now; with several managers the hub's
 /// connectors follow in a section per manager, under its name.
 struct ConnectorsSection: View {
     @Environment(AppModel.self) private var model
@@ -529,7 +554,7 @@ struct FeishuConnectorView: View {
                 }
             } footer: {
                 Text(status?.configured == false
-                     ? String(localized: "The hub isn't connected to Lark yet: run the Lark gateway on the hub machine and add it under lark in the manager's manager.json (docs/extensions/feishu.md).")
+                     ? String(localized: "The hub isn't connected to Lark yet: run the Lark gateway on the hub machine and add it under lark in the assistant's manager.json (docs/extensions/feishu.md).")
                      : String(localized: "The Lark account is signed in through the Lark gateway on the hub machine. Chats share this account with the Inbox, so there's no need to sign in again."))
             }
 
@@ -701,7 +726,7 @@ struct HubConnectorView: View {
                 }
             } footer: {
                 if let connector, !connector.signsInHere, !connector.undescribed {
-                    Text("Sign-in is set up in the manager's configuration (manager.json, see docs/operations/config.md); this page only shows the status.")
+                    Text("Sign-in is set up in the assistant's configuration (manager.json, see docs/operations/config.md); this page only shows the status.")
                 }
             }
             // Telegram switched off lists nothing until it runs: its switch is here all the same.

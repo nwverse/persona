@@ -39,7 +39,7 @@ func kbInvalidParams(method, message string) error {
 
 func kbRPCKind(kind string) bool {
 	switch kind {
-	case kb.KindProject, kb.KindChat, kb.KindPerson, kb.KindDoc, kb.KindMeeting, kb.KindEvent, kb.KindRecording:
+	case kb.KindProject, kb.KindChat, kb.KindPerson, kb.KindDoc, kb.KindMeeting, kb.KindEvent, kb.KindRecording, kb.KindTopic:
 		return true
 	}
 	return false
@@ -68,6 +68,10 @@ func (s *Service) kbRPCRequest(ctx context.Context, method string, raw json.RawM
 	var since, until time.Time
 	var params any
 	extension := ""
+	sentOrigin := method == assistantwire.MethodKBExtensionDay
+	if sentOrigin {
+		method = assistantwire.MethodKBDay
+	}
 	if method == assistantwire.MethodKBExtensionUpdate {
 		var env assistantwire.KBExtensionUpdate
 		if err := kbDecodeParams(method, raw, &env); err != nil {
@@ -232,11 +236,15 @@ func (s *Service) kbRPCRequest(ctx context.Context, method string, raw json.RawM
 		detail, err := e.Get(get.Kind, get.ID, *get.RecentChars)
 		return assistantwire.KBGetResult{Detail: detail}, true, kbRPCError(err)
 	case assistantwire.MethodKBDay:
+		if sentOrigin {
+			out, err := s.kbDaySent(ctx, e, day)
+			return out, true, kbRPCError(err)
+		}
 		messages, prev, next, err := e.Day(day.ID, day.Day)
 		if messages == nil {
 			messages = []kb.DayMessage{}
 		}
-		return assistantwire.KBDayResult{Day: day.Day, Messages: messages, Prev: prev, Next: next}, true, kbRPCError(err)
+		return assistantwire.KBDayResult{SentOrigin: "unavailable", Day: day.Day, Messages: messages, Prev: prev, Next: next}, true, kbRPCError(err)
 	case assistantwire.MethodKBSearch:
 		hits := e.Search(search.Query, search.Messages == nil || *search.Messages, search.Limit)
 		if hits == nil {

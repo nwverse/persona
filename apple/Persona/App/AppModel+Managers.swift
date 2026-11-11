@@ -1,0 +1,263 @@
+import Foundation
+
+// Several managers on one hub (docs/assistant/managers.md "Clients"), as the app reads them outside Settings › Assistants:
+// each group's roster, read when its hub says hello and on each of its `managers` pushes. Pages that group a list read
+// their own (`ManagerRoster.read`); this one is for what is decided outside such a page: whose copy of an extension a
+// push is about, the inbox's groups, a computer whose manager is offline, and the current assistant: the manager picked
+// in the sidebar's switcher (`AssistantSwitcher`), kept on this device for each hub. The interface calls a manager an
+// assistant; the code and the docs keep "manager".
+
+extension AppModel {
+    /// The roster of the hub-level group's hub; nil from a hub before managers, or until it is read.
+    var managerRoster: ManagerRoster? { managerRosters[hub?.group ?? ""] }
+
+    /// Reads group's roster again. A hub without one (404) has none; one that can't be read now keeps the last.
+    func refreshManagerRoster(_ group: String) async {
+        guard let api = api(group) else { return }
+        let read = managerRosterReads[group, default: 0] + 1
+        managerRosterReads[group] = read
+        let roster = await ManagerRoster.read(api, keeping: managerRosters[group])
+        guard read == managerRosterReads[group], managerRosters[group] != roster else { return }
+        let was = managerRosters[group].map { shownOwner($0, group: group) }
+        let wasPick = assistantPick(in: group)
+        let wasOffline = group == hub?.group && assistantManagerOffline != nil
+        let defaultMoved = managerRosters[group] != nil && roster != nil && managerRosters[group]?.defaultID != roster?.defaultID
+        if defaultMoved {
+            // What was held as the default's settings is the one before's, and the new default's may be held by its id.
+            if let old = managerRosters[group]?.defaultID, let held = assistantByGroup[group] {
+                assistantByManager[Self.managerKey(group, old)] = held
+            }
+            assistantByGroup[group] = roster.flatMap { assistantByManager[Self.managerKey(group, $0.defaultID)] }
+        }
+        managerRosters[group] = roster
+        // A pick of a manager that left the roster goes with it: back to the default, also should it come back. A hub
+        // without a roster leaves the pick alone: it names nothing there.
+        if let roster, let pick = assistantPicks[group], !roster.installed.contains(where: { $0.id == pick }) {
+            assistantPicks[group] = nil
+        }
+        saveSnapshot()
+        // Another manager's page stays shown: Health, the channels and the health launcher follow the default all the same,
+        // so its settings are read once in this run (the default's own page, which reads them, doesn't show), and again
+        // when another manager becomes the default.
+        if assistantPick(in: group) != nil, defaultMoved || defaultAssistantReads.insert(group).inserted {
+            readDefaultAssistant(group, api: api)
+        }
+        guard group == hub?.group else { return }
+        // The manager the Persona page showed left the roster (or the hub has one manager again), the default moved, or the
+        // shown one is back online: the page reads its manager again. Only the first and a pick kept from the last launch
+        // that names a manager only now that the roster is read change the current assistant.
+        let now = roster.map { shownOwner($0, group: group) }
+        let back = wasOffline && assistantManagerOffline == nil
+        let switched = (was != nil && was != now) || assistantPick(in: group) != wasPick
+        if defaultMoved || back || switched { assistantManagerChanged(switched: switched) } else { relistAssistant() }
+    }
+
+    /// The default manager's Persona settings for group while another assistant is current (`assistantByGroup`), unless
+    /// the default moved again or the default became current meanwhile.
+    private func readDefaultAssistant(_ group: String, api: APIClient) {
+        let expected = managerRosters[group]?.defaultID
+        Task {
+            guard let st = try? await api.manager(nil).assistant(), managerRosters[group]?.defaultID == expected,
+                  assistantPick(in: group) != nil else { return }
+            assistantByGroup[group] = st
+        }
+    }
+
+    /// The manager group's Persona page shows by `roster`.
+    private func shownOwner(_ roster: ManagerRoster, group: String) -> String {
+        roster.isMulti ? roster.owner(assistantPicks[group]) : roster.defaultID
+    }
+
+    /// The current assistant, when another than the default: the switcher's pick while the roster has it installed. nil
+    /// for the default, and always with one manager.
+    var assistantManagerID: String? { assistantPick(in: hub?.group ?? "") }
+
+    /// The current assistant as the roster has it, for the sidebar's header and its list: the picked manager, else the
+    /// default. nil from a hub without a roster, or until it is read.
+    var currentAssistant: HubManager? {
+        guard let group = hub?.group, let roster = managerRosters[group] else { return nil }
+        let id = roster.owner(assistantPicks[group])
+        return roster.installed.first { $0.id == id }
+    }
+
+    /// `assistantManagerID` for group's Persona page.
+    func assistantPick(in group: String) -> String? {
+        guard let roster = managerRosters[group], roster.isMulti, let pick = assistantPicks[group] else { return nil }
+        return roster.named(pick)
+    }
+
+    /// The manager the Persona page shows, as the roster has it, on a hub with several managers; nil with one.
+    var assistantManager: HubManager? {
+        guard let roster = managerRoster, roster.isMulti else { return nil }
+        let id = roster.owner(assistantManagerID)
+        return roster.installed.first { $0.id == id }
+    }
+
+    /// The assistant whose conversation `key` is, when that is another than the current one: a conversation opened from
+    /// a notification, a link or the inbox, which doesn't switch. By its listing, else by what it was opened for
+    /// (`assistantItemManagers`). nil for the current assistant's, the health space's, and with one manager.
+    func otherAssistant(of key: SessionKey) -> HubManager? {
+        guard let roster = managerRosters[key.group], roster.isMulti else { return nil }
+        let manager: String?
+        if let s = session(key) {
+            guard s.assistant, !s.isHealth else { return nil }
+            manager = s.manager
+        } else {
+            guard let m = assistantItemManagers[key] else { return nil }
+            manager = m
+        }
+        let id = roster.owner(manager)
+        guard id != roster.owner(assistantPick(in: key.group)) else { return nil }
+        return roster.installed.first { $0.id == id }
+    }
+
+    /// That manager while it is offline: its page shows what was read of it in this run, and nothing is sent to it.
+    var assistantManagerOffline: HubManager? { assistantManager.flatMap { $0.online ? nil : $0 } }
+
+    /// Whether a thing stamped `manager` is the Persona page's manager's (everything is, with one manager).
+    func assistantShows(_ manager: String?) -> Bool { sameManager(manager, assistantManagerID) }
+
+    /// Whether things stamped `a` and `b` are one manager's (everything is, with one manager).
+    func sameManager(_ a: String?, _ b: String?) -> Bool {
+        guard let roster = managerRoster, roster.isMulti else { return true }
+        return roster.owner(a) == roster.owner(b)
+    }
+
+    /// The Persona page's manager for its lists; nil with one manager.
+    var assistantShown: AssistantLists.Shown? {
+        guard let roster = managerRoster, roster.isMulti else { return nil }
+        return AssistantLists.Shown(roster: roster, manager: roster.owner(assistantManagerID))
+    }
+
+    /// Manager `id` is the current assistant from now on, on this device (nil: the hub's default again, whichever that
+    /// becomes): the Persona page's settings, conversations and readiness are that manager's. The pick is the manager
+    /// itself, so it stays when another one becomes the default. Nothing for one the roster hasn't installed.
+    func selectAssistantManager(_ id: String?) {
+        guard let group = hub?.group, let roster = managerRosters[group] else { return }
+        if let id, !roster.installed.contains(where: { $0.id == id }) { return }
+        let was = assistantManagerID
+        assistantPicks[group] = id
+        if assistantManagerID != was { assistantManagerChanged() }
+    }
+
+    /// Settings, on the page `settingsPath` names, where the caller has no way of its own to it.
+    func showSettings() {
+        #if os(macOS)
+        MacShellState.shared.go(.settings, self)
+        #else
+        selectedTab = .settings
+        if tabRouter != nil { shellSettings = true }
+        #endif
+    }
+
+    /// Whether `api` was made for the Persona page as it is now (its group and manager): what it read lands.
+    func showsPage(of api: APIClient) -> Bool { api.group == hub?.group && api.shownManager == assistantManagerID }
+
+    #if DEBUG
+    /// `-openAssistantManager <id>`: the Persona page on that manager once the hub's roster is in (screenshots, UI tests).
+    func openAssistantManagerWhenListed(_ id: String) {
+        selectedTab = .assistant
+        Task {
+            for _ in 0..<40 where managerRoster?.isMulti != true { try? await Task.sleep(for: .milliseconds(250)) }
+            selectAssistantManager(id)
+        }
+    }
+    #endif
+
+    /// `assistantByManager`'s key.
+    static func managerKey(_ group: String, _ manager: String) -> String { group + "\u{0}" + manager }
+
+    /// This device's prefs as a page just saved them, for what reads them here (the Mac's banners, the Live
+    /// Activities); a prefs read already on its way doesn't put the old ones back.
+    func savedNotifyPrefs(_ prefs: NotifyPrefs) {
+        notifyPrefsWrites += 1
+        LiveActivityController.shared.settings(prefs)
+    }
+
+    /// Whose copy a hub-level push is about, as the pages name managers (`ManagerRoster.named`): nil for the default
+    /// manager's, else its id. A push without `manager` is the hub's own assistant's, the default until the roster says
+    /// otherwise.
+    func pushedBy(_ manager: String?) -> String? { ManagerRoster.pushed(by: manager, defaultID: managerRoster?.defaultID) }
+
+    /// The manager a request about an inbox item stamped `manager` names (its details, Done, Mute, a reply): none for the
+    /// default's (docs/assistant/managers.md "Grouping"). Until a roster is read, its stamp: the default may have moved,
+    /// and naming the default is harmless. The Rules and Muted lists name their stamp too.
+    func itemManager(_ manager: String?) -> String? { managerRoster.map { $0.naming(manager) } ?? manager }
+
+    /// The manager of `machine` while a hub with several managers has that manager offline: the computer comes back
+    /// with it, and Reconnect, which goes through it, can't work meanwhile. nil otherwise.
+    func offlineManager(of machine: Machine?, group: String) -> HubManager? {
+        guard let machine, !machine.online else { return nil }
+        return managerRosters[group]?.offlineManager(of: machine.manager)
+    }
+
+    /// The manager of conversation `session` while a hub with several managers has it offline: nothing goes to it until
+    /// it is back, wherever the conversation was opened. nil otherwise.
+    func offlineManager(of session: Session?) -> HubManager? {
+        guard let session else { return nil }
+        return managerRosters[session.group]?.offlineManager(of: session.manager)
+    }
+
+    /// The manager the links opened among things stamped `manager` (a chat's session, an inbox item) are read through
+    /// (`ManagerRoster.reading`), in group `group` (nil: the hub-level one). The native readers read through the hub-level
+    /// group's hub, so another group's name none.
+    func linkManager(_ manager: String?, group: String? = nil) -> String? {
+        guard group == nil || group == (hub?.group ?? "") else { return nil }
+        return ManagerRoster.reading(manager, roster: managerRoster)
+    }
+}
+
+/// Where each hub's current assistant is kept on this device (`AppModel.assistantPicks`: group → manager id): the
+/// app's defaults, so it outlives the caches; a test's model keeps its own file in its state folder, read through
+/// `StateCache` like the model's other state-folder files (#4695). The write stays synchronous: a test reads it back
+/// at once, and `StateCache.save` writes later.
+nonisolated enum AssistantPickStore {
+    static let key = "assistant.manager"
+    /// The file's name in a test's state folder, one `StateCache` keeps as it is.
+    private static let fileName = "assistant-manager"
+
+    private static func file(_ folder: URL) -> URL { folder.appending(path: fileName + ".json") }
+
+    static func load(folder: URL?) -> [String: String] {
+        if let folder {
+            return StateCache.load(fileName, as: [String: String].self, in: folder) ?? [:]
+        }
+        return UserDefaults.standard.dictionary(forKey: key)?.compactMapValues { $0 as? String } ?? [:]
+    }
+
+    static func save(_ picks: [String: String], folder: URL?) {
+        if let folder {
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? JSONEncoder().encode(picks).write(to: file(folder), options: .atomic)
+        } else if picks.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(picks, forKey: key)
+        }
+    }
+}
+
+extension ManagerRoster {
+    /// `AppModel.pushedBy` with the default manager's id, nil until a roster is read.
+    static func pushed(by manager: String?, defaultID: String?) -> String? {
+        let id = manager ?? assistant
+        return id == (defaultID ?? assistant) ? nil : id
+    }
+
+    /// The installed manager a thing stamped `manager` belongs to, when it is offline on a hub with several managers;
+    /// nil otherwise (with one manager the pages show none of it).
+    func offlineManager(of manager: String?) -> HubManager? {
+        guard isMulti else { return nil }
+        let id = owner(manager)
+        return installed.first { $0.id == id && !$0.online }
+    }
+
+    /// The manager a link opened among things stamped `manager` is read through (docs/assistant/managers.md "Clients"): as
+    /// `named`, nil for the default's and for one `roster` hasn't installed; before a roster is read, any but the hub's own
+    /// assistant.
+    static func reading(_ manager: String?, roster: ManagerRoster?) -> String? {
+        if let roster { return roster.named(manager) }
+        guard let manager, !manager.isEmpty, manager != assistant else { return nil }
+        return manager
+    }
+}

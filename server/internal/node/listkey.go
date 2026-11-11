@@ -38,13 +38,42 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.RootSessionID, '/')
 		w.str(strconv.FormatBool(s.IsSubagent), '/')
 		w.quote(s.RepoRoot, '/')
+		w.quote(s.Worktree, '/')
+		w.quote(s.Branch, '/')
 		w.quote(s.SpaceID, '/')
 		w.quote(s.SpaceKind, '\n')
+		if inv := s.Inventory; inv != nil {
+			w.b.WriteString("inventory:")
+			w.quote(inv.ProjectKind, '/')
+			w.quote(inv.ProjectRepo, '/')
+			if inv.CreatedAt != nil {
+				w.str(inv.CreatedAt.Format(time.RFC3339Nano), '\n')
+			} else {
+				w.b.WriteByte('\n')
+			}
+		}
 		writeUltracodeKey(&w, s)
+		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
+			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)
+		}
+		// A completed background scan can discover a fallback without a new transcript revision or status.
+		if s.ModelFallback != nil || s.TurnErrorCode != "" {
+			fmt.Fprintf(&w.b, "model-fallback:%+v/%q\n", s.ModelFallback, s.TurnErrorCode)
+		}
+		if s.ModelRestore != nil { // a restore asked (model_restore.go): no new revision says so
+			fmt.Fprintf(&w.b, "model-restore:%+v\n", *s.ModelRestore)
+		}
 		if s.Activity != "" { // a new step shows at once, not with the next 10 s of updated_at
 			w.b.WriteString("activity:")
 			w.str(s.Activity, '/')
 			w.int(unixOf(s.ActivityAt), '\n')
+		}
+		// Restored runtime metadata changes assistant classification without a new runtime event.
+		if s.SourceKind == "runtime" {
+			w.b.WriteString("runtime-state:")
+			w.quote(s.Cwd, '/')
+			w.quote(s.Launcher, '/')
+			w.str(strconv.FormatBool(s.StartedByPersona), '\n')
 		}
 		// A new reason or link alone is a change.
 		w.b.WriteString("attention:")
@@ -82,11 +111,7 @@ func listKeySized(list []proto.Session, size int) string {
 		w.str(s.SourceThreadID, '/')
 		w.str(s.SourceInstanceID, '/')
 		w.str(s.ReadOnlyReason, '/')
-		if s.Capabilities != nil {
-			fmt.Fprint(&w.b, s.Capabilities)
-		} else {
-			w.b.WriteString("<nil>")
-		}
+		w.caps(s.Capabilities)
 		w.b.WriteByte('/')
 		w.str(strconv.FormatBool(s.Attached), '/')
 		w.str(s.CodexRoute, '/')
@@ -97,7 +122,8 @@ func listKeySized(list []proto.Session, size int) string {
 		w.str(strconv.FormatBool(s.BackgroundWaiting), '\n')
 		// Workflow journals advance without changing the main transcript's rev, and so do its agents: each one's
 		// latest tool call (its name, and its calls to tell one Read from the next) goes out as often as the
-		// workflow cache reads them (workflowReadInterval). Tokens and the last text ride along.
+		// workflow cache reads them (workflowReadInterval). Tokens and the last text ride along. Each agent's id too:
+		// a retried agent replaces its earlier attempt without changing any count (#2323).
 		for _, run := range s.Workflows {
 			w.b.WriteString("workflow:")
 			w.str(run.TaskID, '/')
@@ -108,12 +134,19 @@ func listKeySized(list []proto.Session, size int) string {
 			w.int(int64(run.AgentsRunning), '/')
 			w.int(int64(run.AgentsFailed), '\n')
 			for _, a := range run.Agents {
+				w.str(a.ID, '/')
 				if a.LatestTool != nil {
 					w.b.WriteString(a.LatestTool.Name)
 				}
 				w.b.WriteByte('/')
 				w.int(int64(a.Calls), ',')
 			}
+		}
+		if loop := s.ToolLoop; loop != nil {
+			w.b.WriteString("tool-loop:")
+			w.quote(loop.Tool, '/')
+			w.int(int64(loop.Count), '/')
+			w.str(loop.Since.Format(time.RFC3339Nano), '\n')
 		}
 		if s.Loop != nil {
 			w.b.WriteString("loop")
@@ -176,6 +209,29 @@ func (w *keyWriter) quote(s string, sep byte) {
 	w.tmp = strconv.AppendQuote(w.tmp[:0], s)
 	w.b.Write(w.tmp)
 	w.b.WriteByte(sep)
+}
+
+// caps writes a session's capabilities by value, as %v would print them with Modes dereferenced ("<nil>" when absent).
+// Never through fmt: Modes is a pointer, and a fresh one each poll would print a new address and change the key every
+// second.
+func (w *keyWriter) caps(c *proto.SessionCapabilities) {
+	if c == nil {
+		w.b.WriteString("<nil>")
+		return
+	}
+	w.b.WriteString("&{")
+	for _, v := range [...]bool{c.Read, c.Send, c.Interrupt, c.Approve, c.Terminal, c.Attach} {
+		w.str(strconv.FormatBool(v), ' ')
+	}
+	if c.Modes == nil {
+		w.b.WriteString("<nil>")
+	} else {
+		w.b.WriteString(strconv.FormatBool(*c.Modes))
+	}
+	if c.Model != nil {
+		w.b.WriteString(" model=" + strconv.FormatBool(*c.Model))
+	}
+	w.b.WriteByte('}')
 }
 
 // quotes writes a list of strings as %q would ([] when empty, the rare others through fmt).

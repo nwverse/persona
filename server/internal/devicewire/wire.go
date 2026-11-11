@@ -1,5 +1,5 @@
 // Package devicewire is what the hub and the manager that carries the user's computers say to each other over the
-// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects the computers"): the manager (internal/devices, in
+// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects to computers"): the manager (internal/devices, in
 // `personad assistant`) connects every computer — the local node, ssh, tailcat, Persona Link in both modes, the ones
 // reached through another hub of the mesh — and holds what is known of each; the hub never dials or accepts a
 // computer. It hands the manager hub.json's machines as defaults, relays the apps' calls and streams to it, and keeps
@@ -21,6 +21,11 @@ const (
 	EventState = "devices.state"
 	// EventNode {machine_id, event, params}: one of a node's one-way events, as it came, in the order they came.
 	EventNode = "devices.event"
+	// EventDesktops Desktops: the manager's computers whose Persona Link says the user is at them now, all of them, on
+	// every presence the Persona Links say (once a minute while active), after a devices.state when it changed, and in
+	// full after each handshake. Apart from devices.state, whose every change goes to the apps as their machine list.
+	// Older hubs ignore it.
+	EventDesktops = "devices.desktops"
 	// MethodRequest {machine_id, method, params, request} → the hub's answer to a node's request the hub answers
 	// (interaction.create, assistant.lark, mcp.tools, mcp.call).
 	MethodRequest = "devices.request"
@@ -153,6 +158,9 @@ type Accept struct {
 // Config is what the hub hands the manager: the defaults of what the manager carries, as the hub's hello has them
 // (manager.hello's answer, field devices) and devices.config again whenever they change.
 type Config struct {
+	ShareRoutingHandle []byte                    `json:"share_routing_handle,omitempty"`
+	SharePublicOrigin  string                    `json:"share_public_origin,omitempty"`
+	ShareAuthorities   map[string]ShareAuthority `json:"share_authorities,omitempty"`
 	// AutoUpdateNodes is an explicit opt-in; older hubs omit it and leave nodes unchanged.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Machines are hub.json's machines (and those the admin page added since), each the JSON hub.json has.
@@ -168,6 +176,9 @@ type Config struct {
 	// Endpoints are the hub's https addresses and MeshHubs how many hubs its mesh has: what Persona Link is told.
 	Endpoints []LinkEndpoint `json:"endpoints,omitempty"`
 	MeshHubs  int            `json:"mesh_hubs,omitempty"`
+	// WebURL is where people open the web app: hub.json's public_url when it is https, its sub-path included (no
+	// trailing slash); "" without one. Persona Link's "Needs you" summary carries it (link.Attention.WebURL).
+	WebURL string `json:"web_url,omitempty"`
 	// TailcatDERPMapURL is hub.json's tailcat.derp_map_url.
 	TailcatDERPMapURL string `json:"tailcat_derp_map_url,omitempty"`
 	// NodePackagesURL is where the manager fetches the node builds the hub has none of (docs/operations/node-update.md "Node
@@ -195,7 +206,7 @@ type LinkEndpoint struct {
 	Kind string `json:"kind"`
 }
 
-// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Several ways"): whether this hub leaves its computers to
+// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Multiple paths to one computer"): whether this hub leaves its computers to
 // the center, and the members' computers the center reaches through them.
 type Mesh struct {
 	// Member: this hub is a member; its computers are connected by the center (through it), not from here.
@@ -252,6 +263,26 @@ type State struct {
 	Paths []PathInfo `json:"paths,omitempty"`
 }
 
+// Desktops is EventDesktops' params.
+type Desktops struct {
+	Desktops []Desktop `json:"desktops"`
+}
+
+// Desktop is a computer whose Persona Link says the user is at it (docs/operations/link.md "Presence"); the hub counts
+// it as a desktop for "Phone Muted" for TTLMS from when it takes this, on its own clock (at most DesktopTTLMax), while
+// Notifies holds.
+type Desktop struct {
+	MachineID string `json:"machine_id"`
+	// Since: when this run of presence began, on the manager's clock: only for the apps to show.
+	Since    time.Time `json:"since"`
+	TTLMS    int64     `json:"ttl_ms"`
+	Notifies bool      `json:"notifies"`
+}
+
+// DesktopTTLMax caps a desktop's TTL, twice Persona Link's presence TTL (link.PresenceTTL): however a manager counts,
+// no presence keeps phones quiet longer without being said again.
+const DesktopTTLMax = 4 * time.Minute
+
 // PathInfo is a path as the admin page and the machine list show it.
 type PathInfo struct {
 	Via    string `json:"via"`
@@ -286,14 +317,20 @@ type NodeEvent struct {
 
 // NodeCall is devices.call's and devices.request's params.
 type NodeCall struct {
-	MachineID string          `json:"machine_id"`
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params,omitempty"`
+	Caller     *Caller         `json:"caller,omitempty"`
+	Submission *Submission     `json:"submission,omitempty"`
+	Authority  *ShareAuthority `json:"share_authority,omitempty"`
+	MachineID  string          `json:"machine_id"`
+	Method     string          `json:"method"`
+	Params     json.RawMessage `json:"params,omitempty"`
 	// TimeoutMS bounds the call on the manager's side too, a little before the caller gives up: the manager's
 	// CodeDeadline answer comes back in time.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 	// Request is devices.request's key, the manager's (EventRequestEnd names it).
 	Request string `json:"request,omitempty"`
+	// Fallback (a connection's calls only): sent instead when the node answers unknown method, a node from before
+	// Method (launchers.catalog falls back to launchers.managed).
+	Fallback *NodeCall `json:"fallback,omitempty"`
 }
 
 // RequestEnd is devices.request_end's params.
@@ -349,6 +386,23 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
 	"PUT /api/v1/machines/{mid}/claude-live-replies",
+	// Sharing the machine's clipboard with the phone (#3064, internal/devices clipboard.go).
+	"GET /api/v1/machines/{mid}/clipboard",
+	"PUT /api/v1/machines/{mid}/clipboard",
+	"GET /api/v1/machines/{mid}/clipboard/settings",
+	"PUT /api/v1/machines/{mid}/clipboard/settings",
+	// The file transfer switch (#3065, internal/devices transfer_settings.go).
+	"GET /api/v1/machines/{mid}/file-transfer/settings",
+	"PUT /api/v1/machines/{mid}/file-transfer/settings",
+}
+
+// TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),
+// relayed the same way: a POST to the manager of its source computer (from.machine in the body), GET and DELETE to the
+// one the request names (?manager=, as the transfer's events say), else the default.
+var TransferRoutes = []string{
+	"POST /api/v1/files/transfer",
+	"GET /api/v1/files/transfer/{id}",
+	"DELETE /api/v1/files/transfer/{id}",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
@@ -383,4 +437,7 @@ const (
 	CodeMachineOffline = "machine_offline" // its node is not connected
 	CodeNodeClosed     = "node_closed"     // the connection to its node dropped during the call
 	CodeDeadline       = "deadline"        // the call's time ran out with the node on it (it may have done it)
+	// CodeHandoffRefused: secret.stage, or a session.start with a secret_ticket, asked by the hub or another manager:
+	// only the manager that connects the computer makes a hand-off, after its own card (docs/extensions/secret-providers.md).
+	CodeHandoffRefused = "handoff_refused"
 )

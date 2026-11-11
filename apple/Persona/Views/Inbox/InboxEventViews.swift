@@ -333,6 +333,7 @@ struct InboxSuggestionEditor: View {
 struct InboxChainSection: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
+    @Environment(\.pushInboxChat) private var pushChat
     var item: InboxItem
     var sourceShown = false
     var openItem: ((InboxItem) -> Void)?
@@ -429,11 +430,11 @@ struct InboxChainSection: View {
         case .url(let u):
             Button { openURL(u) } label: { label() }.buttonStyle(.plain)
         case .session(let key, let manager):
-            Button { InboxEventOpen.session(key, manager: manager, model: model) } label: { label() }
+            Button { InboxEventOpen.session(key, manager: manager, owner: item.manager, model: model, push: pushChat) } label: { label() }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("inbox.chain.session")
         case .item(let id):
-            if let it = InboxStore.shared.items.first(where: { $0.id == id }) {
+            if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: id, manager: item.manager) }) {
                 if let openItem {
                     Button { openItem(it) } label: { label() }.buttonStyle(.plain)
                 } else {
@@ -504,7 +505,7 @@ struct InboxRelatedSection: View {
                     }
                     .padding(.vertical, Theme.Space.xs)
                     .contentShape(.rect)
-                    if let it = InboxStore.shared.items.first(where: { $0.id == r.id }) {
+                    if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: r.id, manager: item.manager) }) {
                         if let openItem {
                             Button { openItem(it) } label: { label }.buttonStyle(.plain)
                         } else {
@@ -520,16 +521,32 @@ struct InboxRelatedSection: View {
 }
 
 /// Opening a chain's conversation: the processing one is the assistant's (Persona's own conversations), a sub-session
-/// an Agent's.
+/// an Agent's. On the iPhone's shell either is pushed over the item instead (`pushInboxChat`).
 @MainActor enum InboxEventOpen {
-    static func session(_ key: SessionKey, manager: Bool, model: AppModel) {
-        if manager && model.session(key) == nil {
-            model.assistantCurrent = model.inHub(key)
-            model.selectedTab = .assistant
+    /// `owner`: the item's manager, which a conversation not listed yet is read through (`InboxChatRoute`, or the
+    /// Persona page's `assistantItemManagers`).
+    static func session(_ key: SessionKey, manager: Bool, owner: String?, model: AppModel, push: ((InboxChatRoute) -> Void)? = nil) {
+        if let push {
+            push(InboxChatRoute(key: model.inHub(key), manager: owner))
+        } else if manager && model.session(key) == nil {
+            model.openAssistantConversation(model.inHub(key), manager: owner)
         } else {
             model.open(key)
         }
     }
+}
+
+/// A conversation an inbox item links to (the AI's handling, an Agent it started), pushed over the item. `manager`: the
+/// item's, which a conversation not listed yet is read for.
+struct InboxChatRoute: Hashable {
+    var key: SessionKey
+    var manager: String?
+}
+
+extension EnvironmentValues {
+    /// The iPhone shell's Assistant stack: a conversation an inbox item links to goes on top of the item, so Back comes
+    /// back to it (#3114). Nil elsewhere, where the conversation opens on its own page.
+    @Entry var pushInboxChat: ((InboxChatRoute) -> Void)? = nil
 }
 
 // MARK: - view original
@@ -545,6 +562,7 @@ struct InboxSourceRoute: Hashable {
 struct InboxSourcePage: View {
     var route: InboxSourceRoute
     var accounts: [MailAccount]
+    @Environment(AppModel.self) private var model
     @State private var slot: InboxItemSlotModel
 
     init(route: InboxSourceRoute, accounts: [MailAccount]) {
@@ -566,9 +584,9 @@ struct InboxSourcePage: View {
         } else if item.connector != nil {
             InboxConnectorDetailView(item: item)
         } else if let m = item.moment {
-            LarkMomentsPostView(postID: m.postID, pushed: true)
+            LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(item.manager))
         } else if let c = conversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: model.linkManager(item.manager))
         } else if let m = mail {
             MailDetailView(summary: m, accounts: accounts)
         } else {
@@ -608,7 +626,7 @@ struct InboxEventPage: View {
         self.item = item
         self.accounts = accounts
         self.draft = draft
-        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id))
+        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id, manager: item.manager))
     }
 
     var body: some View {

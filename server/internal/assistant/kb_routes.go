@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -22,7 +23,7 @@ var (
 )
 
 func (s *Service) kbRoutes() {
-	kinds := map[string]bool{kb.KindProject: true, kb.KindChat: true, kb.KindPerson: true, kb.KindDoc: true, kb.KindMeeting: true, kb.KindEvent: true, kb.KindRecording: true}
+	kinds := map[string]bool{kb.KindProject: true, kb.KindChat: true, kb.KindPerson: true, kb.KindDoc: true, kb.KindMeeting: true, kb.KindEvent: true, kb.KindRecording: true, kb.KindTopic: true}
 	engine := func(w http.ResponseWriter, r *http.Request) *kb.Engine {
 		if r.Method != http.MethodGet && s.kbReadOnly(r.Context()) {
 			apierr.WriteCode(w, http.StatusForbidden, assistantwire.CodeKBReadOnly, i18n.Err("assistant-kb_routes.read_only"))
@@ -38,6 +39,7 @@ func (s *Service) kbRoutes() {
 		return e
 	}
 	s.recordingRoutes(engine)
+	s.kbSelectionRoutes()
 	s.handle("GET /api/v1/kb/{kind}", func(w http.ResponseWriter, r *http.Request) {
 		e := engine(w, r)
 		kind := r.PathValue("kind")
@@ -169,6 +171,46 @@ func (s *Service) kbRoutes() {
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"id": id})
+	})
+	// A project's soft delete and its Undo (#4412, docs/assistant/knowledge.md "Deleting a project").
+	s.handle("DELETE /api/v1/kb/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
+		e := engine(w, r)
+		if e == nil {
+			return
+		}
+		entry, err := e.DeleteProject(r.PathValue("id"), time.Now())
+		if errors.Is(err, kb.ErrNotFound) {
+			apierr.Write(w, http.StatusNotFound, err)
+			return
+		} else if err != nil {
+			apierr.Write(w, http.StatusInternalServerError, err)
+			return
+		}
+		apierr.WriteJSON(w, entry)
+	})
+	s.handle("GET /api/v1/kb-trash", func(w http.ResponseWriter, r *http.Request) {
+		e := engine(w, r)
+		if e == nil {
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"items": e.Trash()})
+	})
+	s.handle("POST /api/v1/kb-trash/{id}/restore", func(w http.ResponseWriter, r *http.Request) {
+		e := engine(w, r)
+		if e == nil {
+			return
+		}
+		entry, err := e.RestoreProject(r.PathValue("id"))
+		switch {
+		case errors.Is(err, kb.ErrNotFound):
+			apierr.Write(w, http.StatusNotFound, err)
+		case errors.Is(err, kb.ErrConflict):
+			apierr.Write(w, http.StatusConflict, err)
+		case err != nil:
+			apierr.Write(w, http.StatusInternalServerError, err)
+		default:
+			apierr.WriteJSON(w, entry)
+		}
 	})
 	s.handle("GET /api/v1/kb-search", func(w http.ResponseWriter, r *http.Request) {
 		e := engine(w, r)

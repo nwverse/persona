@@ -1,13 +1,21 @@
-import type { AgentState, Session, SessionCapabilities } from "./types";
+import type { AgentState, Interaction, Session, SessionCapabilities } from "./types";
 import { formatDate, formatRelative, t } from "../i18n";
 import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
+import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
 
 // Missing session metadata is not permission to write; legacy sources retain their existing behavior.
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
   if (!s) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
+  if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
   return !s.source_kind || s.capabilities?.[operation] === true;
+}
+
+/** A script request explicitly outside a session has no session-source approval
+ *  policy. A nonempty session id still requires its real session metadata. */
+export function interactionCanAnswer(ix: Pick<Interaction, "session_id">, session: Session | undefined): boolean {
+  return ix.session_id === "" || sessionCan(session, "approve");
 }
 
 export function sourceSubtitle(s?: Session): string {
@@ -43,7 +51,8 @@ export function sessionMenuActions(s: Session): string[] {
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
     ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
-    ...(sessionCan(s, "terminal") ? ["resume", ...(!s.assistant && stateOf(s) !== "offline" ? ["close"] : [])] : []),
+    ...(sessionCan(s, "terminal") ? ["resume"] : []),
+    ...(!s.assistant && stateOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
 }
 
@@ -100,10 +109,6 @@ export function byAttention(a: Session, b: Session): number {
   return (tb ?? "").localeCompare(ta ?? "") || a.session_id.localeCompare(b.session_id) || a.machine_id.localeCompare(b.machine_id);
 }
 
-export function isLive(s: Session) {
-  return stateOf(s) !== "offline";
-}
-
 /** Why it waits for you, in its host's words (a botmux attention), while it needs you; a reason left over from before
  *  (offline, seen) stays out. */
 export function attentionReason(s: Session): string | undefined {
@@ -112,10 +117,21 @@ export function attentionReason(s: Session): string | undefined {
 }
 
 /** The line a list row shows for it: why it waits for you when its host says so, else why its host stopped it on an
- *  error, else where its work stands when the hub triaged its turn (docs/assistant/agent-work.md), else its last words (iOS
- *  listPreview). */
+ *  error, else where its work stands when the hub triaged its turn (docs/assistant/agent-work.md), with where its closeout
+ *  stands on merged and deployed after it, else its last words (iOS listPreview). */
 export function sessionPreview(s: Session): string {
-  return attentionReason(s) ?? failureReason(s) ?? usageLimitLabel(s) ?? workLine(s) ?? s.last_text ?? "";
+  return attentionReason(s) ?? failureReason(s) ?? usageLimitLabel(s) ?? closeoutPreview(s) ?? workLine(s) ?? s.last_text ?? "";
+}
+
+/** A stopped session's line when its agent ended the turn with a closeout (lib/closeout.ts): the hub's line as before
+ *  (the closeout's own words when the hub gave none: the last words would be the raw block), then "merged · not
+ *  deployed" where the agent said or the hub found it. One string: the row truncates it like any other line. */
+function closeoutPreview(s: Session): string | undefined {
+  const c = shownCloseout(s);
+  if (!c) return undefined;
+  const line = workLine(s) ?? closeoutLine(c);
+  const suffix = closeoutSuffix(c);
+  return line && suffix ? t("lib-work.closeout_line", { line, suffix }) : line || suffix || undefined;
 }
 
 /** A failure notice without the warning sign botmux starts it with: the page draws its own (iOS Session.failureText). */
@@ -162,18 +178,20 @@ export function shortPath(p?: string): string {
   return p.replace(/^\/(Users|home|data\d*\/home)\/[^/]+/, "~");
 }
 
-export function ago(iso?: string, now = Date.now()): string {
+/** `style` "narrow" is for a crowded row's end ("13m ago" in English; Chinese reads the same in every style). */
+export function ago(iso?: string, now = Date.now(), style: Intl.RelativeTimeFormatStyle = "long"): string {
   if (!iso) return "";
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts) || ts < 86400_000) return "";
   const s = Math.round((now - ts) / 1000);
+  const opts: Intl.RelativeTimeFormatOptions = { numeric: "auto", style };
   // "Just now" rather than Intl's "now" for under a minute
   if (s < 45) return t("lib-format.just_now");
-  if (s < 3600) return formatRelative(-Math.round(s / 60), "minute");
-  if (s < 86400) return formatRelative(-Math.round(s / 3600), "hour");
+  if (s < 3600) return formatRelative(-Math.round(s / 60), "minute", opts);
+  if (s < 86400) return formatRelative(-Math.round(s / 3600), "hour", opts);
   // Days by the local calendar, not by 24 h spans: yesterday morning seen late tonight is yesterday, not the day before yesterday (#4281).
   const days = calendarDays(ts, now);
-  if (days < 7) return formatRelative(-days, "day");
+  if (days < 7) return formatRelative(-days, "day", opts);
   return formatDate(ts, { month: "numeric", day: "numeric" });
 }
 

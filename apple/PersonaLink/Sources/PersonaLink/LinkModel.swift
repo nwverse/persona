@@ -11,6 +11,22 @@ struct LinkEndpoint: Decodable, Hashable, Identifiable {
     var id: String { url }
 }
 
+/// Optional SSH tunnel settings in link.json and status (`ssh`, internal/link SSH).
+struct SSHConfig: Codable, Equatable {
+    var server: String
+    var target: String
+    var always: Bool?
+
+    var isAlways: Bool { always == true }
+}
+
+/// Structured SSH failure code reported while waiting (`ssh_error`, internal/link SSHStatusError).
+struct SSHStatusError: Decodable, Equatable {
+    var code: String
+    var server: String?
+    var target: String?
+}
+
 /// One status line from `persona-link run` (internal/link Status).
 struct LinkStatus: Decodable, Equatable {
     var state: String // unpaired | connecting | connected | waiting | refused
@@ -23,6 +39,8 @@ struct LinkStatus: Decodable, Equatable {
     var error: String?
     var retry: Date?
     var endpoints: [LinkEndpoint]?
+    var ssh: SSHConfig?
+    var sshError: SSHStatusError?
     /// What the hub calls itself, and (while connected) how many hubs its mesh has; older hubs send neither.
     var hubName: String?
     var meshHubs: Int?
@@ -39,11 +57,17 @@ struct LinkStatus: Decodable, Equatable {
     var from: String?
     var codeExpires: Date?
     /// "system": the hub sits behind an HTTPS reverse proxy and is checked with the system's CAs and its host name, not
-    /// a pin (docs/operations/link.md「hub 在反向代理后面」); nil when pinned or with older helpers.
+    /// a pin (docs/operations/link.md「Hub behind a reverse proxy」); nil when pinned or with older helpers.
     var trust: String?
     /// The hub still waits for someone to confirm this computer in the phone App or on the web (「是我的电脑」,
     /// docs/assistant/onboarding.md 4.2). Helpers and hubs that do not say yet send nothing: shown as connected.
     var pending: Bool?
+    /// The hub's "Needs you" summary (Attention.swift); helpers and hubs that do not send one leave it out. Decoded
+    /// apart from the rest (`decode`), so a summary that does not decode loses only itself.
+    var attention: LinkAttention? = nil
+    /// While connected (active mode): which of the helper's links this is. A confirmation names the link its card's
+    /// summary came on, and the helper passes it on to that link only; older helpers say nothing.
+    var conn: UInt64?
 
     var passive: Bool { mode == "passive" }
     var systemTrust: Bool { trust == "system" }
@@ -54,13 +78,47 @@ struct LinkStatus: Decodable, Equatable {
     var renamable: Bool { !passive && state == "connected" && !(machineName ?? "").isEmpty && pending != true }
 
     enum CodingKeys: String, CodingKey {
-        case state, machine, address, kind, since, node, error, retry, endpoints, mode, listen, addrs, from, trust, pending
+        case state, machine, address, kind, since, node, error, retry, endpoints, ssh, mode, listen, addrs, from, trust, pending, conn
+        case sshError = "ssh_error"
         case nodeError = "node_error"
         case hubName = "hub_name"
         case meshHubs = "mesh_hubs"
         case machineName = "machine_name"
         case lastSeen = "last_seen"
         case codeExpires = "code_expires"
+    }
+}
+
+extension LinkStatus {
+    /// One status line from the helper. `attention` is decoded apart, and one that does not decode keeps `previous`: it
+    /// says nothing about the connection, while a missing summary starts the notifications' baseline anew.
+    @MainActor static func decode(_ line: Data, previous: LinkAttention? = nil) throws -> LinkStatus {
+        let decoded = try LinkModel.decoder.decode(StatusLine.self, from: line)
+        var s = decoded.status
+        s.attention = decoded.present && decoded.summary == nil ? previous : decoded.summary
+        return s
+    }
+}
+
+/// A status line in one pass: the status, and its `attention` told apart: missing (or null), a summary, or one that
+/// does not decode.
+private struct StatusLine: Decodable {
+    var status: LinkStatus
+    var present = false
+    var summary: LinkAttention?
+
+    enum CodingKeys: String, CodingKey { case attention }
+
+    init(from decoder: Decoder) throws {
+        status = try LinkStatus(from: decoder)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard c.contains(.attention), try !c.decodeNil(forKey: .attention) else { return }
+        present = true
+        do {
+            summary = try c.decode(LinkAttention.self, forKey: .attention)
+        } catch {
+            NSLog("Persona Link: a Needs you summary that does not decode: %@", String(describing: error))
+        }
     }
 }
 
@@ -125,7 +183,64 @@ enum LinkLook {
 }
 
 enum LinkText {
-    static let kinds = ["lan": "内网", "ipv6": "公网 IPv6", "name": "域名", "ipv4": "公网 IPv4"]
+    static var kinds: [String: String] {
+        ["lan": "内网", "ipv6": "公网 IPv6", "name": "域名", "ipv4": "公网 IPv4", "ssh": linkText("SSH")]
+    }
+
+    static func sshLoginCommand(_ server: String) -> String {
+        let s = server.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return "ssh <server>" }
+        let user: String
+        let hostPort: Substring
+        if let at = s.lastIndex(of: "@") {
+            user = String(s[..<at])
+            hostPort = s[s.index(after: at)...]
+        } else {
+            user = ""
+            hostPort = s[...]
+        }
+        if hostPort.hasPrefix("["), let close = hostPort.firstIndex(of: "]") {
+            let host = String(hostPort[hostPort.index(after: hostPort.startIndex)..<close])
+            let rest = hostPort[hostPort.index(after: close)...]
+            let dest = user.isEmpty ? host : "\(user)@\(host)"
+            if rest.hasPrefix(":") {
+                let port = String(rest.dropFirst())
+                if !port.isEmpty && port != "22" { return "ssh -p \(port) \(dest)" }
+            }
+            return "ssh \(dest)"
+        }
+        if let colon = hostPort.lastIndex(of: ":"), hostPort.firstIndex(of: ":") == colon {
+            let host = String(hostPort[..<colon])
+            let port = String(hostPort[hostPort.index(after: colon)...])
+            if let p = Int(port), (1...65535).contains(p) {
+                let dest = user.isEmpty ? host : "\(user)@\(host)"
+                return port == "22" ? "ssh \(dest)" : "ssh -p \(port) \(dest)"
+            }
+        }
+        return "ssh \(s)"
+    }
+
+    static func sshError(_ e: SSHStatusError) -> String {
+        let server = e.server ?? ""
+        let target = e.target ?? ""
+        let cmd = sshLoginCommand(server)
+        switch e.code {
+        case "no_ssh":
+            return linkText("There is no ssh command on this computer; install an OpenSSH client first.")
+        case "auth_refused":
+            return linkText("The SSH server (\(server)) refused authentication; check your key, ssh-agent, or ~/.ssh/config.")
+        case "host_key":
+            return linkText("This SSH server's host key isn't trusted yet; run “\(cmd)” once in a terminal to check and accept it.")
+        case "forward_refused":
+            return linkText("The SSH server refused port forwarding to \(target); check AllowTcpForwarding and permitopen on the server.")
+        case "target_unreachable":
+            return linkText("The hub isn't answering at \(target) through the SSH server; check that the hub is running and the target port is right.")
+        case "invalid":
+            return linkText("Enter an SSH server as [user@]host[:port] or an alias, and a target as host:port.")
+        default:
+            return linkText("Can't reach the SSH server (\(server)); check the server address and this computer's network.")
+        }
+    }
 
     /// The host and port of a hub URL, and the path a reverse proxy puts the hub under.
     static func host(_ url: String?) -> String {
@@ -194,6 +309,7 @@ enum LinkText {
     private(set) var loginNote: String?
     /// The candidates in link.json (read here, written only by the helper).
     private(set) var endpoints: [LinkEndpoint] = []
+    private(set) var ssh: SSHConfig?
     private(set) var pairedMachine: String?
     /// The mode link.json is in, and passive mode's pairing (kept while in active mode, for switching back).
     private(set) var configMode: String?
@@ -207,6 +323,18 @@ enum LinkText {
     private(set) var incomingNotice: String?
     /// How many times pairing ran (`persona-link pair`): only the 「配对」 (Pair) button does it.
     private(set) var pairRuns = 0
+    /// The "Web address" setting: where rows and notifications open the web app, over the hub's `web_url`; "" for the
+    /// hub's. Read in `start()`, so snapshots never show this Mac's own.
+    private(set) var webAddress = ""
+    /// The user turned this app's notifications off (System Settings › Notifications); LinkNotifier keeps it current.
+    var notificationsOff = false
+    /// How the model opens a URL, asks for the web address and keeps it; tests replace them.
+    @ObservationIgnored var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    @ObservationIgnored var askForWebAddress: (() -> Void)? // nil: the Web Address window
+    @ObservationIgnored var defaults = UserDefaults.standard
+    /// A route a row or a notification could not open for want of a web address: opened once one is saved, dropped when
+    /// the Web Address window closes without one.
+    @ObservationIgnored private(set) var pendingRoute: (route: String, webURL: String?)?
 
     @ObservationIgnored private var process: Process?
     @ObservationIgnored private var keepStdin: Pipe?
@@ -216,6 +344,8 @@ enum LinkText {
     @ObservationIgnored private var quitting = false
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var sawFirstPath = false
+    /// Presence for the helper's stdin (Presence.swift); started with the app, never in snapshots or tests.
+    @ObservationIgnored private let presence = PresenceMonitor()
 
     nonisolated static let helperURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/persona-link")
     /// The device's program the app carries (persona-node), for the resident node when this Mac has none
@@ -237,6 +367,7 @@ enum LinkText {
         environment[LegacyNames.product.uppercased() + "_HOME"] = stateURL.path
         return environment
     }
+    static let webAddressKey = "webAddress"
     nonisolated static let configURL = stateURL.appendingPathComponent("link.json")
     nonisolated static let logURL = stateURL.appendingPathComponent("link.log")
 
@@ -256,9 +387,29 @@ enum LinkText {
     /// Passive mode: what the helper says, else what link.json says.
     var passive: Bool { status?.mode.map { $0 == "passive" } ?? (configMode == "passive") }
 
+    /// Default SSH tunnel target (`127.0.0.1:<TLS port>`) from saved endpoints, or the hub's usual TLS port.
+    var defaultSSHTarget: String {
+        for e in endpoints {
+            guard let c = URLComponents(string: e.url), c.scheme?.lowercased() == "https", !(c.host ?? "").isEmpty else { continue }
+            let port = c.port ?? 443
+            if (1...65535).contains(port) { return "127.0.0.1:\(port)" }
+        }
+        return "127.0.0.1:18662"
+    }
+
     func start() {
+        webAddress = defaults.string(forKey: Self.webAddressKey) ?? ""
+        LinkNotifier.shared.start(open: { [weak self] route, webURL in self?.open(route: route, webURL: webURL) },
+                                  access: { [weak self] access in
+                                      self?.notificationsOff = !access.allowed
+                                      self?.presence.receive(.notifies(access.shows))
+                                  },
+                                  confirm: { [weak self] card, conn in
+                                      self?.writeHelper(Presence.rangLine(card, conn: conn), what: "confirmation")
+                                  })
         readConfig()
         startHelper()
+        presence.start(write: { [weak self] line in self?.writeHelper(line, what: "presence") })
         Task { await setUpNodeOnce() }
         monitor.pathUpdateHandler = { _ in
             Task { @MainActor in LinkModel.shared.networkChanged() }
@@ -268,10 +419,14 @@ enum LinkText {
 
     /// Used by the snapshots: a status without a helper.
     func show(_ status: LinkStatus?, helperDown: String? = nil, endpoints: [LinkEndpoint] = [], machine: String? = nil,
-              mode: String? = nil, passive: PassivePairing? = nil, node: NodeService? = nil) {
+              mode: String? = nil, passive: PassivePairing? = nil, node: NodeService? = nil, webAddress: String = "",
+              notificationsOff: Bool = false, ssh: SSHConfig? = nil) {
         self.status = status
+        self.webAddress = webAddress
+        self.notificationsOff = notificationsOff
         self.helperDown = helperDown
         self.endpoints = endpoints
+        self.ssh = ssh ?? status?.ssh
         self.pairedMachine = machine
         self.configMode = mode ?? status?.mode
         self.passivePairing = passive
@@ -285,6 +440,7 @@ enum LinkText {
         p.environment = Self.helperEnvironment
         p.arguments = ["run", "--parent"] // exits when its stdin closes: when this app goes away, however it does
         let input = Pipe(), output = Pipe()
+        Self.dontBlock(input.fileHandleForWriting)
         p.standardInput = input
         p.standardOutput = output
         p.standardError = logHandle()
@@ -303,6 +459,7 @@ enum LinkText {
             keepStdin = input
             startedAt = Date()
             helperDown = nil
+            presence.helperStarted()
         } catch {
             helperDown = "后台程序启动不了：\(error.localizedDescription)"
             scheduleRestart()
@@ -328,10 +485,10 @@ enum LinkText {
         while let nl = lines.firstIndex(of: 0x0A) {
             let line = lines[lines.startIndex..<nl]
             lines.removeSubrange(lines.startIndex...nl)
-            if let s = try? Self.decoder.decode(LinkStatus.self, from: line) {
-                if s.endpoints != status?.endpoints || s.machine != status?.machine || s.mode != status?.mode
-                    || s.hubName != status?.hubName || s.state != status?.state { readConfig() }
-                status = s
+            if let s = try? LinkStatus.decode(line, previous: status?.attention) {
+                if s.endpoints != status?.endpoints || s.ssh != status?.ssh || s.machine != status?.machine
+                    || s.mode != status?.mode || s.hubName != status?.hubName || s.state != status?.state { readConfig() }
+                setStatus(s)
             }
         }
     }
@@ -339,10 +496,31 @@ enum LinkText {
     private func helperExited(_ code: Int32) {
         process = nil
         keepStdin = nil
+        var s = status
+        s?.attention = nil // the summary belonged to the helper's connection
+        setStatus(s)
         guard !quitting else { return }
         helperDown = "后台程序退出了（\(code)），正在重启"
         if Date().timeIntervalSince(startedAt) > 60 { restartDelay = 1 }
         scheduleRestart()
+    }
+
+    /// The helper's status changed: the notifications follow its summary.
+    private func setStatus(_ s: LinkStatus?) {
+        if s?.attention != status?.attention { LinkNotifier.shared.apply(s?.attention, conn: s?.conn) }
+        status = s
+    }
+
+    /// A line for the helper's stdin, presence or a confirmation (Presence.swift). None goes out while there is no
+    /// helper: the next one gets the presence as it starts, and a confirmation lost so leaves the card to the phone. The
+    /// pipe does not block (`dontBlock`); a line is far shorter than PIPE_BUF, so it goes whole or not at all.
+    private func writeHelper(_ line: Data?, what: String) {
+        guard let line, let input = keepStdin else { return }
+        do {
+            try Self.writeAll(input.fileHandleForWriting, line)
+        } catch {
+            NSLog("Persona Link: %@ not written to the helper: %@", what, error.localizedDescription)
+        }
     }
 
     private func scheduleRestart() {
@@ -362,6 +540,57 @@ enum LinkText {
     }
 
     func reconnect() { signal(SIGUSR2) }
+
+    // MARK: the web app
+
+    /// Where the web app is: the setting, else the hub's `web_url`, else `hubWebURL` (the one a notification carries,
+    /// for when there is no summary now).
+    func webBase(hubWebURL: String? = nil) -> String? {
+        AttentionURL.base(setting: webAddress, webURL: status?.attention?.webURL, hubWebURL)
+    }
+
+    /// Opens `route` of the web app in the default browser; without a web address, asks for one and opens it then.
+    /// `webURL`: the hub's web address a notification carries.
+    /// The latest click wins: one that opens drops a route still waiting for an address.
+    func open(route: String, webURL: String? = nil) {
+        if openWeb(route: route, webURL: webURL) {
+            pendingRoute = nil
+        } else {
+            pendingRoute = (route, webURL)
+            requestWebAddress()
+        }
+    }
+
+    func requestWebAddress() {
+        if let askForWebAddress { askForWebAddress() } else { WebAddressWindow.show(model: self) }
+    }
+
+    func forgetPendingRoute() { pendingRoute = nil }
+
+    private func openWeb(route: String, webURL: String?) -> Bool {
+        guard let url = AttentionURL.web(base: webBase(hubWebURL: webURL), route: route) else { return false }
+        openURL(url)
+        return true
+    }
+
+    /// `value`: as `AttentionURL.setting` made it ("" for the hub's). A route waiting for it opens now.
+    func setWebAddress(_ value: String) {
+        webAddress = value
+        if webAddress.isEmpty {
+            defaults.removeObject(forKey: Self.webAddressKey)
+        } else {
+            defaults.set(webAddress, forKey: Self.webAddressKey)
+        }
+        if let p = pendingRoute, openWeb(route: p.route, webURL: p.webURL) { pendingRoute = nil }
+    }
+
+    /// System Settings › Notifications at this app.
+    func openNotificationSettings() {
+        let id = Bundle.main.bundleIdentifier ?? ""
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)") {
+            openURL(url)
+        }
+    }
 
     func setLaunchAtLogin(_ on: Bool) {
         do {
@@ -408,17 +637,76 @@ enum LinkText {
     /// The notice about a link for another app goes once the user pairs or opens a link for this one.
     func clearNotice() { incomingNotice = nil }
 
-    func pair(link: String, machine: String) async -> (ok: Bool, message: String) {
+    func pair(link: String, machine: String, ssh: SSHConfig? = nil) async -> (ok: Bool, message: String) {
         pairRuns += 1
         incomingNotice = nil
         var args = ["pair"]
         let id = machine.trimmingCharacters(in: .whitespacesAndNewlines)
         if !id.isEmpty { args += ["--machine", id] }
+        if let ssh {
+            let srv = ssh.server.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !srv.isEmpty {
+                args += ["--ssh", srv]
+                let tgt = ssh.target.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !tgt.isEmpty { args += ["--ssh-target", tgt] }
+                args.append(ssh.isAlways ? "--ssh-always" : "--no-ssh-always")
+            }
+        }
         args.append("-")
         let r = await Self.runHelper(args, stdin: link)
         readConfig()
-        if r.ok { signal(SIGUSR1) }
+        if r.ok { signal(SIGUSR2) }
         return r
+    }
+
+    func setSSH(_ next: SSHConfig?) async -> (ok: Bool, message: String) {
+        let args: [String]
+        if let next {
+            let srv = next.server.trimmingCharacters(in: .whitespacesAndNewlines)
+            var a = ["ssh", srv]
+            let tgt = next.target.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tgt.isEmpty { a += ["--target", tgt] }
+            a.append(next.isAlways ? "--always" : "--no-always")
+            a.append("--json")
+            args = a
+        } else {
+            args = ["ssh", "--off", "--json"]
+        }
+        let r = await Self.runHelper(args, stdin: nil, split: true)
+        readConfig()
+        if r.ok {
+            reconnect()
+            return (true, next == nil ? linkText("SSH tunnel removed.") : linkText("SSH tunnel saved. Reconnecting…"))
+        }
+        return (false, r.message)
+    }
+
+    func testSSH(server: String, target: String, link: String) async -> (ok: Bool, message: String, target: String?) {
+        struct Reply: Decodable {
+            var ok: Bool
+            var code: String?
+            var server: String?
+            var target: String?
+            var message: String
+        }
+        var args = ["ssh", server.trimmingCharacters(in: .whitespacesAndNewlines), "--test", "--json"]
+        let tgt = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tgt.isEmpty { args += ["--target", tgt] }
+        let raw = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !raw.isEmpty { args += ["--link", raw] }
+        let r = await Self.runHelper(args, stdin: nil, split: true)
+        if let reply = try? JSONDecoder().decode(Reply.self, from: Data(r.out.utf8)) {
+            if reply.ok {
+                let resolved = reply.target ?? tgt
+                return (true, linkText("SSH tunnel reached the hub at \(resolved)."), reply.target)
+            }
+            if let code = reply.code, !code.isEmpty {
+                let se = SSHStatusError(code: code, server: reply.server ?? server, target: reply.target ?? tgt)
+                return (false, LinkText.sshError(se), nil)
+            }
+            return (false, reply.message, nil)
+        }
+        return (r.ok, r.message, nil)
     }
 
     func addAddress(_ raw: String) async -> (ok: Bool, message: String) {
@@ -437,17 +725,20 @@ enum LinkText {
             var machine: String?
             var token: String?
             var endpoints: [LinkEndpoint]?
+            var ssh: SSHConfig?
             var mode: String?
             var passive: PassivePairing?
         }
         guard let data = try? Data(contentsOf: Self.configURL), let f = try? JSONDecoder().decode(File.self, from: data) else {
             endpoints = []
+            ssh = nil
             pairedMachine = nil
             configMode = nil
             passivePairing = nil
             return
         }
         endpoints = Self.ranked(f.endpoints ?? [])
+        ssh = f.ssh
         pairedMachine = (f.token ?? "").isEmpty ? nil : f.machine
         configMode = f.mode
         passivePairing = f.passive
@@ -591,11 +882,21 @@ enum LinkText {
 
     /// GUI apps launched from the Finder already run with SIGPIPE ignored; a CLI launch (debugger, xctest) does
     /// not, where a broken-pipe helper write would kill the process. Install the GUI disposition once.
-    private static let installIgnoredSigpipe: Void = {
+    nonisolated private static let installIgnoredSigpipe: Void = {
         Darwin.signal(SIGPIPE, SIG_IGN)
     }()
 
-    /// Writes every byte to a pipe.
+    /// Writes to `handle` fail at once (EAGAIN) while its pipe is full, instead of waiting for the reader: a helper that
+    /// stopped reading loses presence lines but never stalls the app. `writeAll` on it may then stop part way through
+    /// anything longer than PIPE_BUF (512 bytes).
+    nonisolated static func dontBlock(_ handle: FileHandle) {
+        let fd = handle.fileDescriptor
+        if fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == -1 {
+            NSLog("Persona Link: pipe left blocking: %@", String(cString: strerror(errno)))
+        }
+    }
+
+    /// Writes every byte to a pipe (a non-blocking one, `dontBlock`: until it is full, then EAGAIN).
     ///
     /// `FileHandle.write` raises an uncatchable ObjC exception on EPIPE (with SIGPIPE ignored, the write fails
     /// with EPIPE rather than raising a signal), so go through `write(2)` and let a helper that exits before

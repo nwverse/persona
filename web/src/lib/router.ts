@@ -13,17 +13,22 @@ export type SessionView = "chat" | "term";
 
 export type Route =
   | { name: "home" }
+  | { name: "request"; id: string }
   | { name: "workspace-board" }
   | { name: "persona-new" }
   // `view` is the page's `?view=chat|term`; without it the page shows what it showed last (lib/session-view.ts)
-  | { name: "session"; mid: string; sid: string; view?: SessionView }
+  | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true }
   // one herdr tab (a slot) of a workspace; `sid` picks its pane (lib/herdr-tree.ts resolveTab)
-  | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView }
-  | { name: "persona"; sid?: string }
+  | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView; work?: true }
+  // `mid` / `manager`: the computer the conversation runs on and its manager when another than the default
+  // (`?machine=…&manager=…`, lib/conversation-page.ts): with several assistants a reload, a new tab or a link finds it
+  // where it runs, whichever assistant is current
+  | { name: "persona"; sid?: string; mid?: string; manager?: string }
   // "All chats"; `origin` filters it (lib/conversation-origins.ts): the sidebar's "Automatic" rows open it so
   | { name: "history"; origin?: string }
-  // the health space (docs/assistant/health.md): its home, or one of its conversations
-  | { name: "health"; sid?: string }
+  // the health space (docs/assistant/health.md): `/health` opens its latest conversation (#4329), `/health/new` its new
+  // conversation page (with its past ones), `/health/<id>` one of them
+  | { name: "health"; sid?: string; fresh?: boolean }
   | { name: "profile" }
   // `manager`: whose item it is when that is another manager than the default (`?manager=`, docs/assistant/managers.md
   // "Clients"): two managers may list the same id
@@ -35,7 +40,7 @@ export type Route =
   | { name: "machine"; mid: string }
   // one space of a machine by its name (lib/space-page.ts): its agents, the todos it hangs on, what can be done to it
   | { name: "space"; mid: string; space: string }
-  // the terminal browser (docs/integrations/terminal.md "Standalone terminals"): every pane of every machine; `id` is the terminal opened (an agent
+  // the terminal browser (docs/integrations/terminal.md "Standalone terminal"): every pane of every machine; `id` is the terminal opened (an agent
   // session's id, or "pane:<pane>" for a plain shell)
   | { name: "terminal"; mid?: string; id?: string }
   | { name: "settings" }
@@ -44,8 +49,19 @@ export type Route =
   | { name: "agent-list" }
   // the agents archived from the Agents list (lib/agent-archives.ts), to find and restore
   | { name: "agent-archives" }
-  | { name: "todos"; id?: string }
-  | { name: "extension"; extension: string; ui: string };
+  // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"), with the open to-do beside it
+  | { name: "todos"; id?: string; view?: "calendar"; mode?: "day" | "week" | "month"; date?: string }
+  | { name: "extension"; extension: string; ui: string }
+  // the source subscription pages (#2041), their first state in ?state=
+  | { name: "subscriptions" };
+
+/** A conversation page's `?machine=` and `?manager=` (routePath writes them), each only when there. */
+function conversationQuery(search: string): { mid?: string; manager?: string } {
+  const q = new URLSearchParams(search);
+  const mid = q.get("machine");
+  const manager = q.get("manager");
+  return { ...(mid ? { mid } : {}), ...(manager ? { manager } : {}) };
+}
 
 /** `?view=term|chat` of an agent page's address; anything else is no choice. */
 export function parseView(search: string): SessionView | undefined {
@@ -57,14 +73,16 @@ export function parse(path: string, search = ""): Route {
   // a malformed escape must still route: parse runs outside every error boundary
   const p = path.split("/").filter(Boolean).map(decodeURIComponentSafe);
   const view = parseView(search);
-  if (p[0] === "s" && p[1] && p[2]) return { name: "session", mid: p[1], sid: p[2], ...(view && { view }) };
-  if (p[0] === "t" && p[1] && p[2] && p[3]) return { name: "tab", mid: p[1], space: p[2], slot: p[3], sid: p[4] || undefined, ...(view && { view }) };
+  const detail = () => ({ ...(view && { view }), ...(new URLSearchParams(search).get("work") === "1" && { work: true as const }) });
+  if (p[0] === "s" && p[1] && p[2]) return { name: "session", mid: p[1], sid: p[2], ...detail() };
+  if (p[0] === "t" && p[1] && p[2] && p[3]) return { name: "tab", mid: p[1], space: p[2], slot: p[3], sid: p[4] || undefined, ...detail() };
   if (!p.length) return { name: "persona" };
-  if (assistantPath(p[0])) return p[1] === "new" && !p[2] ? { name: "persona-new" } : { name: "persona", sid: p[1] };
+  if (assistantPath(p[0])) return p[1] === "new" && !p[2] ? { name: "persona-new" } : p[1] ? { name: "persona", sid: p[1], ...conversationQuery(search) } : { name: "persona" };
   if (p[0] === "workspace-board") return { name: "workspace-board" };
+  if (p[0] === "requests" && p[1]) return { name: "request", id: p[1] };
   if (p[0] === "overview") return { name: "home" };
   if (p[0] === "history") return p[1] ? { name: "history", origin: p[1] } : { name: "history" };
-  if (p[0] === "health") return { name: "health", sid: p[1] || undefined };
+  if (p[0] === "health") return p[1] === "new" && !p[2] ? { name: "health", fresh: true } : { name: "health", sid: p[1] || undefined };
   if (p[0] === "assistant") return { name: "profile" };
   if (p[0] === "inbox") {
     const manager = p[1] ? new URLSearchParams(search).get("manager") : null;
@@ -79,13 +97,36 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "a") return { name: "agents", id: p[1] };
   if (p[0] === "agents") return p[1] === "archived" ? { name: "agent-archives" } : { name: "agent-list" };
   if (p[0] === "settings") return { name: "settings" };
+  if (p[0] === "subscriptions") return { name: "subscriptions" };
   // /plugin/<id>/<ui>: the same page under its name before #1845 (bookmarks)
   if ((p[0] === "extension" || p[0] === "plugin") && p[1] && p[2]) return { name: "extension", extension: p[1], ui: p[2] };
   if (p[0] === "todos") {
-    const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("id") : null;
-    return { name: "todos", id: p[1] || q || undefined };
+    const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+    const r: Route = { name: "todos", id: p[1] || q.get("id") || undefined };
+    if (q.get("view") === "calendar") {
+      const mode = q.get("mode");
+      const date = q.get("date");
+      return {
+        ...r,
+        view: "calendar",
+        ...(mode === "day" || mode === "week" || mode === "month" ? { mode } : {}),
+        ...(date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? { date } : {}),
+      };
+    }
+    return r;
   }
   return { name: "home" };
+}
+
+/** The route a link's address opens in this app (`a.href`: absolute, under the sub-path); null for another origin. */
+export function routeAt(url: string): Route | null {
+  let u: URL;
+  try {
+    u = new URL(url, location.href);
+  } catch {
+    return null;
+  }
+  return u.origin === location.origin ? parse(stripBase(u.pathname), u.search) : null;
 }
 
 /** The address of a route as this page reaches it: under the sub-path the hub is served at (lib/base.ts), if any. */
@@ -96,18 +137,26 @@ export function href(r: Route, base = BASE): string {
 /** A route's path in the app, without the sub-path (what parse reads). */
 export function routePath(r: Route): string {
   switch (r.name) {
+    case "request":
+      return `/requests/${encodeURIComponent(r.id)}`;
     case "session":
-      return `/s/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.sid)}${viewQuery(r.view)}`;
+      return `/s/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.sid)}${detailQuery(r)}`;
     case "tab":
-      return ["/t", r.mid, r.space, r.slot, ...(r.sid ? [r.sid] : [])].map((x, i) => (i ? encodeURIComponent(x) : x)).join("/") + viewQuery(r.view);
-    case "persona":
-      return r.sid ? `/persona/${encodeURIComponent(r.sid)}` : "/";
+      return ["/t", r.mid, r.space, r.slot, ...(r.sid ? [r.sid] : [])].map((x, i) => (i ? encodeURIComponent(x) : x)).join("/") + detailQuery(r);
+    case "persona": {
+      if (!r.sid) return "/";
+      const q = new URLSearchParams();
+      if (r.mid) q.set("machine", r.mid);
+      if (r.manager) q.set("manager", r.manager);
+      const query = q.toString();
+      return `/persona/${encodeURIComponent(r.sid)}${query ? `?${query}` : ""}`;
+    }
     case "persona-new":
       return "/persona/new";
     case "history":
       return r.origin ? `/history/${encodeURIComponent(r.origin)}` : "/history";
     case "health":
-      return r.sid ? `/health/${encodeURIComponent(r.sid)}` : "/health";
+      return r.sid ? `/health/${encodeURIComponent(r.sid)}` : r.fresh ? "/health/new" : "/health";
     case "profile":
       return "/assistant";
     case "inbox":
@@ -136,16 +185,39 @@ export function routePath(r: Route): string {
       return "/agents";
     case "agent-archives":
       return "/agents/archived";
-    case "todos":
-      return r.id ? `/todos?id=${encodeURIComponent(r.id)}` : "/todos";
+    case "todos": {
+      const q = new URLSearchParams();
+      if (r.view === "calendar") {
+        q.set("view", "calendar");
+        if (r.mode) q.set("mode", r.mode);
+        if (r.date) q.set("date", r.date);
+      }
+      if (r.id) q.set("id", r.id);
+      const s = q.toString();
+      return s ? `/todos?${s}` : "/todos";
+    }
     case "extension":
       return `/extension/${encodeURIComponent(r.extension)}/${encodeURIComponent(r.ui)}`;
+    case "subscriptions":
+      return "/subscriptions";
     default:
       return "/overview";
   }
 }
 
-const viewQuery = (view?: SessionView) => (view ? `?view=${view}` : "");
+function detailQuery({ view, work }: { view?: SessionView; work?: true }): string {
+  const q = [view && `view=${view}`, work && "work=1"].filter(Boolean).join("&");
+  return q ? `?${q}` : "";
+}
+
+export function inWorkView(r: Route): boolean {
+  return (r.name === "session" || r.name === "tab") && r.work === true;
+}
+
+/** Keep the split view when resolving a legacy session address or following a tab inside it. */
+export function withWorkView(r: Route, work: boolean): Route {
+  return work && (r.name === "session" || r.name === "tab") ? { ...r, work: true } : r;
+}
 
 const listeners = new Set<() => void>();
 // The address Back / Forward last landed on, until a page takes it (takeReturn) or the app navigates on: a page that

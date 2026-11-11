@@ -4,6 +4,7 @@ const P: Record<string, React.ReactNode> = {
   spark: <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="currentColor" stroke="none" />,
   // the running status bar's (Lucide's sparkles, as cindy's)
   sparkles: <g><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z" /><path d="M20 3v4M22 5h-4M4 17v2M5 18H3" /></g>,
+  foldToggle: <path d="m7 4 5 5 5-5M7 20l5-5 5 5" />,
   chevron: <path d="M6 9l6 6 6-6" />,
   pin: <g><path d="M12 17v5" /><path d="M9 10.76V6h6v4.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z" /><path d="M8 2h8v4H8z" /></g>,
   filter: <path d="M3 5h18M6 12h12M10 19h4" />,
@@ -59,6 +60,7 @@ const P: Record<string, React.ReactNode> = {
   target: <g><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /></g>,
   gear: <g><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></g>,
   arrowDown: <path d="M12 5v14M19 12l-7 7-7-7" />,
+  arrowUp: <path d="M12 19V5M5 12l7-7 7 7" />,
   image: <g><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></g>,
   external: <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />,
   download: <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />,
@@ -70,6 +72,8 @@ const P: Record<string, React.ReactNode> = {
   eyeOff: <g><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c4.64 0 8.58 2.97 9.94 7.1a1 1 0 0 1 0 .7 10.8 10.8 0 0 1-1.44 2.49" /><path d="M14.08 14.16a3 3 0 0 1-4.24-4.24" /><path d="M17.48 17.5A10.75 10.75 0 0 1 2.06 12.35a1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.45-5.14" /><path d="m2 2 20 20" /></g>,
   // Generic protection and authorization status.
   shield: <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />,
+  // the shield with a warning mark: Allow Everything (iOS exclamationmark.shield, #3956)
+  shieldAlert: <g><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /><path d="M12 8v4M12 16h.01" /></g>,
   key: <g><circle cx="7.5" cy="15.5" r="5.5" /><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3" /></g>,
   terminal: <g><rect x="2" y="4" width="20" height="16" rx="2.5" /><path d="m6 9 3 3-3 3M12 15h5" /></g>,
   // a desktop app's window, a frame with a title bar: an agent in an app's own chat (the sidebar's source marks; a terminal's is `run`)
@@ -127,8 +131,46 @@ const P: Record<string, React.ReactNode> = {
   code: <path d="m16 18 6-6-6-6M8 6l-6 6 6 6" />,
   pullRequest: <g><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7M6 9v12" /></g>,
   merge: <g><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 21V9a9 9 0 0 0 9 9" /></g>,
+  // voice chat (docs/web/web.md "Voice"): the composer's entry (a sound wave), the bar's mute (after Lucide's mic-off) and hang-up
+  voice: <path d="M3 10v4M7.5 6v12M12 3v18M16.5 7v10M21 10v4" />,
+  micOff: <g><path d="M15 9.34V5.5a3 3 0 0 0-5.68-1.33M9 9v2.5a3 3 0 0 0 5.12 2.12" /><path d="M19 11a7 7 0 0 1-1.07 3.73M5 11a7 7 0 0 0 11.37 5.47M12 18v3.5M2 2l20 20" /></g>,
+  // hang up: Lucide's phone handset turned to lie flat, as call apps draw it
+  hangUp: <path transform="translate(12 12.6) rotate(135) scale(0.86) translate(-12 -12)" d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />,
   // Settings › Extensions
   extension: <path d="M19.44 7.85c-.05.32.06.65.29.88l1.57 1.57a2.4 2.4 0 0 1 0 3.41l-1.61 1.61a.98.98 0 0 1-.84.28c-.47-.07-.8-.48-.97-.93a2.5 2.5 0 1 0-3.21 3.21c.45.17.86.5.93.97a.98.98 0 0 1-.28.84l-1.61 1.61a2.4 2.4 0 0 1-3.41 0l-1.57-1.57a1.03 1.03 0 0 0-.88-.29c-.49.07-.84.5-1.02.97a2.5 2.5 0 1 1-3.24-3.24c.46-.18.89-.53.97-1.02a1.03 1.03 0 0 0-.29-.88l-1.57-1.57a2.4 2.4 0 0 1 0-3.41L4.23 8.77c.24-.24.58-.35.92-.3.52.08.88.53 1.07 1.01a2.5 2.5 0 1 0 3.26-3.26c-.48-.2-.93-.56-1.01-1.07-.05-.34.06-.68.3-.92l1.53-1.53a2.4 2.4 0 0 1 3.41 0l1.57 1.57c.23.23.56.34.88.29.49-.07.84-.5 1.02-.97a2.5 2.5 0 1 1 3.24 3.24c-.46.18-.89.53-.97 1.02z" />,
+  // extensions' declarative UI version 6 (the home's and the markets' meanings; lib/extension-ui.ts NEW_ICONS_6)
+  sofa: <g><path d="M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3" /><path d="M2 16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v1.5H6V11a2 2 0 0 0-4 0z" /><path d="M4 18v2M20 18v2" /></g>,
+  light: <g><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" /><path d="M9 18h6M10 22h4" /></g>,
+  power: <g><path d="M12 2v10" /><path d="M18.4 6.6a9 9 0 1 1-12.77.04" /></g>,
+  fan: <g><path d="M10.83 13.42 4.8 19.44a2 2 0 0 1-3.32-2.1C3 13 6 11 10 11.5" /><path d="M13.17 10.58 19.2 4.56a2 2 0 0 1 3.32 2.1C21 11 18 13 14 12.5" /><path d="M13.42 13.17 19.44 19.2a2 2 0 0 1-2.1 3.32C13 21 11 18 11.5 14" /><path d="M10.58 10.83 4.56 4.8a2 2 0 0 1 2.1-3.32C11 3 13 6 12.5 10" /><circle cx="12" cy="12" r="1.5" /></g>,
+  thermometer: <path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z" />,
+  droplet: <path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5S5 13 5 15a7 7 0 0 0 7 7z" />,
+  unlock: <g><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 7.75-1.4" /></g>,
+  door: <g><path d="M13 4h3a2 2 0 0 1 2 2v14M2 20h3M13 20h9" /><path d="M10 12v.01" /><path d="M13 4.56v16.88a.5.5 0 0 1-.6.49l-6.6-1.47A1 1 0 0 1 5 19.5V5.6a1 1 0 0 1 .8-.98l6.6-1.47a.5.5 0 0 1 .6.49z" /></g>,
+  window: <g><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18M3 12h18" /></g>,
+  camera: <g><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z" /><circle cx="12" cy="13" r="3" /></g>,
+  video: <g><path d="m16 13 5.22 3.48a.5.5 0 0 0 .78-.42V7.94a.5.5 0 0 0-.76-.43L16 10.5" /><rect x="2" y="6" width="14" height="12" rx="2" /></g>,
+  pause: <g><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></g>,
+  speaker: <g><rect x="5" y="2" width="14" height="20" rx="2" /><circle cx="12" cy="14" r="4" /><path d="M12 6h.01" /></g>,
+  music: <g><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></g>,
+  tv: <g><rect x="2" y="7" width="20" height="15" rx="2" /><path d="m17 2-5 5-5-5" /></g>,
+  plug: <g><path d="M12 22v-5M9 8V2M15 8V2" /><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z" /></g>,
+  battery: <g><rect x="2" y="7" width="16" height="10" rx="2" /><path d="M22 11v2M6 11v2" /></g>,
+  cloud: <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z" />,
+  rain: <g><path d="M4 14.9A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.24" /><path d="M16 14v6M8 14v6M12 16v6" /></g>,
+  snow: <path d="M2 12h20M12 2v20M20 16l-4-4 4-4M4 8l4 4-4 4M16 4l-4 4-4-4M8 20l4-4 4 4" />,
+  wind: <path d="M12.8 19.6A2 2 0 1 0 14 16H2M17.5 8a2.5 2.5 0 1 1 2 4H2M9.8 4.4A2 2 0 1 1 11 8H2" />,
+  leaf: <g><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z" /><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" /></g>,
+  car: <g><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2" /><circle cx="7" cy="17" r="2" /><path d="M9 17h6" /><circle cx="17" cy="17" r="2" /></g>,
+  location: <g><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z" /><circle cx="12" cy="10" r="3" /></g>,
+  robot: <g><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3" /><path d="M7 7.5h.01M3.5 12h2" /></g>,
+  wifi: <path d="M12 20h.01M2 8.82a15 15 0 0 1 20 0M5 12.86a10 10 0 0 1 14 0M8.5 16.43a5 5 0 0 1 7 0" />,
+  trendUp: <path d="M22 7 13.5 15.5l-5-5L2 17M16 7h6v6" />,
+  trendDown: <path d="M22 17 13.5 8.5l-5 5L2 7M16 17h6v-6" />,
+  wallet: <g><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" /><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" /></g>,
+  bank: <path d="M3 22h18M6 18v-7M10 18v-7M14 18v-7M18 18v-7M12 2l8 5H4z" />,
+  minus: <path d="M5 12h14" />,
+  share: <g><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><path d="m16 6-4-4-4 4M12 2v13" /></g>,
 };
 
 export type IconName = keyof typeof P;

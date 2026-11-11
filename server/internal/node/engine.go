@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/terncli"
 )
 
 // A machine's node drives a set of terminal hosts side by side (#2576, proto/enginehosts.go): any of herdr (the
@@ -85,7 +86,7 @@ func engineHosts(engine string, logf func(format string, args ...any)) []host.Ho
 }
 
 // engineHostsFor are the terminal hosts of a set, in its canonical order: herdr at its default socket (what every
-// node had before engines), herdr-core at the socket hc would use, Orca's runtime. Paseo is no terminal host: its
+// node had before engines), herdr-core at the socket hc would use, Orca's runtime, Tern's command line. Paseo is no terminal host: its
 // sessions are its runtime's (runtimecontrol.go), run while the set holds it (engine.use in node.go). The empty set has
 // none. The hosts stay isolated from each other — their refreshes run in parallel and each watcher only refreshes its
 // own host (placement.go, herdrevents.go).
@@ -103,7 +104,7 @@ func engineHostsFor(c proto.EngineChoice, logf func(format string, args ...any))
 					logf("herdr: this node's data directory has its own herdr session (%s), but its environment points at %s: using that, so its Agents belong to whichever node started that server", own, hc.Socket)
 				}
 			}
-			hs = append(hs, &herdrHost{c: hc})
+			hs = append(hs, newHerdrHost(hc, logf))
 		case proto.EngineHerdrCore:
 			cc := herdrcore.New()
 			cc.Log = logf
@@ -112,6 +113,10 @@ func engineHostsFor(c proto.EngineChoice, logf func(format string, args ...any))
 			oc := orcart.New()
 			oc.Log = logf
 			hs = append(hs, newOrcaHost(oc))
+		case proto.EngineTern:
+			tc := ternClient()
+			tc.Log = logf
+			hs = append(hs, newTernHost(tc))
 		}
 	}
 	return hs
@@ -161,7 +166,7 @@ func (n *Node) defaultKind() string { return n.engineChoice().Default }
 // noEngineRefusal is why nothing can start on a machine that enables no terminal engine (the empty set).
 func noEngineRefusal() error {
 	return refusal(engineMissing, "这台电脑没启用终端引擎，不能从手机新开或接着会话，这次没有发送。"+
-		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca 或 Paseo）再试。", nil)
+		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca、Paseo 或 Cindy）再试。", nil)
 }
 
 // watchEngine starts watching the engine in use for as long as ctx lasts (Serve); engine.use moves it to the new one.
@@ -244,6 +249,7 @@ func (n *Node) useEngineChoice(ctx context.Context, c proto.EngineChoice) error 
 	n.hostAgents, n.layouts, n.agents, n.panePIDs, n.lastList = nil, nil, map[string]host.Agent{}, map[string]panePID{}, ""
 	n.lastPanes, n.onAgentsList = nil, nil
 	n.mu.Unlock()
+	n.sent.forget() // the new engine's list goes once even when the old one's was the same (sessions_sent.go)
 	n.endTermStreams("the machine's terminal engine changed")
 	traexCache.Lock()
 	traexCache.panes, traexCache.status = map[int]string{}, map[string]traexState{}
@@ -328,8 +334,27 @@ func (n *Node) engines(ctx context.Context, herdrVersion string) []proto.Engine 
 		// already shows each runtime's version on its own row).
 		{ID: proto.EngineHerdrBoth, Name: proto.EngineNames[proto.EngineHerdrBoth], Available: herdrAvailable && coreAvailable},
 		orcaEngine(ctx, orcaClient()),
+		ternEngine(ctx, ternClient()),
 		n.paseoEngine(ctx),
+		n.cindyEngine(ctx),
 	}
+}
+
+// ternClient is the tern command line the Tern host drives and node.info asks; tests point it at a fake one.
+var ternClient = terncli.New
+
+// ternEngine is Tern as found on this machine: available when its binary is there and its session daemon answers
+// (`tern inspect`); the version is the binary's, also while Tern is not running.
+func ternEngine(ctx context.Context, c *terncli.Client) proto.Engine {
+	e := proto.Engine{ID: proto.EngineTern, Name: proto.EngineNames[proto.EngineTern]}
+	if c.Bin() == "" {
+		return e
+	}
+	e.Version = c.Version(ctx)
+	if _, err := c.Inspect(ctx, ""); err == nil {
+		e.Available = true
+	}
+	return e
 }
 
 // orcaClient is the Orca runtime node.info asks; tests point it at a fake one.

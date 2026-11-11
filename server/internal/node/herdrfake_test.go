@@ -334,6 +334,9 @@ func agentOf(kind, session, status, pane, tab, ws, cwd, title string) map[string
 func herdrNode(t *testing.T) (*Node, *fakeHerdr, string) {
 	t.Helper()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	// herdr's config is the temp home's, not one the environment points at (herdr.WorktreesDir)
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	f := newFakeHerdr(t)
 	n, home := testNode(t)
 	n.hosts, n.dir, n.bin = herdrHosts(&herdr.Client{Socket: f.sock}), filepath.Join(home, ".persona"), "/tmp/persona-test/personad"
@@ -358,6 +361,7 @@ func herdrNode(t *testing.T) (*Node, *fakeHerdr, string) {
 	withFirstPromptWaits(t, 400*time.Millisecond, 3*time.Second)
 	t.Cleanup(n.firstWait.Wait) // before the waits are put back: a check still going reads them
 	t.Cleanup(n.engLists.Wait)  // before the caches are reset: an engine switch's list, still being built, reads them
+	t.Cleanup(n.starts.close)   // before firstWait, caches and the fake socket: starts can still use all of them
 	return n, f, home
 }
 
@@ -461,6 +465,18 @@ func withSubmitWindow(t *testing.T, window, poll time.Duration) {
 type hubPush struct {
 	Event  string          `json:"event"`
 	Params json.RawMessage `json:"params"`
+}
+
+// pollRepo keeps optional Git decoration stable before a poll test changes its transcript or workflow. Otherwise
+// a cold Git lookup can produce an unrelated sessions.changed on the next tick.
+func pollRepo(t *testing.T) string {
+	t.Helper()
+	cwd := physicalTempDir(t)
+	writeGitFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
+	if got := awaitGitPlace(t, gitPlaces, cwd); legacyGitPlace(got) != (gitPlace{root: cwd, worktree: cwd, branch: "main"}) {
+		t.Fatalf("poll repository: %+v", got)
+	}
+	return cwd
 }
 
 // pollNode runs the node's herdr poll loop (no event stream: a snapshot every tick) with a hub connection, and

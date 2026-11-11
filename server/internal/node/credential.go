@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "4 · Credentials"). Only the hub
+// Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "Credentials"). Only the hub
 // asks — it is a hub → node RPC, the node socket of hooks and MCP does not route here — and nothing is logged.
 
 var ghHost = lazyre.New(`^[A-Za-z0-9.-]+(:[0-9]+)?$`)
@@ -26,9 +26,9 @@ func ghToken(ctx context.Context, host string) (map[string]any, error) {
 	if !ghHost.MatchString(host) {
 		return nil, &rpc.Error{Message: "bad host"}
 	}
-	gh, err := exec.LookPath("gh")
+	gh, err := ghLookPath()
 	if err != nil {
-		return nil, &rpc.Error{Code: proto.CodeNoGh, Message: "gh is not installed"}
+		return nil, &rpc.Error{Code: proto.CodeNoGh, Message: ghMissing(err)}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()

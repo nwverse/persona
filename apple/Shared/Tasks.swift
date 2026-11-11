@@ -2,7 +2,7 @@ import Foundation
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930): a plan the assistant handed the user,
 // the todos it opened (one per task), and the items the hub inserted into the conversation (its feed). The hub's
-// shapes are in docs/protocol/protocol.md「任务和对话动态」.
+// shapes are in docs/protocol/protocol.md「Tasks and the chat feed」.
 
 /// One task of a plan, as the assistant proposed it (and the user may have edited it).
 nonisolated struct PlanTask: Codable, Hashable, Sendable {
@@ -53,10 +53,44 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// How an interrupted receipt's task was dealt with, as the hub worked it out (#3834; docs/protocol/protocol.md
+/// "Tasks and the chat feed").
+nonisolated enum InterruptResolution: String, Codable, Hashable, Sendable {
+    case pending, cancelled, rerouted, resumed, accepted, done
+}
+
+/// Interruptions with the same cause in one chat within ten minutes, as their first receipt carries them (#3834).
+nonisolated struct InterruptBatch: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable, Sendable {
+        var receipt: String
+        var todoID: String
+        var title: String
+        var resolution: String
+        enum CodingKeys: String, CodingKey { case receipt, todoID = "todo_id", title, resolution }
+        /// A resolution this build doesn't know reads as handled, not as pending.
+        var resolved: InterruptResolution { InterruptResolution(rawValue: resolution) ?? .done }
+    }
+    var cause: String
+    var machine: String?
+    var total: Int
+    var pending: Int
+    var resolved: Int
+    var tasks: [Entry]
+}
+
+/// How the chat draws an interrupted receipt: `hidden` inside its batch's head, `batch` the head of several,
+/// `resolved` one dealt with (a grey line), `pending` still to deal with (the red card).
+nonisolated enum InterruptLook: Equatable, Sendable {
+    case hidden
+    case batch(InterruptBatch)
+    case resolved(InterruptResolution)
+    case pending
+}
+
 /// An item the hub inserted into an assistant conversation; drawn among the transcript's lines by `at`.
 nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case plan, task, answered, receipt, routed, today, message, view, notice, review, report, unknown
+        case plan, task, answered, receipt, routed, today, message, view, notice, review, report, brief, unknown
         init(from decoder: Decoder) throws {
             self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
         }
@@ -110,7 +144,23 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     /// `receipt`: the task's title, done / failed, the agent's last words, its PR and machine.
     var title: String? { string("title") }
     var failed: Bool { string("state") == "failed" }
+    /// A turn the model service cut off (#1516): not done, whatever its to-do says.
+    var turnInterrupted: Bool { string("state") == "interrupted" }
+    /// An interrupted receipt's raw error (the API error that cut the turn off); older hubs put it in `summary`.
+    var receiptError: String? { string("error") }
     var summary: String? { string("summary") }
+    /// How the chat draws an interrupted receipt, from what the hub worked out (#3834): nil from a hub before it.
+    var interruptLook: InterruptLook? {
+        guard kind == .receipt, turnInterrupted, let raw = string("resolution"),
+              let resolution = InterruptResolution(rawValue: raw) else { return nil }
+        if let group = string("group"), !group.isEmpty, group != id { return .hidden }
+        if case .object(let o)? = body, let b = o["batch"],
+           let data = try? JSONEncoder().encode(b), let batch = try? JSONDecoder().decode(InterruptBatch.self, from: data),
+           batch.tasks.count > 1 {
+            return .batch(batch)
+        }
+        return resolution == .pending ? .pending : .resolved(resolution)
+    }
     var pr: String? { string("pr") }
     var machine: String? { string("machine") }
     /// `routed`: what the user said straight to the task; `message`: the message itself.
@@ -131,6 +181,9 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var sentAt: Date? { string("sent_at").flatMap(JSON.parseDate) }
     var sent: String? { string("sent") }
     var filedAt: Date? { sentAt == nil ? string("filed_at").flatMap(JSON.parseDate) : nil }
+    /// A per-card decision; it does not file the Inbox item or stop the task's Agent.
+    var dismissedAt: Date? { string("dismissed_at").flatMap(JSON.parseDate) }
+    var dismissalID: String? { string("dismissal_id") }
 
     /// `review`: the supervisor's verdict (accepted / rework / needs_user / cancelled), the rework round, its note.
     var verdict: String? { string("verdict") }
@@ -217,7 +270,7 @@ nonisolated struct AnsweredItem: Hashable, Sendable {
     var answer: String
 }
 
-/// The Today card's content (docs/protocol/protocol.md「任务和对话动态」, kind `today`), built by the hub.
+/// The Today card's content (docs/protocol/protocol.md「Tasks and the chat feed」, kind `today`), built by the hub.
 nonisolated struct TodayBody: Codable, Hashable, Sendable {
     nonisolated struct TaskRef: Codable, Hashable, Sendable { var id: String; var title: String }
     nonisolated struct Meeting: Codable, Hashable, Sendable { var start: Date; var end: Date; var title: String }
@@ -292,12 +345,14 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var doneAt: Date?
     var createdAt: Date?
     var updatedAt: Date?
+    /// When it was last reopened (by the user, or by the hub when its agent got more work); nil from older hubs.
+    var reopenedAt: Date?
     var origin: String?
     var planID: String?
     /// The task's agent did not start, and why: the hub ended the todo there (it is done, #1077).
     var startError: String?
     /// "auto" when the hub marked the task done because its work was judged finished, with why (#1092,
-    /// docs/assistant/todos.md「自动完成」); nil when the user did.
+    /// docs/assistant/todos.md「Automatic completion」); nil when the user did.
     var doneBy: String?
     var doneReason: String?
     var agents: [Agent]
@@ -314,6 +369,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// The main conversation supervises it (#3124, `Supervision.swift`): what done means, its reviews, its agent's
     /// latest report. Nil for a todo that is not supervised, from an older hub, or when it does not decode.
     var supervision: TaskSupervision?
+    /// The current owner decision or verification round; malformed asks never hide the task.
+    var ask: TodoAsk?
     /// When it is due (#1683, docs/assistant/todos.md "Due date, reminder, priority"): a moment, or a day ("yyyy-MM-dd",
     /// due by its end in the user's time zone); at most one. Nil from a hub without them.
     var dueAt: Date?
@@ -323,10 +380,12 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var remindedAt: Date?
     /// "high" or "low"; nil is normal.
     var priority: String?
+    /// Where its finished work stands (`delivery`, docs/assistant/todos.md "Delivery"); nil from a hub without it.
+    var delivery: TodoDelivery?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority
-        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", planID = "plan_id", startError = "start_error",
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery
+        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
              remindAt = "remind_at", remindedAt = "reminded_at"
     }
@@ -335,7 +394,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
          origin: String? = nil, planID: String? = nil, startError: String? = nil, doneBy: String? = nil, doneReason: String? = nil,
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
-         remindedAt: Date? = nil, priority: String? = nil) {
+         remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
+         delivery: TodoDelivery? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -358,6 +418,9 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.remindAt = remindAt
         self.remindedAt = remindedAt
         self.priority = priority
+        self.ask = ask
+        self.reopenedAt = reopenedAt
+        self.delivery = delivery
     }
 
     init(from decoder: Decoder) throws {
@@ -387,13 +450,45 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         remindAt = (try? c.decodeIfPresent(Date.self, forKey: .remindAt)) ?? nil
         remindedAt = (try? c.decodeIfPresent(Date.self, forKey: .remindedAt)) ?? nil
         priority = (try? c.decodeIfPresent(String.self, forKey: .priority)) ?? nil
+        ask = (try? c.decodeIfPresent(TodoAsk.self, forKey: .ask)) ?? nil
+        // New (#3206): absent from older hubs; one that does not decode is as if there were none.
+        reopenedAt = (try? c.decodeIfPresent(Date.self, forKey: .reopenedAt)) ?? nil
+        delivery = (try? c.decodeIfPresent(TodoDelivery.self, forKey: .delivery)) ?? nil
     }
 
+    /// An ended task cannot keep an old decision card alive.
+    var openAsk: TodoAsk? { doneAt == nil && ask?.askedAt.isEmpty == false ? ask : nil }
     var activeAgents: [Agent] { agents.filter(\.isActive) }
     /// The hub ended it because its agent did not start.
     var failedToStart: Bool { !(startError ?? "").isEmpty }
     /// The hub marked it done because its task's work was judged finished; reopening undoes it.
     var autoDone: Bool { doneAt != nil && doneBy == "auto" }
+}
+
+/// Where a task's finished work stands (`delivery`): `live`, `pr`, `merged`, `off` or `none`, what holds it and who
+/// can unhold it. Kept as the hub sent it; a state this build does not know is just not one of those.
+nonisolated struct TodoDelivery: Codable, Hashable, Sendable {
+    var state: String
+    var gate: String?
+    var unblock: String?
+    var at: Date?
+
+    enum CodingKeys: String, CodingKey { case state, gate, unblock, at }
+
+    init(state: String, gate: String? = nil, unblock: String? = nil, at: Date? = nil) {
+        self.state = state
+        self.gate = gate
+        self.unblock = unblock
+        self.at = at
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
+        gate = (try? c.decodeIfPresent(String.self, forKey: .gate)) ?? nil
+        unblock = (try? c.decodeIfPresent(String.self, forKey: .unblock)) ?? nil
+        at = (try? c.decodeIfPresent(Date.self, forKey: .at)) ?? nil
+    }
 }
 
 /// The agents of quiet tasks (#1731, `TodoItem.quiet`): the main conversation tells the user about them, so the island,
@@ -457,6 +552,72 @@ nonisolated enum WatchInteractions {
     }
 }
 
+/// A small, value-only snapshot of the work a tray row shows. It does not carry transcripts or subscribe to every session.
+nonisolated struct AssistantTrayActivity: Hashable, Sendable {
+    struct Workflow: Hashable, Sendable {
+        var title: String
+        var phase: String?
+        var counts: String?
+        var startedAt: Date? = nil
+    }
+
+    var backgroundTasks = 0
+    var subagents = 0
+    var workflows: [Workflow] = []
+    var workflowCount = 0
+    /// An older complete response may say background work runs without listing its kind.
+    var reportedBackgroundWork = false
+
+    var isActive: Bool { backgroundTasks > 0 || subagents > 0 || workflowCount > 0 || reportedBackgroundWork }
+
+    init() {}
+
+    init(sessions: [Session]) {
+        var seen = Set<SessionKey>()
+        for session in sessions where seen.insert(session.key).inserted {
+            let background = session.background ?? []
+            // Fresh bounded-summary counts, including omitted zeros, win over retained chat arrays (#3588).
+            if session.listWaiting != nil || session.listBackgroundTasksCount != nil {
+                let count = max(0, session.listRunningWorkflows ?? 0)
+                let agents = max(0, session.listRunningSubagents ?? 0)
+                workflowCount += count
+                subagents += agents
+                backgroundTasks += max(0, session.listBackgroundTasksCount ?? ((session.listBackgroundCount ?? 0) - count - agents))
+                if count > 0, let run = session.listWorkflowProgress, run.isRunning {
+                    workflows.append(Workflow(title: run.title, phase: run.phaseLabel, counts: run.counts, startedAt: run.startedAt))
+                }
+                continue
+            }
+            reportedBackgroundWork = reportedBackgroundWork || (session.backgroundWorking && !session.backgroundWaiting)
+            let runs = session.runningWorkflows
+            let workflowMarkers = background.filter { task in
+                task.isWorkflow && !(session.workflows ?? []).contains { run in
+                    (run.id == task.runID || run.taskID == task.id) && !run.isRunning
+                }
+            }
+            let count = max(runs.count, session.listRunningWorkflows ?? 0, workflowMarkers.count)
+            workflowCount += count
+            workflows += runs.map { Workflow(title: $0.title, phase: $0.phaseLabel, counts: $0.counts, startedAt: $0.startedAt) }
+            let listedAgents = session.subagents ?? []
+            let backgroundAgents = background.filter { task in
+                task.isAgent && !listedAgents.contains { $0.id == task.id && !$0.running }
+            }
+            let agentIDs = Set(listedAgents.filter(\.running).map(\.id) + backgroundAgents.map(\.id))
+            subagents += max(agentIDs.count, session.listRunningSubagents ?? 0)
+            if session.background != nil {
+                backgroundTasks += background.filter { !$0.isWorkflow && !$0.isAgent }.count
+            } else {
+                // Bounded lists include compatibility workflow markers in background_count too.
+                backgroundTasks += max(0, (session.listBackgroundCount ?? 0) - count)
+            }
+        }
+        workflows = workflows.enumerated().sorted { a, b in
+            let first = a.element.startedAt ?? .distantPast, second = b.element.startedAt ?? .distantPast
+            return first != second ? first > second : a.offset < b.offset
+        }.map(\.element)
+    }
+}
+
 /// An agent going on (Needs You / Working) as the main conversation's dock shows it after the tasks (#1113): the ones the user
 /// opened on the Agents page, which no conversation's task stands for. Made from the Agents page's session list, so
 /// it follows the agents without a poll of its own.
@@ -468,23 +629,29 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
     var since: Date?
     /// The todo it works for, as the hub tags the session (a task's, or one made by hand).
     var todoID: String?
+    var activity: AssistantTrayActivity
+    var backgroundWaiting: Bool
 
     var id: SessionKey { key }
     var isWaiting: Bool { state == .needsYou }
 
-    init(key: SessionKey, title: String, state: AgentState, since: Date? = nil, todoID: String? = nil) {
+    init(key: SessionKey, title: String, state: AgentState, since: Date? = nil, todoID: String? = nil,
+         activity: AssistantTrayActivity = .init(), backgroundWaiting: Bool = false) {
         self.key = key
         self.title = title
         self.state = state
         self.since = since
         self.todoID = todoID
+        self.activity = activity
+        self.backgroundWaiting = backgroundWaiting
     }
 
     /// The agents going on in a session list (Persona's own conversations are not agents): waiting for the user
     /// first, then the newest. Only what a pill shows goes in, so it changes when a pill would.
     @MainActor static func going(_ sessions: [Session]) -> [DockAgent] {
         sessions.filter { !$0.assistant && ($0.state == .needsYou || $0.state == .working) }
-            .map { DockAgent(key: $0.key, title: $0.displayTitle, state: $0.state, since: $0.stateSince, todoID: $0.todo?.id) }
+            .map { DockAgent(key: $0.key, title: $0.displayTitle, state: $0.state, since: $0.stateSince, todoID: $0.todo?.id,
+                             activity: AssistantTrayActivity(sessions: [$0]), backgroundWaiting: $0.waitsToBeWoken) }
             .sorted { a, b in
                 if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
                 if a.since != b.since { return (a.since ?? .distantPast) > (b.since ?? .distantPast) }
@@ -508,26 +675,38 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
     }
 }
 
-/// Where a task is, from its todo and its agents' states (docs/assistant/todos.md「状态计算规则」, the hub's taskState).
+/// Where a task is, from its todo and its agents' states (docs/assistant/todos.md「State calculation rules」, the hub's taskState).
 nonisolated enum TaskState: String, Sendable, CaseIterable {
-    case needsYou, working, unread, followup, notStarted, done, failed
+    /// `waiting`: its agents ended their turn, yet something brings one back, its background work or the hub's wake-up
+    /// (`Session.waitsToBeWoken`, #3274); only a task nothing brings back is `followup`.
+    case needsYou, working, unread, waiting, followup, notStarted, done, failed
 
-    init(todo: TodoItem, agents: [AgentState]) {
+    /// `agents`: the states of the agents that do not wait to be woken; `waiting`: whether one does.
+    init(todo: TodoItem, agents: [AgentState], waiting: Bool = false) {
         if todo.failedToStart { self = .failed; return }
         if todo.doneAt != nil { self = .done; return }
+        if todo.openAsk != nil { self = .needsYou; return }
         let has = Set(agents)
         if has.contains(.needsYou) { self = .needsYou }
         else if has.contains(.unread) { self = .unread }
         else if has.contains(.working) { self = .working }
+        else if waiting { self = .waiting }
         else if !agents.isEmpty { self = .followup }
         else { self = .notStarted }
+    }
+
+    /// From the task's agents as the app has them: one that waits to be woken makes it waiting, not stopped (#3274).
+    init(todo: TodoItem, sessions: [Session]) {
+        let waits = sessions.filter(\.waitsToBeWoken)
+        let others = sessions.filter { !$0.waitsToBeWoken }.map(\.state)
+        self.init(todo: todo, agents: others, waiting: !waits.isEmpty)
     }
 
     /// The agent state whose tone and mark the task borrows.
     var agentState: AgentState {
         switch self {
         case .needsYou: .needsYou
-        case .working, .notStarted: .working
+        case .working, .waiting, .notStarted: .working
         case .unread, .done: .unread
         case .followup, .failed: .idle
         }
@@ -537,7 +716,7 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
     var priority: Int {
         switch self {
         case .needsYou: 0
-        case .working, .notStarted: 1
+        case .working, .waiting, .notStarted: 1
         case .unread: 2
         case .followup: 3
         case .done, .failed: 4
@@ -549,10 +728,10 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
 
     /// Nothing of the task runs (it ended, stopped, or its agent never started; `notStarted` stays when the hub never
     /// said how the start went): the user may take it out of the conversation.
-    var isRemovable: Bool { self != .working && self != .needsYou }
+    var isRemovable: Bool { self != .working && self != .waiting && self != .needsYou }
 }
 
-/// What a task's card says its agent is on now (docs/assistant/unified-entry.md「任务卡片的进度」): its latest words, or — while it
+/// What a task's card says its agent is on now (docs/assistant/unified-entry.md「Task cards」): its latest words, or — while it
 /// only runs tools (reads code, runs tests, waits for CI) and its words stay put for minutes — the step it is on and
 /// since when. New words win again as soon as they come (the hub drops the step then).
 nonisolated enum TaskNow: Equatable, Sendable {
@@ -630,9 +809,12 @@ nonisolated extension APIClient {
         var views: [String: ExtensionAssistantView]?
         var viewActions: [String: ExtensionViewAction]?
         var viewBlocks: [String]?
+        /// nil: legacy hub; empty: the frozen recovery window is complete.
+        var nextCursor: String?
 
         enum CodingKeys: String, CodingKey {
             case items, plans, views
+            case nextCursor = "next_cursor"
             case viewActions = "view_actions"
             case viewBlocks = "view_blocks"
         }
@@ -641,12 +823,37 @@ nonisolated extension APIClient {
     private struct PlanResponse: Decodable { var plan: TaskPlan }
     nonisolated private struct TodosResponse: Decodable, Sendable { var todos: [TodoItem] }
     private struct ItemResponse: Decodable { var item: FeedItem }
+    struct DraftDismissal: Decodable, Sendable {
+        var item: FeedItem
+        var dismissalID: String
+        enum CodingKeys: String, CodingKey { case item, dismissalID = "dismissal_id" }
+    }
+
+    /// Resolve exactly the displayed draft, using its original text rather than local edits.
+    func dismissDraft(_ id: String, original: String) async throws -> DraftDismissal {
+        struct Body: Encodable { var draft: String }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/dismiss", body: Body(draft: original), as: DraftDismissal.self)
+    }
+
+    /// Only the decision identified by this receipt can be undone.
+    func undoDraftDismissal(_ id: String, receipt: String) async throws -> FeedItem {
+        struct Body: Encodable {
+            var dismissalID: String
+            enum CodingKeys: String, CodingKey { case dismissalID = "dismissal_id" }
+        }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/undo-dismiss", body: Body(dismissalID: receipt), as: ItemResponse.self).item
+    }
 
     /// A conversation's feed after `since` (nil: all of it), with the plans its `plan` items name.
-    func feed(conversation: String, since: Date? = nil) async throws -> FeedResponse {
+    func feed(conversation: String, since: Date? = nil, cursor: String? = nil) async throws -> FeedResponse {
         let id = conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))) ?? conversation
-        var query: [String: String] = [:]
-        if let since { query["since"] = Self.feedTime.string(from: since) }
+        var query: [String: String]
+        if let cursor {
+            query = ["cursor": cursor]
+        } else {
+            query = ["paginate": "1"]
+            if let since { query["since"] = Self.feedTime.string(from: since) }
+        }
         return try await get("/api/v1/assistant/conversations/\(id)/feed", query: query)
     }
 
@@ -663,6 +870,26 @@ nonisolated extension APIClient {
 
     func dismissPlan(_ id: String) async throws -> TaskPlan {
         try await post("/api/v1/task-plans/\(id)/dismiss", as: PlanResponse.self).plan
+    }
+
+    /// The Accept button of a `brief` item's to-do to verify (#2320; the to-do rows' one too, #2056): `askedAt` is the round's
+    /// ask as the hub sent it. A 409 means that round is over (asked again since, or already verified).
+    func acceptTodo(_ id: String, askedAt: String) async throws {
+        struct Body: Encodable {
+            var askedAt: String
+            enum CodingKeys: String, CodingKey { case askedAt = "asked_at" }
+        }
+        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept", body: Body(askedAt: askedAt))
+    }
+
+    /// The Handled button of a question that can wait (a `brief` item's `later` row). A 409 means it is not in the queue any
+    /// more (handled before, its to-do ended, or 7 days).
+    func laterHandled(_ id: String) async throws {
+        _ = try await post("/api/v1/later/\(Self.pathPart(id))/handled")
+    }
+
+    private static func pathPart(_ id: String) -> String {
+        id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))) ?? id
     }
 
     /// The conversation's Today card for the user's day (made on the first call of the day).

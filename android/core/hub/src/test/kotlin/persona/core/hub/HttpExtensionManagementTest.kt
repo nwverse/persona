@@ -330,9 +330,22 @@ class HttpExtensionManagementTest {
     @Test fun theDeviceContextIsThePhones() {
         val context = HttpExtensionManagement.deviceContext()
         assertEquals("android", (context.platform).zhAny())
-        assertEquals(5, context.uiVersion)
+        assertEquals(6, context.uiVersion)
         assertEquals(java.util.TimeZone.getDefault().id, context.tz)
         assertFalse(context.locale.isNullOrEmpty())
+    }
+
+    // The locale's language is the app's (what Accept-Language says), not the phone's; the region stays the phone's.
+    @Test fun theDeviceContextLocaleFollowsTheAppLanguage() {
+        val before = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("en-US"))
+            persona.core.contracts.ClientLanguage.current = persona.core.contracts.AppLanguage.Ja
+            assertEquals("ja-US", HttpExtensionManagement.deviceContext().locale)
+        } finally {
+            java.util.Locale.setDefault(before)
+            persona.core.contracts.ClientLanguage.current = persona.core.contracts.AppLanguage.En
+        }
     }
 
     // UI version 2's items read; one this app cannot even decode (a newer hub's, a field of another type) is left out

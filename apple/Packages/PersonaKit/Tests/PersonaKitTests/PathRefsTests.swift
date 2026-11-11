@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import PersonaKit
 
-/// Paths in messages linked where they are there (docs/apple/ios.md「文件查看器」): the same cases as the web's
+/// Paths in messages linked where they are there (docs/apple/ios.md「File viewer」): the same cases as the web's
 /// web/src/lib/path-refs.test.ts and web/src/ui/PathLinks.test.tsx.
 struct PathRefsTests {
     private func paths(_ t: String) -> [String] {
@@ -119,6 +119,15 @@ struct PathMarkdownTests {
         let md = "公式 ![src/a.ts](persona-math:src%2Fa.ts) 和 `cat src/a.ts`\n\n    src/a.ts"
         let p = PathMarkdown(md)
         #expect(p.paths.isEmpty)
+    }
+
+    /// Where code is drawn in the body's color (iOS, #2984), a path's code span is linked as its words, so it stays blue.
+    @Test func aCodeSpanLinkedAsItsWords() {
+        let md = "见 `src/__init__.py:3` 和 `~/notes/a[1].md`。"
+        let p = PathMarkdown(md)
+        let out = p.linked(plainCode: true) { _ in true }.markdown
+        #expect(out == "见 [src/\\_\\_init\\_\\_.py:3](\(link("src/__init__.py", 3))) 和 [\\~/notes/a\\[1\\].md](\(link("~/notes/a[1].md")))。")
+        #expect(p.linked { _ in true }.markdown.contains("[`src/__init__.py:3`]"))
     }
 
     @Test func aWholeSpanWithChineseAndSpaces() {

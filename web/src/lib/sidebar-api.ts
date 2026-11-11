@@ -1,7 +1,8 @@
 import { storedValue, storeValue } from "./compatibility";
 // What the sidebar offers the keyboard shortcuts (docs/web/web.md "Keyboard shortcuts"): fold or open every group, switch how Agents are
-// grouped, walk the rows. Sidebar.tsx subscribes (`onFoldAll`, `onGrouping`) and marks its list `data-sidebar-rows`; the
-// shortcuts call the rest. Kept out of Sidebar.tsx so that file only gains the few lines that listen.
+// grouped, walk the rows. The sidebar's groups subscribe through useFolded (`onFoldAll`), Sidebar.tsx subscribes to
+// `onGrouping` and marks its list `data-sidebar-rows`, and the shortcuts call the rest. Kept out of the sidebar's views
+// so they only gain the few lines that listen.
 import { AGENT_GROUPINGS, agentGrouping, type AgentGrouping } from "./agent-groups";
 
 export const GROUPING_KEY = "persona.agentGrouping";
@@ -55,11 +56,16 @@ export function nextGrouping(current: AgentGrouping, offered: readonly AgentGrou
   return offered[(i + 1) % offered.length] ?? current;
 }
 
+/** Choose a grouping from another navigation surface, keeping mounted sidebar and phone views in sync. */
+export function setAgentGrouping(grouping: AgentGrouping): void {
+  storeValue(GROUPING_KEY, grouping);
+  groupingListeners.forEach((listener) => listener(grouping));
+}
+
 /** Switches the sidebar to its next grouping (kept in this browser, as the menu's choice is); returns it. */
 export function cycleGrouping(offered?: readonly AgentGrouping[]): AgentGrouping {
   const next = nextGrouping(agentGrouping(storedValue(GROUPING_KEY)), offered);
-  storeValue(GROUPING_KEY, next);
-  groupingListeners.forEach((f) => f(next));
+  setAgentGrouping(next);
   return next;
 }
 

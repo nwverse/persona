@@ -1,4 +1,5 @@
 {
+  "start_work_session": "新建工作会话",
   "suggestion_meetings": "今天我有哪些会？帮我准备一下",
   "suggestion_agents": "看看各台电脑上的 Agent 都在干什么",
   "suggestion_lark": "总结一下飞书里需要我回复的消息",
@@ -12,5 +13,6 @@
   "empty_body_setup": "还差一步就能开始，下面告诉你缺什么。",
   "needs_calendar": "会用到手机日历",
   "load_failed": "没读到主对话：{error}",
-  "retry": "重试"
+  "retry": "重试",
+  "still_starting": "还在启动 {launcher}…"
 }

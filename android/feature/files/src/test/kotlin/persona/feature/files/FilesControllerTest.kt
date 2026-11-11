@@ -356,14 +356,16 @@ class FilesControllerTest {
         assertEquals(tracking, state.git)
         assertEquals(listOf("status", "pull $cwd", "status"), machine.asked)
 
-        // No upstream (or a detached HEAD): nothing to pull from.
-        machine.gitStatus = tracking.copy(upstream = null)
-        files.refreshGit()
-        runCurrent()
-        machine.asked.clear()
-        files.pull()
-        runCurrent()
-        assertTrue(machine.asked.isEmpty())
+        // No upstream (or a detached HEAD, or one deleted on the remote): nothing to pull from.
+        for (nothing in listOf(tracking.copy(upstream = null), tracking.copy(behind = 0, gone = true))) {
+            machine.gitStatus = nothing
+            files.refreshGit()
+            runCurrent()
+            machine.asked.clear()
+            files.pull()
+            runCurrent()
+            assertTrue(machine.asked.isEmpty())
+        }
     }
     @Test fun comingBackOnlineReadsAgainWhatFailed() = runTest {
         val machine = FakeMachine()
@@ -407,6 +409,26 @@ class FilesControllerTest {
         online.value = ConnectionState.Online
         runCurrent()
         assertTrue(machine.asked.isEmpty())
+        coroutineContext.cancelChildren()
+    }
+    @Test fun aLoadedComparisonIsNotReadAgainOnReconnect() = runTest {
+        val machine = FakeMachine()
+        val online = MutableStateFlow(ConnectionState.Online)
+        val files = FilesController(machine, "macbook", cwd, this, describe = { it.message ?: "?" }, connection = online)
+        files.start()
+        runCurrent()
+        files.push(FileSelection.Compare("art/icon.png", "art/icon.png", "INDEX", "WORKTREE"))
+        runCurrent()
+        val loaded = files.state.value.compare
+        assertNotNull(loaded)
+        machine.asked.clear()
+        online.value = ConnectionState.Connecting
+        runCurrent()
+        online.value = ConnectionState.Online
+        runCurrent()
+        // Nothing failed: the comparison on screen stays, and neither version is fetched again.
+        assertEquals(loaded, files.state.value.compare)
+        assertTrue(machine.asked.none { it.startsWith("blob") })
         coroutineContext.cancelChildren()
     }
     @Test fun aReadStillOnItsWayWhenTheConnectionReturnsIsAskedAgain() = runTest {

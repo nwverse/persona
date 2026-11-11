@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// Looks (docs/extensions/extensions.md "Looks", docs/apple/persona.md): one list of every look a user can choose — the ones the apps
+// Looks (docs/extensions/extensions.md "Avatars", docs/apple/persona.md): one list of every look a user can choose — the ones the apps
 // draw themselves (builtin), the persona packages on the hub (hub) and the ones extensions declare (extension) — and
 // which one is chosen, kept on the hub so every device of the user shows the same one.
 //
@@ -52,6 +52,8 @@ type lookView struct {
 	Rev           string          `json:"rev,omitempty"`
 	Bytes         int64           `json:"bytes,omitempty"`
 	Manifest      json.RawMessage `json:"manifest,omitempty"`
+	// Uploaded: the hub made it from an image the user uploaded (look_uploads.go); only these can be deleted.
+	Uploaded bool `json:"uploaded,omitempty"`
 }
 
 // lookChoice is the setting: the look the user chose and when.
@@ -219,7 +221,7 @@ func (h *Hub) looks() []lookView {
 		}
 		_ = json.Unmarshal(info.Manifest, &m)
 		v := lookView{ID: p.id, Source: "hub", Name: m.Name, Names: m.Names, Subtitle: m.Subtitle, Subtitles: m.Subtitles,
-			AppIcon: extension.DefaultLook, Rev: info.Rev, Bytes: info.Bytes, Manifest: info.Manifest}
+			AppIcon: extension.DefaultLook, Rev: info.Rev, Bytes: info.Bytes, Manifest: info.Manifest, Uploaded: isUploadedManifest(p.raw)}
 		if s := p.source; s != nil {
 			v.Source, v.Extension, v.ExtensionName, v.AppIcon = "extension", s.extension, s.name, s.appIcon
 		}

@@ -1,0 +1,24 @@
+# Design decisions
+
+The history of the rules in `docs/design/DESIGN_SYSTEM.md`: what was decided, when, what it replaced, and where it landed. Append only; correct an entry with a new one. This file holds no rules: where it and DESIGN_SYSTEM.md differ, DESIGN_SYSTEM.md wins. The principles and their cases are in `docs/design/PRINCIPLES.md`.
+
+## 2026-11
+
+- **11-10 Structure rules for primary screens** (#3186): sessions that need the user, the work-item row and list controls (3.4), pending requests (4.8), objects, titles and state words (5.6), a reading route, and who looks at a UI change (1.4). They hold on iOS, Android and web; visual values stay per platform. They apply `docs/design/PRINCIPLES.md` to Agent work rather than adding principles. Rejected: five more principles next to those six; rules for the Apple apps only.
+- **11-10 Default views stay as they are** (#3186): the rules do not choose a default grouping. iOS and Android open on By Repository; the web opens on its paged list, on By to-do, or on the chat-list view (#2805). Rejected: attention sections as the default on every platform.
+- **11-10 Rows may show the model's short name** (#2805, #3186): raw model IDs stay off primary screens. Rejected: no model in rows.
+- **11-10 List controls follow #2805** (#3186): a grouping control, status chips and a filter bar may sit above a list, each kind looking like itself. Rejected: one row of filter chips, with grouping and display in the ⋯ menu.
+- **11-10 Awaiting Reply stays its own state** (#3186). Rejected: folding it into Needs You.
+- **11-10 No freeze on new appearance options** (#3186): revisit once the structure rules have been in use for a while. Rejected: freezing new styles now. Where: 1.2.
+- **11-10 Row content, not a new row style** (#3186): every row style shows the work-item row's content, with the Avatar style's look as the reference. Rejected: a fourth row style. Where: 3.4.
+- **11-10 Answers stay in rows** (#3186): choices, and low-risk tool approvals whose full command is shown. Plans, high-risk actions and Always Allow for This Session open the session. Rejected: opening the session for every answer. Where: 3.4, 4.8.
+- **11-10 An Agent's run is called a session** (#3186). Rejected: "task", which names the work Persona hands out. Where: 5.5, 5.6.
+- **11-10 Needs You counts sessions** (#3186): a row is a session, so the number equals the rows (principle 4). Rejected: counting requests. Where: 4.8.
+- **11-10 No failed state** (#3186): a failed run says what failed in its row. Rejected: a failed state with its own priority. Where: 5.6.
+- **11-10 Who looks at a UI change** (#3186): a person for a large change, the Agent itself for a small one. Rejected: always a person; always the Agent. Where: 1.4.
+- **11-10 By Repository keeps its tree** (#3186): computer, repository, worktree, then session. Rejected: the work-item row in By Repository, which would leave the old view nowhere to be found. Where: 3.4.
+- **11-11 One wording for request titles** (#3690): every client takes the words iOS used ("Plan awaiting approval", "Needs your permission", "{agent} has a question", "Terminal needs you"), in en, zh-Hans and ja. Rejected: titles that say the action ("Wants to run a command", Android's). Where: 4.8, 5.6.
+- **11-11 Needs You is blue on every client** (#4194): the color iOS shows today. Rejected: red, recorded for the chat top bar on 11-06 but never used in code; the web's amber. Where: 2.1.
+- **11-11 Android takes the iOS contrast floors** (#4194): links 3:1, white on accent 3.5:1, bubble text 4.5:1, with the iOS color values; Android Glass draws the iPhone's colors as they are. Rejected: 4.5:1 for all Android text. Where: 6.
+- **11-11 One hub-built direction tree** (#4352): each direction (leader conversation) opens into its open tasks with a state (在做 / 等你 / 卡住 / 待验收), each task into its Agents and their sub-Agents; the sidebar, the To-dos grouping and the Agents grouping on every client read `GET /api/v1/assistant/directions/tree` and never group or judge state themselves. Tasks with no supervisor or the main chat's go to a 书记官 group; a direction row shows only 「在做 N · 等你 N」; the group is called 常驻 to the owner. Rejected: each client grouping `GET /api/v1/todos` by supervisor (three copies of the state rule); a worker task listed beside its leader's (it shows under the leader's Agent instead). Where: `docs/assistant/unified-entry.md` "The direction tree".
+- **11-11 One feedback layer on Android** (#4194): one toast, modeled on iOS, for all in-app feedback: error, success or info, one slot per window, 2.5 / 4 / 5 s, from the top. Rejected: a Snackbar, per-page hosts and system toasts side by side. Where: 4.3.

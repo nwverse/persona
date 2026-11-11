@@ -1,14 +1,19 @@
 # The hub as a container image (docs/operations/docker.md): personad hub with the web client inside, which is also the node build
 # the app's "Redeploy" sends computers of the image's platform (the others' are built in, or come from the release when
 # the image is built with UPDATE_URL, docs/operations/docker.md "Node builds"). Built for linux/amd64 and linux/arm64
-# (.github/workflows/hub-image.yml); the binaries are cross compiled on the build machine, only the last stage runs on
+# (.github/workflows/release.yml); the binaries are cross compiled on the build machine, only the last stage runs on
 # the target platform.
 #
 #   docker build -t persona-hub .
 #
 # No skills are inside: the assistant's come from ~/.persona/skills on its machine (docs/operations/hub-update.md "Skills out of the binary").
 
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS go-toolchain
+
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web
+# The browser's OPAQUE implementation is built from the same Go sources as the hub.
+COPY --from=go-toolchain /usr/local/go/ /usr/local/go/
+ENV PATH="/usr/local/go/bin:${PATH}"
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 # Packages the project keeps in web/vendor/ (SheetJS publishes its current releases only as a tarball, docs/web/web.md "Spreadsheets").
@@ -20,18 +25,32 @@ RUN if grep -E '"resolved": "' package-lock.json | grep -v '"file:vendor/' | gre
     fi \
  && npm ci --no-audit --no-fund
 COPY web/ ./
+COPY server/go.mod server/go.sum /src/server/
+COPY sdk/go/ /src/sdk/go/
+COPY server/internal/passwordpake/ /src/server/internal/passwordpake/
+COPY server/cmd/password-wasm/ /src/server/cmd/password-wasm/
 # The shared cases a web test imports (src/lib/injected.test.ts reads ../../../spec/fixtures/injected): tsc -b in the
 # build checks the tests too. Only this folder, so other fixtures' changes keep the cache.
 COPY spec/fixtures/injected/ /src/spec/fixtures/injected/
+# Likewise src/lib/attention-fixture.test.ts reads ../../../spec/fixtures/attention.
+COPY spec/fixtures/attention/ /src/spec/fixtures/attention/
+# And src/lib/recent-setups.test.ts reads ../../../spec/fixtures/recents.
+COPY spec/fixtures/recents/ /src/spec/fixtures/recents/
+# Shared JSON imported by the web app's typechecked tests.
+COPY spec/fixtures/entries/ /src/spec/fixtures/entries/
+COPY spec/fixtures/comments/ /src/spec/fixtures/comments/
+COPY spec/fixtures/inbox/ /src/spec/fixtures/inbox/
+COPY spec/fixtures/triage/ /src/spec/fixtures/triage/
+COPY spec/fixtures/sync/ /src/spec/fixtures/sync/
 # The extension schema, which the web app builds in: src/lib/extension-ui-stream.ts imports its *.schema.json (?raw),
 # the admin page's assistant card preview and the showcase glob its examples (import.meta.glob, which comes out empty
 # without them), and tests import example JSON (TS2307 in tsc -b without it).
 COPY schema/extension/ /src/schema/extension/
 # Without prebuild's privacy check: it scans the whole checkout (scripts/, git), which is not in this context. It
-# runs on the checkout before the image is built (.github/workflows/hub-image.yml; locally the hooks and web builds).
-RUN npm run build --ignore-scripts
+# runs on the checkout before the image is built (.github/workflows/release.yml; locally the hooks and web builds).
+RUN npm run pake:build && npm run build --ignore-scripts
 
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+FROM go-toolchain AS build
 # VERSION: what the hub reports and compares with its nodes' (a node of another build gets "Redeploy"). The image's
 # hub never replaces itself (channel docker): it says when a newer image is out (docs/operations/hub-update.md), looking up the
 # tags of IMAGE (the workflow passes ghcr.io/<owner>/<repo>) unless the compose file says which image it runs.
@@ -48,6 +67,8 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=web /src/web/dist/ internal/hub/webdist/
+# Its hashed assets kept gzipped, as the hub sends them (docs/web/web.md "Precompressed assets").
+RUN go run ./internal/webasset/precompress internal/hub/webdist
 # The runtime packages personad carries and keeps its runtimes on (docs/integrations/runtimes.md "Auto-update"): the DSH plugin's and
 # the pi extension's, the Paseo bridge's and the Agent SDK bridge's code.
 COPY integrations/agent-sdk/ /src/integrations/agent-sdk/
@@ -64,21 +85,17 @@ RUN go generate ./internal/runtimepkg
 # itself runs; the PR smoke build passes linux/amd64 only).
 ARG TARGETARCH
 ARG NODE_PLATFORMS="linux/amd64 linux/arm64 darwin/arm64 darwin/amd64"
+# Every program is built with server/build-tags.txt, as the release is: it leaves out the tailscale.com features
+# persona never uses (server/internal/buildtags).
 RUN if [ -n "$UPDATE_URL" ]; then plats="linux/$TARGETARCH"; else plats="$NODE_PLATFORMS"; fi; \
     for t in $plats; do \
-      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath \
+      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" \
         -o /out/nodes/personad-${t%/*}-${t#*/} ./cmd/personad || exit 1; \
     done
-# The built-in plugins' programs (the WeChat bot, docs/extensions/wechat.md), for this image's platform only: the hub runs them next to personad, and starts one only when its `version -v` is
-# personad's (the same -X).
-RUN for p in wechat; do \
-      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath \
-        -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker" -o /out/personad-$p ./cmd/personad-$p || exit 1; \
-    done
 # The hub's and the manager's own programs (docs/server/server.md "Programs"), the same build as personad.
 RUN for p in persona-hub persona-manager; do \
-      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath \
+      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" -o /out/$p ./cmd/$p || exit 1; \
     done
 
@@ -91,8 +108,8 @@ RUN apk add --no-cache ca-certificates tzdata openssh-client su-exec \
 COPY --from=build /out/nodes/ /opt/persona/nodes/
 RUN ln -s /opt/persona/nodes/personad-linux-$TARGETARCH /opt/persona/personad && /opt/persona/personad version
 # Next to the binary personad runs as (the link resolves into nodes/), where the hub looks for it.
-COPY --from=build /out/personad-wechat /out/persona-hub /out/persona-manager /opt/persona/nodes/
-RUN for p in personad-wechat persona-hub persona-manager; do [ "$(/opt/persona/nodes/$p version -v)" = "$(/opt/persona/personad version -v)" ] || exit 1; done
+COPY --from=build /out/persona-hub /out/persona-manager /opt/persona/nodes/
+RUN for p in persona-hub persona-manager; do [ "$(/opt/persona/nodes/$p version -v)" = "$(/opt/persona/personad version -v)" ] || exit 1; done
 COPY deploy/docker/personad.sh /usr/local/bin/personad
 COPY deploy/docker/entrypoint.sh /usr/local/bin/persona-entrypoint
 # Command and artifact aliases share the exact binaries; never create another state store.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRepoMachineTree, buildRepoTree, repoOf, showsWorktreeLevel, type RepoTree } from "./agent-repos";
+import { buildRepoMachineTree, repoOf, showsWorktreeLevel, type RepoTree } from "./agent-repos";
 import type { AgentState, Machine, Session } from "./types";
 
 const machines: Machine[] = [
@@ -53,14 +53,20 @@ describe("从 cwd 推断仓库与工作树", () => {
 const ids = (sessions: Session[]) => sessions.map((s) => s.session_id);
 const names = (tree: RepoTree[]) => tree.map((r) => r.name);
 const worktrees = (r: RepoTree) => r.worktrees.map((w) => `${w.name}${w.main ? "*" : ""}`);
+/** The repositories in machine-a's section, the only one: the tree's agents are all on machine-a. */
+const onMachineA = (all: Session[]) => {
+  const built = buildRepoMachineTree(all, machines);
+  expect(built.map((m) => m.machine.id)).toEqual(["machine-a"]);
+  return built[0]!.repos;
+};
 
 describe("按仓库分组的树", () => {
   it("带 repo_root 的会话（Paseo 的 worktree）归到主仓库下，不再各成一个仓库", () => {
-    const tree = buildRepoTree([
+    const tree = onMachineA([
       session("main", "/code/app", { repo_root: "/code/app" }),
       session("w1", "/home/me/.paseo/worktrees/1a2b3c4d/brave-fox", { repo_root: "/code/app" }),
       session("w2", "/home/me/.paseo/worktrees/1a2b3c4d/calm-bear", { repo_root: "/code/app" }),
-    ], machines);
+    ]);
     expect(names(tree)).toEqual(["app"]);
     expect(tree[0]!.worktrees.map((w) => [w.name, w.main, ids(w.sessions)])).toEqual([
       ["app", true, ["main"]], ["brave-fox", false, ["w1"]], ["calm-bear", false, ["w2"]],
@@ -74,7 +80,7 @@ describe("按仓库分组的树", () => {
       session("wt-a", "/code/app/.worktrees/fix-a"),
       session("wt-a2", "/code/app/.worktrees/fix-a"),
     ];
-    const tree = buildRepoTree(all, machines);
+    const tree = onMachineA(all);
     expect(names(tree)).toEqual(["app"]);
     expect(worktrees(tree[0]!)).toEqual(["app*", "fix-a", "fix-b"]);
     expect(ids(tree[0]!.worktrees[1]!.sessions)).toEqual(["wt-a", "wt-a2"]);
@@ -82,18 +88,18 @@ describe("按仓库分组的树", () => {
   });
 
   it("一个 Agent 都没有的仓库不出现；仓库按名字排序", () => {
-    const tree = buildRepoTree([session("z", "/code/zeta"), session("a", "/code/alpha")], machines);
+    const tree = onMachineA([session("z", "/code/zeta"), session("a", "/code/alpha")]);
     expect(names(tree)).toEqual(["alpha", "zeta"]);
   });
 
   it("离线机器的 Agent 不进树", () => {
-    const tree = buildRepoTree([session("on", "/code/app"), session("off", "/code/app", { machine_id: "machine-off" })], machines);
+    const tree = onMachineA([session("on", "/code/app"), session("off", "/code/app", { machine_id: "machine-off" })]);
     expect(ids(tree[0]!.worktrees[0]!.sessions)).toEqual(["on"]);
   });
 
-  it("不同机器上的同名仓库各算一个，同名时按机器的顺序", () => {
-    const tree = buildRepoTree([session("a", "/code/app"), session("b", "/code/app", { machine_id: "machine-b" })], machines);
-    expect(tree.map((r) => `${r.machineId}/${r.name}`)).toEqual(["machine-b/app", "machine-a/app"]);
+  it("不同机器上的同名仓库各算一个，各在自己电脑的分段里，按机器的顺序", () => {
+    const tree = buildRepoMachineTree([session("a", "/code/app"), session("b", "/code/app", { machine_id: "machine-b" })], machines);
+    expect(tree.map((m) => [m.machine.id, m.repos.map((r) => `${r.machineId}/${r.name}`)])).toEqual([["machine-b", ["machine-b/app"]], ["machine-a", ["machine-a/app"]]]);
   });
 
   it("工作树里的 Agent 排序沿用 byAttention（需要你优先）", () => {
@@ -101,11 +107,11 @@ describe("按仓库分组的树", () => {
       session("idle", "/code/app/.worktrees/wt"),
       session("needs", "/code/app/.worktrees/wt", { state: "needs_you", status: "needs_you" }),
     ];
-    expect(ids(buildRepoTree(all, machines)[0]!.worktrees[0]!.sessions)).toEqual(["needs", "idle"]);
+    expect(ids(onMachineA(all)[0]!.worktrees[0]!.sessions)).toEqual(["needs", "idle"]);
   });
 
   it("助手会话不进树", () => {
-    expect(buildRepoTree([session("assistant", "/code/app", { assistant: true })], machines)).toEqual([]);
+    expect(buildRepoMachineTree([session("assistant", "/code/app", { assistant: true })], machines)).toEqual([]);
   });
 });
 
@@ -305,7 +311,8 @@ describe("Every agent source in Orca worktrees", () => {
     expect(ids(orcaRepo.worktrees[0]!.sessions)).toEqual(["hosted"]);
     const inferred = built.repos.find((r) => r.repo === path)!;
     expect(inferred.count).toBe(3);
-    expect(inferred.worktrees.map((w) => w.path)).toEqual(nested.map((s) => s.cwd));
+    // Three trees of one name: in the order of their keys, whichever session came first.
+    expect(inferred.worktrees.map((w) => w.path)).toEqual(nested.map((s) => s.cwd).sort());
   });
 
   it("matches complete path segments rather than a string prefix", () => {
@@ -484,7 +491,7 @@ describe("Orca child worktrees in By repo", () => {
 
 describe("showsWorktreeLevel", () => {
   it("hides the level for a single main worktree", () => {
-    expect(showsWorktreeLevel(buildRepoTree([session("main", "/code/app")], machines)[0]!)).toBe(false);
+    expect(showsWorktreeLevel(onMachineA([session("main", "/code/app")])[0]!)).toBe(false);
   });
 
   it("hides the level for a single Orca worktree named like its project", () => {
@@ -510,7 +517,145 @@ describe("showsWorktreeLevel", () => {
   });
 
   it("shows the level for a single non-main worktree with another name", () => {
-    expect(showsWorktreeLevel(buildRepoTree([session("wt", "/code/app/.worktrees/feature-a")], machines)[0]!)).toBe(true);
+    expect(showsWorktreeLevel(onMachineA([session("wt", "/code/app/.worktrees/feature-a")])[0]!)).toBe(true);
   });
 });
 
+
+describe("the node's git place (#1805): machine → project → branch → sessions", () => {
+  const mac = (id: string, worktree: string, branch: string, patch: Partial<Session> = {}) =>
+    session(id, worktree, { repo_root: "/home/u/Code/app", worktree, branch, ...patch });
+
+  it("puts linked worktrees under their main repository, labelled by branch, main first", () => {
+    const fix = "/home/u/orca/workspaces/app/fix-login";
+    const tree = onMachineA([
+      mac("fix", fix, "fix/login"),
+      mac("main", "/home/u/Code/app", "main"),
+      mac("sub", fix, "fix/login", { cwd: `${fix}/web` }),
+      session("other", "/home/u/Code/notes", { repo_root: "/home/u/Code/notes", worktree: "/home/u/Code/notes", branch: "trunk" }),
+    ]);
+    expect(names(tree)).toEqual(["app", "notes"]);
+    expect(worktrees(tree[0]!)).toEqual(["main*", "fix/login"]);
+    expect(ids(tree[0]!.worktrees[1]!.sessions).sort()).toEqual(["fix", "sub"]);
+  });
+
+  it("joins Orca-hosted and other agents of one repository into one project", () => {
+    const fix = "/home/u/orca/workspaces/app/fix-login";
+    const tree = onMachineA([
+      mac("orca", fix, "fix/login", { space_kind: "orca", space_id: spaceId("repo-a", fix) }),
+      mac("cli", "/home/u/Code/app", "main"),
+    ]);
+    expect(names(tree)).toEqual(["app"]);
+    expect(worktrees(tree[0]!)).toEqual(["main*", "fix/login"]);
+  });
+
+  it("keeps the branch level under a project with only its main checkout", () => {
+    const tree = onMachineA([mac("main", "/home/u/Code/app", "main")]);
+    expect(showsWorktreeLevel(tree[0]!)).toBe(true);
+    expect(worktrees(tree[0]!)).toEqual(["main*"]);
+  });
+
+  it("lists projects by name inside each machine, in the hub's machine order", () => {
+    const tree = buildRepoMachineTree([
+      session("a", "/code/zeta", { repo_root: "/code/zeta", worktree: "/code/zeta", branch: "main" }),
+      session("b", "/code/alpha", { repo_root: "/code/alpha", worktree: "/code/alpha", branch: "main", machine_id: "machine-b" }),
+      session("c", "/code/beta", { repo_root: "/code/beta", worktree: "/code/beta", branch: "main" }),
+    ], machines);
+    expect(tree.map((m) => [m.machine.id, m.repos.map((r) => r.name)])).toEqual([["machine-b", ["alpha"]], ["machine-a", ["beta", "zeta"]]]);
+  });
+});
+
+describe("a linked worktree named by its host workspace's title (#4497)", () => {
+  const repo = "/home/me/code/app";
+  const fox = "/home/me/.paseo/worktrees/abc123/brave-fox";
+  /** An agent Paseo placed: the node's git place and branch, its workspace's title in slot_name, no slot_id. */
+  const paseo = (id: string, worktree: string, patch: Partial<Session> = {}) =>
+    session(id, worktree, { host: "paseo", repo_root: repo, worktree, branch: "fix/login", slot_name: "Fix the login flow", ...patch });
+  const main = (id: string, patch: Partial<Session> = {}) => session(id, repo, { repo_root: repo, worktree: repo, branch: "main", ...patch });
+  const linked = (all: Session[]) => onMachineA(all)[0]!.worktrees.find((w) => !w.main)!;
+
+  it("names a linked worktree by the title its sessions share and keeps its branch", () => {
+    const tree = onMachineA([main("main"), paseo("a", fox), paseo("b", fox)]);
+    expect(tree[0]!.worktrees.map((w) => [w.name, w.branch, w.main])).toEqual([
+      ["main", "main", true],
+      ["Fix the login flow", "fix/login", false],
+    ]);
+    expect(ids(tree[0]!.worktrees[1]!.sessions).sort()).toEqual(["a", "b"]);
+  });
+
+  it("lets a session of another source, with no slot_name, neither vote nor block", () => {
+    const tree = linked([paseo("a", fox), paseo("b", fox), session("cli", fox, { repo_root: repo, worktree: fox, branch: "fix/login" })]);
+    expect([tree.name, tree.branch, tree.sessions.length]).toEqual(["Fix the login flow", "fix/login", 3]);
+  });
+
+  it("keeps the branch when the tree's sessions name two different workspaces", () => {
+    const tree = linked([paseo("a", fox), paseo("b", fox, { slot_name: "Speed up the importer" })]);
+    expect([tree.name, tree.branch]).toEqual(["fix/login", "fix/login"]);
+  });
+
+  it("keeps the branch for a tab's label: a slot_name beside a slot_id (herdr)", () => {
+    const tree = linked([paseo("tab", fox, { host: "herdr", slot_id: "w1:t2", slot_name: "Fix the login flow" })]);
+    expect([tree.name, tree.branch]).toEqual(["fix/login", "fix/login"]);
+  });
+
+  it("leaves the main checkout's name alone", () => {
+    expect(onMachineA([main("main", { slot_name: "Triage" })])[0]!.worktrees.map((w) => [w.name, w.main])).toEqual([["main", true]]);
+    // An older node sends no git place: the main checkout is named after its repository.
+    expect(onMachineA([session("old", repo, { repo_root: repo, slot_name: "Triage" })])[0]!.worktrees.map((w) => [w.name, w.main]))
+      .toEqual([["app", true]]);
+  });
+
+  it("names a tree without a branch by its title, else by its folder", () => {
+    expect(linked([paseo("a", fox, { branch: undefined })]).name).toBe("Fix the login flow");
+    expect(linked([paseo("a", fox, { branch: undefined, slot_name: undefined })]).name).toBe("brave-fox");
+    expect(linked([paseo("a", fox, { branch: undefined, slot_name: "  " })]).name).toBe("brave-fox");
+    // An older node: the tree is the cwd under the repository the host names (#2840).
+    expect(linked([paseo("a", fox, { branch: undefined, worktree: undefined })]).name).toBe("Fix the login flow");
+  });
+
+  it("keeps a tree's key with and without the title", () => {
+    const titled = linked([paseo("a", fox)]);
+    const plain = linked([paseo("a", fox, { slot_name: undefined })]);
+    expect([titled.name, plain.name]).toEqual(["Fix the login flow", "fix/login"]);
+    expect(titled.key).toBe(plain.key);
+    expect(titled.path).toBe(plain.path);
+  });
+
+  it("sorts the linked trees by the names they show, after the main checkout", () => {
+    const tree = onMachineA([
+      paseo("readme", "/home/me/.paseo/worktrees/abc123/wise-owl", { branch: "docs/readme", slot_name: "Update the README" }),
+      paseo("import", "/home/me/.paseo/worktrees/abc123/calm-otter", { branch: "perf/importer", slot_name: "Speed up the importer" }),
+      paseo("login", fox),
+      main("main"),
+    ]);
+    expect(worktrees(tree[0]!)).toEqual(["main*", "Fix the login flow", "Speed up the importer", "Update the README"]);
+  });
+
+  it("keeps two trees with one title in the same order whichever session comes first", () => {
+    const owl = "/home/me/.paseo/worktrees/abc123/wise-owl";
+    const twins = [paseo("fox", fox), paseo("owl", owl, { branch: "fix/login-2" })];
+    const paths = (all: Session[]) => onMachineA(all)[0]!.worktrees.map((w) => [w.name, w.path]);
+    expect(paths(twins)).toEqual([["Fix the login flow", fox], ["Fix the login flow", owl]]);
+    expect(paths([...twins].reverse())).toEqual(paths(twins));
+  });
+
+  it("leaves an Orca worktree to Orca's naming", () => {
+    const orcaTree = "/home/me/orca/workspaces/app/fix-login";
+    const tree = onMachineA([
+      session("orca", orcaTree, { repo_root: repo, worktree: orcaTree, branch: "fix/login", space_kind: "orca", space_id: spaceId("repo-a", orcaTree), slot_id: "tab1", slot_name: "tab tab1" }),
+      paseo("paseo", orcaTree),
+    ]);
+    expect(tree[0]!.worktrees.map((w) => [w.name, ids(w.sessions).sort()])).toEqual([["fix/login", ["orca", "paseo"]]]);
+  });
+
+  it("still shows the level of a lone linked tree it names", () => {
+    expect(showsWorktreeLevel(onMachineA([paseo("a", fox)])[0]!)).toBe(true);
+    expect(showsWorktreeLevel(onMachineA([paseo("a", fox, { branch: undefined })])[0]!)).toBe(true);
+  });
+
+  it("names the tree the same way through the sidebar's options when the computer has no workspace catalog", () => {
+    const all = [main("main"), paseo("a", fox)];
+    const built = buildRepoMachineTree(all, machines, { workspaces: [], owner: "credential-a", manager: "manager-a", navigationSessions: all });
+    expect(built[0]!.repos[0]!.worktrees.map((w) => w.name)).toEqual(["main", "Fix the login flow"]);
+  });
+});

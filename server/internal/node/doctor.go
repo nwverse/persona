@@ -154,24 +154,62 @@ var generatedGroups = []string{"claude-settings.json", "claude-hooks", "assistan
 
 const agentPluginGroup = "agent-plugin"
 
+// cuaMCPMatcher is the PreToolUse matcher of Cua Driver's MCP tools, under whatever name with "cua" in it the
+// user gave the server (cuaToolOf decides).
+const cuaMCPMatcher = "mcp__.*cua.*__.*"
+
 // hookSettings is the settings with Persona's hooks for a claude whose program is bin, of the node whose directory is
 // dir: the agents' (assistant false) or the assistant's, which add the Feishu gate on Bash (larkgate.go). The hook
 // names dir itself (rootAssign): Claude Code runs it with the claude's environment, which is its pane's (agentenv.go).
 func hookSettings(bin, dir string, assistant bool) map[string]any {
+	return hookSettingsForOS(runtime.GOOS, bin, dir, assistant)
+}
+
+func hookSettingsForOS(goos, bin, dir string, assistant bool) map[string]any {
 	cmd := shellQuote(bin) + " hook"
 	if dir != "" {
 		cmd = rootAssign(dir, shellQuote) + cmd
 	}
-	blocking := func(matcher string) map[string]any {
-		return map[string]any{"matcher": matcher, "hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 86400}}}
+	hook := func(timeout int) map[string]any {
+		h := map[string]any{"type": "command", "command": cmd, "timeout": timeout}
+		if goos == "windows" {
+			// Native hook argv avoids Git Bash consuming the quotes around Windows paths.
+			// Keep the same node and gates, with its data directory passed explicitly.
+			args := []string{"hook"}
+			if dir != "" {
+				args = append(args, nodeclient.HomeFlag, dir)
+			}
+			h["command"], h["args"] = bin, args
+		}
+		return h
 	}
-	notify := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 10}}}
+	blocking := func(matcher string) map[string]any {
+		return map[string]any{"matcher": matcher, "hooks": []any{hook(86400)}}
+	}
+	notify := map[string]any{"hooks": []any{hook(10)}}
+	postQuestion := map[string]any{"matcher": "AskUserQuestion", "hooks": notify["hooks"]}
 	pre := []any{blocking("AskUserQuestion")}
 	if assistant {
 		pre = append(pre, blocking("Bash"))
 	}
+	if goos == "darwin" {
+		// An Agent's own Cua Driver never operates System Settings or a permission prompt (cua_gate.go, #4349): its
+		// MCP tools, and Bash commands running cua-driver. Decided at once, so a short timeout. The assistant's
+		// Bash hook above takes its commands to the gate too; an Agent's goes to the node only when the command
+		// mentions cua-driver (nodeclient.CuaOnlyFlag), so other Bash commands cost a process start and nothing else.
+		quick := func(matcher, command string) map[string]any {
+			h := hook(60)
+			h["command"] = command
+			return map[string]any{"matcher": matcher, "hooks": []any{h}}
+		}
+		pre = append(pre, quick(cuaMCPMatcher, cmd))
+		if !assistant {
+			pre = append(pre, quick("Bash", cmd+" "+nodeclient.CuaOnlyFlag))
+		}
+	}
 	return map[string]any{"hooks": map[string]any{
 		"PreToolUse":        pre,
+		"PostToolUse":       []any{postQuestion},
 		"PermissionRequest": []any{blocking("*")},
 		"Elicitation":       []any{blocking("*")},
 		"Notification":      []any{notify},
@@ -235,7 +273,10 @@ func generatedFiles(bin, dir string) ([]generatedFile, error) {
 	if dir != "" {
 		server["env"] = map[string]string{"PERSONA_HOME": dir}
 	}
-	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.AddMCPAliases(map[string]any{"persona": server})})
+	// This shared file also serves automatic Agent resumes, before any hub handshake.
+	// Keep both namespaces here so historical tool calls remain available. Assistant
+	// starts choose their own per-process registration after capability negotiation.
+	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.MCPRegistrationServers(map[string]any{"persona": server}, true)})
 	if err != nil {
 		return nil, err
 	}
@@ -505,8 +546,8 @@ func configCommands(b []byte) []string {
 }
 
 // shellFirstWord is the program a command line written with shellQuote runs: its first word past the VAR=value ones
-// in front (rootAssign). A word is bare, or single-quoted with each embedded quote closed, backslash-escaped and
-// reopened.
+// in front (rootAssign). A word is bare, or single-quoted with each embedded quote or backslash closed,
+// backslash-escaped and reopened.
 func shellFirstWord(cmd string) string {
 	for rest := strings.TrimSpace(cmd); rest != ""; {
 		var w strings.Builder
@@ -645,7 +686,8 @@ func checkHerdr(ctx context.Context, path string) DoctorCheck {
 func checkAgentSandbox(dir string) DoctorCheck {
 	c := DoctorCheck{Name: "agent-sandbox", Status: DoctorOK, Items: []string{}}
 	on, from := agentSandboxOn(dir)
-	sup := sandbox.AgentSupport(agentSandboxProbe()) // on macOS sandbox-exec runs true once; elsewhere nothing runs
+	support := agentSandboxProbe() // macOS runs sandbox-exec true; Linux runs a real default-allow bwrap probe
+	sup := sandbox.AgentSupport(support)
 	last := readAgentSandboxStatus(dir)
 	wheres := make([]string, 0, len(last))
 	for w := range last {
@@ -682,7 +724,7 @@ func checkAgentSandbox(dir string) DoctorCheck {
 		c.Status, c.Detail = DoctorWarn, "已开启，但工具不可用："+sup.Why
 		c.Hint = "agent 照常启动，不进沙箱"
 	default:
-		c.Detail = "已开启（" + from + "）；" + agentSandboxLimits
+		c.Detail = "已开启（" + from + "）；" + agentSandboxLimits(support.OS)
 		c.Hint = "环境变量 " + agentSandboxEnv + " 只对设置它的进程生效（node 看 launchd 的环境，personad launch 看 pane 的 shell）"
 		for _, w := range wheres {
 			if s := last[w].State; s == sandbox.AgentSkipped || s == sandbox.AgentUnavailable {
@@ -700,8 +742,19 @@ func checkAgentSandbox(dir string) DoctorCheck {
 }
 
 // agentSandboxLimits is what the doctor reminds of while the sandbox is on (docs/server/agent-sandbox.md): what it does not
-// stop, and what stops working in it.
-const agentSandboxLimits = "挡不住 docker；沙箱里 ps、top、sudo 这类 setuid 程序起不来"
+// stop, which agents it does not cover, and platform-specific behavior that needs a restart or stops working.
+func agentSandboxLimits(goos string) string {
+	limits := "挡不住 docker；在 herdr 或 Orca 里不经托管启动器（personad launch）启动的 agent，" +
+		"比如直接用 claude 或 ~/.zshrc 里的启动器，包括 herdr 重启后接着跑的，不在沙箱里"
+	switch goos {
+	case "darwin":
+		return limits + "；沙箱里 ps、top、sudo 这类 setuid 程序起不来"
+	case "linux":
+		return limits + "；node 重启后沙箱内 agent 也要一并重启（node.sock 是启动时快照）"
+	default:
+		return limits
+	}
+}
 
 // agentSandboxWords are the statuses in the doctor's words.
 var agentSandboxWords = map[string]string{

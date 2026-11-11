@@ -83,11 +83,27 @@ internal object Types {
         codeSmall = TextStyle(fontFamily = PersonaFonts.mono, fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
     )
 
-    val Glass = scale(
-        display = PersonaFonts.sora, text = FontFamily.Default, numbers = PersonaFonts.sora,
-        largeTitle = TextStyle(fontFamily = PersonaFonts.sora, fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.SemiBold),
-        number = TextStyle(fontFamily = PersonaFonts.sora, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = TabularFigures),
-        voice = TextStyle(fontFamily = FontFamily.Default, fontSize = 17.sp, lineHeight = 25.sp, fontWeight = FontWeight.Normal),
+    // Native system metrics, not the content-only line-height multipliers in iOS Theme.Level.
+    private fun system(size: androidx.compose.ui.unit.TextUnit, weight: FontWeight = FontWeight.Normal) =
+        TextStyle(fontFamily = FontFamily.Default, fontSize = size, fontWeight = weight)
+
+    // The iPhone's text levels (Theme.Font, from spec/tokens): roles take a level's size and weight, emphasis is semibold.
+    val Glass = PersonaType(
+        largeTitle = system(Tokens.Type.Display.size, Tokens.Type.Display.weight),
+        title = system(Tokens.Type.Title.size, Tokens.Type.Title.weight),
+        headline = system(Tokens.Type.Heading.size, Tokens.Type.Heading.weight),
+        body = system(Tokens.Type.Body.size, Tokens.Type.Body.weight),
+        bodyStrong = system(Tokens.Type.Body.size, FontWeight.SemiBold),
+        callout = system(Tokens.Type.Secondary.size, Tokens.Type.Secondary.weight),
+        caption = system(Tokens.Type.Caption.size, Tokens.Type.Caption.weight),
+        micro = system(Tokens.Type.Label.size, Tokens.Type.Label.weight).copy(fontFeatureSettings = TabularFigures),
+        label = system(Tokens.Type.Heading.size, Tokens.Type.Heading.weight),
+        labelSmall = system(Tokens.Type.Secondary.size, FontWeight.Medium),
+        number = system(Tokens.Type.Display.size, Tokens.Type.Display.weight).copy(fontFeatureSettings = TabularFigures),
+        voice = system(Tokens.Type.Body.size, Tokens.Type.Body.weight),
+        code = system(Tokens.Type.Code.size, Tokens.Type.Code.weight).copy(fontFamily = FontFamily.Monospace),
+        // iOS has one code level; the smaller code takes the label level's size.
+        codeSmall = system(Tokens.Type.Label.size, Tokens.Type.Code.weight).copy(fontFamily = FontFamily.Monospace),
     )
 
     val Brief = scale(

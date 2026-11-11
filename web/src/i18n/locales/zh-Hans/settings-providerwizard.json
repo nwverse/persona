@@ -13,8 +13,8 @@
   "name_placeholder": "比如 {example}",
   "name_hint": "字母、数字、_ 和 -；在模型配置中按这个名字选。",
   "kind": "接入方式",
-  "kind_api_hint": "hub 直接调用这个 API（翻译、分拣这类用途）。",
-  "kind_launcher_hint": "以 Claude Code 运行（主对话、Agents）。",
+  "kind_api_hint": "hub 直接调用这个 API，用于起草回复、分拣、翻译、知识整理这类一次性用途，不会启动 Agent。",
+  "kind_launcher_hint": "在你的电脑上以 {agent} 运行（主对话、Agents）。填了地址和 Key 且没有「直接 API」供应商时，hub 也会直接调用它来起草回复、分拣这类用途，不启动 Agent。",
   "direct_api": "直接 API",
   "api_protocol": "API 协议",
   "protocol_chat": "Chat Completions",
@@ -31,7 +31,8 @@
   "test_model": "测试用的模型",
   "test": "测试连接",
   "discover": "获取模型列表",
-  "test_cost": "测试会发一条很短的请求，可能产生少量费用。",
+  "test_cost": "这里的模型只用来测试，不会保存；默认模型在「选择模型」里设。测试会发一条很短的请求，可能产生少量费用。",
+  "test_cost_current": "这里的模型只用来测试，不会保存；默认模型在「选择模型」里设，现在是 {model}。测试会发一条很短的请求，可能产生少量费用。",
   "discover_failed": "拉不到模型列表：{error}。可以在下一步手动添加模型。",
   "discover_found_other": "找到 {count} 个模型，下一步勾选。",
   "advanced": "高级",
@@ -120,6 +121,7 @@
   "other_provider": "换一家",
   "done_title": "{name} 接好了",
   "done_pick_later": "要让主对话或 Agent 用它，到「模型配置」里选。",
+  "direct_note": "主对话和 Agent 不能用它。信息处理、信息筛选等没有单独选模型的用途，现在可能会改用它；要调整，到「模型配置」里选。",
   "more_options_model": "默认模型",
   "assign_hint_works": "主对话现在用 {machine} 上的 Claude Code，已经能用，所以默认不换。打开就改成用这个 Key（只改还没人设置过的）。",
   "assign_hint_works_here": "主对话现在用电脑上的 Claude Code，已经能用，所以默认不换。打开就改成用这个 Key（只改还没人设置过的）。",
@@ -128,5 +130,6 @@
   "how_install": "怎么装",
   "assign_checking": "正在看主对话现在能不能用…",
   "done_no_claude_kept": "Key 存好了；要用它，还得先在 {machine} 上装 Claude Code。",
-  "done_no_claude_kept_any": "Key 存好了；要用它，还得先在电脑上装 Claude Code。"
+  "done_no_claude_kept_any": "Key 存好了；要用它，还得先在电脑上装 Claude Code。",
+  "step_devices": "电脑"
 }

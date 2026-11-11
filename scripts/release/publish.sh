@@ -2,7 +2,7 @@
 # Publish personad for anyone to install (docs/operations/release.md "Publishing personad"): build the four binaries with the web client
 # inside (no skills in them: those live in each machine's ~/.persona/skills), and the connector persona-link for the
 # same four (the node service, docs/operations/link.md), check them for private values, write the release manifest latest.json
-# (every file's sha256, docs/operations/hub-update.md "Publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
+# (every file's sha256, docs/operations/hub-update.md "Public publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
 # config's publish.site_url. Every hub of the release channel updates itself to it. The worker also runs the push
 # relay (/relay/*): it is deployed with it.
 #
@@ -76,14 +76,31 @@ check_versioned() {
   done < <(node_archives "$dir")
 }
 same_as_served() { curl -fsSL "$PERSONA_PUBLISH_URL/$1" | cmp -s - "$2"; }
-# deploy_site <dir>: deploy that copy of site/ (with dl/ and install.sh in it), the log in <dir>/../deploy.log.
+# relay_ok: the push relay the site runs (/relay/*, docs/operations/push-relay.md) answers its health check with ok and
+# apns both true. Its settings are secrets of the Worker, kept under the Worker's name: deployed under a new name, the
+# site answers 503 "push relay not configured" and no phone gets a push (#1263, docs/operations/site.md).
+relay_ok() {
+  curl -fsS --max-time 10 "$PERSONA_PUBLISH_URL/relay/v1/health" 2>/dev/null | python3 -c '
+import json, sys
+health = json.load(sys.stdin)
+sys.exit(0 if isinstance(health, dict) and health.get("ok") is True and health.get("apns") is True else 1)' 2>/dev/null
+}
+# deploy_site <dir>: deploy that copy of site/ (with dl/ and install.sh in it), the log in <dir>/../deploy.log. A push
+# relay that worked before the deploy must still work after it; a site that runs none gets only a note.
 deploy_site() {
-  local dir="$1" log="$1/../deploy.log"
+  local dir="$1" log="$1/../deploy.log" relay_before=""
+  relay_ok && relay_before=1
   # cf's OAuth token lasts about an hour and wrangler does not renew it; any cf call that finds it stale does (twice a
   # release failed here with "Authentication error" until `cf auth whoami` ran).
   command -v cf >/dev/null && cf auth whoami >/dev/null 2>&1 || true
   wr "$dir" deploy >"$log" 2>&1 \
     || { tail -20 "$log" >&2; echo "deploy failed; see $log (only run cf auth login for authentication errors)" >&2; exit 1; }
+  if [ -z "$relay_before" ]; then
+    echo "note: $PERSONA_PUBLISH_URL/relay/v1/health was not healthy before this deploy either (docs/operations/push-relay.md)" >&2
+    return 0
+  fi
+  settled "the push relay's health check" relay_ok \
+    || { echo "the push relay worked before this deploy and does not now: check the Worker's secrets (docs/operations/site.md)" >&2; exit 1; }
 }
 
 # SITE_ONLY: no new build. The release served now (VERSION, SHA256SUMS, latest.json, SLOT and install.sh) is fetched
@@ -125,7 +142,7 @@ BUILD="$(date -u +%Y%m%d%H%M)"
 VERSION="${VERSION:-$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD}"
 COMMIT="$(git rev-parse HEAD)"
 # A release is the committed code: latest.json says which commit and lists every one it contains, and a hub
-# installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No rollback"). Published with
+# installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No regression"). Published with
 # changes not committed, every hub running it would wait for a person from then on. The binaries say which commit
 # they are (STAMP, "-dirty" only in a NO_DEPLOY build).
 STAMP="$COMMIT"
@@ -147,37 +164,47 @@ NPM_REGISTRY="${PERSONA_NPM_REGISTRY:-https://registry.npmjs.org/}"
 (cd web && { [ -d node_modules ] || npm ci --no-audit --no-fund --registry="$NPM_REGISTRY"; } && npm run build) >/dev/null
 cleanup
 cp -R web/dist/. "$WEBDIST/"
+# The binaries' privacy scan below reads printable strings, which gzip hides: scan the web client as built first. Then
+# keep its hashed assets gzipped, as the hub sends them (docs/web/web.md "Precompressed assets"), and check that it did.
+python3 scripts/release/check_bundle_privacy.py --whole-short "$WEBDIST"
+(cd server && go run ./internal/webasset/precompress internal/hub/webdist)
+[ -n "$(find "$WEBDIST/assets" -type f -name '*.gz' -print -quit)" ] || { echo "no precompressed web assets in $WEBDIST" >&2; exit 1; }
+left="$(find "$WEBDIST/assets" -type f -size +1023c \( -name '*.js' -o -name '*.mjs' -o -name '*.css' -o -name '*.svg' \
+  -o -name '*.json' -o -name '*.txt' -o -name '*.html' -o -name '*.xml' -o -name '*.wasm' \) -print -quit)"
+[ -z "$left" ] || { echo "web asset left uncompressed: $left" >&2; exit 1; }
 
 # Public dependency constants are classified by build-info checksums; verify the actual module cache before building.
 (cd server && go mod verify)
-LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$PERSONA_PUBLISH_URL/dl"
+# Where the binaries look for their updates: the config's publish.update_url, else this site's dl/
+# (scripts/persona_config.py update_url; a GitHub repository's releases/latest/download works as it is). A hub's
+# hub.json update.url replaces it at run time (docs/operations/hub-update.md "Update source").
+UPDATE_URL="${PERSONA_UPDATE_URL:-$PERSONA_PUBLISH_URL/dl}"
+[ "$UPDATE_URL" = "$PERSONA_PUBLISH_URL/dl" ] \
+  || echo "note: these binaries look for updates at $UPDATE_URL (publish.update_url), not at the $PERSONA_PUBLISH_URL/dl this publishes to" >&2
+LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$UPDATE_URL"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 (cd server && go generate ./internal/runtimepkg)
-# -tags public changes no code (no file builds differently with it, TestOneBuild): it marks the binary for
-# check_bundle_privacy.py, which then knows the dependency constants it may skip.
+# The tags are server/build-tags.txt (server/internal/buildtags). No persona file builds differently with any of them
+# (TestOneBuild). The public marker marks the binary for check_bundle_privacy.py, which then knows the dependency
+# constants it may skip. The ts_omit_ tags leave out the tailscale.com features persona never uses.
+TAGS="$(cat server/build-tags.txt)"
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/personad-${t%/*}-${t#*/}" ./cmd/personad)
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-link-${t%/*}-${t#*/}" ./cmd/persona-link)
   # The device's own program (cmd/persona-node): install.sh --node puts it at ~/.persona/bin/persona-node. It is in
   # SHA256SUMS, and in latest.json under nodes (a hub's own update still swaps personad alone; its manager fetches
   # persona-node from dl/<version>/ for a device that runs it, docs/operations/node-update.md "Node packages").
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-node-${t%/*}-${t#*/}" ./cmd/persona-node)
 done
-# The programs released with personad (update.ProgramNames): built the same way, on the same platforms; a hub swaps
-# them with personad. personad-wechat is the WeChat bot (docs/extensions/wechat.md), a plugin of its own. (Telegram's connector is
-# an extension now, released from the extension market: #1704.)
+# The hub and manager programs are released and swapped together with personad (update.ProgramNames).
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  for p in wechat; do
-    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
-      -o "../$OUT/bin/personad-$p-${t%/*}-${t#*/}" "./cmd/personad-$p")
-  done
   # The hub's and the manager's own programs (docs/server/server.md "Programs"): the same code as personad's hub and
   # manager commands, each without the other's.
   for p in persona-hub persona-manager; do
-    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
       -o "../$OUT/bin/$p-${t%/*}-${t#*/}" "./cmd/$p")
   done
 done
@@ -198,7 +225,7 @@ host_link="$OUT/bin/persona-link-${host_bin##*/personad-}"
 host_node="$OUT/bin/persona-node-${host_bin##*/personad-}"
 [ "$("$host_node" version -v)" = "$("$host_bin" version -v)" ] || { echo "persona-node is not the same build as personad" >&2; exit 1; }
 "$host_bin" version -v | grep -qx "channel release, build $BUILD" || { echo "the built personad is not release build $BUILD" >&2; exit 1; }
-for p in personad-wechat persona-hub persona-manager; do
+for p in persona-hub persona-manager; do
   host_p="$OUT/bin/$p-${host_bin##*/personad-}"
   [ "$("$host_p" version -v)" = "$("$host_bin" version -v)" ] || { echo "$p is not the same build as personad" >&2; exit 1; }
 done
@@ -211,13 +238,15 @@ curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/nu
 for bin in "$OUT/bin"/personad-* "$OUT/bin"/persona-link-* "$OUT/bin"/persona-node-* "$OUT/bin"/persona-hub-* "$OUT/bin"/persona-manager-*; do
   gzip -n -9 -c "$bin" > "$bin.gz"
 done
-python3 scripts/persona_identity.py --artifact-aliases "$OUT/bin"
-# Include the device node and compatibility copies in the same verified download index.
+# Only current product names are public downloads; command compatibility stays inside installed services.
 (cd "$OUT/bin" && shasum -a 256 *.gz > SHA256SUMS && printf '%s\n' "$VERSION" > VERSION)
 
 # The manifest hubs update from: version, build number, commit and every download's sha256 (not signed, the user's
 # call: it guards against a broken download over HTTPS, docs/operations/hub-update.md "Security").
 "$host_bin" release manifest --dir "$OUT/bin" --version "$VERSION" --build "$BUILD" --commit "$COMMIT" --out "$OUT/bin/latest.json"
+# The latest.json about to go up, read back against the downloads it lists: sizes and sha256s, this machine's binaries
+# run (version -v), the others' build number. A manifest of another build than its binaries (v0.2.1, #4522) stops here.
+"$host_bin" release verify --dir "$OUT/bin" --manifest "$OUT/bin/latest.json"
 
 # The site with dl/ and install.sh added, deployed from a copy (site/ in the tree stays as committed).
 rm -rf "$OUT/site"

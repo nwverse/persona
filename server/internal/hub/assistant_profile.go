@@ -138,10 +138,12 @@ func (a assistantRemote) SendParams(ctx context.Context, machine, session string
 	return res.Params, nil
 }
 
-// Rename has the assistant rename its conversation session on machine for the user (assistant.rename).
-func (a assistantRemote) Rename(ctx context.Context, machine, session string, params map[string]any) (json.RawMessage, error) {
+// Rename has the assistant rename its conversation session on machine (assistant.rename): for the user, or for
+// extension ext ("" for anyone else), whose title the assistant takes as a hint.
+func (a assistantRemote) Rename(ctx context.Context, machine, session string, params map[string]any, ext string) (json.RawMessage, error) {
 	var out json.RawMessage
-	err := a.call(ctx, assistantwire.MethodRename, assistantwire.RenameParams{MachineID: machine, SessionID: session, Params: params}, &out)
+	err := a.call(ctx, assistantwire.MethodRename, assistantwire.RenameParams{MachineID: machine, SessionID: session, Params: params,
+		Extension: ext}, &out)
 	return out, err
 }
 
@@ -170,6 +172,9 @@ func writeAssistantErr(w http.ResponseWriter, err error) {
 		case assistantwire.CodeBadRequest:
 			writeErr(w, http.StatusBadRequest, errors.New(re.Message))
 			return
+		case assistantwire.CodeMeetingEnded: // a message into a meeting's room that ended: write in its follow-up
+			writeErrCode(w, http.StatusConflict, assistantwire.CodeMeetingEnded, errors.New(re.Message))
+			return
 		case assistantwire.CodeMachineOffline: // as the hub's own call to that machine would answer
 			callErr(w, fmt.Errorf("%s: %w", re.Message, errOffline))
 			return
@@ -182,7 +187,8 @@ func writeAssistantErr(w http.ResponseWriter, err error) {
 }
 
 // renameSession is POST /api/v1/sessions/{mid}/{sid}/rename ({"title", "tab_name"}): the node renames the tab and /
-// or the session; an assistant conversation is the assistant's to rename (assistant.rename).
+// or the session; an assistant conversation is the assistant's to rename (assistant.rename), told when an extension's
+// token asks, whose title is then only a hint.
 func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) {
 	p := map[string]any{}
 	if err := decodeJSONBody(w, r, &p, 1<<20); err != nil && !errors.Is(err, io.EOF) {
@@ -198,7 +204,11 @@ func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	defer cancel()
 	out := json.RawMessage(`{"ok":true}`)
 	if s, _ := m.session(sid); m.isAssistant(s) {
-		res, err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).Rename(ctx, m.cfg.ID, sid, p)
+		ext := ""
+		if pr := principalOf(r.Context()); pr.Role == roleExtension {
+			ext = pr.Extension
+		}
+		res, err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).Rename(ctx, m.cfg.ID, sid, p, ext)
 		if err != nil {
 			writeAssistantErr(w, err)
 			return

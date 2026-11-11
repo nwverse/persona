@@ -9,7 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,6 +17,20 @@ import (
 
 // maxFileBytes caps what the phone can pull in one request: a bigger text file comes in pages (`offset`, `next`).
 const maxFileBytes = 2 << 20
+
+type fileReadHandle interface {
+	io.Reader
+	io.ReaderAt
+	io.Closer
+	Stat() (os.FileInfo, error)
+	Fd() uintptr
+}
+
+type fileReadDependencies struct {
+	size    func(os.FileInfo) int64
+	open    func(string) (fileReadHandle, error)
+	isSysfs func(fileReadHandle) (bool, error)
+}
 
 // FileContent is a file read for the phone's file viewer (paths mentioned in a conversation).
 type FileContent struct {
@@ -59,6 +73,14 @@ func (n *Node) resolvePath(path, cwd string) string {
 // whole up to the cap (they are not paged), or with stream only described: the client fetches them from
 // file/download by Range, however big.
 func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileContent, error) {
+	open := func(path string) (fileReadHandle, error) { return os.Open(path) }
+	isSysfs := fileReadIsSysfs
+	if n.fileReadDeps != nil && n.fileReadDeps.open != nil {
+		open = n.fileReadDeps.open
+	}
+	if n.fileReadDeps != nil && n.fileReadDeps.isSysfs != nil {
+		isSysfs = n.fileReadDeps.isSysfs
+	}
 	asked := strings.TrimSpace(path)
 	if asked == "" {
 		return nil, fmt.Errorf("empty path")
@@ -71,7 +93,11 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
 	}
-	fc := &FileContent{Path: path, Name: filepath.Base(path), Size: st.Size()}
+	size := st.Size()
+	if n.fileReadDeps != nil && n.fileReadDeps.size != nil {
+		size = n.fileReadDeps.size(st)
+	}
+	fc := &FileContent{Path: path, Name: filepath.Base(path), Size: size}
 	if st.IsDir() {
 		fc.IsDir = true
 		ents, err := os.ReadDir(real)
@@ -93,20 +119,54 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 	}
 	// A regular file whose size is 0 can still have content: Linux's /proc and /sys make theirs up as they are read
 	// (#4172). Such a file is read to its end, a page at a time like any other; its size says nothing about the offset.
-	madeUp := st.Size() == 0 && st.Mode().IsRegular()
-	if offset < 0 || (!madeUp && offset > st.Size()) {
-		return nil, fmt.Errorf("offset %d is outside the file (%d bytes)", offset, st.Size())
+	madeUp := size == 0 && st.Mode().IsRegular()
+	if offset < 0 || (!madeUp && offset > size) {
+		return nil, fmt.Errorf("offset %d is outside the file (%d bytes)", offset, size)
 	}
-	f, err := os.Open(real)
+	f, err := open(real)
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !sameFileRead(st, opened) {
+		return nil, errFileChanged
+	}
+	// Validate both the opened object and the checked path. A rename, symlink replacement or truncation between
+	// the path check and the read must not make this page (or its stream revision) describe a different file.
+	validate := func() error {
+		after, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if !sameFileRead(st, after) {
+			return errFileChanged
+		}
+		_, current, err := n.statSafe(path)
+		if err != nil {
+			return explainDenied(path, n.home, err)
+		}
+		if !sameFileRead(st, current) {
+			return errFileChanged
+		}
+		return nil
+	}
 	fc.Offset = offset
 	if stream {
 		fc.Revision = fileRevision(st)
 		if offset == 0 && st.Mode().IsRegular() {
-			if m := fileMime(path, readHead(f)); streamedMime(m) {
+			head := make([]byte, sniffBytes)
+			nr, err := f.ReadAt(head, 0)
+			if err != nil && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			if m := fileMime(path, head[:nr]); streamedMime(m) {
+				if err := validate(); err != nil {
+					return nil, err
+				}
 				fc.Mime, fc.Stream = m, true
 				return fc, nil
 			}
@@ -114,6 +174,7 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 	}
 	var buf []byte
 	var more bool
+	var shortSysfs bool
 	if madeUp {
 		// One byte past the page says whether there is more; a device (size 0, not regular) is never read: /dev/zero
 		// does not end.
@@ -121,17 +182,65 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 		if offset == 0 {
 			r = io.LimitReader(f, maxFileBytes+1) // a plain read from the start, which every such file allows
 		}
-		buf, _ = io.ReadAll(r)
+		buf, err = io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
 		if more = len(buf) > maxFileBytes; more {
 			buf = buf[:maxFileBytes]
 		} else {
 			fc.Size = offset + int64(len(buf)) // as far as it goes: what the viewer shows as its size
 		}
 	} else {
-		buf = make([]byte, min(st.Size()-offset, maxFileBytes))
-		nr, _ := f.ReadAt(buf, offset)
+		buf = make([]byte, min(size-offset, maxFileBytes))
+		want := len(buf)
+		nr, readErr := f.ReadAt(buf, offset)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, readErr
+		}
 		buf = buf[:nr]
-		more = st.Size() > offset+int64(nr)
+		if nr < want {
+			if !errors.Is(readErr, io.EOF) {
+				return nil, io.ErrUnexpectedEOF
+			}
+			if !st.Mode().IsRegular() {
+				return nil, io.ErrUnexpectedEOF
+			}
+			virtual, err := isSysfs(f)
+			if err != nil {
+				return nil, err
+			}
+			if !virtual {
+				if err := validate(); err != nil {
+					return nil, err
+				}
+				return nil, io.ErrUnexpectedEOF
+			}
+			if nr == 0 && offset > 0 {
+				if err := checkFileEnd(f, offset); err != nil {
+					return nil, err
+				}
+			}
+			fc.Size = offset + int64(nr)
+			shortSysfs = true
+		} else {
+			more = size > offset+int64(nr)
+			// A sysfs offset at the reported size may already be beyond the actual end.
+			if len(buf) == 0 && offset > 0 && st.Mode().IsRegular() {
+				virtual, err := isSysfs(f)
+				if err != nil {
+					return nil, err
+				}
+				if virtual {
+					if err := checkFileEnd(f, offset); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+	if err := validate(); err != nil {
+		return nil, err
 	}
 	fc.Mime = fileMime(path, buf[:min(len(buf), sniffBytes)])
 	// Text is valid UTF-8 (a page may cut the last character) with no NUL bytes.
@@ -155,12 +264,34 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 		return nil, fmt.Errorf("binary files are read whole, not from an offset")
 	}
 	if stream {
+		if shortSysfs {
+			// The download endpoint still uses the stat size and revision in its stream descriptor.
+			fc.Size = size
+		}
 		fc.Stream = true
 		return fc, nil
 	}
 	fc.Truncated = more
 	fc.Data = base64.StdEncoding.EncodeToString(buf)
 	return fc, nil
+}
+
+func sameFileRead(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Mode() == b.Mode() && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
+// A zero-byte read does not distinguish the end from an offset past it. Check the preceding byte, without reading
+// the whole file or assuming that the reported size is the true size.
+func checkFileEnd(f fileReadHandle, offset int64) error {
+	var last [1]byte
+	n, err := f.ReadAt(last[:], offset-1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("offset %d is outside the file", offset)
+	}
+	return nil
 }
 
 // maxStatPaths bounds one fs.stat: a page of conversation mentions a few dozen paths at most.
@@ -251,10 +382,12 @@ func explainDenied(path, home string, err error) error {
 		return err
 	}
 	exe, _ := os.Executable()
-	return explainDeniedFor(path, home, launchedVia(os.Getenv), exe, err)
+	via := launchedVia(os.Getenv)
+	return explainDeniedFor(path, home, via, fullDiskAccessProgram(via, home, os.Getenv("XPC_SERVICE_NAME"), exe), err)
 }
 
-// explainDeniedFor is explainDenied for a node started via ("ssh", "launchd" or "") from the program exe.
+// explainDeniedFor is explainDenied for a node started via ("ssh", "launchd" or ""), exe the program macOS holds it
+// to under launchd (fullDiskAccessProgram).
 func explainDeniedFor(path, home, via, exe string, err error) error {
 	if !errors.Is(err, fs.ErrPermission) {
 		return err
@@ -267,11 +400,11 @@ func explainDeniedFor(path, home, via, exe string, err error) error {
 	switch via {
 	case "ssh": // TCC holds what ssh starts to account against sshd-keygen-wrapper, not to personad
 		how = "打开 sshd-keygen-wrapper（Persona 经 ssh 在这台 Mac 上运行）"
-	case "launchd": // a LaunchAgent's program answers for itself
+	case "launchd": // a LaunchAgent's program answers for itself and what it starts (fullDiskAccessProgram)
 		if exe == "" {
 			exe = "personad"
 		}
-		how = "点「+」加上 " + exe + " 并打开它（Persona 的常驻 node 由 launchd 启动；它更新后又读不了的话，把开关关了再打开）"
+		how = "点「+」加上 " + exe + " 并打开它（Persona 的 node 由 launchd 服务启动，macOS 按这个服务运行的程序给权限；它更新后又读不了的话，把开关关了再打开）"
 	default:
 		how = "打开运行 Persona node 的终端或 App"
 	}
@@ -335,7 +468,8 @@ func (n *Node) expandPath(path, cwd string) string {
 	return filepath.Clean(path)
 }
 
-// listDir lists a directory for the file tree: directories first, then files, each by name (case-insensitive).
+// listDir lists a directory for the file tree in treeOrder. A folder over maxDirEntries keeps the first maxDirEntries in
+// that order, so the order is decided on every entry before the cap; only the kept ones pay for a stat (e.Info).
 func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 	path, real, err := n.resolveDir(path, cwd)
 	if err != nil {
@@ -345,28 +479,51 @@ func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
 	}
-	list := make([]DirEntry, 0, min(len(ents), maxDirEntries))
-	for _, e := range ents {
-		if len(list) >= maxDirEntries {
-			break
+	all := n.treeOrder(real, ents)
+	list := make([]DirEntry, min(len(all), maxDirEntries))
+	for i := range list {
+		list[i] = all[i].DirEntry
+		if info, err := all[i].e.Info(); err == nil {
+			list[i].Size, list[i].ModTime = info.Size(), info.ModTime()
 		}
+	}
+	markIgnored(real, list)
+	return map[string]any{"path": path, "entries": list, "truncated": len(ents) > maxDirEntries}, nil
+}
+
+// treeEntry is a folder entry as the file tree shows it, before its size and time are read.
+type treeEntry struct {
+	DirEntry
+	key string // lowercased name, computed once rather than in every comparison
+	e   os.DirEntry
+}
+
+// treeOrder sorts the entries of the folder real the way the file tree shows them: directories first, then files, each
+// by name (case-insensitive, byte order breaking ties). Links are followed (statSafe) so linked directories sort and
+// open like directories (not into iCloud Drive); nothing else is stat'ed. listDir and dirSignature both cap this order,
+// so the folder watch looks at the entries the tree shows.
+func (n *Node) treeOrder(real string, ents []os.DirEntry) []treeEntry {
+	all := make([]treeEntry, len(ents))
+	for i, e := range ents {
 		d := DirEntry{Name: e.Name(), Dir: e.IsDir(), Symlink: e.Type()&os.ModeSymlink != 0}
-		if info, err := e.Info(); err == nil {
-			d.Size, d.ModTime = info.Size(), info.ModTime()
-		}
-		if d.Symlink { // follow links so linked directories open like directories (not into iCloud Drive)
+		if d.Symlink {
 			if _, st, err := n.statSafe(filepath.Join(real, d.Name)); err == nil {
 				d.Dir = st.IsDir()
 			}
 		}
-		list = append(list, d)
+		all[i] = treeEntry{DirEntry: d, key: strings.ToLower(d.Name), e: e}
 	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].Dir != list[j].Dir {
-			return list[i].Dir
+	slices.SortFunc(all, func(a, b treeEntry) int {
+		if a.Dir != b.Dir {
+			if a.Dir {
+				return -1
+			}
+			return 1
 		}
-		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+		if c := strings.Compare(a.key, b.key); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
 	})
-	markIgnored(real, list)
-	return map[string]any{"path": path, "entries": list, "truncated": len(ents) > maxDirEntries}, nil
+	return all
 }

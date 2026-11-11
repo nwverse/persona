@@ -44,11 +44,28 @@ const done = item("lark:f6:1", { done_at: at(30), done_by: "user" });
 const doneLater = item("lark:f7:1", { done_at: at(2), done_by: "replied", tier: "noise" });
 
 describe("一件事", () => {
-  it("还没分拣的算需要你，角标只数未处理的需要你", () => {
+  it("还没分拣的算需要你，角标只数未读未处理", () => {
     expect(triage(item("x", { tier: "" }))).toBe("action");
     expect(triage(item("x", { tier: undefined }))).toBe("action");
     expect(triage(group)).toBe("fyi");
     expect(badgeCount([dm, mention, doc, mail, group, done, doneLater, bot])).toBe(4);
+  });
+
+  it("counts only unread Needs you items without filing other sections", () => {
+    let items = [item("unread"), item("read-pending", { read: true }),
+      item("read-done", { read: true, done_at: at(1) }), item("unread-done", { done_at: at(1) }),
+      item("fyi", { tier: "fyi" }), item("working", { status: "working" }), item("noise", { tier: "noise" })];
+    expect(badgeCount(items)).toBe(1);
+    expect(ids(sections(items, all).tiers.action).sort()).toEqual(["read-pending", "unread"]);
+    items = items.map((it) => ({ ...it, read: true }));
+    expect(badgeCount(items)).toBe(0);
+    const restored = JSON.parse(JSON.stringify(items)) as InboxItem[];
+    expect(badgeCount(restored)).toBe(0);
+    expect(sections(restored, all).tiers.action).toHaveLength(2);
+    expect(restored.find((it) => it.id === "read-pending")?.done_at).toBeUndefined();
+    expect(badgeCount([item("promoted", { tier: "fyi", status: "action" })])).toBe(1);
+    expect(badgeCount([item("demoted", { status: "fyi" })])).toBe(0);
+    expect(badgeCount([item("legacy", { tier: undefined, status: undefined })])).toBe(1);
   });
 
   it("类型标签：@我 红色，@所有人、评论、公司圈、机器人", () => {
@@ -94,11 +111,13 @@ describe("筛选和分段", () => {
     expect(sections(items, { ...all, source: "acc2" }).tiers.action).toEqual([]);
   });
 
-  it("@我 含文档和 @我 的公司圈，群聊含机器人，Agent 不含任何一件", () => {
+  it("@我 含文档和 @我 的公司圈，群聊不含机器人（机器人单独一类），Agent 不含任何一件", () => {
     const m = sections(items, { ...all, kind: "mention" });
     expect([...ids(m.tiers.action), ...ids(m.tiers.fyi)].sort()).toEqual([atAll.id, comment.id, doc.id, mention.id, moment.id].sort());
     const g = sections(items, { ...all, kind: "group" });
-    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)].sort()).toEqual([bot.id, group.id].sort());
+    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)]).toEqual([group.id]);
+    const b = sections(items, { ...all, kind: "bot" });
+    expect([...ids(b.tiers.fyi), ...ids(b.tiers.noise)]).toEqual([bot.id]);
     const a = sections(items, { ...all, kind: "agent" });
     expect([...a.tiers.action, ...a.tiers.fyi, ...a.tiers.noise, ...a.done]).toEqual([]);
   });
@@ -247,7 +266,7 @@ describe("小工具", () => {
     expect(withToken("/api/v1/lark/media/k?size=48", "jd_x")).toBe("/api/v1/lark/media/k?size=48&token=jd_x");
     expect(withToken("https://example.com/a.png", "jd_x")).toBe("https://example.com/a.png");
     expect(withToken(undefined, "jd_x")).toBeUndefined();
-    // under a reverse proxy's sub-path (docs/web/web.md "Sub-path")
+    // under a reverse proxy's sub-path (docs/web/web.md "Subpaths")
     expect(withToken("/api/v1/lark/media/k", "jd_x", "/persona")).toBe("/persona/api/v1/lark/media/k?token=jd_x");
     expect(withToken("https://example.com/a.png", "jd_x", "/persona")).toBe("https://example.com/a.png");
   });
@@ -344,6 +363,41 @@ describe("列表状态", () => {
     fetcher.mockResolvedValueOnce(ok({ items: [dm] }));
     await reloadInbox();
     expect(getInbox().triage).toBeNull();
+  });
+
+  it("a 304 keeps the list it validates, the marks laid over it again", async () => {
+    const tagged = (body: unknown, etag: string) => ({ ok: true, status: 200, headers: new Headers({ ETag: etag }), text: async () => JSON.stringify(body) });
+    const notModified = { ok: false, status: 304, headers: new Headers(), text: async () => "" };
+    const ready: InboxTriage = { state: "ok", waiting: 0 };
+    const sent = (i: number) => new Headers(fetcher.mock.calls[i][1].headers).get("If-None-Match");
+    expect(sent(0)).toBe('W/"i1-"'); // no validator yet: one no list has
+    fetcher.mockResolvedValueOnce(tagged({ items: [dm, mail], triage: ready }, 'W/"i1-aa"'));
+    await reloadInbox();
+    expect(sent(1)).toBe('W/"i1-"');
+    let finish: (v: unknown) => void = () => {};
+    fetcher.mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const marked = setDone(dm, true);
+    fetcher.mockResolvedValueOnce(notModified);
+    await reloadInbox();
+    expect(sent(3)).toBe('W/"i1-aa"');
+    expect(ids(getInbox().items)).toEqual([dm.id, mail.id]);
+    expect(getInbox().items[0].done_by).toBe("user"); // the mark still out, over the kept list
+    expect(getInbox().triage).toEqual(ready);
+    expect(getInbox().error).toBe("");
+    finish(ok({ ...dm, done_at: at(0), done_by: "user" }));
+    expect(await marked).toBe(true);
+    // The list changed: a full answer with a new validator replaces the kept one; one without forgets it.
+    fetcher.mockResolvedValueOnce(tagged({ items: [mail], triage: ready }, 'W/"i1-bb"'));
+    await reloadInbox();
+    expect(sent(4)).toBe('W/"i1-aa"');
+    expect(ids(getInbox().items)).toEqual([mail.id]);
+    fetcher.mockResolvedValueOnce(ok({ items: [dm] }));
+    await reloadInbox();
+    expect(sent(5)).toBe('W/"i1-bb"');
+    fetcher.mockResolvedValueOnce(ok({ items: [dm] }));
+    await reloadInbox();
+    expect(sent(6)).toBe('W/"i1-"');
+    expect(ids(getInbox().items)).toEqual([dm.id]);
   });
 
   it("拉列表；请求进行中再要一次会在之后补一次", async () => {
@@ -464,6 +518,29 @@ describe("列表状态", () => {
     fetcher.mockResolvedValueOnce(ok({ items: [dm, doc, mail] }));
     await reloadInbox();
     expect(byId(dm.id).done_at).toBeUndefined();
+  });
+
+  // #2201 (reported on iOS): A then B marked done; A's answer comes after B's mark, and the reload A's push brings has
+  // the list from before the hub had B. B must stay done until its own answer, not come back for a moment.
+  it("two done in a row: the reload after the first answer, listed before the second, keeps the second done", async () => {
+    const finishA = held();
+    const a = setDone(dm, true);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    const finishB = held();
+    const b = setDone(doc, true);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    finishA(ok({ ...dm, done_at: at(0), done_by: "user" }));
+    expect(await a).toBe(true);
+    // the push for A: the hub lists A done and B still open
+    fetcher.mockResolvedValueOnce(ok({ items: [{ ...dm, done_at: at(0), done_by: "user" }, doc, mail] }));
+    await reloadInbox();
+    expect(byId(dm.id).done_at).toBeTruthy();
+    expect(byId(doc.id).done_at, "B came back while its request was out").toBeTruthy();
+    finishB(ok({ ...doc, done_at: at(0), done_by: "user" }));
+    expect(await b).toBe(true);
+    fetcher.mockResolvedValueOnce(ok({ items: [{ ...dm, done_at: at(0), done_by: "user" }, { ...doc, done_at: at(0), done_by: "user" }, mail] }));
+    await reloadInbox();
+    expect([dm, doc, mail].map((x) => Boolean(byId(x.id).done_at))).toEqual([true, true, false]);
   });
 
   it("a failed done is not laid over a reload that left before it", async () => {

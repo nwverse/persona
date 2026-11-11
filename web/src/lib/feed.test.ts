@@ -7,6 +7,7 @@ import {
   displayLines,
   draftPlaceholder,
   field,
+  loadedFrom,
   getFeedState,
   loadFeed,
   mergeInto,
@@ -47,6 +48,23 @@ const noon = (n: number, m = 0) => {
 };
 
 describe("the assistant's feed among the chat's lines (docs/assistant/unified-entry.md)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("retains task-card upserts across partial and empty HTTP pages", async () => {
+    const at = "2026-11-10T08:00:00Z";
+    const conversation = "c-card-upserts";
+    const card = { id: "plan:metadata:0", plan_id: "metadata", index: 0, at, updated_at: at, state: "not_started" };
+    const pages = [
+      { items: [], task_cards: [card] },
+      { items: [], task_cards: [{ ...card, todo_id: "metadata-todo", state: "working", updated_at: "2026-11-10T08:02:00Z" }] },
+      { items: [], task_cards: [] },
+      { items: [], task_cards: null },
+      { items: [] },
+    ];
+    vi.stubGlobal("localStorage", { getItem: () => "jd_test" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(pages.shift()), { headers: { "Content-Type": "application/json" } })));
+    for (let i = 0; i < 5; i++) await loadFeed(conversation);
+    expect(getFeedState().taskCards[conversation]).toEqual([{ ...card, todo_id: "metadata-todo", state: "working", updated_at: "2026-11-10T08:02:00Z" }]);
+  });
   it("keeps one copy of each item, oldest first", () => {
     const a = feed("a", 5), b = feed("b", 10);
     expect(mergeInto([a], [b, a]).map((i) => i.id)).toEqual(["b", "a"]);
@@ -59,6 +77,24 @@ describe("the assistant's feed among the chat's lines (docs/assistant/unified-en
     const ids = out.map((l) => l.id);
     expect(ids.filter((i) => i.startsWith("day-"))).toHaveLength(2);
     expect(ids.filter((i) => !i.startsWith("day-"))).toEqual(["s1", "feed-early", "s2", "feed-mid"]);
+  });
+
+  it("holds back feed items older than the loaded page until that page loads, so the newest page never reads as the start", () => {
+    // The main conversation shows its newest page; the feed holds the whole history. Days-old cards and their day lines
+    // used to stack on top of that page, as if the conversation began there with its messages gone.
+    const lines = [seg("s1", noon(1, 10)), seg("s2", noon(1, 30))];
+    const all = [feed("days-ago", noon(3)), feed("before-page", noon(1)), feed("in-page", noon(1, 20))];
+    const partial = displayLines(lines, all, Date.parse(ago(noon(1, 10))));
+    expect(partial.filter((l) => l.kind !== "day").map((l) => l.id)).toEqual(["s1", "feed-in-page", "s2"]);
+    expect(partial.filter((l) => l.kind === "day")).toHaveLength(1);
+    const complete = displayLines(lines, all);
+    expect(complete.filter((l) => l.kind !== "day").map((l) => l.id)).toEqual(["feed-days-ago", "feed-before-page", "s1", "feed-in-page", "s2"]);
+  });
+
+  it("dates the loaded page by its oldest item that has a time", () => {
+    const item = (seq: number, ts?: string) => ({ id: `i${seq}#0`, seq, role: "assistant", kind: "text", ts }) as Item;
+    expect(loadedFrom([item(1), item(2, "2026-11-11T07:58:14Z"), item(3, "2026-11-11T08:00:00Z")])).toBe(Date.parse("2026-11-11T07:58:14Z"));
+    expect(loadedFrom([item(1)])).toBeUndefined();
   });
 
   it("draws a reminder or an event the phone added after its exchange, not a read or a failure", () => {

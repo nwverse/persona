@@ -1,4 +1,5 @@
 {
+  "start_work_session": "作業セッションを作成",
   "suggestion_meetings": "今日の会議は？準備を手伝って",
   "suggestion_agents": "各コンピューターのエージェントが何をしているか見て",
   "suggestion_lark": "Lark で返信が必要なメッセージをまとめて",
@@ -12,5 +13,6 @@
   "empty_body_setup": "あと一歩で始められます。足りないものを下に示します。",
   "needs_calendar": "スマホのカレンダーを使います",
   "load_failed": "メインチャットを読み込めませんでした：{error}",
-  "retry": "再試行"
+  "retry": "再試行",
+  "still_starting": "{launcher} を起動しています…"
 }

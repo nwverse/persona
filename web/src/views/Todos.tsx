@@ -1,16 +1,19 @@
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
 import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
+import { defaultLabel, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { navigate } from "../lib/router";
+import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { composing } from "../lib/send-history";
 import { useAgentSessions } from "../lib/sessions";
-import { dropTodo, refresh, refreshTodos, useStore } from "../lib/store";
+import { useScoped } from "../lib/current-assistant";
+import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/store";
 import {
   addTodoDecision,
   createTodo,
@@ -24,6 +27,7 @@ import {
   isLegacySpacesRouteError,
   makeSessionLookup,
   mostUrgentAgent,
+  orphanedLine,
   sortTodos,
   TODO_STATUS_INFO,
   heldDelivery,
@@ -33,6 +37,7 @@ import {
   todoDueDay,
   todoDueText,
   todoStatusLabel,
+  shownStatus,
   todoStatus,
   unlinkAgentFromTodo,
   unlinkSpaceFromTodo,
@@ -47,48 +52,139 @@ import {
 } from "../lib/todos";
 import type { AgentState, Interaction, Launcher, Machine } from "../lib/types";
 import { Button, cx, Dialog, IconButton, Loading, Menu, toast, useMenu } from "../ui/atoms";
+import { contextMenuProps } from "../ui/context-menu";
+import type { MenuAt } from "../ui/menu-model";
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
+import { useRestoredTodos } from "../lib/todo-restore";
+import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
+import { resultExtras } from "../lib/brief";
+import { prLink } from "./TodoStageBar";
+import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
+import { stateName } from "../lib/state-labels";
 import { answeredLookup } from "./assistant/answered-lookup";
-import { Empty } from "./assistant/parts";
-import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
+import { Empty, Segmented } from "./assistant/parts";
+import { OfflineState, useShownOffline } from "./ManagerParts";
+import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
+import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
+import type { Route } from "../lib/router";
+import { LatestReport, ReviewBadge } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
+import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
+import { TaskCompletionCheck } from "./TaskCompletionCheck";
 import { useTodoField } from "./use-todo-field";
 import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
+import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
+
+/** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
+const VIEW_KEY = "persona.todos.view";
+const MODE_KEY = "persona.todos.calendar.mode";
+const DONE_KEY = "persona.todos.calendar.showDone";
+/** The list by status sections (default, #3156) or by folder (#2526). */
+const GROUPING_KEY = "persona.todos.grouping";
+
+function pref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function setPref(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // private mode, storage full: the choice lasts the page
+  }
+}
+
+/** The calendar's address: its mode, the day it shows, the to-do open beside it. */
+function calendarRoute(mode: CalendarMode, day: number, id?: string): Route {
+  return { name: "todos", view: "calendar", mode, date: dayKey(day), ...(id ? { id } : {}) };
+}
 
 export function TodosView({
   selectedId,
+  view,
+  mode: routeMode,
+  date,
   onToggleSidebar,
 }: {
   selectedId?: string;
+  /** The calendar (#2029) rather than the list; its mode and day, from the address. */
+  view?: "calendar";
+  mode?: CalendarMode;
+  date?: string;
   onToggleSidebar?: () => void;
 }) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  const todos = useStore((s) => s.todos);
+  // with several assistants, the current one's to-dos (docs/assistant/managers.md "Clients"); a link to another assistant's
+  // to-do still opens it, without switching
+  const everyTodo = useStore((s) => s.todos);
+  const ownTodos = useScoped(everyTodo);
+  const todos = useMemo(() => {
+    const linked = selectedId && !ownTodos.some((x) => x.id === selectedId) ? everyTodo.filter((x) => x.id === selectedId) : [];
+    return linked.length ? [...ownTodos, ...linked] : ownTodos;
+  }, [everyTodo, ownTodos, selectedId]);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosError = useStore((s) => s.todosError);
+  // the current assistant offline (several assistants): the hub's merged list leaves it out, so none here means it
+  // couldn't answer; the page says so instead of the empty one
+  const offline = useShownOffline();
   const machines = useStore((s) => s.machines);
   const interactions = useStore((s) => s.interactions);
   const allSessions = useAgentSessions();
   const answered = useStore((s) => s.answered);
   // a card answered here stops its agent's "Needs you" at once, not at the hub's next push (#4186)
-  const lookup = useMemo(() => answeredLookup(allSessions, interactions, answered), [allSessions, interactions, answered]);
+  const taskRows = useStore((s) => s.taskRows);
+  const lookup = useMemo(() => answeredLookup(withTaskRows(makeSessionLookup(allSessions), taskRows), interactions, answered), [allSessions, taskRows, interactions, answered]);
 
   const [activeId, setActiveId] = useState<string | undefined>(selectedId);
   const [search, setSearch] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  // Which to-do the hand-over and delete dialogs are for: a row's whose menu chose them (#4429), or for hand-over
+  // none, the open one, which it follows. Each stays set after its dialog closes, so the dialog leaves with the to-do
+  // it showed.
+  const [handoverId, setHandoverId] = useState<string>();
+  const [deleteId, setDeleteId] = useState<string>();
+  // A row's menu (#4429), where it opens and whether the row's checkbox showed the to-do open; the day picker it opens
+  const [rowMenu, setRowMenu] = useState<{ id: string; at: MenuAt; open: boolean } | null>(null);
+  const [dueFor, setDueFor] = useState<string>();
   const [deleting, setDeleting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [showReleased, setShowReleased] = useState(false);
+  // The calendar (#2029): the address says which mode and day; a click on its empty axis opens New To-Do due there.
+  const calendarOn = view === "calendar";
+  const storedMode = pref(MODE_KEY);
+  const calendarMode: CalendarMode = routeMode ?? (isCalendarMode(storedMode) ? storedMode : "week");
+  const anchor = parseDayKey(date) ?? startOfDay(Date.now());
+  const [calendarDone, setCalendarDone] = useState(() => pref(DONE_KEY) !== "0");
+  const [newSlot, setNewSlot] = useState<CalendarSlot | undefined>();
+  // /todos with no view: the one this browser was last on
+  useEffect(() => {
+    if (!view && !selectedId && pref(VIEW_KEY) === "calendar") navigate(calendarRoute(calendarMode, startOfDay(Date.now())), true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selectedId]);
+  // on the calendar a new to-do is due on the day shown
+  const openNew = () => {
+    setNewSlot(calendarOn ? { day: anchor } : undefined);
+    setNewOpen(true);
+  };
+  const showView = (next: "list" | "calendar") => {
+    setPref(VIEW_KEY, next);
+    navigate(next === "calendar" ? calendarRoute(calendarMode, startOfDay(Date.now()), selectedId) : { name: "todos", ...(selectedId ? { id: selectedId } : {}) });
+  };
 
   // Sync selectedId from URL
   useEffect(() => {
@@ -123,12 +219,37 @@ export function TodosView({
 
   const filteredUncompleted = useMemo(() => steadyUncompleted.filter(filterTodo), [steadyUncompleted, search]);
   const filteredCompleted = useMemo(() => steadyCompleted.filter(filterTodo), [steadyCompleted, search]);
-  // open todos under the project their agents work in (#2526)
-  const projectGroups = useSteady(useMemo(() => groupTodosByProject(filteredUncompleted, lookup), [filteredUncompleted, lookup]), steadyGroups);
+  // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
+  const kbProjects = useTodoProjects();
+  const projectName = useMemo(() => projectNames(kbProjects), [kbProjects]);
+  const projectGroups = useSteady(
+    useMemo(() => groupTodosByProject(filteredUncompleted, lookup, Date.now(), projectName), [filteredUncompleted, lookup, projectName]),
+    steadyGroups,
+  );
   // each section gets only its own rows' views, so one row's change re-renders that row's section alone
   const sectionViews = useSteady(
     useMemo((): ReadonlyMap<string, TodoRowView[]> => new Map(projectGroups.map((g) => [g.key, g.todos.map((td) => views.get(td.id)!)])), [projectGroups, views]),
     steadyLists,
+  );
+
+  // The list by status sections (#3156, docs/assistant/todo-status-sop.md), or by folder as before
+  const [grouping, setGrouping] = useState<"status" | "folder">(() => (pref(GROUPING_KEY) === "folder" ? "folder" : "status"));
+  const byStatus = grouping === "status";
+  const [restored, restoreTodo] = useRestoredTodos();
+  // a minute's tick moves to-dos across the 24 h and 48 h lines while nothing else changes
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const triaged = useMemo(() => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored), [todos, lookup, restored, search, tick]);
+  const triageAll = useMemo(() => (search.trim() ? triageTodos(todos, lookup, Date.now(), restored) : triaged), [todos, lookup, restored, search, triaged, tick]);
+  const onRestore = useCallback(
+    (id: string) => {
+      restoreTodo(id);
+      toast(t("todos.restored"), "ok");
+    },
+    [restoreTodo],
   );
 
   // Active selected todo
@@ -137,8 +258,17 @@ export function TodosView({
       const found = todos.find((t) => t.id === activeId);
       if (found) return found;
     }
+    if (byStatus) {
+      // the first row of an open section; none rather than one that would unfold a folded section
+      for (const sec of TRIAGE_SECTIONS) if (!FOLDED_SECTIONS.has(sec) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
+      // nothing in the open sections: Other open starts unfolded (TodoTriageSection), its first row; never a shelved or done one
+      return triaged.sections.other[0]?.lead;
+    }
     return filteredUncompleted[0] ?? filteredCompleted[0];
-  }, [activeId, todos, filteredUncompleted, filteredCompleted]);
+  }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, triaged]);
+
+  // The to-do open beside the calendar: the address's, while it is there.
+  const selectedTodo = calendarOn && selectedId ? todos.find((td) => td.id === selectedId) : undefined;
 
   // Active agents of current selected todo
   const activeAgents = useMemo(() => {
@@ -172,16 +302,63 @@ export function TodosView({
     } else navigate("/todos", true);
   };
 
-  const toggleDone = useCallback(async (todo: Todo) => {
+  // `open`: the row's checkbox shows it open (`checksAsOpen`): a failed start waiting on the owner is ticked to close it
+  const toggleDone = useCallback(async (todo: Todo, open = !todo.done_at) => {
     try {
-      await updateTodo(todo.id, { done: !todo.done_at });
+      await updateTodo(todo.id, { done: open });
       await refreshTodos();
       await refresh();
-      toast(todo.done_at ? t("todos.reopened") : t("todos.completed"), "ok");
+      toast(open ? t("todos.completed") : t("todos.reopened"), "ok");
     } catch (e) {
       toast(t("todos.action_failed", { error: errorText(e) }), "error");
     }
   }, []);
+
+  // a to-do dragged to another time or day on the calendar (#2045): saved at once, said when it fails (it goes back)
+  const moveTodo = useCallback(async (id: string, patch: TodoPatch) => {
+    try {
+      await updateTodo(id, patch);
+      await refreshTodos();
+    } catch (e) {
+      toast(t("todos.calendar_move_failed", { error: errorText(e) }), "error");
+    }
+  }, []);
+
+  // a priority, due date or reminder chosen in a row's menu: saved at once, as the to-do's page saves its fields; false
+  // when it failed (said in a toast)
+  const savePlan = async (id: string, patch: TodoPatch): Promise<boolean> => {
+    try {
+      await updateTodo(id, patch);
+      await refreshTodos();
+      return true;
+    } catch (e) {
+      toast(t("todos.save_plan_failed", { error: errorText(e) }), "error");
+      return false;
+    }
+  };
+  // `id`: a row's to-do; none: the open one, as the page's Hand to agent
+  const openHandover = (id?: string) => {
+    setHandoverId(id);
+    setHandoverOpen(true);
+  };
+  const askDelete = (id: string) => {
+    setDeleteId(id);
+    setDeleteConfirm(true);
+  };
+  // stable, so the memoized rows keep the same props
+  const openRowMenu = useCallback((todo: Todo, at: MenuAt, open: boolean) => setRowMenu({ id: todo.id, at, open }), []);
+  const menuTodo = rowMenu ? todos.find((x) => x.id === rowMenu.id) : undefined;
+  const handoverTodo = handoverId ? todos.find((x) => x.id === handoverId) : activeTodo;
+  const deleteTodoShown = todos.find((x) => x.id === deleteId);
+  const dueTodo = todos.find((x) => x.id === dueFor);
+  // the to-do went (deleted elsewhere, another assistant): its menu and the dialogs opened for it go with it, and do
+  // not come back with it
+  useEffect(() => {
+    if (rowMenu && !menuTodo) setRowMenu(null);
+    if (handoverId && !handoverTodo) setHandoverOpen(false);
+    if (deleteId && !deleteTodoShown) setDeleteConfirm(false);
+    if (dueFor && !dueTodo) setDueFor(undefined);
+  }, [rowMenu, menuTodo, handoverId, handoverTodo, deleteId, deleteTodoShown, dueFor, dueTodo]);
 
   const retryTodos = async () => {
     if (retrying) return;
@@ -194,8 +371,8 @@ export function TodosView({
   };
 
   const handleDelete = async () => {
-    if (!activeTodo || deleting) return;
-    const id = activeTodo.id;
+    if (!deleteTodoShown || deleting) return;
+    const id = deleteTodoShown.id;
     setDeleting(true);
     try {
       await deleteTodo(id);
@@ -209,10 +386,13 @@ export function TodosView({
     // be deleted a second time (the hub answers 404 for it).
     dropTodo(id);
     setDeleteConfirm(false);
-    setActiveId(undefined);
-    pushedId.current = undefined;
-    // replace: Back must not land on ?id=<the deleted todo>
-    navigate("/todos", true);
+    // a row's menu can delete another to-do than the one open: that one stays open
+    if (id === activeTodo?.id || id === selectedId) {
+      setActiveId(undefined);
+      pushedId.current = undefined;
+      // replace: Back must not land on ?id=<the deleted todo>
+      navigate(calendarOn ? calendarRoute(calendarMode, anchor) : { name: "todos" }, true);
+    }
     toast(t("todos.deleted"), "ok");
     // the rest of the page catches up in the background; a failed refresh leaves the list as dropped, the next push fixes it
     void refreshTodos().then(() => refresh()).catch(() => {});
@@ -225,20 +405,96 @@ export function TodosView({
         <div className="flex items-center gap-3">
           {onToggleSidebar && <IconButton icon="sidebar" label={t("agents-agentsview.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
           <div className="flex items-baseline gap-2">
-            <h1 className="text-[16px] font-semibold text-ink">{t("todos.title")}</h1>
+            <h1 className="text-[16px] font-semibold whitespace-nowrap text-ink">{t("todos.title")}</h1>
             {!(todos.length === 0 && todosError) && (
-              <span className="text-[12px] text-ink-3">
-                {t("todos.summary", { open: uncompleted.length, done: completed.length })}
+              // a phone's header has the List | Calendar switch to fit (#2029): the counts stay on wider screens
+              <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden">
+                {byStatus
+                  ? t("todos.summary_triage", { open: triageAll.open, shelved: triageAll.shelved, done: triageAll.finished })
+                  : t("todos.summary", { open: uncompleted.length, done: completed.length })}
               </span>
             )}
           </div>
         </div>
-        <Button tone="secondary" icon="plus" onClick={() => setNewOpen(true)} className="h-8 text-[12.5px]">
-          {t("todos.new_todo")}
-        </Button>
+        <div className="flex items-center gap-2.5">
+          <Segmented
+            label={t("todos.view_label")}
+            value={calendarOn ? "calendar" : "list"}
+            options={[
+              { v: "list", label: t("todos.view_list") },
+              { v: "calendar", label: t("todos.view_calendar") },
+            ]}
+            onChange={showView}
+            compact
+          />
+          {/* on a phone the plus alone, so the label never wraps beside the switch */}
+          <IconButton icon="plus" label={t("todos.new_todo")} onClick={openNew} className="sm:hidden" />
+          <Button tone="secondary" icon="plus" onClick={openNew} className="h-8 text-[12.5px] max-sm:hidden">
+            {t("todos.new_todo")}
+          </Button>
+        </div>
       </header>
 
-      {/* Main Split Layout: Left List & Right Detail */}
+      {calendarOn && offline && todosLoaded && todos.length === 0 ? (
+        <div className="flex min-h-0 flex-1 items-start justify-center bg-page">
+          <OfflineState offline={offline} className="py-14" />
+        </div>
+      ) : calendarOn ? (
+        <div className="flex min-h-0 flex-1">
+          <div className={cx("flex min-h-0 min-w-0 flex-1 flex-col bg-page", selectedTodo && "max-md:hidden")}>
+            <TodoCalendar
+              todos={todos}
+              lookup={lookup}
+              mode={calendarMode}
+              anchor={anchor}
+              showDone={calendarDone}
+              selectedId={selectedId}
+              onMode={(m, day) => {
+                setPref(MODE_KEY, m);
+                navigate(calendarRoute(m, day ?? anchor, selectedId));
+              }}
+              onAnchor={(day) => navigate(calendarRoute(calendarMode, day, selectedId), true)}
+              onShowDone={(on) => {
+                setPref(DONE_KEY, on ? "1" : "0");
+                setCalendarDone(on);
+              }}
+              onOpen={(id) => navigate(calendarRoute(calendarMode, anchor, id))}
+              onAdd={(slot) => {
+                setNewSlot(slot);
+                setNewOpen(true);
+              }}
+              onShowList={() => showView("list")}
+              onMove={moveTodo}
+            />
+          </div>
+          {selectedTodo && (
+            <div data-testid="todo-calendar-detail" className="flex min-h-0 w-full flex-col overflow-y-auto border-line md:w-[440px] md:shrink-0 md:border-l">
+              <div className="flex shrink-0 items-center justify-between px-2 pt-2">
+                <Button tone="quiet" icon="chevronLeft" onClick={() => navigate(calendarRoute(calendarMode, anchor))} className="md:hidden">
+                  {t("todos.calendar_back")}
+                </Button>
+                <IconButton icon="x" label={t("todos.calendar_close")} onClick={() => navigate(calendarRoute(calendarMode, anchor))} className="ml-auto max-md:hidden" />
+              </div>
+              <TodoDetail
+                key={`${owner}/${selectedTodo.id}`}
+                owner={owner}
+                todo={selectedTodo}
+                activeAgents={(selectedTodo.agents ?? []).filter((a) => !a.released_at)}
+                releasedAgents={(selectedTodo.agents ?? []).filter((a) => a.released_at)}
+                lookup={lookup}
+                machines={machines}
+                interactions={interactions}
+                showReleased={showReleased}
+                onToggleReleased={() => setShowReleased((v) => !v)}
+                onToggleDone={() => toggleDone(selectedTodo)}
+                onOpenHandover={() => openHandover()}
+                onDeleteClick={() => askDelete(selectedTodo.id)}
+              />
+            </div>
+          )}
+        </div>
+      ) : (
+      // Main Split Layout: Left List & Right Detail
       <div className="flex min-h-0 flex-1">
         {/* Left Column: Todo List */}
         <div
@@ -248,8 +504,23 @@ export function TodosView({
           className={cx("flex w-full shrink-0 flex-col border-line md:w-[380px] md:border-r lg:w-[400px]", detailOnNarrow && "max-md:hidden")}
         >
           {/* Search Bar */}
-          <div className="p-3">
-            <SearchField tone="inset" value={search} onChange={setSearch} placeholder={t("todos.search_placeholder")} />
+          <div className="flex items-center gap-2 p-3">
+            <div className="min-w-0 flex-1">
+              <SearchField tone="inset" value={search} onChange={setSearch} placeholder={t("todos.search_placeholder")} />
+            </div>
+            <Segmented
+              label={t("todos.grouping_label")}
+              value={grouping}
+              options={[
+                { v: "status", label: t("todos.grouping_status") },
+                { v: "folder", label: t("todos.grouping_folder") },
+              ]}
+              onChange={(next) => {
+                setPref(GROUPING_KEY, next);
+                setGrouping(next);
+              }}
+              compact
+            />
           </div>
 
           {/* List Content */}
@@ -271,7 +542,9 @@ export function TodosView({
                 {todosError}
               </Empty>
             ) : filteredUncompleted.length === 0 && filteredCompleted.length === 0 ? (
-              search.trim() ? (
+              offline && todos.length === 0 ? (
+                <OfflineState offline={offline} ring="ring-surface" className="py-14" />
+              ) : search.trim() ? (
                 <Empty icon="search" title={t("todos.no_match_title")}>
                   {t("todos.no_match_body")}
                 </Empty>
@@ -289,6 +562,27 @@ export function TodosView({
                 </Empty>
               )
             ) : (
+              byStatus ? (
+              <div className="flex flex-col gap-1" data-testid="todos-sections">
+                {TRIAGE_SECTIONS.map((sec) =>
+                  triaged.sections[sec].length === 0 ? null : (
+                    <TodoTriageSection
+                      key={sec}
+                      section={sec}
+                      folded={FOLDED_SECTIONS.has(sec) && !(sec === "other" && !TRIAGE_SECTIONS.some((o) => !FOLDED_SECTIONS.has(o) && triaged.sections[o].length > 0))}
+                      groups={triaged.sections[sec]}
+                      count={triaged.todoCounts[sec]}
+                      views={views}
+                      selectedId={activeTodo?.id}
+                      onSelect={openFromList}
+                      onToggleDone={toggleDone}
+                      onRestore={onRestore}
+                      onMenu={openRowMenu}
+                    />
+                  ),
+                )}
+              </div>
+              ) : (
               <div className="flex flex-col gap-1">
                 {projectGroups.map((g) => (
                   <TodoProjectSection
@@ -298,6 +592,7 @@ export function TodosView({
                     selectedId={activeTodo?.id}
                     onSelect={openFromList}
                     onToggleDone={toggleDone}
+                    onMenu={openRowMenu}
                   />
                 ))}
 
@@ -326,6 +621,7 @@ export function TodosView({
                             selected={activeTodo?.id === todo.id}
                             onSelect={openFromList}
                             onToggleDone={toggleDone}
+                            onMenu={openRowMenu}
                           />
                         ))}
                       </div>
@@ -333,6 +629,7 @@ export function TodosView({
                   </div>
                 )}
               </div>
+              )
             )}
           </div>
         </div>
@@ -363,8 +660,8 @@ export function TodosView({
               showReleased={showReleased}
               onToggleReleased={() => setShowReleased((v) => !v)}
               onToggleDone={() => toggleDone(activeTodo)}
-              onOpenHandover={() => setHandoverOpen(true)}
-              onDeleteClick={() => setDeleteConfirm(true)}
+              onOpenHandover={() => openHandover()}
+              onDeleteClick={() => askDelete(activeTodo.id)}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -373,24 +670,50 @@ export function TodosView({
           )}
         </div>
       </div>
+      )}
 
       {/* Dialogs */}
-      <NewTodoDialog open={newOpen} onClose={() => setNewOpen(false)} onCreated={(id) => setActiveId(id)} />
+      <NewTodoDialog
+        open={newOpen}
+        slot={newSlot}
+        onClose={() => {
+          setNewOpen(false);
+          setNewSlot(undefined);
+        }}
+        onCreated={(id) => setActiveId(id)}
+      />
 
-      {activeTodo && (
+      {rowMenu && menuTodo && (
+        <Menu
+          anchor={rowMenu.at.anchor ?? null}
+          point={rowMenu.at.point}
+          onClose={() => setRowMenu(null)}
+          items={todoRowMenu(menuTodo, rowMenu.open, Date.now(), {
+            toggleDone: () => void toggleDone(menuTodo, rowMenu.open),
+            save: (patch) => void savePlan(menuTodo.id, patch),
+            pickDue: () => setDueFor(menuTodo.id),
+            handOver: () => openHandover(menuTodo.id),
+            remove: () => askDelete(menuTodo.id),
+          })}
+        />
+      )}
+
+      {dueTodo && <TodoDueDialog key={dueTodo.id} todo={dueTodo} onClose={() => setDueFor(undefined)} onSave={(patch) => savePlan(dueTodo.id, patch)} />}
+
+      {handoverTodo && (
         <HandoverDialog
-          key={activeTodo.id}
+          key={handoverTodo.id}
           open={handoverOpen}
-          todo={activeTodo}
+          todo={handoverTodo}
           machines={machines}
           onClose={() => setHandoverOpen(false)}
         />
       )}
 
-      {activeTodo && (
+      {deleteTodoShown && (
         <Dialog open={deleteConfirm} onClose={() => setDeleteConfirm(false)} title={t("todos.delete_title")}>
           <div className="py-2 text-[13.5px] text-ink-2">
-            {t("todos.delete_confirm", { title: activeTodo.title })}
+            {t("todos.delete_confirm", { title: deleteTodoShown.title })}
           </div>
           <div className="mt-4 flex justify-end gap-2">
             <Button tone="secondary" onClick={() => setDeleteConfirm(false)}>
@@ -475,24 +798,28 @@ const TodoProjectSection = memo(function TodoProjectSection({
   selectedId,
   onSelect,
   onToggleDone,
+  onMenu,
 }: {
   group: TodoProjectGroup;
   /** Its todos' row views, in the same order as group.todos. */
   views: readonly TodoRowView[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
+  onMenu: TodoRowMenuOpener;
 }) {
   const holds = group.todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds });
   return (
-    <div className="mt-1 first:mt-0">
+    <div className="mt-1 first:mt-0" data-testid="todo-group" data-group={group.key}>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] text-ink-2 hover:bg-hover">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <Icon name="folder" size={12} stroke={2} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate font-semibold">{group.name}</span>
         <span className="shrink-0 text-[11px] text-ink-3 tabular-nums">{group.todos.length}</span>
-        <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", TREE_TONE[group.state])}>{treeStateLabel(group.state)}</span>
+        {!(group.area && group.state === "done") && (
+          <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", TREE_TONE[group.state])}>{treeStateLabel(group.state)}</span>
+        )}
       </button>
       {!folded && (
         <div className="flex flex-col gap-1 pl-2 pt-0.5">
@@ -504,6 +831,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
               selected={selectedId === todo.id}
               onSelect={onSelect}
               onToggleDone={onToggleDone}
+              onMenu={onMenu}
             />
           ))}
         </div>
@@ -511,6 +839,127 @@ const TodoProjectSection = memo(function TodoProjectSection({
     </div>
   );
 });
+
+// ── Status sections (#3156) ──────────────────────────────────
+
+const SECTION_TONE: Record<TriageSection, string> = {
+  waiting: "text-attention",
+  working: "text-orange",
+  just_done: "text-green",
+  pr: "text-accent-ink",
+  other: "text-ink-2",
+  shelved: "text-ink-3",
+  done: "text-ink-3",
+};
+
+/** A section's title: the two that are agent states take the state names (lib/state-labels.ts). */
+function sectionTitle(section: TriageSection): string {
+  if (section === "waiting") return stateName("needs_you");
+  if (section === "working") return stateName("working");
+  return t(`todos.section_${section}`);
+}
+
+/** One status section (docs/assistant/todo-status-sop.md): a folding title with its count, a row per group of related
+ *  to-dos. Waiting on you, Working, Just finished and PR to merge start open; Other, Shelved and Done start folded. */
+const TodoTriageSection = memo(function TodoTriageSection({
+  section,
+  folded: foldedFirst,
+  groups,
+  count,
+  views,
+  selectedId,
+  onSelect,
+  onToggleDone,
+  onRestore,
+  onMenu,
+}: {
+  section: TriageSection;
+  /** Whether it starts folded: Other open only while some open section has rows. */
+  folded: boolean;
+  groups: TriageGroup[];
+  /** To-dos in it (a merged row holds several). */
+  count: number;
+  views: ReadonlyMap<string, TodoRowView>;
+  selectedId: string | undefined;
+  onSelect: (id: string) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
+  onRestore: (id: string) => void;
+  onMenu: TodoRowMenuOpener;
+}) {
+  const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
+  const [folded, toggle] = useFolded(`todos-section:${section}`, foldedFirst, { follow: true, holds });
+  return (
+    <section className="mt-1 first:mt-0" data-testid="todo-section" data-section={section} data-count={groups.length} data-todos={count}>
+      <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] hover:bg-hover">
+        <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+        <span className={cx("min-w-0 flex-1 truncate font-semibold whitespace-nowrap", SECTION_TONE[section])}>{sectionTitle(section)}</span>
+        <span className="shrink-0 text-[11px] text-ink-3 tabular-nums">{groups.length}</span>
+      </button>
+      {!folded && section === "shelved" && <p className="px-2.5 pb-1 text-[11.5px] text-ink-3">{t("todos.shelved_hint")}</p>}
+      {!folded && (
+        <div className="flex flex-col gap-1 pt-0.5">
+          {groups.map((g) => (
+            <TodoTriageRow key={g.key} group={g} views={views} selectedId={selectedId} onSelect={onSelect} onToggleDone={onToggleDone} onRestore={onRestore} onMenu={onMenu} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+});
+
+/** A section's row: the group's lead, and its related to-dos under "N related" (same PR, issue, title or plan). */
+function TodoTriageRow({
+  group,
+  views,
+  selectedId,
+  onSelect,
+  onToggleDone,
+  onRestore,
+  onMenu,
+}: {
+  group: TriageGroup;
+  views: ReadonlyMap<string, TodoRowView>;
+  selectedId: string | undefined;
+  onSelect: (id: string) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
+  onRestore: (id: string) => void;
+  onMenu: TodoRowMenuOpener;
+}) {
+  const others = group.members.slice(1);
+  const [opened, setOpen] = useState(false);
+  // a selected member always shows, however it was selected (a click, the address, a push)
+  const open = opened || others.some((m) => m.id === selectedId);
+  const item = (td: Todo) => (
+    <TodoListItem
+      key={td.id}
+      todo={td}
+      view={views.get(td.id)!}
+      selected={selectedId === td.id}
+      onSelect={onSelect}
+      onToggleDone={onToggleDone}
+      section={group.triage.get(td.id)?.section}
+      onRestore={onRestore}
+      onMenu={onMenu}
+    />
+  );
+  return (
+    <div data-testid="todo-triage-row" data-id={group.lead.id} data-members={group.members.length}>
+      {item(group.lead)}
+      {others.length > 0 && (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="ml-9 flex h-7 items-center gap-1 rounded-control px-1.5 text-[11.5px] whitespace-nowrap text-ink-3 hover:bg-hover hover:text-ink-2"
+        >
+          <Icon name="chevron" size={10} stroke={2.4} className="transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }} />
+          {t("todos.related", { count: others.length })}
+        </button>
+      )}
+      {open && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map(item)}</div>}
+    </div>
+  );
+}
 
 // ── Todo List Item ───────────────────────────────────────────
 
@@ -529,6 +978,8 @@ export type TodoRowView = {
   urgentLead: string;
   /** What the agent asks (its card) or does / last said. */
   urgentText: string;
+  /** The line says nobody is working on it (#3618): its lead is in the caution color, the reason after it. */
+  orphaned: boolean;
   /** One of its agents runs with ultracode on (#12): the Agent list row's mark after its title. */
   ultracode: boolean;
 };
@@ -539,18 +990,48 @@ const DOT_STATE: Record<TodoStatus, AgentState> = {
   usage_limit: "idle",
   unread: "unread",
   working: "working",
+  waiting: "working",
   follow_up: "idle",
   done: "offline",
   not_started: "offline",
   failed: "offline",
 };
 
-/** The view of one todo's row (TodoRowView). */
+/** The view of one todo's row (TodoRowView). Every open row says its latest progress: what its agent asks or does,
+ *  else what its agent last reported to its supervisor (#3156). */
 export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Interaction[]): TodoRowView {
+  const view = agentRowView(todo, lookup, interactions);
+  // Nobody is working on it (#3618): the hub's finding goes ahead of what a stopped agent last said (Interrupted,
+  // Follow up; docs/assistant/todos.md). A card that waits for the user still says its question.
+  const orphan = view.status !== "needs_you" ? orphanedLine(todo) : undefined;
+  if (orphan) {
+    view.urgentLine = true;
+    view.orphaned = true;
+    view.urgentLead = orphan.lead;
+    view.urgentText = orphan.reason ? ` · ${orphan.reason}` : "";
+    return view;
+  }
+  if (!view.urgentLine && !todo.done_at) {
+    const said = parkedLine(todo) ?? progressLine(todo.supervision);
+    if (said) {
+      view.urgentLine = true;
+      view.urgentText = said;
+    }
+  }
+  return view;
+}
+
+/** How long since it or any of its agents last moved (#3156): the time the status sections go by. */
+function lastMoved(todo: Todo, lookup: SessionLookup): string {
+  const last = lastActivity(todo, lookup);
+  return last ? ago(new Date(last).toISOString()) : ago(todo.updated_at || todo.created_at);
+}
+
+function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interaction[]): TodoRowView {
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[status], age: ago(todo.updated_at || todo.created_at), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -577,23 +1058,39 @@ function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Intera
 
 const TONE_CLASS = TODO_TONE_CLASS;
 
+/** Opens a row's menu (#4429) where `at` says, for the to-do the row's checkbox shows open (`open`) or done. */
+type TodoRowMenuOpener = (todo: Todo, at: MenuAt, open: boolean) => void;
+
 const TodoListItem = memo(function TodoListItem({
   todo,
   view,
   selected,
   onSelect,
   onToggleDone,
+  section,
+  onRestore,
+  onMenu,
 }: {
   todo: Todo;
   view: TodoRowView;
   selected: boolean;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
+  /** Its status section (#3156): a PR to merge shows its link, a shelved one its Restore. */
+  section?: TriageSection;
+  onRestore?: (id: string) => void;
+  onMenu?: TodoRowMenuOpener;
 }) {
   const { status, dotState, activeCount } = view;
-  const toneClass = TONE_CLASS[TODO_STATUS_INFO[status].tone];
+  const pr = section === "pr" ? prLink(todo.pr_url) : null;
+  const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
+  // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713)
+  const open = checksAsOpen(todo, section);
+  const failedOpen = open && Boolean(todo.start_error);
+  // Its menu (#4429): a right click opens it at the pointer, the menu key and Shift+F10 on the row
+  const menu = onMenu ? contextMenuProps((at) => onMenu(todo, at, open)) : undefined;
 
   return (
     <div
@@ -601,8 +1098,14 @@ const TodoListItem = memo(function TodoListItem({
       tabIndex={0}
       aria-current={selected || undefined}
       onClick={() => onSelect(todo.id)}
+      // a right click on its PR link keeps the browser's menu (Copy link, open in a new tab)
+      onContextMenu={menu && ((e) => {
+        if (!(e.target as HTMLElement).closest("a[href]")) menu.onContextMenu(e);
+      })}
       // Enter / Space on the row itself (not on its own buttons) opens it, as a click does
       onKeyDown={(e) => {
+        menu?.onKeyDown(e);
+        if (e.defaultPrevented) return;
         if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
         e.preventDefault();
         onSelect(todo.id);
@@ -615,14 +1118,14 @@ const TodoListItem = memo(function TodoListItem({
       {/* Checkbox button: touch-hit makes the 16px circle a 44px target on touch, its own (no row underneath) */}
       <button
         type="button"
-        aria-label={todo.done_at ? t("todos.reopen_todo") : t("todos.complete_todo")}
+        aria-label={open ? t("todos.complete_todo") : t("todos.reopen_todo")}
         onClick={(e) => {
           e.stopPropagation();
-          onToggleDone(todo);
+          onToggleDone(todo, open);
         }}
         className={cx(
           "touch-hit mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
-          todo.done_at
+          !open
             ? "border-accent bg-accent text-white"
             : "border-line-strong hover:border-accent hover:text-accent text-transparent",
         )}
@@ -639,7 +1142,7 @@ const TodoListItem = memo(function TodoListItem({
               <UltraMark size={11} />
             </span>
           ) : (
-            <span className={cx("truncate text-[13.5px] font-semibold text-ink", todo.done_at && "line-through text-ink-3 font-normal")}>
+            <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "line-through text-ink-3 font-normal")}>
               {todo.title}
             </span>
           )}
@@ -655,7 +1158,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Status Line */}
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]">
-          {!todo.done_at && <StatusMark state={dotState} size="sm" />}
+          {open && <StatusMark state={dotState} size="sm" />}
           <span className={cx("shrink-0 whitespace-nowrap font-medium", toneClass)}>{todoStatusLabel(todo, status)}</span>
           {!todo.done_at && activeCount > 0 && (
             <>
@@ -669,8 +1172,14 @@ const TodoListItem = memo(function TodoListItem({
           {!todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />}
         </div>
 
+        {/* What it waits on from the user, with the one tap that answers it (#2056) */}
+        <TodoAskLine todo={todo} className="mt-1" />
+
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
+
+        {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
+        {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
 
         {/* Why the hub closed it */}
         {isAutoDone(todo) && todo.done_reason && (
@@ -688,9 +1197,36 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Most Urgent Agent Line */}
         {view.urgentLine && (
-          <div className="mt-1 truncate text-[11.5px] text-ink-3">
-            {view.urgentLead && <span className="font-medium text-attention">{view.urgentLead}</span>}
+          <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
+            {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
             {view.urgentText}
+          </div>
+        )}
+
+        {/* A PR to merge: its link and how long it has not moved (#3156) */}
+        {pr && (
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3" data-testid="todo-pr-line">
+            <a
+              href={pr.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label={pr.label}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-accent-ink hover:underline"
+            >
+              <Icon name="pullRequest" size={11} />
+              {pr.text}
+            </a>
+            <span className="truncate">· {t("todos.pr_idle", { age: view.age })}</span>
+          </div>
+        )}
+
+        {/* Shelved: one tap brings it back (#3156); nothing is deleted */}
+        {section === "shelved" && onRestore && (
+          <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+            <Button tone="secondary" icon="undo" onClick={() => onRestore(todo.id)} className="h-7 text-[12px] whitespace-nowrap">
+              {t("todos.restore")}
+            </Button>
           </div>
         )}
       </div>
@@ -707,9 +1243,10 @@ function localParts(ms: number): { day: string; time: string } {
   return { day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
 }
 
-/** The detail's due date (a day, with a time when one is set), reminder and priority; each change is saved at once. */
+/** The detail's due date (a day, with a time when one is set), reminder, priority and project; each change is saved at once. */
 function TodoPlanEditor({ todo }: { todo: Todo }) {
   const [busy, setBusy] = useState(false);
+  const projects = projectChoices(useTodoProjects(), todo.project);
   const save = async (patch: TodoPatch) => {
     setBusy(true);
     try {
@@ -784,6 +1321,25 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
           <option value="low">{t("todos.priority_low")}</option>
         </select>
       </span>
+      <span className="inline-flex min-w-0 items-center gap-1.5">
+        <Icon name="folder" size={13} stroke={2} />
+        <span className="whitespace-nowrap">{t("todos.project_label")}</span>
+        <select
+          aria-label={t("todos.project_label")}
+          value={todo.project ?? ""}
+          disabled={busy}
+          onChange={(e) => void save({ project: e.target.value })}
+          className={cx(PLAN_FIELD, "max-w-56 truncate")}
+          data-testid="todo-plan-project"
+        >
+          <option value="">{t("todos.project_none")}</option>
+          {projects.map((p) => (
+            <option key={p.slug} value={p.slug}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </span>
     </div>
   );
 }
@@ -824,6 +1380,103 @@ function askText(ix: Interaction | undefined): string {
 }
 
 // ── Todo Detail ──────────────────────────────────────────────
+
+// A task's brief (#3822) comes with the first to-do that has one, not with the page.
+const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
+const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
+
+// The existing review UI lives with this lazy page, not the first screen's card badges.
+const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
+  met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
+  missing: { icon: "x", className: "text-red", label: () => t("assistant-tasks.review_missing") },
+  open: { icon: "clock", className: "text-ink-3", label: () => t("assistant-tasks.review_open") },
+  // added after the acceptance, which still stands (#3156): nothing waits on it
+  unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
+};
+
+/** The task's criteria, each as its latest report or review found it, and what the supervisor said last. */
+export function ReviewChecklist({ todo }: { todo: Todo }) {
+  const sup = todo.supervision;
+  if (!sup) return null;
+  const list = checklist(sup);
+  const review = latestReview(sup);
+  const parked = parkedLine(todo);
+  // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
+  const extras = todo.done_at ? resultExtras(todo) : undefined;
+  return (
+    <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
+      <div className="flex items-center gap-2">
+        <span className="text-[12.5px] font-semibold text-ink-2">{t("assistant-tasks.review_title")}</span>
+        <ReviewBadge todo={todo} />
+        <span className="flex-1" />
+        {sup.expect_minutes ? <span className="text-[12px] text-ink-3">{t("assistant-tasks.review_expect", { minutes: sup.expect_minutes })}</span> : null}
+      </div>
+      {list.length === 0 ? (
+        <p className="mt-2 text-[12.5px] text-ink-3">{t("assistant-tasks.review_none")}</p>
+      ) : (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {list.map((c) => {
+            const m = MARK[c.mark];
+            return (
+              <li key={c.criterion} className="flex items-start gap-2 text-[13px]">
+                <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
+                  <Icon name={m.icon} size={13} stroke={2.4} />
+                </span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-ink">{c.criterion}</span>
+                  {c.evidence && <span className="text-[12px] text-ink-3 select-text">{c.evidence}</span>}
+                  {(c.at || c.by) && (
+                    <span className="flex flex-wrap gap-x-1.5 text-[11px] text-ink-3">
+                      {c.by && <span>{c.by}</span>}
+                      {c.at && <time dateTime={c.at} title={c.at}>{new Date(c.at).toLocaleString()}</time>}
+                    </span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {extras && (
+        <Suspense fallback={null}>
+          <BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />
+        </Suspense>
+      )}
+      {parked && <p data-testid="review-parked" className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{parked}</p>}
+      {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
+      <AutoReviewResult sup={sup} />
+    </section>
+  );
+}
+
+/** The independent reviewer's result (#2173) under the criteria: a line, and its report on a click. Nothing when no
+ *  review ran, so a task without one looks as it did. */
+function AutoReviewResult({ sup }: { sup: Supervision }) {
+  const [open, setOpen] = useState(false);
+  const line = autoReviewLine(sup);
+  if (!line) return null;
+  const findings = sup.auto_review?.findings;
+  return (
+    <div data-testid="auto-review" className="mt-2 flex flex-col gap-1 text-[12.5px] text-ink-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <Icon name="target" size={12} className="shrink-0" />
+        <span className="shrink-0 whitespace-nowrap font-semibold">{t("assistant-tasks.auto_review_title")}</span>
+        <span className="min-w-0">· {line}</span>
+        {findings && (
+          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="touch-hit ml-auto shrink-0 whitespace-nowrap text-ink-3 hover:text-ink-2">
+            {t(open ? "assistant-tasks.auto_review_hide" : "assistant-tasks.auto_review_show")}
+          </button>
+        )}
+      </div>
+      {open && findings && (
+        <div data-testid="auto-review-findings" className="leading-[1.55] whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">
+          {findings}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TodoDetail({
   todo,
@@ -901,7 +1554,7 @@ function TodoDetail({
   };
 
   const status = todoStatus(todo, lookup);
-  const statusInfo = TODO_STATUS_INFO[status];
+  const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
   const toneClass = {
     red: "bg-red-tint text-red",
     green: "bg-green-tint text-green",
@@ -910,16 +1563,17 @@ function TodoDetail({
     off: "bg-hover text-ink-3",
   }[statusInfo.tone];
 
+  const shown = shownStatus(todo, status);
   const dotState =
-    status === "needs_you" || status === "interrupted"
+    shown === "needs_you" || shown === "interrupted"
       ? "needs_you"
-      : status === "usage_limit"
+      : shown === "usage_limit"
         ? "idle"
-      : status === "unread"
+      : shown === "unread"
         ? "unread"
-        : status === "working"
+        : shown === "working" || shown === "waiting"
           ? "working"
-          : status === "follow_up"
+          : shown === "follow_up"
             ? "idle"
             : "offline";
 
@@ -978,12 +1632,30 @@ function TodoDetail({
         </p>
       )}
 
+      {/* What it waits on from the user and how to answer it (#2056) */}
+      <TodoAskPanel todo={todo} />
+
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
+      {/* The brief its work is held to (#3822): who asked and in what words above the criteria; the scope changes
+          and who worked on it under them. */}
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefPanel todo={todo} />
+        </Suspense>
+      )}
       <ReviewChecklist todo={todo} />
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefHistory todo={todo} />
+        </Suspense>
+      )}
+      <LatestReport todo={todo} />
 
-      {/* Stage Bar (#2776): progress from plan to verified, from the hub's todo; nothing on hubs that don't send it. */}
-      <TodoStageBar stage={todo.stage} prURL={todo.pr_url} className="mt-4" />
+      {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />
+
+      {todo.origin && <TaskCompletionCheck todo={todo} />}
 
       {/* Notes / Description */}
       <div className="mt-4">
@@ -1051,7 +1723,7 @@ function TodoDetail({
 
         {activeAgents.length === 0 ? (
           <div className="rounded-control border border-dashed border-line p-6 text-center text-[13px] text-ink-3">
-            {t("todos.no_agents")}
+            {todo.done_at ? t("todos.no_agents_done") : t("todos.no_agents")}
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -1197,11 +1869,13 @@ function TodoDetail({
         )}
       </div>
 
-      {/* Bottom Action Bar */}
+      {/* Bottom Action Bar. A done to-do can't be handed over (the hub refuses, #1856): Reopen next to it comes first. */}
       <div className="mt-8 flex flex-wrap items-center gap-2.5 border-t border-line pt-4">
-        <Button tone="accent" icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px]">
-          {t("todos.hand_over")}
-        </Button>
+        {!todo.done_at && (
+          <Button tone="accent" icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px]">
+            {t("todos.hand_over")}
+          </Button>
+        )}
         <Button tone="secondary" icon="check" onClick={onToggleDone} className="h-8.5 px-3 text-[13px]">
           {todo.done_at ? t("todos.reopen") : t("todos.complete")}
         </Button>
@@ -1563,34 +2237,56 @@ function DecisionDialog({
 
 function NewTodoDialog({
   open,
+  slot,
   onClose,
   onCreated,
 }: {
   open: boolean;
+  /** Made on the calendar (#2029): due there, a moment or a whole day; the calendar stays in front once it is saved. */
+  slot?: CalendarSlot;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dueDay, setDueDay] = useState("");
+  const [dueTime, setDueTime] = useState("");
+  const [allDay, setAllDay] = useState(true);
 
   useEffect(() => {
     if (open) {
       setTitle("");
       setNotes("");
+      if (slot) {
+        setDueDay(dayKey(slot.at ?? slot.day));
+        setDueTime(slot.at !== undefined ? localParts(slot.at).time : "09:00");
+        setAllDay(slot.at === undefined);
+      }
     }
-  }, [open]);
+  }, [open, slot]);
+
+  /** What the slot's row now says: due on the day, or at the day's time. */
+  const due = (): { due_at?: string; due_date?: string } | undefined => {
+    if (!slot || !parseDayKey(dueDay)) return undefined;
+    if (allDay || !/^\d{2}:\d{2}$/.test(dueTime)) return { due_date: dueDay };
+    const [h, m] = dueTime.split(":").map(Number);
+    const at = new Date(parseDayKey(dueDay)!);
+    at.setHours(h, m, 0, 0);
+    return { due_at: at.toISOString() };
+  };
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!title.trim()) return;
     setBusy(true);
     try {
-      const todo = await createTodo(title, notes);
+      const todo = await createTodo(title, notes, due());
       await refreshTodos();
       await refresh();
       toast(t("todos.created"), "ok");
       onClose();
+      if (slot) return; // the calendar stays, the new one on it
       onCreated(todo.id);
       navigate(`/todos?id=${encodeURIComponent(todo.id)}`);
     } catch (err) {
@@ -1616,6 +2312,34 @@ function NewTodoDialog({
           />
         </div>
 
+        {slot && (
+          <div data-testid="todo-new-due">
+            <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.due_label")}</label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                data-testid="todo-new-due-day"
+                value={dueDay}
+                onChange={(e) => setDueDay(e.target.value)}
+                className="rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent"
+              />
+              {!allDay && (
+                <input
+                  type="time"
+                  data-testid="todo-new-due-time"
+                  value={dueTime}
+                  onChange={(e) => setDueTime(e.target.value)}
+                  className="rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent"
+                />
+              )}
+              <label className="flex cursor-pointer items-center gap-1.5 text-[12.5px] text-ink-2">
+                <input type="checkbox" data-testid="todo-new-all-day" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="accent-accent" />
+                {t("todos.calendar_all_day")}
+              </label>
+            </div>
+          </div>
+        )}
+
         <div>
           <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.notes_optional")}</label>
           <textarea
@@ -1633,6 +2357,50 @@ function NewTodoDialog({
           </Button>
           <Button tone="accent" type="submit" disabled={!title.trim() || busy} busy={busy}>
             {t("todos.create")}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+// ── Due Date Dialog ──────────────────────────────────────────
+
+/** A row menu's Due date › Pick a date… (#4429): any day, starting from the one it is due on (else today). A to-do due
+ *  at a time keeps the time (`duePatch`). It stays open, with the toast, when the save fails. */
+function TodoDueDialog({ todo, onClose, onSave }: { todo: Todo; onClose: () => void; onSave: (patch: TodoPatch) => Promise<boolean> }) {
+  const [day, setDay] = useState(() => dayKey(dueOn(todo) ?? Date.now()));
+  const [busy, setBusy] = useState(false);
+  const picked = parseDayKey(day);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (picked === undefined || busy) return;
+    setBusy(true);
+    if (await onSave(duePatch(todo, picked))) onClose();
+    else setBusy(false);
+  };
+  return (
+    <Dialog open onClose={onClose} title={t("todos-menu.due")}>
+      <form onSubmit={submit} className="flex flex-col gap-3.5">
+        <div>
+          <label htmlFor="todo-due-pick" className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.due_label")}</label>
+          <input
+            id="todo-due-pick"
+            type="date"
+            required
+            autoFocus
+            data-testid="todo-due-pick"
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            className="rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent"
+          />
+        </div>
+        <div className="mt-2 flex justify-end gap-2">
+          <Button tone="secondary" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button tone="accent" type="submit" disabled={picked === undefined || busy} busy={busy}>
+            {t("common.save")}
           </Button>
         </div>
       </form>
@@ -1662,6 +2430,10 @@ export function HandoverDialog({
   const [mid, setMid] = useState(() => onlineMachines[0]?.id ?? "");
   const [cwd, setCwd] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
+  // What Model settings › Agents runs on this computer, as the hub says (null: no launcher default); undefined until the list
+  // is in, and from an older hub, which has no default to follow.
+  const [hubDefault, setHubDefault] = useState<LauncherDefault | null | undefined>(undefined);
+  // "": the default (the hub resolves it at the start, as New Agent's "Default: …")
   const [launcher, setLauncher] = useState("");
 
   // For "existing":
@@ -1689,26 +2461,37 @@ export function HandoverDialog({
   useEffect(() => {
     if (!open || !mid) return;
     const controller = new AbortController();
-    api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`, { signal: controller.signal })
+    // another computer's list is not this one's
+    setLaunchers([]);
+    setHubDefault(undefined);
+    setLauncher("");
+    machineLaunchers(mid, { signal: controller.signal })
       .then((r) => {
-        setLaunchers(r.launchers ?? []);
-        // the first this computer can start now, not one its terminal can't run (#1643)
-        if (r.launchers?.length) setLauncher(initialLauncher(null, r.launchers));
+        const ls = r.launchers ?? [];
+        setLaunchers(ls);
+        setHubDefault(r.default);
+        // the default the user configured, as New Agent starts from it (#4384); an older hub has none: the first this computer
+        // can start now, not one its terminal can't run (#1643)
+        setLauncher(r.default !== undefined ? "" : initialLauncher(null, ls));
       })
-      .catch(() => {});
+      .catch((e) => { if (!controller.signal.aborted) toast(errorText(e), "error"); });
     return () => controller.abort();
   }, [open, mid]);
 
   const previewCard = useMemo(() => {
     return formatTodoContext(todo.title, todo.notes);
   }, [todo]);
-  const pickedBlock = launcherBlock(launchers.find((l) => l.name === launcher));
+  // the default is held to what it runs here
+  const pickedBlock = launcherBlock(launchers.find((l) => l.name === (launcher || hubDefault?.provider)));
+  const defaultChoice = hubDefault ? defaultLabel(hubDefault) : t("newagent.follow_model_settings");
 
   const submitNew = async () => {
     if (!mid) return;
     setBusy(true);
     try {
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
+      // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
+      // has answered (#1856).
       launchAgent({
         machineId: mid,
         cwd: cwd.trim(),
@@ -1717,7 +2500,6 @@ export function HandoverDialog({
         attachments: [],
         todoId: todo.id,
       });
-      toast(t("todos.launched"), "ok");
       onClose();
     } catch (e) {
       toast(t("todos.launch_failed", { error: errorText(e) }), "error");
@@ -1809,14 +2591,16 @@ export function HandoverDialog({
               />
             </div>
 
-            {launchers.length > 0 && (
+            {(launchers.length > 0 || hubDefault !== undefined) && (
               <div>
                 <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.launcher")}</label>
                 <select
+                  data-testid="todo-handoff-launcher"
                   value={launcher}
                   onChange={(e) => setLauncher(e.target.value)}
                   className="w-full rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none"
                 >
+                  {hubDefault !== undefined && <option value="">{defaultChoice}</option>}
                   {usableFirst(launchers).map((l) => {
                     const block = launcherBlock(l);
                     // still a choice (a start that works clears it), with why, after the ones that can start (#1643)
@@ -1833,6 +2617,19 @@ export function HandoverDialog({
                     <span className="min-w-0">{pickedBlock.reason}</span>
                   </p>
                 )}
+                {/* add, hide or restore launchers (#4384): Settings › Model providers, as New Agent's entry */}
+                <button
+                  type="button"
+                  data-testid="todo-handoff-manage-launchers"
+                  onClick={() => {
+                    onClose();
+                    navigate(settingsHref("models", null, false, null, "providers"));
+                  }}
+                  className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium whitespace-nowrap text-accent-ink hover:underline"
+                >
+                  <Icon name="gear" size={11} />
+                  {t("newagent.manage_launchers")}
+                </button>
               </div>
             )}
           </div>

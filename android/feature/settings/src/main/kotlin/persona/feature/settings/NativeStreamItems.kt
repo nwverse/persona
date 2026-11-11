@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
@@ -37,7 +38,7 @@ internal fun NativeStreamItem(item: ExtensionViewItem, display: ExtensionViewSta
                               press: NativePress, edit: (String, String) -> Unit): Boolean {
     val node = state.tree?.nodes?.get(item.key) ?: return false
     when (item.type) {
-        "row" -> NativeRow(node, item, state, local, modifier, press, edit)
+        "row" -> NativeRow(node, item, state, local, modifier, handle, press, edit)
         "image" -> NativeImage(node, local, modifier)
         "grid", "carousel" -> NativeTiles(node, state, local, modifier, press, edit)
         "field" -> if (item.kind in setOf("text", "number", "multiline") || item.detail != null) {
@@ -60,13 +61,13 @@ private fun ExtensionViewHandle.withoutNative() = ExtensionViewHandle(press, edi
 
 @Composable
 private fun NativeRow(node: JsonObject, item: ExtensionViewItem, state: NativeStreamState, local: NativeExtensionLocal,
-                      modifier: Modifier, press: NativePress, edit: (String, String) -> Unit) {
+                      modifier: Modifier, handle: (String) -> ExtensionViewHandle, press: NativePress, edit: (String, String) -> Unit) {
     val key = node.getValue("key").jsonPrimitive.content
     val control = node["control"] as? JsonObject
     Column(modifier.fillMaxWidth()) {
         NativeActionContainer(node, local, press) {
             JRow(item.title.orEmpty(), subtitle = item.subtitle, value = item.value,
-                leadingIcon = item.icon?.let(ExtensionIcons::of), leading = rowLeading(item),
+                leadingIcon = item.icon?.let(ExtensionIcons::of), leading = rowLeading(item, handle(key)),
                 trailing = {
                     item.badge?.let { JTag(it.text, ExtensionViewText.tone(it.tone)) }
                     if (control?.text("kind") == "switch") NativeControl(key, item.title.orEmpty(), control, state, local, press, edit)
@@ -196,10 +197,13 @@ private fun NativeImage(node: JsonObject, local: NativeExtensionLocal, modifier:
     }
     var zoom by local.slot(key, "zoom") { false }
     var loaded by remember(src) { mutableStateOf(false) }
+    // A tap says it opens the picture full screen, like ExtensionImage in the v6 view (#4176).
+    val open = stringResource(R.string.settings_ext_open_image)
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         // Accessible fallback remains visible on loading/failure; URLs are HTTPS without hub/device credentials.
         Box(Modifier.fillMaxWidth().aspectRatio(aspect).background(PersonaTheme.palette.sunken)
-            .then(if (node["no_zoom"] != JsonPrimitive(true)) Modifier.clickable { zoom = true } else Modifier), contentAlignment = Alignment.Center) {
+            .then(if (node["no_zoom"] != JsonPrimitive(true)) Modifier.clickable(role = Role.Image, onClickLabel = open) { zoom = true } else Modifier),
+            contentAlignment = Alignment.Center) {
             if (!loaded) Text(alt, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
             AsyncImage(src.text("url"), alt, Modifier.fillMaxSize(), contentScale = if (node.text("fit") == "fit") ContentScale.Fit else ContentScale.Crop,
                 onSuccess = { loaded = true }, onError = { loaded = false })

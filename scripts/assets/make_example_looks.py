@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws the example looks extension's pictures (schema/extension/examples/example-looks, docs/extensions/extensions.md "Looks").
+"""Draws the example looks extension's pictures (schema/extension/examples/example-looks, docs/extensions/extensions.md "Avatars").
 
 Two original looks, drawn here so nothing third-party is in the repo:
 - aurora: a glowing jellyfish, avatar PNGs and SVGs for light and dark, and all five dot states as APNGs.

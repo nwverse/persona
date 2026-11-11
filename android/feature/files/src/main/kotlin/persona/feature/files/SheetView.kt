@@ -21,7 +21,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -73,7 +72,7 @@ internal fun readSheets(file: SessionFileContent, whole: java.io.File? = null): 
 }
 
 /**
- * A table file as a grid (docs/android/android.md "File viewer", iOS `TableFileView`): column letters across the top and row
+ * A table file as a grid (docs/android/android.md "Files and Git in chat", iOS `TableFileView`): column letters across the top and row
  * numbers down the side stay put while the cells scroll both ways; a workbook with several sheets has a chip per sheet.
  * Tap a cell to see all of it in the bar below (with a copy button); long-press to copy the cell or its row.
  */
@@ -124,9 +123,8 @@ internal fun SheetGrid(sheets: List<TableSheet>, truncated: Boolean, contentPadd
             }
         }
     }
-    val context = LocalContext.current
     val resources = LocalResources.current
-    val feedback = LocalAppFeedback.current
+    val copy = rememberCopy()
     val palette = PersonaTheme.palette
     Column(Modifier.fillMaxSize().padding(top = contentPadding.calculateTopPadding()).testTag("sheet")) {
         if (sheets.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = pagePadding, vertical = Tokens.Space.s),
@@ -156,13 +154,13 @@ internal fun SheetGrid(sheets: List<TableSheet>, truncated: Boolean, contentPadd
             }
         }
         SheetFooter(sheet, selected, truncated, Modifier.background(palette.surfaceOpaque).padding(bottom = contentPadding.calculateBottomPadding())) {
-            copyText(context, it, feedback, resources.getString(R.string.files_cell_copied))
+            copy(it, resources.getString(R.string.files_cell_copied))
         }
     }
     menu?.let { (r, c) ->
         JActionSheet(listOf(
-            JAction(stringResource(R.string.files_copy_cell), PhIcons.Copy) { copyText(context, sheet[r, c], feedback, resources.getString(R.string.files_cell_copied)) },
-            JAction(stringResource(R.string.files_copy_row), PhIcons.Copy) { copyText(context, sheet.rowText(r), feedback, resources.getString(R.string.files_row_copied)) },
+            JAction(stringResource(R.string.files_copy_cell), PhIcons.Copy) { copy(sheet[r, c], resources.getString(R.string.files_cell_copied)) },
+            JAction(stringResource(R.string.files_copy_row), PhIcons.Copy) { copy(sheet.rowText(r), resources.getString(R.string.files_row_copied)) },
         ), { menu = null }, TableSheet.columnName(c) + (r + 1))
     }
 }
@@ -254,8 +252,8 @@ private fun columnWidths(sheet: TableSheet): List<Dp> {
     val style = cellStyle().copy(fontWeight = FontWeight.SemiBold)
     val density = LocalDensity.current
     val pad = Tokens.Space.s * 2
-    val min = Tokens.Space.xxxl * 2
-    val max = Tokens.Space.xxxl * 7
+    val min = Tokens.Space.xxl * 2
+    val max = Tokens.Space.xxl * 7
     // One measurement for a character cell (half a CJK glyph, or a digit if wider), times each column's widest text in
     // cells: a sheet can have thousands of columns, too many to lay each one's text out on the main thread.
     val cell = remember(style, density) {

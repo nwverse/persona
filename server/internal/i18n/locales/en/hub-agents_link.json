@@ -1,11 +1,11 @@
 {
   "question": "Has a question",
-  "plan": "Plan waiting for approval",
-  "permission": "Waiting for your approval",
-  "permission_for": "Waiting for approval: {summary}",
+  "plan": "Plan awaiting approval",
+  "permission": "Needs your permission",
+  "permission_for": "Needs your permission: {summary}",
   "elicitation": "MCP request needs you",
   "screen": "Terminal needs you",
-  "plan_for": "Plan waiting for approval: {plan}",
+  "plan_for": "Plan awaiting approval: {plan}",
   "more_questions_one": "{question} ({count} more question)",
   "more_questions_other": "{question} ({count} more questions)"
 }

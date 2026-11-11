@@ -30,13 +30,12 @@ struct WakeReplyOrderTests {
             let key = store.key
             let newest = pacer.pendingText(key)
             switch pacer.offer(key, text, now: .now) {
-            case .draw(let t) where t.isEmpty: store.clearLive(newest: newest)
-            case .draw(let t): store.liveText = t
+            case .draw(let t): store.streamed(t, agents: false, newest: newest)
             case .later(let wait):
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(wait))
                     guard let self, let t = self.pacer.due(key, now: .now) else { return }
-                    self.store.liveText = t
+                    self.store.streamed(t, agents: false)
                 }
             case .kept: break
             }
@@ -57,6 +56,47 @@ struct WakeReplyOrderTests {
             let lines = ChatLines(openWork: []).build(store.blocks, live: live, streaming: liveShown)
             if lines.contains(where: { $0.id == id }) { return "line" }
             return liveShown ? "live" : "none"
+        }
+    }
+
+    /// A pending wake leaves the previous answer in place until its own continuation starts streaming. Other live
+    /// views keep showing that answer too; the competing wake-tail model is not restored (#2796, #3169).
+    @Test func wakeReplacesThePreviousAnswerOnlyWhenItsOwnContinuationStreams() throws {
+        var wake = item(4, .notice, role: "system", text: "Background check finished")
+        wake.wake = true
+        let old = item(3, .text, text: "The background check is running.")
+        let items = [item(1, .text, role: "user", text: "Check the forecast."),
+                     item(2, .toolUse, tool: "Bash", id: "before"), old, wake,
+                     item(5, .toolUse, tool: "Bash", id: "after")]
+        let reloaded = try JSONDecoder().decode([Item].self, from: JSONEncoder().encode(items))
+        for history in [items, reloaded] {
+            let blocks = ChatStore.rebuild(history, settled: nil).blocks
+            guard case .turn(let turn) = blocks.last else { Issue.record("expected a turn"); return }
+            #expect(turn.tail.isEmpty, "a pending wake stays in ordered, not a competing answer tail")
+            #expect(turn.hasPendingWake)
+            #expect(turn.ordered.flatMap { ChatLines.transcriptItems($0) }.map(\.id) == items.map(\.id),
+                    "row grouping adds tools- IDs but does not drop the wake or its later tool call")
+            func answers(_ lines: [ChatLine]) -> [String] {
+                lines.compactMap { if case .row(.assistant(let item)) = $0.content { item.id } else { nil } }
+            }
+            var builder = ChatLines(openWork: [])
+            #expect(answers(builder.build(blocks, live: turn.id)) == [old.id],
+                    "before new words stream, the previous answer stays in place")
+            let streaming = builder.build(blocks, live: turn.id, streaming: true)
+            #expect(answers(streaming).isEmpty)
+            let work = try #require(streaming.first { if case .work = $0.content { true } else { false } })
+            builder.openWork = [work.id]
+            #expect(builder.build(blocks, live: turn.id, streaming: true).contains {
+                if case .workStep(_, .text(let item), _) = $0.content { return item.id == old.id }
+                return false
+            })
+            builder.openWork = []
+            #expect(answers(builder.build(blocks, live: nil, streaming: true)) == [old.id],
+                    "a non-live presentation still shows the turn's last answer")
+            #expect(answers(builder.build(blocks, live: "another-turn", streaming: true)) == [old.id])
+            let final = item(6, .text, text: "No rain.")
+            let done = ChatStore.rebuild(history + [final], settled: nil).blocks
+            #expect(answers(builder.build(done, live: nil)) == [final.id])
         }
     }
 

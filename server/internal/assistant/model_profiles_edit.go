@@ -43,8 +43,15 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 				return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": id, "field": field})
 			}
 		}
-		if b.Effort != "" && !slices.Contains(proto.EffortLevels, b.Effort) {
-			return profileEffortErr(id, b.Effort)
+		kind := ""
+		for _, purpose := range modelPurposes {
+			if purpose.ID == id {
+				kind = purpose.Kind
+				break
+			}
+		}
+		if b.Effort != "" && !slices.Contains(effortLevelsForKind(kind), b.Effort) {
+			return profileEffortErr(id, b.Effort, effortLevelsForKind(kind))
 		}
 	}
 	for name, m := range p.Launchers {
@@ -66,7 +73,7 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 				return i18n.Err("assistant-model_profiles.err_launcher_model", i18n.Args{"launcher": name})
 			}
 			if f.name == "effort" && *v != "" && !slices.Contains(proto.EffortLevels, *v) {
-				return profileEffortErr(name, *v)
+				return profileEffortErr(name, *v, proto.EffortLevels)
 			}
 			if stored[i].Kind == "api" && f.name != "model" && *v != "" {
 				return i18n.Err("assistant-model_profiles.err_launcher_api", i18n.Args{"launcher": name, "field": f.name})
@@ -76,24 +83,8 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 			delete(p.Launchers, name)
 		}
 	}
-	if len(p.Tiers) > maxModelTiers {
-		return i18n.Err("assistant-model_profiles.err_tiers", i18n.Args{"max": maxModelTiers})
-	}
-	for name, t := range p.Tiers {
-		if !modelTierName.MatchString(name) {
-			return i18n.Err("assistant-model_profiles.err_tier_name", i18n.Args{"tier": name})
-		}
-		if t.Launcher == "" {
-			return i18n.Err("assistant-model_profiles.err_tier_launcher", i18n.Args{"tier": name})
-		}
-		for field, v := range map[string]string{"launcher": t.Launcher, "model": t.Model} {
-			if !validProfileValue(v) || strings.Contains(v, " ") {
-				return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": name, "field": field})
-			}
-		}
-		if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
-			return profileEffortErr(name, t.Effort)
-		}
+	if err := checkModelTiers(p.Tiers); err != nil {
+		return err
 	}
 	if len(p.Purposes) == 0 {
 		p.Purposes = nil
@@ -107,44 +98,102 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 	return nil
 }
 
-func profileEffortErr(where, effort string) error {
-	return i18n.Err("assistant-model_profiles.err_effort", i18n.Args{"where": where, "effort": effort, "levels": strings.Join(proto.EffortLevels, " / ")})
+// checkModelTiers is what saving tiers needs (normalized in place): names, a launcher each, model ids, effort levels
+// and one-line descriptions. Whether a launcher exists is the editor's to check (settings_tiers.go): a ~/.zshrc one
+// is known only to its computers.
+func checkModelTiers(tiers map[string]ModelTier) error {
+	if len(tiers) > maxModelTiers {
+		return i18n.Err("assistant-model_profiles.err_tiers", i18n.Args{"max": maxModelTiers})
+	}
+	for name, t := range tiers {
+		if !modelTierName.MatchString(name) {
+			return i18n.Err("assistant-model_profiles.err_tier_name", i18n.Args{"tier": name})
+		}
+		if t.Launcher == "" {
+			return i18n.Err("assistant-model_profiles.err_tier_launcher", i18n.Args{"tier": name})
+		}
+		for field, v := range map[string]string{"launcher": t.Launcher, "model": t.Model} {
+			if !validProfileValue(v) || strings.Contains(v, " ") {
+				return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": name, "field": field})
+			}
+		}
+		if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
+			return profileEffortErr(name, t.Effort, proto.EffortLevels)
+		}
+		if t.Description = strings.TrimSpace(t.Description); utf8.RuneCountInString(t.Description) > modelTierAbout ||
+			strings.ContainsAny(t.Description, "\r\n\x00") {
+			return i18n.Err("assistant-model_profiles.err_tier_description", i18n.Args{"tier": name, "max": modelTierAbout})
+		}
+		tiers[name] = t
+	}
+	return nil
+}
+
+// checkTierModel is what a tier added or changed needs of its model: it goes to the agent as --model, so one that is no
+// model id would fail every start on the tier (#1644). Tiers saved before this was checked are left as they are: a
+// switch or an edit of something else never stops on them (a start on one says why).
+func checkTierModel(name string, t ModelTier) error {
+	if t.Model != "" && !proto.ValidModelID(t.Model) {
+		return i18n.Err("assistant-model_profiles.err_tier_model", i18n.Args{"tier": name, "model": t.Model})
+	}
+	return nil
+}
+
+func profileEffortErr(where, effort string, levels []string) error {
+	return i18n.Err("assistant-model_profiles.err_effort", i18n.Args{"where": where, "effort": effort, "levels": strings.Join(levels, " / ")})
 }
 
 // ---- editing ----
 
 // saveModelProfile changes (or makes) profile id with edit, at the profiles' revision when one is given; the history
-// says who. Saving the profile in use does not switch to it again: its changes run after the next switch.
+// says who. Saving the profile in use does not switch to it again: its changes run after the next switch (its tiers
+// at the next start on one, as they are read then).
 func (s *Service) saveModelProfile(ctx context.Context, revision *int64, id string, by ProfileActor, edit func(p *ModelProfile, exists bool) error) (ModelProfile, error) {
 	s.models.mu.Lock()
-	defer s.models.mu.Unlock()
-	ps, _, err := s.modelProfilesLocked(ctx)
+	p, active, err := s.saveModelProfileLocked(ctx, revision, id, by, edit)
+	s.models.mu.Unlock()
+	if err == nil {
+		s.profileEvent(ctx, active)
+	}
+	return p, err
+}
+
+func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, id string, by ProfileActor, edit func(p *ModelProfile, exists bool) error) (ModelProfile, string, error) {
+	ps, seeded, err := s.modelProfilesLocked(ctx)
 	if err != nil {
-		return ModelProfile{}, err
+		return ModelProfile{}, "", err
 	}
 	if revision != nil && *revision != ps.Revision {
-		return ModelProfile{}, errModelProfileConflict
+		return ModelProfile{}, "", errModelProfileConflict
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == id })
 	p := ModelProfile{ID: id}
+	var saved map[string]ModelTier // the tiers as they are: only the ones added or changed are held to checkTierModel
 	if i >= 0 {
-		p = ps.Profiles[i]
+		p, saved = ps.Profiles[i], ps.Profiles[i].Tiers
 		// the values are never written through: a copy of the maps is a copy
 		p.Purposes, p.Launchers, p.Tiers = maps.Clone(p.Purposes), maps.Clone(p.Launchers), maps.Clone(p.Tiers)
 	} else if len(ps.Profiles) >= maxModelProfiles {
-		return p, i18n.Err("assistant-model_profiles.err_profiles", i18n.Args{"max": maxModelProfiles})
+		return p, "", i18n.Err("assistant-model_profiles.err_profiles", i18n.Args{"max": maxModelProfiles})
 	}
 	if err := edit(&p, i >= 0); err != nil {
-		return p, err
+		return p, "", err
 	}
 	p.ID = id
 	stored, err := s.readStoredLaunchers(ctx)
 	if err != nil {
-		return p, err
+		return p, "", err
 	}
 	ctx = withManagedSnapshot(ctx, stored)
 	if err := checkModelProfile(&p, stored); err != nil {
-		return p, err
+		return p, "", err
+	}
+	for name, t := range p.Tiers {
+		if was, ok := saved[name]; !ok || was.Model != t.Model {
+			if err := checkTierModel(name, t); err != nil {
+				return p, "", err
+			}
+		}
 	}
 	now := time.Now().UTC()
 	p.UpdatedAt = now
@@ -156,44 +205,58 @@ func (s *Service) saveModelProfile(ctx context.Context, revision *int64, id stri
 	ps.Revision++
 	state, err := s.readModelProfileState(ctx)
 	if err != nil {
-		return p, err
+		return p, "", err
+	}
+	if seeded {
+		state.seed()
 	}
 	state.record(ModelProfileEvent{At: now, Action: "save", To: id, By: by})
 	if err := s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: ps, modelProfileStateKey: state}); err != nil {
-		return p, err
+		return p, "", err
 	}
 	s.ProfileChanged(ctx)
-	return p, nil
+	return p, state.Active, nil
 }
 
 // deleteModelProfile removes profile id; not the one in use.
 func (s *Service) deleteModelProfile(ctx context.Context, revision *int64, id string, by ProfileActor) error {
 	s.models.mu.Lock()
-	defer s.models.mu.Unlock()
-	ps, _, err := s.modelProfilesLocked(ctx)
+	active, err := s.deleteModelProfileLocked(ctx, revision, id, by)
+	s.models.mu.Unlock()
+	if err == nil {
+		s.profileEvent(ctx, active)
+	}
+	return err
+}
+
+func (s *Service) deleteModelProfileLocked(ctx context.Context, revision *int64, id string, by ProfileActor) (string, error) {
+	ps, seeded, err := s.modelProfilesLocked(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if revision != nil && *revision != ps.Revision {
-		return errModelProfileConflict
+		return "", errModelProfileConflict
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == id })
 	if i < 0 {
-		return errModelProfileNotFound
+		return "", errModelProfileNotFound
 	}
 	state, err := s.readModelProfileState(ctx)
 	if err != nil {
-		return err
+		return "", err
+	}
+	if seeded {
+		state.seed()
 	}
 	if state.Active == id {
-		return i18n.Err("assistant-model_profiles.err_active", i18n.Args{"name": ps.Profiles[i].Name})
+		return "", i18n.Err("assistant-model_profiles.err_active", i18n.Args{"name": ps.Profiles[i].Name})
 	}
 	ps.Profiles = slices.Delete(ps.Profiles, i, i+1)
 	ps.Revision++
 	state.record(ModelProfileEvent{At: time.Now().UTC(), Action: "delete", To: id, By: by})
 	if err := s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: ps, modelProfileStateKey: state}); err != nil {
-		return err
+		return "", err
 	}
 	s.ProfileChanged(ctx)
-	return nil
+	return state.Active, nil
 }

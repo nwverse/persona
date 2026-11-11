@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { describe, expect, it } from "vitest";
 import {
   agentPreset,
@@ -17,8 +18,12 @@ import {
   kindOf,
   linkGroups,
   markParts,
+  minutesKeptUntil,
   parseLogLine,
   recordingView,
+  recordingClock,
+  transcriptLineId,
+  transcriptTarget,
   durationLabel,
   parseMessageLine,
   parseRecent,
@@ -326,6 +331,34 @@ describe("开 Agent", () => {
   });
 });
 
+describe("recording minutes helpers", () => {
+  it("labels minutes search hits", () => {
+    expect(hitView({ path: "recordings/example/minutes.md", line: "- Design review" })).toEqual({ source: t("lib-kb.hit_minutes"), text: "Design review", day: null });
+  });
+  it("uses local clock math across midnight and keeps fractional offsets", () => {
+    const start = new Date(2026, 10, 9, 23, 59, 50).toISOString();
+    expect(recordingClock(start, 15.5)).toBe("00:00:05");
+    expect(recordingClock(start, 3615)).toBe("01:00:05");
+    expect(recordingClock("invalid", 65.9)).toBe("1:05");
+    expect(recordingClock(undefined, 3723)).toBe("1:02:03");
+    expect(transcriptLineId(15.5)).toBe("recording-line-15.5");
+    expect(transcriptLineId(15.5, true)).toBe("recording-bookmark-15.5");
+  });
+  it("targets ordered spoken lines, including gaps, not intervening bookmarks", () => {
+    const rec = recordingView("recordings", { bookmarks: [{ at: 12, label: "Review" }, { at: 20.5 }] }, [
+      { start: 20.5, end: 25, text: "Second" }, { start: 5, end: 10, text: "First" },
+    ])!;
+    expect(rec.lines.map((line) => line.seconds)).toEqual([5, 12, 20.5, 20.5]);
+    expect(transcriptTarget(rec.lines, 0)).toBe(transcriptLineId(5));
+    expect(transcriptTarget(rec.lines, 5)).toBe(transcriptLineId(5));
+    expect(transcriptTarget(rec.lines, 18)).toBe(transcriptLineId(5));
+    expect(transcriptTarget(rec.lines, 20.5)).toBe(transcriptLineId(20.5));
+    expect(transcriptTarget(rec.lines, 100)).toBe(transcriptLineId(20.5));
+    expect(transcriptTarget(rec.lines.filter((line) => line.bookmark), 12)).toBeUndefined();
+    expect(transcriptTarget([], 0)).toBeUndefined();
+  });
+});
+
 describe("recordingView", () => {
   it("is only for recordings", () => {
     expect(recordingView("meetings", {}, [])).toBeNull();
@@ -342,9 +375,9 @@ describe("recordingView", () => {
       ],
     )!;
     expect(v.lines).toEqual([
-      { clock: "09:00:00", text: "第一段" },
-      { clock: "09:00:12", text: "灰度", bookmark: true },
-      { clock: "09:00:20", text: "后一段" },
+      { seconds: 0, clock: "09:00:00", text: "第一段" },
+      { seconds: 12, clock: "09:00:12", text: "灰度", bookmark: true },
+      { seconds: 20, clock: "09:00:20", text: "后一段" },
     ]);
     expect(v.partial).toBe(true);
     expect(v.duration).toBe(durationLabel(3733));
@@ -353,4 +386,38 @@ describe("recordingView", () => {
   it("falls back to offsets without a start", () => {
     expect(recordingView("recordings", { complete: true }, [{ start: 3723, end: 3730, text: "x" }])!.lines[0].clock).toBe("1:02:03");
   });
+  it.each([
+    [{}, undefined, undefined],
+    [{ attendance: "off" }, undefined, undefined],
+    [{ attendance: "observer" }, undefined, undefined],
+    [{ attendance: "listener" }, "listener", undefined],
+    [{ attendance: "participant", attending_session: { machine_id: "macbook", session_id: "s1" } }, "participant", { machineId: "macbook", sessionId: "s1" }],
+    [{ attendance: "participant", attending_session: { machine_id: "macbook", session_id: "" } }, "participant", undefined],
+    [{ attendance: "listener", attending_session: null }, "listener", undefined],
+  ])("reads the attendance of %j", (meta, attendance, attendingSession) => {
+    const v = recordingView("recordings", meta, [])!;
+    expect(v.attendance).toBe(attendance);
+    expect(v.attendingSession).toEqual(attendingSession);
+  });
+  it.each([
+    [{ trimmed_at: "2026-11-25T02:00:00Z" }, "2026-11-25T02:00:00Z"],
+    [{ trimmed_at: "soon" }, undefined],
+    [{ trimmed_at: 1 }, undefined],
+    [{}, undefined],
+  ])("reads trimmed_at of %j", (meta, trimmedAt) => {
+    expect(recordingView("recordings", meta, [])!.trimmedAt).toBe(trimmedAt);
+  });
+});
+
+describe("minutesKeptUntil", () => {
+  it("is the start plus the minutes' days, as a date", () => {
+    const start = new Date(2026, 10, 5, 9, 0, 0);
+    expect(minutesKeptUntil(start.toISOString(), 30)).toBe(minutesKeptUntil(new Date(start.getTime() + 29 * 86_400_000).toISOString(), 1));
+    expect(minutesKeptUntil(start.toISOString(), 30)).not.toBe(minutesKeptUntil(start.toISOString(), 29));
+    expect(minutesKeptUntil(start.toISOString(), 365)).toContain("2027");
+  });
+  it.each([[undefined, 30], ["not a time", 30], ["2026-11-05T09:00:00Z", 0], ["2026-11-05T09:00:00Z", 1.5], ["2026-11-05T09:00:00Z", "30"], ["2026-11-05T09:00:00Z", undefined]])(
+    "is unknown for %j and %j", (start, days) => {
+      expect(minutesKeptUntil(start, days)).toBeUndefined();
+    });
 });

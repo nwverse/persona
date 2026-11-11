@@ -2,7 +2,6 @@ package hub
 
 import (
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/osproc"
 )
@@ -47,6 +47,8 @@ type adminState struct {
 	ifCache       []ifacePrefix
 	ifCached      time.Time
 	gatewayLogged time.Time
+	// apiGatewayLogged: when plaintext API traffic from the container's gateway was last said to be refused (gate.go).
+	apiGatewayLogged time.Time
 
 	// Seams for tests.
 	prefixes  func() []ifacePrefix
@@ -130,6 +132,9 @@ func (h *Hub) adminRoutes(mux *http.ServeMux, api, web http.Handler) http.Handle
 	h.adminMachineRoutes(closed)
 	h.adminUsageRoutesRelayed(closed) // the usage sources page, the manager's (devices_routes.go, #2595)
 	h.adminDeviceRoutes(closed)
+	h.adminPasswordLoginRoutes(closed)
+	h.adminOwnerRoutes(closed)
+	h.adminShareRoutes(closed)
 	h.adminNetworkRoutes(closed)
 	h.adminExtensionRoutes(closed)
 	// Hub mesh (docs/archive/operations/plan-hub-mesh.md 2.7): /peers and /routes, from the mesh's own file.
@@ -274,21 +279,7 @@ func (h *Hub) adminPage(dir string) http.Handler {
 }
 
 // readAdminJSON decodes a small JSON body into v (an empty body is {}).
-func readAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	b, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return false
-	}
-	if len(strings.TrimSpace(string(b))) == 0 {
-		return true
-	}
-	if err := json.Unmarshal(b, v); err != nil {
-		writeErrCode(w, http.StatusBadRequest, "bad_request", errors.New("bad JSON: "+err.Error()))
-		return false
-	}
-	return true
-}
+var readAdminJSON = apierr.ReadAdminJSON
 
 // supervised is whether something restarts the hub when it exits: systemd (INVOCATION_ID), a container's restart
 // policy, or PERSONA_SUPERVISED=1 for anything else that does.

@@ -81,7 +81,10 @@ func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy st
 		s.Capabilities.Send, s.Capabilities.Attach, s.Capabilities.Interrupt = false, false, false
 	}
 	if !origin.desktop {
-		return
+		// An App chat whose rollout is gone is grouped as one with a rollout (codex_appdb.go).
+		if _, app := codexAppThreadOf(src); !app {
+			return
+		}
 	}
 	s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
 	app := loadCodexAppState(src.home)
@@ -94,7 +97,15 @@ func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy st
 		}
 	}
 	s.RepoRoot = codexProjectRoot(cwd, projects)
-	if s.RepoRoot != "" {
+	// A chat the App keeps in no project (projectless-thread-ids) is under "Codex chats", as the App's sidebar lists it
+	// and placeCodexDesktop placed it, whatever folder the App made for it (~/Documents/Codex/<date>/<name>): by its
+	// folder it was a project of its own. A subagent goes by its chat: resolveCodexHierarchy gives it its chat's place,
+	// but not when the chat is not listed (archived in the App, or read from its database without sqlite3).
+	chat := src.thread
+	if s.IsSubagent {
+		chat = firstNonEmpty(origin.root, s.ParentThreadID, chat)
+	}
+	if s.RepoRoot != "" && !app.inNoProject(chat) {
 		s.SpaceID, s.SpaceName = "codex-project:"+s.RepoRoot, filepath.Base(s.RepoRoot)
 	} else {
 		s.SpaceID, s.SpaceName = "codex-chats:"+src.home, "Codex 对话"
@@ -146,12 +157,12 @@ func resolveCodexHierarchy(sessions []proto.Session) {
 // programRun: a one-shot run a program started (`codex exec`, an SDK; an evaluation opens dozens at once, #2131),
 // known only from its rollout: not one of the user's agents. A thread a shared app-server holds is drivable and stays,
 // as does a run the Codex App lists in its sidebar.
-func (n *Node) programRun(id string, src codexSource) bool {
+func (n *Node) programRun(id string, src codexSource, pass *codexListPass) bool {
 	if src.path == "" || !readCodexOrigin(src.path).exec {
 		return false
 	}
 	if _, _, err := n.codexOwner(id); err != errCodexNoOwner {
 		return false
 	}
-	return !codexDesktopChat(src)
+	return !codexDesktopChatIn(src, pass)
 }

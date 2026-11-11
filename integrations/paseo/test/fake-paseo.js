@@ -19,6 +19,31 @@ export function agentSnapshot(fields = {}) {
 }
 
 /**
+ * What Paseo 0.13.2's AgentSessionConfigSchema (messages.ts McpServerConfigSchema) takes in config.mcpServers: a record of
+ * servers, each stdio (command, args, env), http or sse, discriminated by `type` — which stdio servers must carry.
+ * Returns what is wrong, or null.
+ */
+export function mcpServersError(servers) {
+  if (servers === undefined) return null
+  const isStrings = (a) => Array.isArray(a) && a.every((x) => typeof x === 'string')
+  const isRecord = (o) => o && typeof o === 'object' && !Array.isArray(o) && Object.values(o).every((x) => typeof x === 'string')
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return 'mcpServers: not a record'
+  for (const [name, s] of Object.entries(servers)) {
+    const at = `mcpServers.${name}`
+    if (s?.type === 'stdio') {
+      if (typeof s.command !== 'string') return `${at}.command: not a string`
+      if (s.args !== undefined && !isStrings(s.args)) return `${at}.args: not a list of strings`
+      if (s.env !== undefined && !isRecord(s.env)) return `${at}.env: not a record of strings`
+    } else if (s?.type === 'http' || s?.type === 'sse') {
+      if (typeof s.url !== 'string') return `${at}.url: not a string`
+    } else {
+      return `${at}.type: expected stdio, http or sse`
+    }
+  }
+  return null
+}
+
+/**
  * @param {import('node:test').TestContext} t
  * @param {{ version?: string, providers?: object, entries?: object[], agents?: {agent: object, project?: object}[] }} [o]
  */
@@ -35,6 +60,8 @@ export async function startFakePaseo(t, o = {}) {
     subs: new Map(), // subscriptionId → { conn, kind, events?, agentIds? }
     handlers: {}, // a test's own answers: type → (msg) => payload | undefined
     refuse: undefined, // close code for the next hellos
+    refuseDelay: 0, // ms before an MCP refusal is answered (a creation slow to fail)
+    noMcp: new Set(o.noMcpProviders ?? []), // providers that take no MCP servers (Paseo's requireExternalMcpSupport)
   }
   let n = 0
   const http = createServer()
@@ -98,11 +125,25 @@ export async function startFakePaseo(t, o = {}) {
       case 'session.events.set_subscription.request':
         return reply(c, 'session.events.set_subscription.response', { requestId: id, subscriptionId: sub('events', { events: msg.events }) })
       case 'fetch_agents_request': {
-        const list = [...f.agents.values()].filter((e) => !e.agent.archivedAt)
+        // Archived agents only when asked for, and then among the others; in the order asked for, a page at a time.
+        const list = [...f.agents.values()].filter((e) => msg.filter?.includeArchived || !e.agent.archivedAt)
+        const by = msg.sort?.[0]
+        if (by?.key === 'updated_at') {
+          const at = (e) => Date.parse(e.agent.updatedAt) || 0
+          list.sort((x, y) => (by.direction === 'asc' ? at(x) - at(y) : at(y) - at(x)))
+        }
+        const from = Number(msg.page?.cursor) || 0
+        const limit = msg.page?.limit ?? list.length
+        const more = from + limit < list.length
         return reply(c, 'fetch_agents_response', {
-          requestId: id, subscriptionId: msg.subscribe ? sub('agents') : null, entries: list,
-          pageInfo: { nextCursor: null, prevCursor: null, hasMore: false },
+          requestId: id, subscriptionId: msg.subscribe ? sub('agents') : null, entries: list.slice(from, from + limit),
+          pageInfo: { nextCursor: more ? String(from + limit) : null, prevCursor: null, hasMore: more },
         })
+      }
+      case 'fetch_agent_request': {
+        // An archived agent's record is still there; a deleted one is a null agent, not an error.
+        const e = f.agents.get(msg.agentId)
+        return reply(c, 'fetch_agent_response', { requestId: id, agent: e?.agent ?? null, project: e?.project ?? null, error: null })
       }
       case 'agent.timeline.set_subscription.request':
         return reply(c, 'agent.timeline.set_subscription.response', { requestId: id, agentIds: msg.agentIds, subscriptionId: sub('timeline', { agentIds: msg.agentIds }) })
@@ -133,13 +174,19 @@ export async function startFakePaseo(t, o = {}) {
         return reply(c, replyType(msg.type), { requestId: id, agentId: msg.agentId, accepted: true, error: null })
       case 'archive_agent_request': {
         const at = new Date().toISOString()
-        const e = f.agents.get(msg.agentId)
-        if (e) e.agent = { ...e.agent, archivedAt: at }
         reply(c, 'agent_archived', { requestId: id, agentId: msg.agentId, archivedAt: at })
-        f.emit('agents', { type: 'agent_update', payload: { kind: 'remove', agentId: msg.agentId } })
+        f.archive(msg.agentId, at)
         return
       }
       case 'agent.create.request': {
+        const bad = mcpServersError(msg.config.mcpServers)
+        if (bad) return reply(c, 'agent.create.response', { requestId: id, agent: null, error: `Invalid agent config: ${bad}` })
+        if (Object.keys(msg.config.mcpServers ?? {}).length && f.noMcp.has(msg.config.provider)) {
+          const refuse = () => reply(c, 'agent.create.response', { requestId: id, agent: null, error: `Provider '${msg.config.provider}' does not support MCP servers` })
+          if (f.refuseDelay) setTimeout(refuse, f.refuseDelay).unref()
+          else refuse()
+          return
+        }
         const agent = agentSnapshot({ id: msg.agentId ?? randomUUID(), provider: msg.config.provider, cwd: msg.config.cwd, labels: msg.labels ?? {},
           model: msg.config.model ?? null, currentModeId: msg.config.modeId ?? null, thinkingOptionId: msg.config.thinkingOptionId ?? null,
           status: msg.initialPrompt ? 'running' : 'idle', workspaceId: msg.workspaceId ?? 'wks_new' })
@@ -178,6 +225,42 @@ export async function startFakePaseo(t, o = {}) {
     const prev = f.agents.get(agent.id)
     f.agents.set(agent.id, { agent, project: project ?? prev?.project ?? null })
     f.emit('agents', { type: 'agent_update', payload: { kind: 'upsert', agent, project: project ?? prev?.project ?? null } })
+  }
+  /**
+   * An agent is archived: its record stays, and it leaves the list (told twice, as Paseo does for an agent that ran:
+   * when it closes it, and when it stores its record). The agents it created go with it (Paseo's
+   * cascadeArchiveChildren): those in its workspace are archived too, one in another workspace is let go of.
+   */
+  f.archive = (agentId, at = new Date().toISOString()) => {
+    const e = f.agents.get(agentId)
+    if (!e || e.agent.archivedAt) return
+    e.agent = { ...e.agent, archivedAt: at, updatedAt: at }
+    for (let i = 0; i < 2; i++) f.emit('agents', { type: 'agent_update', payload: { kind: 'remove', agentId } })
+    for (const k of [...f.agents.values()]) {
+      if (k.agent.archivedAt || k.agent.labels?.['paseo.parent-agent-id'] !== agentId) continue
+      if (k.agent.workspaceId === e.agent.workspaceId) f.archive(k.agent.id, at)
+      else {
+        const { 'paseo.parent-agent-id': _, ...labels } = k.agent.labels
+        f.upsert({ ...k.agent, labels })
+      }
+    }
+  }
+  /**
+   * An agent is deleted in another client (Paseo's own app, its command line): nothing of it is left. Paseo tells
+   * the removal only to the lists of the client that deleted it (session.ts handleDeleteAgentRequest): every other
+   * one sees the agent closed when it ran (its last state), and nothing when it did not. told: the lists are told
+   * of the removal, as that client's are. after: ms from closing the agent to its record being gone.
+   */
+  f.delete = (agentId, { told = false, after = 0 } = {}) => {
+    const e = f.agents.get(agentId)
+    if (!e) return
+    if (e.agent.status !== 'closed' && !e.agent.archivedAt) f.upsert({ ...e.agent, status: 'closed' })
+    const gone = () => {
+      f.agents.delete(agentId)
+      if (told) f.emit('agents', { type: 'agent_update', payload: { kind: 'remove', agentId } })
+    }
+    if (after) setTimeout(gone, after).unref()
+    else gone()
   }
   f.update = (agentId, fields) => {
     const e = f.agents.get(agentId)

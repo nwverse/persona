@@ -42,7 +42,7 @@ type probeInput struct {
 
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
-	base, key, headers, model, proxy, api string
+	base, key, headers, model, proxy, noProxy, api, kind string
 }
 
 func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, error) {
@@ -54,15 +54,21 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 			return t, i18n.Err("assistant-models_probe.err_no_provider", i18n.Args{"name": in.Name})
 		}
 		l := list[i]
-		key, err := s.openKey(l.KeySealed)
+		key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 		if err != nil {
+			if _, ref := s.keyReference(l.KeySealed); ref {
+				return t, err // the provider extension's words
+			}
 			return t, i18n.Err("assistant-models_probe.err_open_key")
 		}
 		headers, err := s.openKey(l.HeadersSealed)
 		if err != nil {
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
-		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy, api: l.API}
+		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind}
+		if t.kind == "" {
+			t.kind = "launcher" // Stored entries without kind are legacy launchers.
+		}
 	}
 	if b := strings.TrimSpace(in.BaseURL); b != "" {
 		// The stored key and headers only go to the stored gateway: another address gets just what the request brings.
@@ -85,6 +91,12 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if !ok {
 			return t, errNoPreset
 		}
+		if in.Name == "" {
+			t.kind = pr.Kind
+			if t.kind == "" {
+				t.kind = "launcher"
+			}
+		}
 		if strings.TrimSpace(t.base) == "" {
 			t.base = pr.BaseURL
 		}
@@ -101,8 +113,13 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	if t.api != "" && t.api != "messages" && t.api != "responses" && t.api != "chat" {
 		return t, i18n.Err("assistant-models_launchers.err_api")
 	}
-	if t.api == "chat" && (strings.TrimSpace(t.headers) != "" || strings.TrimSpace(t.proxy) != "") {
-		return t, errChatTransport
+	// An anonymous Messages probe also tests launchers, so only a stored provider or
+	// preset identifies it as direct API. Anonymous Responses calls are direct API.
+	if t.kind == "" && t.api == "responses" {
+		t.kind = "api"
+	}
+	if err := checkAPITransport(t.kind, t.api, t.proxy, t.noProxy, strings.TrimSpace(t.headers) != ""); err != nil {
+		return t, err
 	}
 	// Both credential headers go anyway (cindy's buildProbeRequest), so Auth only tidies a pasted "Bearer …".
 	t.key = strings.TrimSpace(strings.TrimPrefix(t.key, "Bearer "))
@@ -122,6 +139,22 @@ func (t probeTarget) endpoint(path string) string {
 		return t.base + "/" + path
 	}
 	return t.base + "/v1/" + path
+}
+
+// modelsEndpoint keeps discovery separate from the inference protocol. DeepSeek documents /models at the
+// official origin, not under its /anthropic Messages base (https://api-docs.deepseek.com/api/list-models/).
+// Only its known HTTPS bases qualify; custom gateway prefixes and authorities stay untouched.
+func (t probeTarget) modelsEndpoint() string {
+	u, err := url.Parse(t.base)
+	if err == nil && u.Scheme == "https" && u.User == nil && u.RawQuery == "" && u.Fragment == "" &&
+		(strings.EqualFold(u.Host, "api.deepseek.com") || strings.EqualFold(u.Host, "api.deepseek.com:443")) {
+		switch u.EscapedPath() {
+		case "", "/v1", "/anthropic", "/anthropic/v1":
+			u.Path, u.RawPath = "/models", ""
+			return u.String()
+		}
+	}
+	return t.endpoint("models")
 }
 
 // do sends one request with the custom headers first, then the version and both credential headers.
@@ -320,7 +353,10 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		"messages": []any{map[string]any{"role": "user", "content": "ping"}}}
 	if t.api == "responses" {
 		path = "responses"
-		payload = map[string]any{"model": t.model, "input": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "store": false}
+		// The same shape as the real calls (ai.respond: the system prompt as a developer message), so a key that
+		// passes is one those calls work with.
+		payload = map[string]any{"model": t.model, "input": []any{map[string]any{"role": "developer", "content": "Reply in one word."},
+			map[string]any{"role": "user", "content": "ping"}}, "stream": true, "store": false}
 	} else if t.api == "chat" {
 		path = "chat/completions"
 		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
@@ -370,29 +406,27 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	return out
 }
 
-// responsesProbeCompleted requires the same terminal event as the runtime, within the response budget.
+// responsesProbeCompleted requires the same terminal event as the runtime, within the response budget, reading the
+// stream's events the way the runtime does (ai.SSEEvents).
 func responsesProbeCompleted(body io.Reader) bool {
-	sc := bufio.NewScanner(io.LimitReader(body, 8<<20))
-	sc.Buffer(make([]byte, 64<<10), 4<<20)
-	for sc.Scan() {
-		data, ok := strings.CutPrefix(sc.Text(), "data:")
-		if !ok {
-			continue
-		}
+	completed := false
+	err := ai.SSEEvents(io.LimitReader(body, 8<<20), func(data string) bool {
 		var event struct {
 			Type string `json:"type"`
 		}
-		if json.Unmarshal([]byte(strings.TrimSpace(data)), &event) != nil {
-			continue
+		if json.Unmarshal([]byte(data), &event) != nil {
+			return false
 		}
 		switch event.Type {
 		case "response.completed":
+			completed = true
 			return true
 		case "response.failed", "response.incomplete", "error":
-			return false
+			return true
 		}
-	}
-	return false
+		return false
+	})
+	return err == nil && completed
 }
 
 // chatProbeCompleted follows the first choice to a terminal event, including errors after its finish reason.
@@ -458,7 +492,7 @@ func chatProbeCompleted(body io.Reader) bool {
 	return hasText && finished
 }
 
-// providerDiscover: GET <base>/v1/models, its models filled in from the catalog.
+// providerDiscover reads the provider's model-list endpoint, its models filled in from the catalog.
 func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[string]any {
 	models := []proto.ProviderModel{}
 	enriched := func() []proto.ProviderModel {
@@ -478,6 +512,9 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 	// failed is fail with what failure says, and its code when it has one
 	failed := func(res *http.Response, err error) map[string]any {
 		msg, code := t.failure(ctx, res, err)
+		if err == nil && res != nil && res.StatusCode == http.StatusNotFound {
+			msg = pt(i18n.From(ctx), "models_not_found")
+		}
 		out := fail(msg)
 		if code != "" {
 			out["code"] = code
@@ -488,8 +525,9 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 	seenModels := map[string]int{}
 	seenCursors := map[string]bool{}
 	query := url.Values{}
+	modelsEndpoint := t.modelsEndpoint()
 	for page := 0; page < maxPages; page++ {
-		endpoint := t.endpoint("models")
+		endpoint := modelsEndpoint
 		if len(query) > 0 {
 			endpoint += "?" + query.Encode()
 		}
@@ -574,7 +612,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		case nextPage != "":
 			query.Set("page", nextPage)
 		case next != "":
-			base, _ := url.Parse(t.endpoint("models"))
+			base, _ := url.Parse(modelsEndpoint)
 			ref, err := url.Parse(next)
 			if err != nil {
 				return fail(pt(i18n.From(ctx), "models_pagination"))

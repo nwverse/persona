@@ -18,6 +18,10 @@ import (
 // exact source and chat, and first-write-wins: replay or an edited body with the
 // same ID adds nothing. Missing IDs retain legacy append behavior. Old Markdown
 // has no recoverable IDs, so only messages ingested with receipts are replay-safe.
+//
+// With a selection (Engine.Selection), every message goes through it first (Selection.Evaluate): only what it
+// stores is written, with its rule's days, and the mine rule's context is kept per chat between batches
+// (select_context.go). A chat outside the selection (Selected false) is archived as before.
 func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []SourceMessage) (int, error) {
 	if e.Store.ReadOnly() {
 		return 0, ErrReadOnly
@@ -37,33 +41,105 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	if err := attributeChat(c, src); err != nil {
 		return 0, err
 	}
-	var lines []Line
-	var kept []SourceMessage
+	sel, ret, facts := e.selection(), e.Retention(), ChatFactsOf(src.Name(), sc)
+	selecting := sel != nil && facts.Selected()
+	unchanged := func() (int, error) {
+		if exists {
+			e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
+		}
+		return 0, nil
+	}
+	span := 0
+	var win mineWindow
+	if selecting {
+		if !sel.ReadChat(ret, facts).Read {
+			return unchanged()
+		}
+		if span = sel.MineContext(); span > 0 {
+			if win, err = e.Store.mineWindow(c.ID, src.Name(), sc.ID); err != nil {
+				return 0, err
+			}
+		}
+	}
+	type pick struct {
+		m    SourceMessage
+		d    Decision
+		late bool // stored with a later message of the owner's: older than lines written before it
+	}
+	var picks []pick
 	for _, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		if m.At.Before(cut) {
+		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
+			continue
+		}
+		if !selecting {
+			if !m.At.Before(cut) {
+				picks = append(picks, pick{m: m, d: Decision{Store: true, Days: or(e.TextDays, 365), AttachmentDays: e.AttachmentDaysFor(src.Name())}})
+			}
+			continue
+		}
+		if span > 0 && win.seen(m.ID) {
+			continue
+		}
+		mf := MessageFactsOf(m)
+		switch {
+		case m.Mine && span > 0:
+			for _, b := range win.Before {
+				if b.Stored {
+					continue
+				}
+				bf := MessageFactsOf(b.M)
+				bf.NearMine = true
+				if d := sel.Evaluate(ret, facts, bf); d.Store {
+					picks = append(picks, pick{m: b.M, d: d, late: true})
+				}
+			}
+			win.Before, win.After = nil, span
+		case win.After > 0:
+			mf.NearMine = true
+			win.After--
+		}
+		d := sel.Evaluate(ret, facts, mf)
+		if d.Store {
+			picks = append(picks, pick{m: m, d: d})
+		}
+		if span > 0 {
+			win.push(m, d.Store, span)
+		}
+	}
+	saveWindow := func() error {
+		if span == 0 {
+			return nil
+		}
+		return e.Store.putMineWindow(c.ID, win)
+	}
+	var lines []ingestLine
+	var kept []SourceMessage
+	for _, p := range picks {
+		m := p.m
+		if m.At.Before(e.CutoffFor(p.d.Days)) {
 			continue
 		}
 		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
 			continue
 		}
-		l := e.line(ctx, src.Download, c, m)
+		l := e.buildLine(ctx, src.Download, c, m, false, p.d.AttachmentDays)
 		if l.Text == "" {
 			continue
 		}
-		lines = append(lines, l)
+		lines = append(lines, ingestLine{Line: l, rule: p.d.Rule, late: p.late})
 		if m.ID != "" {
 			r.IDs[m.ID] = m.At
 		}
 		kept = append(kept, m)
 	}
 	if len(lines) == 0 {
-		if exists {
-			e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
+		if err := saveWindow(); err != nil {
+			return 0, err
 		}
-		return 0, nil
+		return unchanged()
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -77,9 +153,13 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	if err := attributeChat(c, src); err != nil {
 		return 0, err
 	}
-	for _, m := range kept {
+	for i, m := range kept {
 		if m.ID != "" {
 			r.IDs[m.ID] = m.At
+			if r.Lines == nil {
+				r.Lines = map[string]messageReceiptLine{}
+			}
+			r.Lines[m.ID] = messageReceiptLine{Hash: receiptLineHash(lines[i].Line), Mine: m.Mine}
 		}
 		e.notePerson(c, src.Name(), m)
 		c.Mine = c.Mine || m.Mine
@@ -94,8 +174,17 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	c.Messages += len(lines)
 	c.Pending += len(lines)
-	if err := e.Store.commitIngest(c, lines, r); err != nil {
+	usual := ""
+	if selecting {
+		usual = sel.UsualRule(ret, facts)
+		c.Rule = usual
+	}
+	if err := e.Store.commitIngest(c, lines, r, selecting, usual); err != nil {
 		return 0, err
+	}
+	// After the commit: a window saved before it would say messages are stored that a failed commit never wrote.
+	if err := saveWindow(); err != nil {
+		e.logf("selection context of %s: %v", c.ID, err)
 	}
 	e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 	return len(lines), nil
@@ -113,7 +202,8 @@ type (
 
 var ErrNotFound = errors.New("not found")
 
-// Get reads one entity. recentChars bounds a chat's latest messages (0: none).
+// Get reads one entity. recentChars bounds a chat's latest messages in bytes, a recording's transcript in characters
+// (0: none).
 func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	if kind == KindRecording {
 		id, _ = RecordingID(id) // the phone's UUID in any case
@@ -121,7 +211,7 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	d := &Detail{Kind: kind, ID: SafeID(id)}
 	var meta string
 	switch kind {
-	case KindChat, KindPerson, KindProject, KindRecording:
+	case KindChat, KindPerson, KindProject, KindRecording, KindTopic:
 		meta = e.Store.path(kind, id, "meta.json")
 		d.Path = e.Store.path(kind, id)
 		d.Summary = e.Store.Summary(kind, id)
@@ -147,6 +237,12 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		return nil, ErrNotFound
 	}
 	d.Meta = raw
+	if kind == KindRecording {
+		e.Store.recFilesMu.RLock()
+		m, _ := e.Store.readMeeting(id)
+		e.Store.recFilesMu.RUnlock()
+		d.Meta = metaWithMeeting(raw, m)
+	}
 	if kind == KindProject {
 		d.Log = e.Store.Log(id, 30)
 		if p, ok := e.Store.Project(id); ok {
@@ -162,6 +258,9 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		var segs []RecordingSegment
 		_ = json.Unmarshal(recording["segments.json"], &segs)
 		d.Segments = nonNilSegments(segs)
+		if raw, err := os.ReadFile(e.Store.path(kind, id, "minutes.json")); err == nil && json.Valid(raw) {
+			d.Minutes = raw
+		}
 		if recentChars > 0 {
 			raw := recording["transcript.md"]
 			d.Recent = clip(string(raw), recentChars)
@@ -169,6 +268,9 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	}
 	if kind == KindChat && recentChars > 0 {
 		d.Recent = e.Store.Since(id, time.Now().AddDate(0, 0, -7), recentChars)
+	}
+	if kind == KindTopic {
+		d.Points = e.Store.TopicPoints(id)
 	}
 	var refs struct {
 		Projects []string `json:"projects"`
@@ -322,27 +424,30 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		p.Dirs = addUnique(p.Dirs, u.Dirs...)
 		p.People = addUnique(p.People, u.People...)
 		for _, pid := range u.People {
-			if person, ok := e.Store.Person(pid); ok {
+			_, _, err := e.Store.updatePerson(pid, true, nil, func(person *Person) bool {
 				person.Projects = addUnique(person.Projects, p.Slug)
 				if u.Lock == nil || *u.Lock {
 					person.LockedFields = addUnique(person.LockedFields, "projects")
 				}
-				if err := e.Store.putEntity(KindPerson, person.ID, person, &person.Tagging, true); err != nil {
-					return "", err
-				}
+				return true
+			})
+			if err != nil {
+				return "", err
 			}
 		}
 		for _, cid := range u.Chats {
-			if c, ok := e.Store.Chat(cid); ok {
-				p.Chats = addUnique(p.Chats, c.ID)
+			c, ok, err := e.Store.editChat(cid, func(c *Chat) {
 				c.Projects = addUnique(c.Projects, p.Slug)
 				if u.Lock == nil || *u.Lock {
 					c.LockedFields = addUnique(c.LockedFields, "projects")
 				}
+			})
+			if err != nil {
+				return "", err
+			}
+			if ok {
+				p.Chats = addUnique(p.Chats, c.ID)
 				p.People = addUnique(p.People, c.People...)
-				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
-					return "", err
-				}
 			}
 		}
 		if u.Log != "" {
@@ -375,31 +480,39 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		e.index(KindProject, p.Slug, p.Name, p.Tagging, p.OneLine, p.Updated)
 		return p.Slug, nil
 	case KindChat:
-		c, ok := e.Store.Chat(id)
+		var linked []*Project
+		for _, slug := range u.Projects {
+			if pr, ok := e.Store.Project(slug); ok {
+				linked = append(linked, pr)
+			}
+		}
+		// The chat is read again under chatMu and only the user's fields change: what an ingest wrote meanwhile stays.
+		c, ok, err := e.Store.editChat(id, func(c *Chat) {
+			tagUpdate(u, &c.Tagging)
+			protectUpdate(u, &c.Tagging)
+			if u.Name != "" {
+				c.Name = u.Name
+			}
+			for _, pr := range linked {
+				c.Projects = addUnique(c.Projects, pr.Slug)
+			}
+			c.People = removeStrings(c.People, u.RemovePeople)
+			c.Projects = removeStrings(c.Projects, u.RemoveProjects)
+		})
+		if err != nil {
+			return "", err
+		}
 		if !ok {
 			return "", ErrNotFound
 		}
-		tagUpdate(u, &c.Tagging)
-		protectUpdate(u, &c.Tagging)
-		if u.Name != "" {
-			c.Name = u.Name
-		}
-		for _, slug := range u.Projects {
-			if pr, ok := e.Store.Project(slug); ok {
-				c.Projects = addUnique(c.Projects, pr.Slug)
-				pr.Chats = addUnique(pr.Chats, c.ID)
-				if u.Lock == nil || *u.Lock {
-					pr.LockedFields = addUnique(pr.LockedFields, "chats")
-				}
-				if err := e.Store.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, true); err != nil {
-					return "", err
-				}
+		for _, pr := range linked {
+			pr.Chats = addUnique(pr.Chats, c.ID)
+			if u.Lock == nil || *u.Lock {
+				pr.LockedFields = addUnique(pr.LockedFields, "chats")
 			}
-		}
-		c.People = removeStrings(c.People, u.RemovePeople)
-		c.Projects = removeStrings(c.Projects, u.RemoveProjects)
-		if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
-			return "", err
+			if err := e.Store.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, true); err != nil {
+				return "", err
+			}
 		}
 		if u.Summary != "" {
 			if err := e.Store.putSummary(KindChat, c.ID, u.Summary, true); err != nil {
@@ -412,18 +525,17 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 		return c.ID, nil
 	case KindPerson:
+		if u.Status != "" && u.Status != "active" && u.Status != "ignored" && u.Status != "self" {
+			return "", fmt.Errorf("unknown person status %q", u.Status)
+		}
 		p, ok := e.Store.Person(id)
 		if !ok {
 			return "", ErrNotFound
 		}
-		tagUpdate(u, &p.Tagging)
-		protectUpdate(u, &p.Tagging)
-		if u.Note != "" {
-			p.Note = oneLine(u.Note)
-		}
+		var linked []string
 		for _, slug := range u.Projects {
 			if pr, ok := e.Store.Project(slug); ok {
-				p.Projects = addUnique(p.Projects, pr.Slug)
+				linked = append(linked, pr.Slug)
 				pr.People = addUnique(pr.People, p.ID)
 				if u.Lock == nil || *u.Lock {
 					pr.LockedFields = addUnique(pr.LockedFields, "people")
@@ -433,10 +545,26 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 				}
 			}
 		}
-		p.Chats = removeStrings(p.Chats, u.RemoveChats)
-		p.Projects = removeStrings(p.Projects, u.RemoveProjects)
-		if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, true); err != nil {
+		// Changed on the person as read again under personMu: what the pipeline linked meanwhile stays.
+		p, _, err := e.Store.updatePerson(id, true, nil, func(p *Person) bool {
+			tagUpdate(u, &p.Tagging)
+			protectUpdate(u, &p.Tagging)
+			if u.Note != "" {
+				p.Note = oneLine(u.Note)
+			}
+			if u.Status != "" {
+				p.Status = u.Status
+			}
+			p.Projects = addUnique(p.Projects, linked...)
+			p.Chats = removeStrings(p.Chats, u.RemoveChats)
+			p.Projects = removeStrings(p.Projects, u.RemoveProjects)
+			return true
+		})
+		if err != nil {
 			return "", err
+		}
+		if p == nil {
+			return "", ErrNotFound // forgotten meanwhile
 		}
 		if err := e.unlink(KindPerson, p.ID, u); err != nil {
 			return "", err
@@ -475,6 +603,41 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		}
 		e.index(kind, it.ID, it.Title, it.Tagging, it.Note, it.At)
 		return it.ID, nil
+	case KindTopic:
+		// The curation owns the points (topics.go); by hand the name, the one line, aliases, tags and pinned facts,
+		// which the merge reads and never overwrites.
+		if u.Summary != "" {
+			return "", errors.New("a topic's summary is written from its points: correct it with pinned facts")
+		}
+		e.Store.topicMu.Lock()
+		defer e.Store.topicMu.Unlock()
+		t, ok := e.Store.Topic(id)
+		if !ok {
+			return "", ErrNotFound
+		}
+		tagUpdate(u, &t.Tagging)
+		protectUpdate(u, &t.Tagging)
+		if u.Name != "" {
+			t.Name = oneLine(u.Name)
+		}
+		if u.Note != "" {
+			t.Note = oneLine(u.Note)
+		}
+		t.Aliases = removeStrings(addUnique(t.Aliases, u.Aliases...), u.RemoveAliases)
+		if err := e.Store.putEntity(KindTopic, t.Slug, t, &t.Tagging, true); err != nil {
+			return "", err
+		}
+		if u.Name != "" || u.Note != "" {
+			f, err := e.Store.topicFile(t.Slug)
+			if err != nil {
+				return "", err
+			}
+			if err := e.Store.writeTopicSummary(t, f.Points); err != nil {
+				return "", err
+			}
+		}
+		e.index(KindTopic, t.Slug, t.Name, t.Tagging, t.Note, t.Updated)
+		return t.Slug, nil
 	case KindRecording:
 		id, _ = RecordingID(id)
 		// The phone owns the content (PutRecording); by hand only the tags, the pinned facts and the projects.
@@ -549,7 +712,7 @@ func (e *Engine) entries(projects, chats, people []string) []Entry {
 		}
 	}
 	for _, id := range people {
-		if p, ok := e.Store.Person(id); ok {
+		if p, ok := e.Store.Person(id); ok && p.Status != "ignored" && p.Status != "self" {
 			ps = append(ps, Entry{Kind: KindPerson, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 				Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 		}

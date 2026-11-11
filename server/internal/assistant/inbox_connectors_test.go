@@ -182,6 +182,41 @@ func TestConnectorThingReadElsewhere(t *testing.T) {
 	}
 }
 
+// A thing older than the open item's newest move says nothing of whether that move was read: a GitHub connector that
+// restarted after the CI follow-up folded in a later run (one GitHub sent no notification of) reports the item's
+// older notification read on GitHub. The item at the later run stays unread and open, whatever its tier (#2207
+// review); the same move read elsewhere still counts.
+func TestConnectorOlderThingReadLeavesTheNewerMoveUnread(t *testing.T) {
+	for _, tier := range []connector.Tier{TierAction, TierFYI} {
+		t.Run(string(tier), func(t *testing.T) {
+			h := newInboxHub(t)
+			now := time.Now()
+			notified, later := now.Add(-3*time.Hour), now.Add(-time.Hour)
+			ci := func(at time.Time, read bool) connector.InboxThing {
+				th := thing(at.UTC().Format(time.RFC3339), at)
+				th.Thread, th.Kind, th.Tier, th.Read = "ci:example-org/example-repo@main", "ci_failed", tier, read
+				return th
+			}
+			h.inbox.mu.Lock()
+			defer h.inbox.mu.Unlock()
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(notified, false)}, now)
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(later, false)}, now) // the follow-up folded a later run
+			it := openItems(h)[0]
+			if it.Last != ci(later, false).Last || it.Read {
+				t.Fatalf("setup: %+v", it)
+			}
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(notified, true)}, now) // after a restart
+			if it.Read || !it.open() {
+				t.Fatalf("the item at the later run (Last %s) is read %v, open %v: an older thing read on GitHub marked it", it.Last, it.Read, it.open())
+			}
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(later, true)}, now)
+			if !it.Read || it.open() != (tier == TierAction) {
+				t.Fatalf("the later run itself read on GitHub: read %v, open %v", it.Read, it.open())
+			}
+		})
+	}
+}
+
 // A new move is unread even when an earlier action in the same open thread was read elsewhere.
 func TestConnectorNewMoveIsUnreadAfterReadElsewhere(t *testing.T) {
 	h := newInboxHub(t)
@@ -329,5 +364,34 @@ func TestMigratedThingsWithoutABlockAreGeneric(t *testing.T) {
 	}
 	if h.inbox.ruleTier(items[0]) != TierAction {
 		t.Fatalf("rule tier %s", h.inbox.ruleTier(items[0]))
+	}
+}
+
+func TestRenamedConnectorRenamesItsItems(t *testing.T) {
+	h := newInboxHub(t)
+	now := time.Now()
+	apply := func(name string, things ...connector.InboxThing) []*InboxItem {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		return h.inbox.applyConnector("example", name, things, now)
+	}
+	other := thing("b1", now.Add(-time.Hour))
+	other.Thread = "example-org/example-repo#13"
+	apply("Old name", thing("a1", now.Add(-time.Hour)), other)
+	// One thread moves in the same round as the rename: it is listed once.
+	moved := thing("a2", now)
+	ch := apply("New name", moved)
+	if len(ch) != 2 {
+		t.Fatalf("changed %d, want both items once", len(ch))
+	}
+	h.inbox.mu.Lock()
+	for _, it := range h.inbox.items {
+		if it.Source == "example" && it.AccountName != "New name" {
+			t.Errorf("%s keeps account name %q", it.ID, it.AccountName)
+		}
+	}
+	h.inbox.mu.Unlock()
+	if ch := apply("New name"); len(ch) != 0 {
+		t.Fatalf("an unchanged name changed %d items", len(ch))
 	}
 }

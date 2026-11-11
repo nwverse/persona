@@ -34,6 +34,7 @@ func paseoEngineHello() map[string]any {
 func TestRuntimeLaunchers(t *testing.T) {
 	n, _ := runtimeNode(t)
 	host := dialRuntime(t, n, paseoEngineHello())
+	enablePaseo(n)
 	raw, err := nodeCall(t, n, "launchers.list", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -71,12 +72,12 @@ func TestRuntimeLaunchers(t *testing.T) {
 		return map[string]any{"ok": true}, nil
 	}
 	if _, err := nodeCall(t, n, "session.start", map[string]any{"cwd": "/w/app", "launcher": "paseo-codex", "model": "gpt-6",
-		"permission_mode": "plan", "effort": "high", "workspace_id": "wks_1", "async": true}); err != nil {
+		"permission_mode": "default", "effort": "high", "workspace_id": "wks_1", "async": true}); err != nil {
 		t.Fatal(err)
 	}
 	var start map[string]any
 	_ = json.Unmarshal(host.got("session.start")[0], &start)
-	if start["launcher"] != "paseo-codex" || start["model"] != "gpt-6" || start["permission_mode"] != "plan" || start["effort"] != "high" ||
+	if start["launcher"] != "paseo-codex" || start["model"] != "gpt-6" || start["permission_mode"] != "default" || start["effort"] != "high" ||
 		start["workspace_id"] != "wks_1" || start["shell_launcher"] != nil || start["resume"] != nil {
 		t.Fatalf("started with %v", start)
 	}
@@ -234,5 +235,122 @@ func TestEngineRuntimeSessionOpenElsewhere(t *testing.T) {
 	_ = json.Unmarshal(host.got("session.start")[0], &start)
 	if start["open_elsewhere"] != true || len(host.got("session.send")) != 0 {
 		t.Fatalf("started with %v, sends %d", start, len(host.got("session.send")))
+	}
+}
+
+func TestRuntimeNativeModelsAndModelControl(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := paseoEngineHello()
+	hello["caps"].(map[string]any)["model"] = true
+	hello["caps"].(map[string]any)["models"] = true
+	host := dialRuntime(t, n, hello)
+	enablePaseo(n)
+	host.mu.Lock()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "launchers.models" {
+			return proto.LauncherModels{Models: []proto.AgentModel{{ID: "future-model", Name: "Future Model"}}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	host.mu.Unlock()
+	got, err := n.launcherModels(context.Background(), "paseo-claude", "", true)
+	if err != nil || len(got.Models) != 1 || got.Models[0].ID != "future-model" {
+		t.Fatalf("native models: %+v %v", got, err)
+	}
+	var discovery map[string]any
+	_ = json.Unmarshal(host.got("launchers.models")[0], &discovery)
+	if discovery["refresh"] != true {
+		t.Fatalf("refresh lost: %v", discovery)
+	}
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "paseo-model", "agent": "claude", "status": "idle"}}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["paseo-model"]; return ok })
+	row := listed(t, n)["paseo-model"]
+	if row.Capabilities.Model == nil || !*row.Capabilities.Model {
+		t.Fatal("model capability missing")
+	}
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": row.SessionID, "model": "future-model"}); err != nil {
+		t.Fatal(err)
+	}
+	var change map[string]any
+	_ = json.Unmarshal(host.got("session.modes")[0], &change)
+	if change["model"] != "future-model" {
+		t.Fatalf("model lost: %v", change)
+	}
+	host.mu.Lock()
+	host.answer = func(string, json.RawMessage) (any, error) { return nil, errors.New("native catalog unavailable") }
+	host.mu.Unlock()
+	if _, err := n.launcherModels(context.Background(), "paseo-claude", "", true); err == nil {
+		t.Fatal("native failure was hidden")
+	}
+}
+
+func TestRuntimeWithoutModelCapabilityRejectsModel(t *testing.T) {
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, paseoEngineHello())
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "paseo-model", "agent": "claude", "status": "idle"}}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["paseo-model"]; return ok })
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": "paseo-model", "model": "future"}); err == nil {
+		t.Fatal("unadvertised model switch passed")
+	}
+	if len(host.got("session.modes")) != 0 {
+		t.Fatal("unsupported model reached runtime")
+	}
+}
+
+func TestRuntimeLauncherAvailabilityCheck(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := paseoEngineHello()
+	hello["caps"].(map[string]any)["check"] = true
+	host := dialRuntime(t, n, hello)
+	enablePaseo(n)
+	var workspace string
+	host.mu.Lock()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method != "launchers.check" {
+			return nil, errors.New("unexpected shell fallback")
+		}
+		var p struct{ Launcher, Cwd, Prompt string }
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		workspace = p.Cwd
+		if _, err := os.Stat(p.Cwd); err != nil {
+			return nil, err
+		}
+		if p.Launcher != "paseo-claude" || p.Prompt == "" {
+			return nil, errors.New("missing check parameters")
+		}
+		return proto.LauncherCheck{OK: true, Model: "native-model", Answer: "OK"}, nil
+	}
+	host.mu.Unlock()
+	result := n.launcherCheck(context.Background(), "paseo-claude")
+	if !result.OK || result.Model != "native-model" || result.Agent != "claude" || result.Answer != "OK" {
+		t.Fatalf("native check: %+v", result)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("check workspace survived: %v", err)
+	}
+	host.mu.Lock()
+	host.answer = func(string, json.RawMessage) (any, error) {
+		return nil, errors.New("native authentication unavailable")
+	}
+	host.mu.Unlock()
+	result = n.launcherCheck(context.Background(), "paseo-claude")
+	if result.OK || !strings.Contains(result.Error, "native authentication unavailable") {
+		t.Fatalf("native error lost: %+v", result)
+	}
+	if len(host.got("launchers.check")) != 2 {
+		t.Fatal("runtime check did not own the result")
+	}
+}
+
+func TestRuntimeAvailabilityCheckRequiresOptIn(t *testing.T) {
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, paseoEngineHello())
+	if _, handled := n.runtimeLauncherCheck(context.Background(), "paseo-claude", t.TempDir(), "probe"); handled {
+		t.Fatal("older runtime intercepted the shell check")
+	}
+	if len(host.got("launchers.check")) != 0 {
+		t.Fatal("unsupported check reached runtime")
 	}
 }

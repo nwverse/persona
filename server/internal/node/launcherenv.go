@@ -192,9 +192,6 @@ func withoutEnv(environ, clear []string) []string {
 	})
 }
 
-// withoutProviderEnv is environ without what providerEnvClear names (the Agent SDK bridge's env).
-func withoutProviderEnv(environ []string) []string { return withoutEnv(environ, providerEnvClear) }
-
 const (
 	// oneMillionSuffix: Claude Code runs a model with a 1M context window only when its name says so.
 	oneMillionSuffix = "[1m]"
@@ -232,8 +229,8 @@ func providerShaped(l proto.ManagedLauncher) bool {
 		l.TimeoutMS != 0 || l.CompactWindow != 0 || l.MaxContext != 0 || l.Effort != "" || l.Source != ""
 }
 
-// providerEnv is the environment claude runs provider l with, for this model and effort ("" for the provider's own)
-// and the main conversation or not. A "" value means set empty: the variable must not come from anywhere else (the
+// providerEnv is the environment claude runs provider l with, for this model and effort ("" for the provider's own),
+// for an assistant conversation (mainConversation: it switches its own thinking level) or not. A "" value means set empty: the variable must not come from anywhere else (the
 // other credential of the two, which a gateway seeing both refuses with 401). What the shell carries is cleared
 // first (providerEnvClear); settings env cannot unset, so a value here is the only way to override one there.
 //
@@ -280,16 +277,14 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	} else if w > standardWindow {
 		env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = strconv.Itoa(w)
 	}
-	if mainConversation {
-		env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = strconv.Itoa(standardWindow)
-	} else if c := cmp.Or(l.CompactWindow, w); c > 0 {
+	// The compact window the provider declares, else its model's window; none when neither is known, and Claude Code
+	// compacts by the model it knows. The same for an assistant conversation, main or not, as for an agent (#3066).
+	if c := cmp.Or(l.CompactWindow, w); c > 0 {
 		env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = strconv.Itoa(c)
 	}
-	// the main conversation switches its thinking level while it runs (apply_flag_settings, modes.go), which the
-	// environment variable would win over: it takes the level from the start and the switch, not from here
-	if !mainConversation {
-		set("CLAUDE_CODE_EFFORT_LEVEL", cmp.Or(effort, l.Effort, pm.DefaultEffort))
-	}
+	// Claude Code puts CLAUDE_CODE_EFFORT_LEVEL above --effort and /effort, which would override the caller's
+	// choice and lock the session's effort control (#2307). A default effort goes to the command line (--effort)
+	// instead, and the environment variable is set only when the provider's own env sets it explicitly.
 	set("ANTHROPIC_CUSTOM_HEADERS", l.Headers)
 	// Both spellings: Node's fetch reads the lower-case one first, so an upper-case value alone would lose to a lower-case
 	// one in the user's settings env.
@@ -314,14 +309,14 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	env[k] = v
 	// The launcher's own environment last: it wins over all of the above (#5953); an empty value sets the variable
 	// empty. A proxy variable goes in both spellings unless both are given, or the shell's other spelling would still
-	// count. Not for the main conversation what it decides itself (perStartEnv).
+	// count. Not for an assistant conversation the thinking level, which it switches while it runs.
 	vars := launcherEnvVars(l.Env)
 	given := map[string]bool{}
 	for _, kv := range vars {
 		given[kv[0]] = true
 	}
 	for _, kv := range vars {
-		if mainConversation && slices.Contains(perStartEnv, kv[0]) {
+		if mainConversation && kv[0] == "CLAUDE_CODE_EFFORT_LEVEL" {
 			continue
 		}
 		env[kv[0]] = kv[1]
@@ -329,13 +324,6 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 			if !given[o] {
 				env[o] = kv[1]
 			}
-		}
-	}
-	if mainConversation {
-		c := compactionLimits(false, providerCapacity(l, model))
-		env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = strconv.Itoa(c.window)
-		if c.capacity > 0 {
-			env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = strconv.Itoa(c.capacity)
 		}
 	}
 	return env
@@ -371,8 +359,9 @@ func envList(env map[string]string) []string {
 	return out
 }
 
-// perStartEnv: what a start decides (the main conversation keeps its 200000 compact window and switches its thinking
-// level while it runs) and so never goes into settings env, which would win over the start's own environment.
+// perStartEnv: what an assistant start decides (its compact window, the launcher's declared one as
+// assistantCompactionPolicy reads it; its thinking level, switched while it runs) and so never goes into settings env,
+// which would win over the start's own environment.
 var perStartEnv = []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL"}
 
 // pinnedEnv is env without perStartEnv: the part pinned over the user's ~/.claude/settings.json (the gateway, its key,
@@ -386,8 +375,8 @@ func pinnedEnv(env map[string]string) map[string]string {
 }
 
 // launchEnvFor is what `personad launch` drops from the shell and sets for a launcher (the node's clear and env lists):
-// in the assistant's process (PERSONA_ASSISTANT=1), neither touches perStartEnv, so its own compact window and
-// thinking level stay.
+// in the assistant's process (PERSONA_ASSISTANT=1), neither touches perStartEnv or CLAUDE_CONFIG_DIR, so its own
+// compact window, thinking level and recorded profile stay. Terminal Agents retain the provider's full environment.
 func launchEnvFor(clear, env []string, assistant bool) ([]string, []string) {
 	if !assistant {
 		return clear, env
@@ -395,7 +384,15 @@ func launchEnvFor(clear, env []string, assistant bool) ([]string, []string) {
 	clear = slices.DeleteFunc(slices.Clone(clear), func(c string) bool { return slices.Contains(perStartEnv, c) })
 	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
-		return slices.Contains(perStartEnv, k)
+		return slices.Contains(perStartEnv, k) || k == "CLAUDE_CONFIG_DIR"
 	})
+	clear = slices.DeleteFunc(clear, func(k string) bool { return k == "CLAUDE_CONFIG_DIR" })
 	return clear, env
+}
+
+// launcherDefaultEffort returns the provider's default effort level (its configured Effort,
+// or its default model's DefaultEffort).
+func launcherDefaultEffort(l proto.ManagedLauncher) string {
+	pm, _ := providerModel(l, l.Model)
+	return cmp.Or(l.Effort, pm.DefaultEffort)
 }

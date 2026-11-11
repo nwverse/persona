@@ -266,7 +266,7 @@ export function localOffset(at = Date.now()): number {
 
 export type Level = "normal" | "warning" | "critical";
 
-/** docs/server/machines.md "Anomalies": CPU ≥ 75 / 90 %, memory and disk ≥ 80 / 90 %, load ≥ 1 / 2 × cores. */
+/** docs/server/machines.md "Alerts": CPU ≥ 75 / 90 %, memory and disk ≥ 80 / 90 %, load ≥ 1 / 2 × cores. */
 export function level(v: number | undefined, warn: number, crit: number): Level {
   if (v === undefined) return "normal";
   return v >= crit ? "critical" : v >= warn ? "warning" : "normal";

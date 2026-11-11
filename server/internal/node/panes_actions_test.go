@@ -249,7 +249,7 @@ func TestGitOpsNeverForce(t *testing.T) {
 	// fetch: sees the remote's new commit without moving the branch
 	f.upstreamCommit(t)
 	res, err := f.node.gitOp(ctx, f.local, "fetch")
-	if err != nil || res.Op != "fetch" {
+	if err != nil || res.Op != "fetch" || res.Outcome != proto.GitOutcomeFetched {
 		t.Fatalf("fetch = %+v, %v", res, err)
 	}
 	if st, _ := f.node.gitStatus(ctx, f.local); st.Behind != 1 {
@@ -258,19 +258,19 @@ func TestGitOpsNeverForce(t *testing.T) {
 
 	// pull: fast-forward only
 	res, err = f.node.gitOp(ctx, f.local, "pull")
-	if err != nil || res.Message != "已拉取最新提交" {
+	if err != nil || res.Outcome != proto.GitOutcomePulled || res.Message != "Pulled the latest commits" {
 		t.Fatalf("pull = %+v, %v", res, err)
 	}
-	if res, err = f.node.gitOp(ctx, f.local, "pull"); err != nil || res.Message != "已是最新" {
+	if res, err = f.node.gitOp(ctx, f.local, "pull"); err != nil || res.Outcome != proto.GitOutcomeUpToDate {
 		t.Errorf("second pull = %+v, %v", res, err)
 	}
 
 	// push: nothing to send, then one commit to its upstream
-	if res, err = f.node.gitOp(ctx, f.local, "push"); err != nil || res.Message != "没有要推送的提交" {
+	if res, err = f.node.gitOp(ctx, f.local, "push"); err != nil || res.Outcome != proto.GitOutcomeNothingToPush {
 		t.Errorf("push of nothing = %+v, %v", res, err)
 	}
 	f.commit(t, f.local, "local.txt", "mine\n")
-	if res, err = f.node.gitOp(ctx, f.local, "push"); err != nil || res.Message != "已推送" {
+	if res, err = f.node.gitOp(ctx, f.local, "push"); err != nil || res.Outcome != proto.GitOutcomePushed {
 		t.Fatalf("push = %+v, %v", res, err)
 	}
 	if runPullGit(t, f.local, "rev-parse", "HEAD") != runPullGit(t, f.seed, "ls-remote", "origin", "refs/heads/main")[:40] {
@@ -287,9 +287,72 @@ func TestGitOpsNeverForce(t *testing.T) {
 	remoteBefore := runPullGit(t, f.seed, "ls-remote", "origin", "refs/heads/main")
 	if _, err = f.node.gitOp(ctx, f.local, "push"); err == nil {
 		t.Fatal("a diverged push went through")
+	} else if refusalCode(err) != gitOpPushRejected || !strings.Contains(err.Error(), "rejected") {
+		t.Errorf("a diverged push = %v", err)
 	}
 	if got := runPullGit(t, f.seed, "ls-remote", "origin", "refs/heads/main"); got != remoteBefore {
 		t.Errorf("the remote moved: %s -> %s", remoteBefore, got)
+	}
+}
+
+// A branch whose upstream was deleted on the remote and pruned (a merged pull request's branch) is not "up to date":
+// the status says the upstream is gone, and Push publishes the branch again instead of finding nothing to push.
+func TestGitUpstreamGone(t *testing.T) {
+	f := newPullFixture(t)
+	ctx := context.Background()
+	runPullGit(t, f.local, "switch", "-q", "-c", "feature")
+	f.commit(t, f.local, "feature.txt", "first\n")
+	runPullGit(t, f.local, "push", "-q", "-u", "origin", "feature")
+	runPullGit(t, f.seed, "push", "-q", "origin", "--delete", "feature")
+	runPullGit(t, f.local, "fetch", "-q", "--prune")
+	f.commit(t, f.local, "feature.txt", "after the merge\n")
+
+	st, err := f.node.gitStatus(ctx, f.local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Upstream != "origin/feature" || !st.Gone || st.Ahead != 0 || st.Behind != 0 {
+		t.Fatalf("status = upstream %q gone %v ahead %d behind %d", st.Upstream, st.Gone, st.Ahead, st.Behind)
+	}
+	res, err := f.node.gitOp(ctx, f.local, "push")
+	if err != nil || res.Outcome != proto.GitOutcomePushed {
+		t.Fatalf("push = %+v, %v", res, err)
+	}
+	if got := runPullGit(t, f.seed, "ls-remote", "origin", "refs/heads/feature"); !strings.HasPrefix(got, runPullGit(t, f.local, "rev-parse", "HEAD")) {
+		t.Fatalf("the remote branch is %q", got)
+	}
+	if st, _ = f.node.gitStatus(ctx, f.local); st.Gone || st.Ahead != 0 {
+		t.Fatalf("after the push: gone %v ahead %d", st.Gone, st.Ahead)
+	}
+
+	// the Git panel's push publishes it again the same way
+	runPullGit(t, f.seed, "push", "-q", "origin", "--delete", "feature")
+	runPullGit(t, f.local, "fetch", "-q", "--prune")
+	w, err := f.node.gitPush(ctx, f.local, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Status.Gone || w.Status.Upstream != "origin/feature" {
+		t.Fatalf("after the panel's push: %+v", w.Status)
+	}
+}
+
+func TestParseStatusV2Upstream(t *testing.T) {
+	for _, c := range []struct {
+		name, out     string
+		gone          bool
+		ahead, behind int
+	}{
+		{"tracked", "# branch.head main\x00# branch.upstream origin/main\x00# branch.ab +2 -1\x00", false, 2, 1},
+		{"level", "# branch.head main\x00# branch.upstream origin/main\x00# branch.ab +0 -0\x00", false, 0, 0},
+		{"gone", "# branch.head feature\x00# branch.upstream origin/feature\x00? new.txt\x00", true, 0, 0},
+		{"none", "# branch.head feature\x00", false, 0, 0},
+	} {
+		st := &GitStatus{}
+		parseStatusV2(c.out, st)
+		if st.Gone != c.gone || st.Ahead != c.ahead || st.Behind != c.behind {
+			t.Errorf("%s: gone %v ahead %d behind %d", c.name, st.Gone, st.Ahead, st.Behind)
+		}
 	}
 }
 
@@ -298,7 +361,7 @@ func TestGitOpsRefuse(t *testing.T) {
 	ctx := context.Background()
 	plain := t.TempDir()
 	for _, op := range []string{"fetch", "pull", "push"} {
-		if _, err := f.node.gitOp(ctx, plain, op); err == nil || !strings.Contains(err.Error(), "不是 Git 仓库") {
+		if _, err := f.node.gitOp(ctx, plain, op); refusalCode(err) != gitOpNotRepo {
 			t.Errorf("%s outside a repository: %v", op, err)
 		}
 	}
@@ -313,14 +376,29 @@ func TestGitOpsRefuse(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.local, "app.txt"), []byte("dirty\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.node.gitOp(ctx, f.local, "pull"); err == nil {
-		t.Error("pulled over uncommitted changes")
+	if _, err := f.node.gitOp(ctx, f.local, "pull"); refusalCode(err) != gitOpUncommitted {
+		t.Errorf("pulled over uncommitted changes: %v", err)
 	}
 	// a detached HEAD cannot be pushed
 	runPullGit(t, f.local, "checkout", "--", "app.txt")
 	runPullGit(t, f.local, "checkout", "--detach")
-	if _, err := f.node.gitOp(ctx, f.local, "push"); err == nil {
-		t.Error("pushed a detached HEAD")
+	if _, err := f.node.gitOp(ctx, f.local, "push"); refusalCode(err) != gitOpDetached {
+		t.Errorf("pushed a detached HEAD: %v", err)
+	}
+	// a branch with no upstream is neither pushed nor pulled
+	runPullGit(t, f.local, "switch", "-q", "-c", "alone")
+	for _, op := range []string{"push", "pull"} {
+		if _, err := f.node.gitOp(ctx, f.local, op); refusalCode(err) != gitOpNoUpstream {
+			t.Errorf("%s with no upstream: %v", op, err)
+		}
+	}
+	// a remote that cannot be reached: git's own words, under its code
+	runPullGit(t, f.local, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+	if _, err := f.node.gitOp(ctx, f.local, "fetch"); refusalCode(err) != gitOpFetchFailed || !strings.Contains(err.Error(), "git fetch:") {
+		t.Errorf("fetch from a missing remote: %v", err)
+	}
+	if _, err := f.node.gitOp(ctx, "", "fetch"); refusalCode(err) != gitOpNoDirectory {
+		t.Errorf("no directory: %v", err)
 	}
 }
 
@@ -331,7 +409,7 @@ func TestPanesGitUsesTheListedDirectory(t *testing.T) {
 	for _, p := range []map[string]any{
 		{"pane": "w1:p2", "op": "fetch", "cwd": "/etc"}, {"workspace_id": "w1", "op": "fetch", "cwd": "/etc"},
 	} {
-		if _, err := request(t, n, "panes.git", p); err == nil || !strings.Contains(err.Error(), "不是 Git 仓库") {
+		if _, err := request(t, n, "panes.git", p); refusalCode(err) != gitOpNotRepo {
 			t.Errorf("%v in %s: %v", p, cwd, err)
 		}
 	}

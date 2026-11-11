@@ -107,7 +107,7 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 		content.Text = rest
 	}
 	if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
-		return // about a "Please verify" card (acceptance.go)
+		return // about a "Please verify" card (acceptance_reply.go)
 	}
 	if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
 		return // the answer to the card waiting in this topic (feishu_text_answer.go)
@@ -384,7 +384,7 @@ func (s *Service) botQuote(ctx context.Context, id string) (*prompts.BotQuote, [
 		return nil, nil
 	}
 	it := items[0]
-	c := feishubot.ParseContent(it.MsgType, it.Body.Content, nil)
+	c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 	who := "Persona"
 	if it.Sender.SenderType == "user" {
 		who = s.botName(ctx, it.Sender.ID)
@@ -408,7 +408,7 @@ func (s *Service) botForward(ctx context.Context, id string) string {
 		if it.UpperMessageID != id {
 			continue
 		}
-		c := feishubot.ParseContent(it.MsgType, it.Body.Content, nil)
+		c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 		text := c.Text
 		if text == "" {
 			text = "[" + it.MsgType + "]"

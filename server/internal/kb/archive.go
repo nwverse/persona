@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -56,7 +57,7 @@ type Engine struct {
 	Sources      []Source
 	Model        Model
 	ModelFor     func(string) Model
-	Owner        string // how the owner is called (the AI writes the Chinese "I" for them)
+	Owner        string // how the owner is called (the AI writes the Chinese "I" for them); SetOwner changes it later
 	Logf         func(string, ...any)
 	// ExtraDirs are directories outside the data dir that Search also reads (Markdown files, read only): notes the
 	// user keeps elsewhere, e.g. a git repository of facts. Absolute paths.
@@ -67,8 +68,26 @@ type Engine struct {
 	Unindex func(kind string, ids []string)
 	// RecordingDaysFunc is how many days recordings are kept (the assistant's recording_days; nil or <= 0: 14).
 	RecordingDaysFunc func() int
+	// MinutesDaysFunc is how many days a meeting's minutes are kept once its transcript went (the assistant's
+	// minutes_days; nil or <= 0: forever); finite windows are never fewer than RecordingDaysFunc's (MinutesDays).
+	MinutesDaysFunc func() int
+	// EarlierMeetingsInAnswers lets the material of an answer (MeetingMaterial) and the room's meeting_earlier hold
+	// earlier meetings: only those marked not private (meeting.go, "The private mark"). The manager turns it on.
+	EarlierMeetingsInAnswers bool
+	// MeetingChanged is told of recording id's meeting parts that changed (PartRoom, PartAsks, PartPrivate,
+	// PartFollowup): the manager's meeting_live event. Called outside the store's locks; optional.
+	MeetingChanged func(id string, parts []string)
+	// MinutesWritten is told when a recording's minutes for its current revision are written (minutes.go): the
+	// assistant pushes them. Called from the loop, outside the store's locks.
+	MinutesWritten func(ctx context.Context, r Recording, m Minutes)
+	// LiveChanged is told of recording id when what the attending feeder does may have changed (live.go): a stored
+	// upload of a recording that attends or attended until then, and sentences LiveAppend stored. Called outside the
+	// store's locks; optional.
+	LiveChanged func(id string)
 	// HandleKey is the hub's key for the senders' identity hints (handles.go); without it none are kept.
 	HandleKey []byte
+	// TopicsOn says whether the knowledge points curation runs (topics.go; assistant.kb_topics). nil: it does.
+	TopicsOn func() bool
 
 	// Limits (zero: defaults).
 	ChatsPerRun  int // how many recently active chats an archive run looks at (100)
@@ -82,14 +101,52 @@ type Engine struct {
 	// TextDays: older messages are not written at all (365). Prune deletes such days, and anything that wrote them
 	// again (a chat's first page, a mailbox's first read, imported history) would bring them back after every prune.
 	TextDays int
+	// Selection is the selection document (selection.go) that decides what daily ingestion, the history import and
+	// pruning keep, read each time it is needed (nil result: Defaults; KeepEverything when the document cannot be
+	// read now, under which nothing is pruned). A nil func means no selection at all: everything is kept for
+	// TextDays, as before it.
+	Selection func() *Selection
 
 	// failed: attachment downloads that failed this run (logged once per chat); atomic, as a history import
 	// (WriteHistory) may download while the archive runs.
 	failed atomic.Int32
 
-	find findCache // what Find read last time, kept while the files are unchanged (find.go)
+	find findCache // what Find read last time, kept while the files are unchanged (find_cache.go)
 
-	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
+	// Retries are the steps' backoffs, shared by the engines a caller builds over the same store one after another (the
+	// hub's settings changed), so they carry over (#4247); nil: the engine's own.
+	Retries    *Retries
+	ownRetries Retries
+
+	// ownerNow is how the owner is called as the knowledge base loop last read it (SetOwner); its lanes read it while
+	// it is set (#4247), so it is not the Owner field. Nil: Owner.
+	ownerNow atomic.Pointer[string]
+}
+
+// Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
+type Retries struct {
+	projects   retrySet // projects whose rewrite failed, by slug (RefreshProjects)
+	topics     retrySet // sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>")
+	recordings retrySet // recordings whose summary failed, by id (SummarizeRecordings)
+	items      retrySet // documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems)
+}
+
+func (e *Engine) retries() *Retries {
+	if e.Retries != nil {
+		return e.Retries
+	}
+	return &e.ownRetries
+}
+
+// SetOwner sets how the owner is called in the models' prompts from now on; safe while the lanes run.
+func (e *Engine) SetOwner(owner string) { e.ownerNow.Store(&owner) }
+
+// ownerName is how the owner is called: what SetOwner set last, else Owner.
+func (e *Engine) ownerName() string {
+	if o := e.ownerNow.Load(); o != nil {
+		return *o
+	}
+	return e.Owner
 }
 
 func (e *Engine) modelFor(id string) Model {
@@ -118,26 +175,61 @@ func or(n, d int) int {
 	return n
 }
 
-// textCutoff is the start of the oldest day Prune keeps (in the archive's zone): a message before it is past
-// TextDays and is not written.
-func (e *Engine) textCutoff() time.Time {
+// TextCutoff is the start of the oldest day Prune keeps (in the archive's zone): a message before it is past
+// TextDays and is not written (the history import stops there too).
+func (e *Engine) TextCutoff() time.Time { return e.textCutoff() }
+
+// textCutoff is TextCutoff.
+func (e *Engine) textCutoff() time.Time { return e.CutoffFor(e.TextDays) }
+
+// Retention is the engine's retention settings, which the selection's null days fall back to.
+func (e *Engine) Retention() Retention {
+	return Retention{TextDays: e.TextDays, AttachmentDays: e.AttachmentDays, AttachmentDaysBySource: e.AttachmentDaysBySource}
+}
+
+// selection is the document in force: nil when the engine has none (Selection nil), Defaults when it returns nil.
+func (e *Engine) selection() *Selection {
+	if e.Selection == nil {
+		return nil
+	}
+	if s := e.Selection(); s != nil {
+		return s
+	}
+	d := Defaults()
+	return &d
+}
+
+// CutoffFor is the start of the oldest day a line kept days days still has (in the archive's zone): a message
+// before it is not written (TextCutoff is CutoffFor of TextDays).
+func (e *Engine) CutoffFor(days int) time.Time {
 	zone := e.Store.Zone()
-	d := time.Now().AddDate(0, 0, -or(e.TextDays, 365)).In(zone)
+	d := time.Now().AddDate(0, 0, -or(days, or(e.TextDays, 365))).In(zone)
 	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, zone)
 }
 
 // AttachmentDaysFor is how many days the attachments of a source's chats are kept: its AttachmentDaysBySource,
-// else AttachmentDays (30).
+// else AttachmentDays (30), and never longer than TextDays. An attachment belongs to its line: a message past the
+// text retention is not written (so its attachment is never downloaded) and its day file is deleted, so an
+// attachment kept longer would be a file no line points to any more.
 func (e *Engine) AttachmentDaysFor(source string) int {
-	if d := e.AttachmentDaysBySource[source]; d > 0 {
-		return d
+	d := or(e.AttachmentDays, 30)
+	if days := e.AttachmentDaysBySource[source]; days > 0 {
+		d = days
 	}
-	return or(e.AttachmentDays, 30)
+	return min(d, or(e.TextDays, 365))
 }
 
 // Prune deletes message days past TextDays and attachment days past each chat's AttachmentDaysFor: the same days
-// textCutoff and line stop writing.
+// textCutoff and line stop writing. With a selection, each line's days are its deciding rule's (PruneSelected), and
+// documents past the days the user set for them go too (pruneDocs); a selection that cannot be read now
+// (Selection.Stopgap) prunes nothing: the next round tries again. The count is of day files, attachment days and documents.
 func (e *Engine) Prune(now time.Time) int {
+	if sel := e.selection(); sel != nil {
+		if sel.Stopgap() {
+			return 0
+		}
+		return e.Store.PruneSelected(now, sel, e.Retention()) + e.pruneDocs(now, sel)
+	}
 	return e.Store.PruneBySource(now, or(e.TextDays, 365), e.AttachmentDaysFor)
 }
 
@@ -302,12 +394,13 @@ type DownloadFunc func(ctx context.Context, media, dst string) error
 // line turns a message into an archive line; images and files are saved under attachments/<day>/ while the message
 // is within its source's attachment days (AttachmentDaysFor). download nil: none are.
 func (e *Engine) line(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage) Line {
-	return e.buildLine(ctx, download, c, m, false)
+	return e.buildLine(ctx, download, c, m, false, e.AttachmentDaysFor(c.Source))
 }
 
-// buildLine is line; history (WriteHistory) downloads images only, writes a placeholder naming the kind of any other
-// attachment, and notes no documents (imported history is archive only: nothing for the model to tag).
-func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage, history bool) Line {
+// buildLine is line with the message's attachment days (the selection's decision, else AttachmentDaysFor); history
+// (WriteHistory) downloads images only, writes a placeholder naming the kind of any other attachment, and notes no
+// documents (imported history is archive only: nothing for the model to tag).
+func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage, history bool, attDays int) Line {
 	sender := m.SenderName
 	if m.Mine {
 		sender = "我" // i18n-ignore: archive data
@@ -320,17 +413,20 @@ func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, 
 		return Line{}
 	}
 	day := m.At.In(e.Store.Zone()).Format("2006-01-02")
-	recent := time.Since(m.At) <= time.Duration(e.AttachmentDaysFor(c.Source))*24*time.Hour
+	recent := time.Since(m.At) <= time.Duration(attDays)*24*time.Hour
 	if history {
-		image := isImage(m.Type)
-		if !image && len(m.Media) == 0 && text == "" {
+		if !isImage(m.Type) && len(m.Media) == 0 && text == "" {
 			if p := mediaPlaceholder(m.Type); p != attachmentPlaceholder {
 				text = p // a voice message or video that came without its media reference
 			}
 		}
 		for i, media := range m.Media {
-			if !image {
-				text += " " + mediaPlaceholder(m.Type)
+			if !historyImage(m.Type, media) {
+				kind := m.Type
+				if kind == "POST" { // a post's embedded video or file, by its reference
+					kind = mediaKind(kind, media)
+				}
+				text += " " + mediaPlaceholder(kind)
 				continue
 			}
 			text += " " + e.attach(ctx, download, c, m, i, media, day, recent)
@@ -364,7 +460,9 @@ func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m S
 	name := attachmentName(m.ID, i, media, m.Type)
 	dst := e.Store.path(KindChat, c.ID, "attachments", day, "messages", name)
 	if err := download(ctx, media, dst); err != nil {
-		e.failed.Add(1)
+		if !errors.Is(err, ErrDownloadAborted) { // an aborted write keeps nothing of the line anyway
+			e.failed.Add(1)
+		}
 		return attachmentPlaceholder
 	}
 	rel, _ := filepath.Rel(e.Store.path(KindChat, c.ID), dst)
@@ -386,6 +484,34 @@ func attachmentName(id string, i int, media, typ string) string {
 
 // isImage: a message whose media are pictures (a rich-text post's are its inline images).
 func isImage(typ string) bool { return typ == "IMAGE" || typ == "POST" }
+
+// historyImage: imported history downloads this media of a message. An image message's are pictures; a rich-text
+// post's are mostly its inline images, but a post can embed a video or a file too, so one whose reference names a
+// file type that is no picture is not downloaded (the import downloads images only; the downloader also refuses
+// what does not come back as an image).
+func historyImage(typ, media string) bool {
+	switch typ {
+	case "IMAGE":
+		return true
+	case "POST":
+		return mediaKind(typ, media) == typ
+	}
+	return false
+}
+
+// mediaKind is the type a media reference says it is by its file extension (VIDEO, FILE, AUDIO), else typ.
+func mediaKind(typ, media string) string {
+	ext := strings.ToLower(filepath.Ext(strings.SplitN(media, "?", 2)[0]))
+	switch ext {
+	case ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm":
+		return "VIDEO"
+	case ".mp3", ".m4a", ".aac", ".amr", ".wav", ".ogg", ".opus", ".silk":
+		return "AUDIO"
+	case ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".rar", ".7z", ".txt", ".csv", ".key", ".pages", ".numbers":
+		return "FILE"
+	}
+	return typ
+}
 
 // mediaPlaceholder names the kind of an attachment imported history does not download.
 func mediaPlaceholder(typ string) string {
@@ -410,7 +536,8 @@ func extOf(media, typ string) string {
 	return ""
 }
 
-// notePerson links the sender and the chat both ways.
+// notePerson links the sender and the chat both ways. The person is read again and written under personMu
+// (updatePerson), so another writer's chats, projects or tags are kept.
 func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 	if m.Mine {
 		if e.MineObserved != nil {
@@ -426,54 +553,70 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		return
 	}
 	pid := PersonID(source, m.SenderID)
-	p, ok := e.Store.Person(pid)
-	if !ok {
-		p = &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
+	linked := false
+	create := func() *Person {
+		return &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
 	}
-	if p.Connector != "" && p.Connector != c.Connector {
-		return
-	}
-	attributed := false
-	if p.Connector == "" && c.Connector != "" {
-		known := len(p.Chats) > 0
-		for _, id := range p.Chats {
-			if id == c.ID {
-				continue
+	p, written, err := e.Store.updatePerson(pid, false, create, func(p *Person) bool {
+		if p.Status == "ignored" || (p.Connector != "" && p.Connector != c.Connector) {
+			return false
+		}
+		linked = true
+		attributed := false
+		if p.Connector == "" && c.Connector != "" {
+			known := len(p.Chats) > 0
+			for _, id := range p.Chats {
+				if id == c.ID {
+					continue
+				}
+				other, exists := e.Store.Chat(id)
+				if !exists || other.Connector != c.Connector {
+					known = false
+					break
+				}
 			}
-			other, exists := e.Store.Chat(id)
-			if !exists || other.Connector != c.Connector {
-				known = false
-				break
+			if known {
+				p.Connector = c.Connector
+				attributed = true
 			}
 		}
-		if known {
-			p.Connector = c.Connector
-			attributed = true
+		if m.SenderName != "" {
+			p.Name = m.SenderName
 		}
-	}
-	if m.SenderName != "" {
-		p.Name = m.SenderName
-	}
-	before, seen := len(p.Chats), p.LastSeen
-	p.Chats = addUnique(p.Chats, c.ID)
-	if m.At.After(p.LastSeen) {
-		p.LastSeen = m.At
-	}
-	c.People = addUnique(c.People, pid)
-	e.addHandles(pid, m.SenderHandles)
-	// Only write when something a reader cares about changed (not on every message of a busy group).
-	if !ok || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour {
-		if err := e.Store.PutPerson(p); err == nil {
-			e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
+		before, seen := len(p.Chats), p.LastSeen
+		p.Chats = addUnique(p.Chats, c.ID)
+		if m.At.After(p.LastSeen) {
+			p.LastSeen = m.At
 		}
+		e.addHandles(pid, m.SenderHandles)
+		// Only write when something a reader cares about changed (not on every message of a busy group).
+		return !p.persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
+	})
+	if linked {
+		c.People = addUnique(c.People, pid)
+	}
+	if written && err == nil {
+		e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
 	}
 }
 
-// noteDoc remembers a document link seen in a chat.
+// noteDoc remembers a document link seen in a chat. Under a selection it writes no stub for a document the user keeps
+// from being read (a per-item read false) nor one already past its days (Selection.DocDays: a per-item days, as a stub
+// has no signals), so neither an excluded nor a pruned document comes back through an old message that links it.
 func (e *Engine) noteDoc(u string, chat *Chat, at time.Time) {
 	id := SafeID(u[strings.LastIndex(u, "/")+1:])
 	if _, ok := e.Store.Item(KindDoc, id); ok {
 		return
 	}
-	_ = e.Store.PutItem(&Item{Kind: KindDoc, ID: id, URL: u, At: at, Where: chat.ID, Source: chat.Connector, Seen: time.Now().UTC()})
+	now := time.Now().UTC()
+	it := &Item{Kind: KindDoc, ID: id, URL: u, At: at, Where: chat.ID, Source: chat.Connector, Seen: now}
+	if sel := e.selection(); sel != nil {
+		if x := sel.Item(chat.Connector, ItemDoc, id); x != nil && !x.Read {
+			return
+		}
+		if days, ok := sel.DocDays(DocFacts{Source: chat.Connector, ID: id}); ok && docExpired(it, now, days) {
+			return
+		}
+	}
+	_ = e.Store.PutItem(it)
 }

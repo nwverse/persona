@@ -20,6 +20,12 @@ import (
 // stableAfter is how long an upstream session holds before a drop of it no longer counts toward maxReconnects.
 var stableAfter = time.Minute
 
+// upWriteTimeout bounds one write to the upstream session. A session that stays connected but takes no frame this
+// long (a hung service, a stalled jump host, a black-holed connection) counts as dropped: the WebSocket closes itself
+// on the deadline, readUpstream sees it and lost reconnects. Without it a write waits on the call's own context,
+// which only ends with the call, so the app hanging up was never read and the call never ended.
+var upWriteTimeout = 10 * time.Second
+
 const (
 	maxReconnects = 3  // in a row: a session that held stableAfter starts the count over
 	historyLines  = 40 // what a reconnected session is told was said
@@ -115,6 +121,10 @@ type conversation struct {
 	reply       string
 	replyVoiced bool
 	silent      []string
+	// replying: a reply is under way (evReply until evTurnEnd). A response.create sent then is refused
+	// (conversation_already_has_active_response, realtime dialect): sendUp holds it back as createOwed and sends it once
+	// the reply is over.
+	replying, createOwed bool
 	// sus is the call's pausing of its upstream while its conversation works (suspend.go, protocol 2).
 	sus suspension
 	// log is what the call's log counts, and its id (calllog.go).
@@ -127,6 +137,10 @@ type conversation struct {
 	// turnsEnd: the service says when the model's turn is over (evTurnEnd, or evReply, whose replies end with one): a
 	// line of the model's ends by that, not by a late caption of the user's (#5673).
 	turnsEnd bool
+	// owed is the answer the model owes the user, and modelAt when it last spoke, wrote a caption, handed something
+	// over or called a function (nudge.go).
+	owed    owedAnswer
+	modelAt time.Time
 }
 
 type outFrame struct {
@@ -319,7 +333,7 @@ func (c *conversation) negotiate(s *startFrame) error {
 				continue
 			}
 			c.resume = append(c.resume, r)
-			c.open = append(c.open, openTask{id: r.ID, task: clipRunes(r.Task, taskMost)})
+			c.open = append(c.open, openTask{id: r.ID, task: clipRunes(r.Task, taskMost), state: r.State})
 		}
 	}
 	c.resumed = len(c.history) > 0 || len(c.resume) > 0
@@ -375,8 +389,8 @@ func (c *conversation) bind(ctx context.Context) func() (online bool, err error)
 	}
 }
 
-// openTask is a run not over yet, as a new upstream session is told (instructions' Waiting).
-type openTask struct{ id, task string }
+// openTask is a run not over yet, as a new upstream session is told (instructions' Waiting), and its run frame's state.
+type openTask struct{ id, task, state string }
 
 // waiting are the tasks of the runs not over yet, oldest first (mu held).
 func (c *conversation) waiting() []string {
@@ -387,13 +401,13 @@ func (c *conversation) waiting() []string {
 	return out
 }
 
-// setOpen records run id's task as not over yet (task "": over).
-func (c *conversation) setOpen(id, task string) {
+// setOpen records run id's task as not over yet, in state (task "": over).
+func (c *conversation) setOpen(id, task, state string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.open = slices.DeleteFunc(c.open, func(o openTask) bool { return o.id == id })
 	if task != "" {
-		c.open = append(c.open, openTask{id: id, task: task})
+		c.open = append(c.open, openTask{id: id, task: task, state: state})
 	}
 }
 
@@ -440,6 +454,13 @@ func (c *conversation) shutdown() {
 		cancel()
 		_ = up.Close(websocket.StatusNormalClosure, "bye")
 	}
+}
+
+// writeUp writes v to the upstream session up, waiting at most upWriteTimeout.
+func (c *conversation) writeUp(up upLink, v any) error {
+	ctx, cancel := context.WithTimeout(c.ctx, upWriteTimeout)
+	defer cancel()
+	return writeJSON(ctx, up, v)
 }
 
 func writeJSON(ctx context.Context, c interface {

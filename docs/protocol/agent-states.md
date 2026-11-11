@@ -7,7 +7,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 
 | State | Meaning | From herdr | Persona adds | Color |
 | --- | --- | --- | --- | --- |
-| `needs_you` Needs you | Stuck somewhere a person must step in | `blocked` (a question / confirm box in the TUI) | A pending question, plan, permission or terminal interaction (herdr still shows working while a hook holds it) | Red, breathing |
+| `needs_you` Needs you | Stuck somewhere a person must step in | `blocked` (a question / confirm box in the TUI) | A pending question, plan, permission or terminal interaction (herdr still shows working while a hook holds it) | Blue, breathing |
 | `working` Working | Running | `working` | Claude: herdr reports `done` / `idle` / `unknown`, but the session has hooks (Persona's, or the global report-only ones) and the hook turn count says the turn isn't over (see "Hook turn signals" below); for sessions without hooks, the terminal title shows Claude Code's working spinner glyph (◐◓◑◒; older versions used braille dots), or the transcript shows this turn has started and not ended (no `turn_duration`, not interrupted) and was written within 45 seconds (#2069; if the transcript shows the turn ended, herdr's state is used). "Written" is its newest timestamped line, not the file's mtime: Claude Code rewrites its trailing metadata in place while idle (#5967); or the turn has stopped but its background commands / sub-Agents / Monitor / workflow are still running (#2228, #2935: when they finish they hand it the result and it carries on; assistant chats excluded) | Amber, breathing |
 | Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count | Amber, faded, still |
 | `unread` Unread | A turn finished and the result hasn't been seen | `done` (never focused in herdr) | And not viewed in the App since it finished | Green |
@@ -16,7 +16,10 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | `interrupted` Interrupted by restart | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
 
-Sort priority: Needs you → Working → Unread → Seen → Unknown → Not running.
+List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Seen → Unknown → Not running.
+
+Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply right after Unread on Android.
+iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
 
 ### Awaiting your reply (#5096)
 
@@ -25,13 +28,17 @@ Sort priority: Needs you → Working → Unread → Seen → Unknown → Not run
 forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; older apps still show Seen):
 
 - **What it asks** (`asks`): the node takes the question to the user from the turn's whole last reply (`last_text` is only its
-  first 200 runes, and the question is usually at the end) with `transcript.AskOf`, rules only, no model: one of the last three
+  first 200 runes, and the question is usually at the end) with `closeout.AskOf` (the words through `transcript.AskOf`), rules only, no model: one of the last three
   sentences ending in a question mark, or carrying a phrase that hands a decision over (要不要 / 要我 / 是否需要 / 请确认 / 选哪个 /
   告诉我 / 跟我说一声 / 选定后…, "Should I / Do you want / Let me know…", ますか / でしょうか…). Code blocks don't count, nor a
   phrase when the close says there is nothing to decide (没有需要你拍板的问题; a real question mark before it still counts), nor a reply a newer message came after (the user already
   answered; a host's answer such as botmux's counts the same way when the host gives its time). Marks inside inline code and links end no sentence (`user?.name`,
   `…?w=1` ask nothing; the question keeps their words), an ASCII `?` only ends a sentence before a space or the line's end, and a Chinese sentence ending in
-  吗 asks even without its question mark (not 么 / 呢: "…为什么。" is a statement). The node marks the session `asks_read`; only without it (an older node, a
+  吗 asks even without its question mark (not 么 / 呢: "…为什么。" is a statement). A reply whose closeout
+  (`../assistant/agent-work.md` "Closeout") says `status="done"` with no `missing` and no `waiting` line asks nothing,
+  wherever its question stands (#4110, `closeout.WaitsOnNobody`): it is the Agent's own word that the turn waits on
+  nobody, so a closing question is conversation or an offer, as triage reads the same closeout. `not_done`, `blocked`,
+  `done` with something missing or waited for, and no closeout at all leave the words to decide, as before. The node marks the session `asks_read`; only without it (an older node, a
   host that does not say) the manager reads `last_text` itself, and only when it was not cut.
 - **Still waiting** (`awaits_reply`, the manager's): Unread or Seen, no pending interaction (that is Needs You), no model
   error, no background work or `/loop`, and either the triage says it waits on the user (not put off on its card:
@@ -90,6 +97,13 @@ Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
   in a herdr pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
+- **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
+  hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
+  the session as `blocked` with the dialog's first line as `attention_reason`, so the manager makes its screen card. The pane is read again every
+  3 s while the dialog stays, until it is gone (or after 3 minutes); keys pressed into the pane drop what was read at once.
+  Why: Claude Code 2.1.322 runs the PermissionRequest hooks for its own safety checks ("Dangerous rm operation …", asked in bypass mode too)
+  but ignores an allow for them. The phone's Always Allow closed the card, herdr kept saying working, and the dialog held the terminal with
+  nothing on the phone to answer it: every message was refused as `dialog_open`.
 
 - **Has hooks and `prompts > completed`**: Working, overriding herdr's `done`.
 - **Has hooks, `prompts == completed`, and a `Stop` was seen**: not working; a leftover spinner glyph in the terminal title doesn't count. Exception: if the transcript has a turn written after the `Stop` (with a 5-second grace for the closing lines) that hasn't ended,
@@ -137,10 +151,11 @@ They count as background work just like background commands: the Agent is Workin
 - **Progress is on disk**: `<session>/subagents/workflows/<run>/journal.jsonl` (one `started` line per agent, with label and phase; `result` means it came back), and in the same directory `agent-<id>.jsonl` / `.meta.json` (each agent's conversation, read as a sub-Agent).
   When done it writes `<session>/workflows/<run>.json` (status, error, duration); the `meta` of the script `<session>/workflows/scripts/<name>-<run>.js` has the name and phases.
 - **Session field** `workflows` (`docs/protocol/protocol.md`): name, status, current phase, finished / started counts, duration, the sub-agent list and each one's last line. While running it's also put into `background` (kind `workflow`), so old clients and old hubs can still tell "there's background work".
-- **Timely updates** (#3433, #5511): each workflow's task id, status, current phase and agent counts (done / failed / running / started), and each listed agent's latest tool call (its name and its call count) are part of the node's session list change detection. Appending a journal `result` or an agent calling a tool sends `sessions.changed` even when the main transcript hasn't grown. A running workflow's progress is cached for at most 1.5 seconds; polling every second leaves scheduling room within the three-second update deadline. Tokens and last words ride along with those pushes.
+- **Timely updates** (#3433, #5511): each workflow's task id, status, current phase and agent counts (done / failed / running / started), and each listed agent's id and latest tool call (its name and its call count) are part of the node's session list change detection (the id since #2323: a retried agent can replace its earlier attempt without changing any count). Appending a journal `result` or an agent calling a tool sends `sessions.changed` even when the main transcript hasn't grown. A running workflow's progress is cached for at most 1.5 seconds; polling every second leaves scheduling room within the three-second update deadline. Tokens and last words ride along with those pushes.
 - **Reading cost** (#5511): node reads the journal only for the lines it gained, and an ended run once (the transcript said it ended and there is no state file: once more when the state file appears; a stalled run keeps being read). An agent's transcript is read whole once and then only for what it gained: its tool calls (a sub-Agent's `steps`, #5602; a workflow agent's `calls`) need every line, but only the reply lines that carry a tool call are parsed, and only for their blocks' types and ids; the latest call, words and exchange are reread from the lines they're on, and a workflow agent's usage and model from its last replies back. Caches drop the least recently used entry instead of starting over when full. On the dev machine's 580 real workflow agent transcripts (600 MB), the first list after a node restart went from about 9 s to under 1.1 s.
 - **Phases and usage** (#3433): `phase_stats` reports `title / started / done / failed / running` for each phase, in declared `phases` order (including zero counts for phases that haven't started), followed by any extra phases found in the journal or agent metadata. Agents with no phase are grouped under `title: ""`. Counts and run-level `tokens / calls` are calculated before `agents` is limited to the latest 60, so clients must not infer totals from that array.
   The journal's `failed` lines (an API error ended the agent) count as `failed` (`agents_failed`, the agent's `status: failed`), not as `done` (#5511; older nodes counted them as done, and leave the fields out). Agents still out when the run ended are `stopped` and in none of the counts but `started`.
+  A retried agent counts once (#2323): Claude Code's workflow view can retry a stalled agent, which starts the same `agent()` call again under a new agent id (the journal line's `key` names the call; two identical calls in one script get different keys). The attempt it replaced never gets a `result` or `failed` line, only `[Request interrupted by user]` at the end of its transcript, so node drops it from the counts, `phase_stats` and `agents` and keeps only its `tokens` / `calls`. Without this the phase stayed current with one agent too many (`2/3`) until the run ended. A retry of an agent that had already returned replaces it the same way. Journals without `key` (older Claude Code) are read as before.
   Each agent also carries `model`, `latest_tool: {id, name, summary}`, `ended_at`, `tokens` and `calls`. `tokens` is the latest assistant usage's `input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens`, not the sum of earlier usage records; Claude Code's own error replies (`<synthetic>`, all-zero usage), usage without input (a gateway's on a turn's other replies, `{"input_tokens":0,"output_tokens":1}`) and a gateway's whole-turn sum don't replace it (#5511, the same rule as a session's context tokens). `calls` counts tool calls. Run-level `tokens` sums those latest snapshots and is not cumulative token consumption either. `latest_tool.summary` comes in the request's language (node writes Chinese, the hub rewrites it). Clients keep their existing display when these fields are absent.
 - **End notifications and timing** (#3433): `Dynamic workflow "…" completed / failed / was stopped` is parsed as `Item.task.kind: workflow`, preserving the notification's `tool_use_id` and `task_id` so clients can find the initiating call or run. Its one-line text is the hub's, in the reader's language like the other task notes ("Background workflow finished · …", #5511); iOS / Mac's `ChatCache` went to `chats-v10` with it, so copies cached with the Chinese text are dropped. A Live Activity item with `background_working` uses the earliest known `started_at` among running workflows for `since`; without one, it falls back to the turn's start time, then the session's update time. `detail` remains a one-line progress summary.
 - **Fallback**: with no notification and no status file, 30 minutes without any write counts as `stalled` (its claude is gone) and no longer as running; a Monitor past `expires_at` doesn't count; finished ones stop being listed after a day.
@@ -179,15 +194,16 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
 DSH (`docs/integrations/dsh.md`): `space_kind` is `dsh`, the space is the session's directory (`space_id` = directory, `space_name` = directory name), no slots;
 state comes from the plugin: running → working, a permission / question waiting → blocked, otherwise done (the hub splits it into Unread / Seen by whether it's been seen, as usual).
 
-Paseo (`docs/integrations/paseo.md` ("Which sessions are shown")): `space_kind` is `paseo`, the space is a Paseo project (`space_id` = project record id, `space_name` = project name);
-a repository's main checkout and its worktrees share a space; the slot is a Paseo workspace (`slot_id` = workspace id, `slot_name` = workspace title).
+Paseo (`docs/integrations/paseo.md` ("Which sessions appear")): `space_kind` is `paseo`, the space is a Paseo project (`space_id` = project record id, `space_name` = project name);
+a repository's main checkout and its worktrees share a space. No slots (#4493): a workspace's Agents are separate conversations, not the panes of one tab;
+`slot_name` alone carries the Paseo workspace's title, as the Agent's place label.
 
 opencode (`docs/integrations/opencode.md`): those in herdr panes are herdr sessions (`space_kind` is `herdr`); those outside herdr (web, other terminals) are runtime sessions,
 `space_kind` is `opencode`, the space is the session's directory, no slots, and state comes from the plugin (running → working, waiting on a permission → blocked, otherwise done / idle depending on whether there's an assistant message).
 
 node fills these fields from herdr's `session.snapshot` (workspaces, tabs and agents in one call): once whenever herdr pushes a change via `events.subscribe`
-(the list is rebuilt at most once a second; entering / leaving blocked doesn't wait, see `docs/server/server.md` ("Fast lane for cards")),
-and every 10 seconds as a fallback (every second when the event stream is down or there's a compatible Codex forks pane, see `docs/server/server.md` ("Connection to herdr")). When a tab name is the default number, the App shows `#2`.
+(the list is rebuilt at most once a second; entering / leaving blocked doesn't wait, see `docs/server/server.md` ("Card fast lane (#751)")),
+and every 10 seconds as a fallback (every second when the event stream is down or there's a compatible Codex forks pane, see `docs/server/server.md` ("Connecting to herdr")). When a tab name is the default number, the App shows `#2`.
 
 If herdr cuts a large snapshot at its socket's 8192-byte limit (`herdr.ErrTruncated`, #6083), the client rebuilds it from
 `workspace.list`, then `tab.list` and `pane.list` per workspace, one `pane.layout` per tab, and `agent.get` per detected agent.
@@ -213,7 +229,7 @@ A common pattern: an Agent runs `herdr pane split` in its own tab, then starts C
   If the top-left is a shell rather than an Agent, the group has no number 0 and the Agents are peers (the web doesn't mark a starter).
 - Parent/child relationships across tabs (an Agent opening a subtask in another tab / workspace) are not inferred; if needed later, agree on an explicit marker (like to-dos' `persona_from`).
 
-For the web, see `docs/web/web.md`; Android, `docs/android/android.md` ("Several Agents in one tab") (#2515). iOS / Mac (#2516; the pure logic is in `apple/Persona/Views/Chats/TabPanes.swift`, same rules as the web's `herdr-tree.ts`):
+For the web, see `docs/web/web.md`; Android, `docs/android/android.md` ("Session controls, session origin and capabilities") (#2515). iOS / Mac (#2516; the pure logic is in `apple/Persona/Views/Chats/TabPanes.swift`, same rules as the web's `herdr-tree.ts`):
 
 - In the Agents list (by repository / by project; cards, capsules, compact list), a tab with several Agents first gets a tab row: the status dot of the one most in need of attention, the tab name and its title, "N Agents"; tap it to collapse / expand.
   Below it, ordered by pane position: the starter on top, labeled **Started It**, the rest indented one level beneath it. Each row names its own Agent (when both are Claude they're numbered "Claude 2"; the starter is told apart by its label) and no longer repeats the tab name.

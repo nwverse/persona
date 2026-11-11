@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Installing, upgrading and removing extensions, with what the hub is doing meanwhile (docs/protocol/protocol.md「扩展的安装、升级、卸载进度」,
+// Installing, upgrading and removing extensions, with what the hub is doing meanwhile (docs/protocol/protocol.md「Extension install, upgrade and uninstall progress」,
 // #3277, #3307).
 //
 // A hub with `extension_operations` runs each as an operation and pushes it in `extension_operation` events (to a
@@ -95,7 +95,7 @@ extension APIClient {
         }
     }
 
-    /// By operation id.
+    /// By operation id (another manager's: `ExtensionOperation.storeKey`).
     private(set) var operations: [String: ExtensionOperation] = [:]
     @ObservationIgnored private var lastHub: String?
     @ObservationIgnored private let deps: Deps
@@ -105,10 +105,11 @@ extension APIClient {
     /// The hub runs them in steps and pushes them.
     var stepped: Bool { deps.features().hasExtensionFeature("operations") }
 
-    /// The one to show for an extension (of a market, when given): one going on, else the latest.
-    func operation(for extensionID: String, market: String? = nil) -> ExtensionOperation? {
+    /// The one to show for an extension (of a market, when given) of `manager` (nil: the default's, whose catalog the
+    /// market pages show): one going on, else the latest. Another manager's copy of the same extension is not this one.
+    func operation(for extensionID: String, market: String? = nil, manager: String? = nil) -> ExtensionOperation? {
         let mine = operations.values.filter {
-            $0.extensionID == extensionID && (market == nil || $0.market == nil || $0.market == market)
+            $0.extensionID == extensionID && (market == nil || $0.market == nil || $0.market == market) && $0.manager == manager
         }
         return mine.first(where: \.isActive) ?? mine.max { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
     }
@@ -116,8 +117,9 @@ extension APIClient {
     /// From an `extension_operation` event or a list: a newer state of the same operation replaces the one kept.
     func received(_ op: ExtensionOperation) {
         resetIfAnotherHub()
-        if let old = operations[op.id], let was = old.updatedAt, let now = op.updatedAt, now < was { return }
-        if operations[op.id] != op { operations[op.id] = op }
+        let key = op.storeKey
+        if let old = operations[key], let was = old.updatedAt, let now = op.updatedAt, now < was { return }
+        if operations[key] != op { operations[key] = op }
     }
 
     /// Reads what the hub has going on (a page opening, the connection back: events missed are not sent again).
@@ -129,48 +131,70 @@ extension APIClient {
         list.forEach(received)
     }
 
-    /// Put away: the hub forgets one that ended, cancels one that waits for consent or still checks.
-    func dismiss(_ id: String) async {
-        guard let op = operations[id] else { return }
-        operations[id] = nil
-        if !op.isLocal { try? await deps.api()?.deleteExtensionOperation(id) }
+    /// Put away: the hub forgets one that ended, cancels one that waits for consent or still checks. `manager`: whose
+    /// operation it is (nil: the default's).
+    func dismiss(_ id: String, manager: String? = nil) async {
+        let key = Self.key(id, manager: manager)
+        guard let op = operations[key] else { return }
+        operations[key] = nil
+        if !op.isLocal { try? await deps.api()?.manager(manager).deleteExtensionOperation(id) }
     }
 
     // MARK: - stepped (a hub with operations)
 
+    // `manager` names the manager whose extension it is (an extension's settings page of another manager); nil: the
+    // default's, whose catalog the market pages show.
+
     /// Downloads and checks a market's extension in the background; the result is the operation once it waits for
     /// consent, failed or was canceled.
-    func preview(market: String, extension id: String) async throws -> ExtensionOperation {
-        guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-        let op = try await api.startCatalogPreview(market: market, extension: id)
+    func preview(market: String, extension id: String, manager: String? = nil) async throws -> ExtensionOperation {
+        await settled(try await startPreview(market: market, extension: id, manager: manager))
+    }
+
+    /// Starts the preview: the operation at its first step.
+    func startPreview(market: String, extension id: String, manager: String? = nil) async throws -> ExtensionOperation {
+        var op = try await api(manager).startCatalogPreview(market: market, extension: id)
+        op.manager = manager
         received(op)
-        return await follow(op.id) { $0.state != .running }
+        return op
+    }
+
+    /// The preview `op` is, once it waits for consent, failed or was canceled.
+    func settled(_ op: ExtensionOperation) async -> ExtensionOperation {
+        await follow(op.id, manager: op.manager) { $0.state != .running }
     }
 
     /// The preview the operation waits on.
-    func consentPreview(_ id: String) async throws -> ExtensionPreview? {
-        guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-        let detail = try await api.extensionOperation(id)
+    func consentPreview(_ id: String, manager: String? = nil) async throws -> ExtensionPreview? {
+        var detail = try await api(manager).extensionOperation(id)
+        detail.operation.manager = manager
         received(detail.operation)
         return detail.preview
     }
 
     /// The user agreed: the operation installs and the result is how it ended.
-    func agree(_ id: String, preview: ExtensionPreview) async throws -> ExtensionOperation {
-        guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-        let op = try await api.agreeExtensionInstall(id, preview: preview)
+    func agree(_ id: String, preview: ExtensionPreview, manager: String? = nil) async throws -> ExtensionOperation {
+        var op = try await api(manager).agreeExtensionInstall(id, preview: preview)
+        op.manager = manager
         received(op)
-        return await follow(op.id) { !$0.isRunning }
+        return await follow(op.id, manager: manager) { !$0.isRunning }
     }
 
     /// Starts a failed one again; the result once it waits for consent again or ended (a new operation).
     func retry(_ op: ExtensionOperation) async throws -> ExtensionOperation {
-        guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-        let next = try await api.retryExtensionOperation(op.id)
-        operations[op.id] = nil
+        var next = try await api(op.manager).retryExtensionOperation(op.id)
+        next.manager = op.manager
+        operations[op.storeKey] = nil
         received(next)
-        return await follow(next.id) { !$0.isRunning }
+        return await follow(next.id, manager: next.manager) { !$0.isRunning }
     }
+
+    private func api(_ manager: String?) throws -> APIClient {
+        guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
+        return api.manager(manager)
+    }
+
+    private static func key(_ id: String, manager: String?) -> String { manager.map { "\($0)\u{0}\(id)" } ?? id }
 
     // MARK: - an older hub
 
@@ -226,17 +250,23 @@ extension APIClient {
 
     /// Waits until `done` says the hub's operation got where it was going: its events move it on, and it is read
     /// again now and then in case one was missed.
-    private func follow(_ id: String, until done: (ExtensionOperation) -> Bool) async -> ExtensionOperation {
+    private func follow(_ id: String, manager: String?, until done: (ExtensionOperation) -> Bool) async -> ExtensionOperation {
+        let key = Self.key(id, manager: manager)
+        let read = { [deps] () async -> ExtensionOperation? in
+            guard var fresh = try? await deps.api()?.manager(manager).extensionOperation(id).operation else { return nil }
+            fresh.manager = manager
+            return fresh
+        }
         let started = Date.now
         var lastRead = Date.now
         while true {
-            if let op = operations[id], done(op) { return op }
-            if operations[id] == nil, let fresh = try? await deps.api()?.extensionOperation(id).operation {
+            if let op = operations[key], done(op) { return op }
+            if operations[key] == nil, let fresh = await read() {
                 received(fresh)
                 continue
             }
             if Date.now.timeIntervalSince(started) > deps.patience || Task.isCancelled {
-                var late = operations[id] ?? ExtensionOperation(id: id, kind: .install, extensionID: "")
+                var late = operations[key] ?? ExtensionOperation(id: id, kind: .install, extensionID: "")
                 late.state = .failed
                 late.error = String(localized: "The hub hasn’t said whether it finished after a long wait. Pull down to refresh.")
                 late.retryable = false
@@ -244,9 +274,9 @@ extension APIClient {
             }
             try? await Task.sleep(for: .milliseconds(200))
             let seconds = Double(deps.poll.components.seconds) + Double(deps.poll.components.attoseconds) / 1e18
-            if Date.now.timeIntervalSince(lastRead) >= seconds, let api = deps.api() {
+            if Date.now.timeIntervalSince(lastRead) >= seconds {
                 lastRead = .now
-                if let fresh = try? await api.extensionOperation(id).operation { received(fresh) }
+                if let fresh = await read() { received(fresh) }
             }
         }
     }
@@ -264,6 +294,10 @@ extension APIClient {
 extension ExtensionOperation {
     /// Kept by this app for a hub that does not run operations.
     var isLocal: Bool { id.hasPrefix("local-") }
+
+    /// Its place in `ExtensionOperations`: the id for the default manager's, the id under its manager for another's
+    /// (each manager numbers its own).
+    var storeKey: String { manager.map { "\($0)\u{0}\(id)" } ?? id }
 }
 
 /// The words for an operation and its steps (the hub sends ids; the words are the app's, docs/protocol/protocol.md).

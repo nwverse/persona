@@ -1,4 +1,5 @@
 {
+  "start_work_session": "New work session",
   "suggestion_meetings": "What meetings do I have today? Help me prepare",
   "suggestion_agents": "What are the agents on my computers doing?",
   "suggestion_lark": "Sum up the Lark messages I need to reply to",
@@ -12,5 +13,6 @@
   "empty_body_setup": "One more step before we start. Here's what's missing.",
   "needs_calendar": "Uses your phone's calendar",
   "load_failed": "Couldn't load main conversation: {error}",
-  "retry": "Retry"
+  "retry": "Retry",
+  "still_starting": "Still starting {launcher}…"
 }

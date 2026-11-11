@@ -5,7 +5,7 @@ package extmgr
 // "Allow once" / "Always allow" / "Deny". Apps always allowed are kept by bundle id for that Mac in the hub's settings
 // (computerAppsKey) and listed, and removable, on the machine's page. Some are never remembered and asked about every
 // time (askedEveryTime), and so is a call whose apps cannot all be told (a script naming them by expression, a step
-// with no app).
+// with no app, a launch naming none). An app a call opens counts as one it operates.
 
 import (
 	"cmp"
@@ -20,7 +20,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/protectedapps"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -67,16 +67,10 @@ var askedEveryTimeNames = []string{
 // approval: the plugin's "Ask the first time an app is operated", on unless turned off.
 func (s cuaSettings) approval() bool { return s.AppApproval == nil || *s.AppApproval }
 
-var getAppLiteral = lazyre.New(`getApp\(\s*(?:"([^"\\]+)"|'([^'\\]+)')\s*\)`)
-
 // callApps is what a computer tool call names: its apps by name (or wholeScreen), and whether that is all it may
-// touch (false: a script naming its apps by expression or none, a step with no app of its own or the call's).
+// touch (false: a script naming its apps by expression or none, a step with no app of its own or the call's, a
+// launch_app step naming no app). An app the call opens (launch_app, cua.launch) is one it touches.
 func callApps(name, app, script string, steps json.RawMessage) (apps []string, whole bool) {
-	add := func(a string) {
-		if a = strings.TrimSpace(a); a != "" && !slices.Contains(apps, a) {
-			apps = append(apps, a)
-		}
-	}
 	switch {
 	case name == "computer_state":
 		if app == "" {
@@ -84,54 +78,18 @@ func callApps(name, app, script string, steps json.RawMessage) (apps []string, w
 		}
 		return []string{app}, true
 	case script != "":
-		for _, m := range getAppLiteral.FindAllStringSubmatch(script, -1) {
-			add(m[1] + m[2])
-		}
-		return apps, len(apps) > 0 && strings.Count(script, "getApp(") == len(getAppLiteral.FindAllString(script, -1))
+		return protectedapps.ScriptApps(script)
 	}
-	var list []map[string]json.RawMessage
-	_ = json.Unmarshal(steps, &list)
-	whole = len(list) > 0
-	for _, s := range list {
-		var named struct {
-			App string `json:"app"`
-		}
-		found := ""
-		for k, raw := range s {
-			if k == "wait_for" || k == "expect" || k == "tool" {
-				continue
-			}
-			if json.Unmarshal(raw, &named) == nil && named.App != "" {
-				found = named.App
-			}
-		}
-		if found == "" {
-			found = app
-		}
-		if found == "" {
-			whole = false
-			continue
-		}
-		add(found)
-	}
-	return apps, whole
+	return protectedapps.StepsApps(app, steps)
 }
 
 // appsOn is what m's Cua Driver knows of the apps named: bundle id and name, by the name given (case aside); a name
-// it does not know stands for itself.
-func (h *Manager) appsOn(ctx context.Context, m *Machine, names []string) []approvedApp {
-	var known struct {
-		Apps []struct {
-			Name     string `json:"name"`
-			BundleID string `json:"bundle_id"`
-		} `json:"apps"`
-	}
+// it does not know stands for itself. known is its list when the caller has it already (nil: asked here if needed).
+func (h *Manager) appsOn(ctx context.Context, m *Machine, names []string, known []protectedapps.App) []approvedApp {
 	// LCU's own elicitation names the app. Probing list_apps first would start the runtime, and might ask, before
 	// this card exists.
-	if h.callBackend(m) != "lcu" && slices.ContainsFunc(names, func(n string) bool { return n != wholeScreen }) {
-		if res, err := h.computerCall(ctx, m, "persona-apps", "", "list_apps", map[string]any{}); err == nil {
-			_ = json.Unmarshal(res.Output, &known)
-		}
+	if known == nil && h.callBackend(m) != "lcu" && slices.ContainsFunc(names, func(n string) bool { return n != wholeScreen }) {
+		known = h.knownApps(ctx, m)
 	}
 	out := make([]approvedApp, 0, len(names))
 	for _, n := range names {
@@ -139,7 +97,7 @@ func (h *Manager) appsOn(ctx context.Context, m *Machine, names []string) []appr
 		if n == wholeScreen {
 			a.BundleID = "screen"
 		}
-		for _, k := range known.Apps {
+		for _, k := range known {
 			if k.BundleID != "" && (strings.EqualFold(k.Name, n) || strings.EqualFold(k.BundleID, n)) {
 				a = approvedApp{BundleID: k.BundleID, Name: k.Name}
 				break
@@ -205,12 +163,12 @@ func (h *Manager) rememberApps(ctx context.Context, m *Machine, apps []approvedA
 }
 
 // approveApps asks on the phone about the apps this call names that m has not always allowed (or every time: those
-// never remembered, a call whose apps are not all known). asked: a card was shown; ok: go ahead.
-func (h *Manager) approveApps(ctx context.Context, m *Machine, by asker, tool string, names []string, whole bool, args json.RawMessage) (asked, ok bool) {
+// never remembered, a call whose apps are not all known). asked: a card was shown; ok: go ahead. known: as appsOn.
+func (h *Manager) approveApps(ctx context.Context, m *Machine, by asker, tool string, names []string, whole bool, args json.RawMessage, known []protectedapps.App) (asked, ok bool) {
 	if !h.cua().approval() {
 		return false, true
 	}
-	apps := h.appsOn(ctx, m, names)
+	apps := h.appsOn(ctx, m, names, known)
 	all, err := h.approvedApps(ctx)
 	if err != nil {
 		h.logf("[%s] reading the apps always allowed: %v", m.cfg.ID, err) // asked, as if none were

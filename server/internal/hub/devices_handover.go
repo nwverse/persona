@@ -15,13 +15,29 @@ import (
 
 // ---- the handover ----
 
-// devicesConfig is what the hub hands the manager now.
-func (h *Hub) devicesConfig() devicewire.Config { return h.devicesConfigFor(devicesOwner) }
-
 // devicesConfigFor is what the hub hands manager id: the machines it carries (ownership.go); the mesh's members
 // only to the carrier.
 func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	out := devicewire.Config{Machines: []json.RawMessage{}, HubID: h.hubID(), HubName: h.hubName(), HubVersion: h.version}
+	if h.cfg != nil && h.publicShareBuildExists() {
+		out.SharePublicOrigin = h.sharingOrigin()
+	}
+	out.ShareAuthorities = map[string]devicewire.ShareAuthority{}
+	for _, mc := range h.cfgEntries() {
+		if h.entryOwner(mc.ID) != id {
+			continue
+		}
+		if store := h.shareRoutingStore(); store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			route, err := store.ShareRouting(ctx, h.hubID(), mc.ID, id)
+			cancel()
+			if err == nil {
+				out.ShareRoutingHandle = route.Handle
+				out.ShareAuthorities[mc.ID] = route.Authority
+			}
+		}
+	}
+	out.AutoUpdateNodes = h.upd.nodesEnabled()
 	for _, mc := range h.cfgEntries() {
 		if h.entryOwner(mc.ID) != id {
 			continue
@@ -31,8 +47,8 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 		}
 	}
 	if h.cfg != nil {
-		out.AutoUpdateNodes = h.cfg.AutoUpdateNodes
 		out.TailcatDERPMapURL = h.cfg.Tailcat.DERPMapURL
+		out.WebURL = h.webURL()
 	}
 	out.NodePackagesURL, out.NodePackagesProxy = h.nodePackages()
 	if every, timeout, set := h.linkPingTimes(); set {
@@ -67,8 +83,19 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	return out
 }
 
-// nodePackages is where the manager fetches node builds (hub.json's node_packages): its url, else this build's update
-// URL (a release hub's, a Docker image built with one); "off" none.
+// webURL is public_url as the web app's address for Persona Link (devicewire.Config.WebURL), as addressOf reads it: an
+// https one only, its sub-path kept, without a trailing slash; "" otherwise (a plain http one is how the apps reach
+// the hub on the LAN).
+func (h *Hub) webURL() string {
+	if base, _, ok := h.addressOf(h.cfg.PublicURL); ok && strings.HasPrefix(base, "https://") {
+		return base
+	}
+	return ""
+}
+
+// nodePackages is where the manager fetches node builds (hub.json's node_packages): its url, else the hub's update
+// source (hub.json's update.url, else the build's: a release hub's, a Docker image built with one), then through
+// update.proxy unless node_packages.proxy names one; "off" none.
 func (h *Hub) nodePackages() (url, proxy string) {
 	if h.cfg != nil {
 		url, proxy = h.cfg.NodePackages.URL, h.cfg.NodePackages.Proxy
@@ -77,7 +104,10 @@ func (h *Hub) nodePackages() (url, proxy string) {
 	case "off":
 		return "", ""
 	case "":
-		url = h.build.UpdateURL
+		url = h.updateURL()
+		if strings.TrimSpace(proxy) == "" && h.cfg != nil {
+			proxy = h.cfg.Update.Proxy // as written: the manager's netproxy refuses one that does not read, never goes around it
+		}
 	}
 	return strings.TrimRight(strings.TrimSpace(url), "/"), proxy
 }
@@ -127,8 +157,15 @@ func (h *Hub) devicesMesh() *devicewire.Mesh {
 // devicesConfigChanged hands the manager the config again if it changed (a regroup of the mesh, an entry added, the
 // hub's addresses), at most every 200 ms.
 func (h *Hub) devicesConfigChanged() {
+	h.queueDevicesConfig(false)
+}
+
+// An explicit policy write can be repeated after the publisher activates its
+// immutable packages. It must reach managers even when the config is unchanged.
+func (h *Hub) queueDevicesConfig(checkNodes bool) {
 	d := &h.devices
 	d.mu.Lock()
+	d.nodeUpdateDue = d.nodeUpdateDue || checkNodes
 	if d.due {
 		d.mu.Unlock()
 		return
@@ -138,25 +175,35 @@ func (h *Hub) devicesConfigChanged() {
 	time.AfterFunc(200*time.Millisecond, func() {
 		d.mu.Lock()
 		d.due = false
+		checkNodes := d.nodeUpdateDue
+		d.nodeUpdateDue = false
 		d.mu.Unlock()
 		for _, p := range h.busRoster() {
 			if p.Role != bus.RoleManager {
 				continue
 			}
-			b, _ := json.Marshal(h.devicesConfigFor(p.ID))
+			cfg := h.devicesConfigFor(p.ID)
+			b, _ := json.Marshal(cfg)
 			d.mu.Lock()
 			same := string(b) == string(d.sent[p.ID])
 			d.mu.Unlock()
-			if same {
-				continue
-			}
-			if err := h.notifyBus(p.ID, devicewire.EventConfig, json.RawMessage(b)); err == nil {
+			if !same {
+				if err := h.notifyBus(p.ID, devicewire.EventConfig, json.RawMessage(b)); err != nil {
+					continue
+				}
 				d.mu.Lock()
 				if d.sent == nil {
 					d.sent = map[string][]byte{}
 				}
 				d.sent[p.ID] = b
 				d.mu.Unlock()
+			}
+			if checkNodes && cfg.AutoUpdateNodes {
+				ctx, cancel := context.WithTimeout(context.Background(), updateRequestLimit)
+				if err := h.callBus(ctx, p.ID, devicewire.MethodUpdateNodes, map[string]any{}, nil); err != nil {
+					h.logf("update: [%s] checks its node packages: %v", p.ID, err)
+				}
+				cancel()
 			}
 		}
 	})
@@ -223,6 +270,9 @@ func (h *Hub) addMachineLive(mc MachineConfig) {
 // removeMachineLive takes a hub.json entry out of what the manager connects: it lets the computer go now. A hub that
 // is not running (tests) does not read it again.
 func (h *Hub) removeMachineLive(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = h.retireShareMachine(ctx, id)
+	cancel()
 	d := &h.devices
 	d.mu.Lock()
 	if !d.started {
@@ -281,7 +331,7 @@ func (c MachineConfig) forMesh() MachineConfig {
 
 // linkPingTimes are the heartbeats of the Persona Links the hub relays: hub.json's link section (config_link.go), else
 // link.PingEvery and PingTimeout; tests set their own (h.linkPing). set: not the defaults, the manager is told them
-// (devicesConfig) and tells Persona Link.
+// (devicesConfigFor) and tells Persona Link.
 func (h *Hub) linkPingTimes() (every, timeout time.Duration, set bool) {
 	if h.linkPing[0] > 0 {
 		return h.linkPing[0], h.linkPing[1], true

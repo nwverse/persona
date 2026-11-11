@@ -58,7 +58,7 @@ import persona.core.domain.sort.WorkflowTimeline.PhaseBlock
 import persona.core.domain.sort.WorkflowTimeline.PhaseState
 import java.time.Instant
 
-// A Claude Code Workflow run (#2935, #3435; docs/protocol/agent-states.md "Background workflow, Monitor") as a timeline card,
+// A Claude Code Workflow run (#2935, #3435; docs/protocol/agent-states.md "Background workflows and Monitor") as a timeline card,
 // the same as the web's (#3434): in the chat where the Workflow call that launched it was (JWorkflowCallCard), and in an
 // agent's details (JWorkflowCard). Both draw the same parts:
 // - a head: the mark, its name, its status, "169/185+" agents done of those started ("+" while it runs: the script
@@ -463,7 +463,7 @@ private fun AgentRow(agent: WorkflowAgent, clock: State<Instant>, fresh: Boolean
         Modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha.value }
             .then(if (onOpen != null) Modifier.clickable(role = Role.Button, onClickLabel = action, onClick = onOpen) else Modifier)
             .semantics(mergeDescendants = true) { stateDescription = word }
-            .heightIn(min = 36.dp).padding(start = inset + Tokens.Space.xxl, end = inset)
+            .heightIn(min = 36.dp).padding(start = inset + Tokens.Space.xl, end = inset)
             .testTag("workflow-agent:" + agent.id),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -506,7 +506,7 @@ private fun AgentDot(state: AgentState) {
 /** A quiet line among the rows ("12 earlier ones not listed"). */
 @Composable
 private fun Note(text: String, inset: Dp) {
-    Text(text, Modifier.heightIn(min = 32.dp).padding(start = inset + Tokens.Space.xxl, end = inset, top = Tokens.Space.s),
+    Text(text, Modifier.heightIn(min = 32.dp).padding(start = inset + Tokens.Space.xl, end = inset, top = Tokens.Space.s),
         style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
@@ -514,7 +514,7 @@ private fun Note(text: String, inset: Dp) {
 @Composable
 private fun TextAction(text: String, inset: Dp, onClick: () -> Unit) {
     Box(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).heightIn(min = 36.dp)
-        .padding(start = inset + Tokens.Space.xxl, end = inset), contentAlignment = Alignment.CenterStart) {
+        .padding(start = inset + Tokens.Space.xl, end = inset), contentAlignment = Alignment.CenterStart) {
         Text(text, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Medium), color = PersonaTheme.palette.accent, maxLines = 1)
     }
 }

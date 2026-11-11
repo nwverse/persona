@@ -1,6 +1,7 @@
 // Derived lists the sidebar, the home page and the palette share.
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { api, credentialOwner } from "./api";
+import { credentialOwner } from "./api";
+import { CompleteSessions } from "./complete-sessions";
 import { stateOf } from "./format";
 import { getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
@@ -15,8 +16,8 @@ export function useAgentSessions(): Session[] {
 
 const EMPTY_FULL_LIST = { sessions: [] as Session[], loaded: false, base: {} as Record<string, Session[]> };
 const FULL_LIST_RETRY_MS = 5_000;
-// Working agents emit list hints for every display update. Space complete reads from their completion
-// so a large fallback list cannot be downloaded back-to-back while those hints keep arriving.
+// Working agents emit list hints for every display update. Space reads from their completion so hints that keep
+// arriving share one read. The complete list is read once; later reads ask only for what changed (complete-sessions.ts).
 const FULL_LIST_REFRESH_MS = 3_000;
 
 // A short handoff window covers Sidebar → AgentsPage and StrictMode remounts, not a permanent
@@ -36,6 +37,7 @@ function createFullCache(owner: string) {
   let stopped = false, consumers = 0, pending = false, dirty = false, urgent = false;
   let nextReadAt = 0;
   let controller: AbortController | undefined;
+  const complete = new CompleteSessions();
   let retry: ReturnType<typeof setTimeout> | undefined;
   let trailing: ReturnType<typeof setTimeout> | undefined;
   let expiry: ReturnType<typeof setTimeout> | undefined;
@@ -59,9 +61,10 @@ function createFullCache(owner: string) {
     controller = new AbortController();
     const base = getState().sessions;
     try {
-      const result = await api<{ sessions: Session[] }>("/sessions", { signal: controller.signal });
-      if (valid()) {
-        fullSnapshot = { sessions: (result.sessions ?? []).filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
+      const result = await complete.read(controller.signal);
+      // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
+      if (valid() && (result.changed || !fullSnapshot.loaded)) {
+        fullSnapshot = { sessions: result.sessions.filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
         fullChanged();
       }
     } catch {
@@ -77,7 +80,11 @@ function createFullCache(owner: string) {
       if (valid() && consumers && dirty && retry === undefined) void read(urgent);
     }
   };
-  const off = ["sessions_list", "session", "sessions", "sessions_delta", "hello"].map((event) => onHubEvent(event, () => { void read(event === "hello"); }));
+  const off = ["sessions_list", "session", "sessions", "sessions_delta", "hello"].map((event) => onHubEvent(event, (msg) => {
+    // A hint for the revision this copy already holds (the one on connect, a burst's repeat) needs no read.
+    if (event === "sessions_list" && complete.holds(msg?.revision)) return;
+    void read(event === "hello");
+  }));
   const dispose = () => {
     if (stopped) return;
     stopped = true;
@@ -114,22 +121,24 @@ function createFullCache(owner: string) {
   };
 }
 
-/** Pins and grouping need complete rows, including agents outside the bounded first page. Consumers
- * share a scoped snapshot and request, released shortly after the last legacy list leaves. */
-export function useFullAgentSessions(): { sessions: Session[]; loaded: boolean } {
+/** Pins, grouping and the per-assistant lists need complete rows, including agents outside the bounded first page.
+ * Consumers share a scoped snapshot and request, released shortly after the last one leaves. */
+export function useFullAgentSessions(on = true): { sessions: Session[]; loaded: boolean } {
   const by = useStore((s) => s.sessions);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const loaded = useStore((s) => s.loaded);
   const snapshot = useSyncExternalStore(subscribeFull, getFullSnapshot, getFullSnapshot);
-  const owner = credentialOwner();
+  const owner = on ? credentialOwner() : "";
   const full = fullCache?.owner === owner ? snapshot : EMPTY_FULL_LIST;
   useEffect(() => {
-    if (!bounded || !loaded) return;
+    if (!on || !bounded || !loaded) return;
     if (fullCache && fullCache.owner !== owner) fullCache.dispose();
     fullCache ??= createFullCache(owner);
     return fullCache.retain();
-  }, [bounded, loaded, owner, snapshot.epoch]);
+  }, [on, bounded, loaded, owner, snapshot.epoch]);
   return useMemo(() => {
+    // `on` false: the caller has no use for the list now and asks the hub for nothing
+    if (!on) return EMPTY_FULL_LIST;
     if (!bounded) return { sessions: Object.values(by).flat().filter((s) => !s.assistant), loaded };
     if (!loaded) return EMPTY_FULL_LIST;
     if (by === full.base) return full;
@@ -143,7 +152,7 @@ export function useFullAgentSessions(): { sessions: Session[]; loaded: boolean }
       return next && next !== before.get(key(s)) ? next : s;
     });
     return { sessions, loaded: full.loaded };
-  }, [bounded, loaded, full, by]);
+  }, [on, bounded, loaded, full, by]);
 }
 
 /** The agents by state. `badge` is the sidebar's "Needs you" count: without quiet tasks' agents, which the main conversation
@@ -161,14 +170,20 @@ export function stateCounts(all: Session[]) {
   return c;
 }
 
+/** `badge` without `open`, the agent on screen: it says it is waiting itself, so a count of only it would tell nothing.
+ *  `quietCounted`: `badge` is the hub's own count, which has quiet agents in it. */
+export function othersWaiting(badge: number, open: Session | undefined, quietCounted = false): number {
+  return Math.max(0, badge - (open && !open.assistant && (quietCounted || !open.quiet) && stateOf(open) === "needs_you" ? 1 : 0));
+}
+
 export function useCounts() {
   const all = useAgentSessions();
   const interactions = useStore((s) => s.interactions.length);
   const counts = useStore((s) => s.sessionCounts);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   return useMemo(() => {
-    if (!bounded || !counts) return { ...stateCounts(all), interactions };
+    if (!bounded || !counts) return { ...stateCounts(all), interactions, quietCounted: false };
     const needs = counts.state.needs_you ?? 0;
-    return { needs, working: counts.state.working ?? 0, unread: counts.state.unread ?? 0, badge: needs, interactions };
+    return { needs, working: counts.state.working ?? 0, unread: counts.state.unread ?? 0, badge: needs, interactions, quietCounted: true };
   }, [all, interactions, counts, bounded]);
 }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A task's detail, risen from the bottom like a link (docs/assistant/unified-entry.md「任务详情」): opens full, pulled down to
+/// A task's detail, risen from the bottom like a link (docs/assistant/unified-entry.md「Task details」): opens full, pulled down to
 /// 0.6 the conversation behind stays usable. Its agent's page is the Agents page's own chat (`ChatView(style: .dev)`),
 /// so everything that page does works here. That chat's header is the sheet's only one (`HostedChat`, #3255): ✕, the
 /// task's title over the agent's state and place, and ⋯ with the task's own actions; no strip of the space's other
@@ -18,7 +18,10 @@ struct TaskDetailSheet: View {
     @Environment(\.detailPushed) private var pushed
     private var store: TasksStore { .shared }
 
-    init(todoID: String) { self.todoID = todoID }
+    init(todoID: String, initialAgent: SessionKey? = nil) {
+        self.todoID = todoID
+        _picked = State(initialValue: initialAgent)
+    }
     init(agent: SessionKey) { agentKey = agent }
 
     /// What an agent no task stands for says about itself (in ⋯, and the header while it has no page).
@@ -33,10 +36,12 @@ struct TaskDetailSheet: View {
                     content(todo)
                 } else {
                     EmptyStateView(symbol: Theme.Icon.todo, title: String(localized: "This task is gone"), message: String(localized: "It may have been deleted."))
+                        .toolbarVisibility(.hidden, for: .navigationBar)
                 }
             }
-            // The agent's page hides the bar (it draws its own header), and so does the page while it has none.
-            .toolbarVisibility(.hidden, for: .navigationBar)
+            // No bar from here: the agent's page says it itself (hidden under its own header, shown while its buttons
+            // are the system's, in iPhone Duo's side column, `ChatView.sideBars`); hidden from here, its Back went with
+            // it and nothing led back (#2625). The page's own headers below hide it where they are.
         }
         .confirmTaskRemoval($removing)
         .presentationDetents([.fraction(0.6), .large], selection: $detent)
@@ -46,7 +51,7 @@ struct TaskDetailSheet: View {
 
     @ViewBuilder private func content(_ todo: TodoItem) -> some View {
         let sessions = store.sessions(todo)
-        let key = picked.flatMap { p in sessions.first { $0.key == p }?.key } ?? store.leadSession(todo)?.key
+        let key = DispatchedTasks.selectedAgent(picked, available: sessions.map(\.key), lead: store.leadSession(todo)?.key)
         let state = store.state(todo)
         // Top-aligned: when the agent's page asks for more than the sheet has (several tall cards waiting), what gives
         // is its bottom, never the header with its close.
@@ -104,6 +109,8 @@ struct TaskDetailSheet: View {
         .padding(.top, Theme.Space.l) // below the sheet's grabber
         .padding(.bottom, Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Its own header: no bar over it (the agent's page decides its own, #2625).
+        .toolbarVisibility(.hidden, for: .navigationBar)
     }
 }
 
@@ -222,32 +229,39 @@ struct TaskBoardSheet: View {
         if !rows.isEmpty || !agents.isEmpty {
             Section {
                 ForEach(rows, id: \.todo.id) { row in
-                    Button {
-                        store.openAfterBoard = row.todo.id // opened once the board is down (one sheet at a time)
-                        store.showBoard = false
-                    } label: {
-                        HStack(spacing: Theme.Space.m) {
-                            TaskMark(state: row.state).scaledFrame(width: Theme.Size.markM)
-                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                                Text(row.todo.title).font(Theme.Font.body).lineLimit(1)
-                                Text(subtitle(row.todo)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if let ask = row.todo.openAsk {
+                        BriefAcceptRow(row: ask.row(for: row.todo), group: AppModel.shared.hub?.group ?? "", open: {
+                            store.openAfterBoard = row.todo.id
+                            store.showBoard = false
+                        })
+                    } else {
+                        Button {
+                            store.openAfterBoard = row.todo.id // opened once the board is down (one sheet at a time)
+                            store.showBoard = false
+                        } label: {
+                            HStack(spacing: Theme.Space.m) {
+                                TaskMark(state: row.state).scaledFrame(width: Theme.Size.markM)
+                                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                    Text(row.todo.title).font(Theme.Font.body).lineLimit(1)
+                                    Text(subtitle(row.todo)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer(minLength: Theme.Space.s)
+                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                             }
-                            Spacer(minLength: Theme.Space.s)
-                            ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                            .contentShape(.rect)
                         }
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    // The Agents page's Close, for a task: swiped from the trailing edge, only when nothing of it runs.
-                    .swipeActions(edge: .trailing) {
-                        if row.state.isRemovable {
-                            Button { store.askRemove(row.todo, pending: $removing) } label: {
-                                Label("Remove [Task Sheets 6135d4]", systemImage: Theme.Icon.delete)
+                        .buttonStyle(.plain)
+                        // The Agents page's Close, for a task: swiped from the trailing edge, only when nothing of it runs.
+                        .swipeActions(edge: .trailing) {
+                            if row.state.isRemovable {
+                                Button { store.askRemove(row.todo, pending: $removing) } label: {
+                                    Label("Remove [Task Sheets 6135d4]", systemImage: Theme.Icon.delete)
+                                }
+                                .tint(Theme.danger)
                             }
-                            .tint(Theme.danger)
                         }
+                        .contextMenu { TaskRemoveMenuItem(todo: row.todo, state: row.state, pending: $removing) }
                     }
-                    .contextMenu { TaskRemoveMenuItem(todo: row.todo, state: row.state, pending: $removing) }
                 }
                 ForEach(agents) { agent in agentRow(agent) }
             } header: {

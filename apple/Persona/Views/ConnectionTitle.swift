@@ -112,6 +112,7 @@ struct ConnectionDetails: View {
                         Text("Pair Again").lineLimit(1).frame(maxWidth: .infinity)
                     }
                     .themedButton(prominent: true)
+                    .disabled(model.hubSignOut != nil) // AppModel.pair would refuse it
                     .padding(.top, Theme.Space.xxs)
                     .accessibilityIdentifier("connection.repair")
                 }
@@ -175,14 +176,14 @@ struct ConnectionDetails: View {
         }
     }
 
-    /// The hub's SSH tunnel as the details mention it (docs/operations/network.md「经 SSH 隧道连 hub」): which server, whether the
+    /// The hub's SSH tunnel as the details mention it (docs/operations/network.md「Connecting to hub through SSH」): which server, whether the
     /// traffic goes through it now, and why it is not up.
     struct SSHFact: Equatable {
         var server: String
         var routed: Bool
         var problem: String?
         /// The way's name when it is not the SSH tunnel: the in-app tunnel's
-        /// (docs/operations/network.md「经 App 内隧道连 hub」), or Local Proxy.
+        /// (docs/operations/network.md「Connecting to hub through an in-app tunnel」), or Local Proxy.
         var inApp: String?
     }
 

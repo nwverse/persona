@@ -53,7 +53,8 @@ export function parseQuote(text: string): DraftQuote {
 
 export type DraftEvent =
   | ({ type: "quote" } & DraftQuote)
-  | { type: "replace"; text: string }
+  /** `edit`: it starts editing the last message (#4503); any other replace ends an edit. */
+  | { type: "replace"; text: string; edit?: boolean }
   | { type: "append"; text: string }
   /** The words of a send that failed after its box moved on (another conversation, or closed): back in front. */
   | { type: "unsent"; text: string }
@@ -275,9 +276,17 @@ export function onDraftEvent(key: string, l: Listener): () => void {
   listeners.get(key)!.add(l);
   tellRows();
   return () => {
-    listeners.get(key)?.delete(l);
+    const ls = listeners.get(key);
+    ls?.delete(l);
+    // the last composer of a key takes its set along: readers only ask for its size, so a missing key reads the same
+    if (ls?.size === 0) listeners.delete(key);
     tellRows();
   };
+}
+
+/** Tests only: how many draft keys have a listener set. */
+export function draftListenerKeysForTests() {
+  return listeners.size;
 }
 
 export function storeDraft(key: string, text: string) {

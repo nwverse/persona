@@ -43,7 +43,6 @@ var hardcodedDirs = []string{
 	"internal/quota",
 	"internal/update",
 	"internal/voice",
-	"internal/wechat", // its spec, as the hub registers the built-in
 	"internal/workspaceboard",
 	"plugins",
 }
@@ -52,6 +51,9 @@ var hardcodedDirs = []string{
 var hardcodedSkip = map[string]string{
 	"internal/hub/doctor.go":             "personad hub doctor's terminal output",
 	"internal/hub/setup.go":              "personad hub setup's terminal output",
+	"internal/hub/setup_config.go":       "personad hub setup's terminal output",
+	"internal/hub/setup_database.go":     "personad hub setup's terminal output",
+	"internal/hub/setup_finish.go":       "personad hub setup's terminal output",
 	"internal/hub/setup_service.go":      "personad hub setup's terminal output",
 	"internal/hub/setup_manager.go":      "personad hub setup's terminal output",
 	"internal/hub/transcript_text.go":    "node's original text, matched to rewrite it",

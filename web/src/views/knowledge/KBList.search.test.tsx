@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-// A knowledge search shown from the cache paints at once and is still asked again, so entries the hub learned since appear.
+// A knowledge search shown from the cache paints at once and is still asked again, so entries the hub learned since appear;
+// the cache keeps only the recent queries.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KBEntry, KBResult } from "../../lib/kb";
-import { lists, searches } from "./cache";
+import { lists, searches, SEARCHES_KEPT, searchKey } from "./cache";
 import { ListPane } from "./KBList";
 
 type Request = { path: string; resolve: (value: unknown) => void; reject: (error: Error) => void };
@@ -55,7 +56,7 @@ afterEach(async () => {
 
 describe("a cached knowledge search", () => {
   it("shows the cached results at once, asks the hub again and shows what it answers", async () => {
-    searches.set("ab", [hit(oldEntry)]);
+    searches.set(searchKey("ab"), [hit(oldEntry)]);
     render();
     search("ab");
     expect(host.textContent).toContain(oldEntry.name);
@@ -66,18 +67,18 @@ describe("a cached knowledge search", () => {
     await act(async () => searchRequests()[0].resolve({ results: [hit(oldEntry), hit(newEntry)] }));
     expect(host.textContent).toContain(oldEntry.name);
     expect(host.textContent).toContain(newEntry.name);
-    expect(searches.get("ab")?.map((r) => r.entry.id)).toEqual(["old", "new"]);
+    expect(searches.get(searchKey("ab"))?.map((r) => r.entry.id)).toEqual(["old", "new"]);
   });
 
   it("keeps the cached results without an error when the refresh fails", async () => {
-    searches.set("ab", [hit(oldEntry)]);
+    searches.set(searchKey("ab"), [hit(oldEntry)]);
     render();
     search("ab");
     await typed();
     await act(async () => searchRequests()[0].reject(new TypeError("Failed to fetch")));
     expect(host.textContent).toContain(oldEntry.name);
     expect(host.textContent).not.toContain("连不上 hub");
-    expect(searches.get("ab")?.map((r) => r.entry.id)).toEqual(["old"]);
+    expect(searches.get(searchKey("ab"))?.map((r) => r.entry.id)).toEqual(["old"]);
   });
 
   it("paints a cached search without the loading label after a remount", async () => {
@@ -95,5 +96,30 @@ describe("a cached knowledge search", () => {
     expect(host.textContent).not.toContain("加载中");
     await typed();
     expect(searchRequests()).toHaveLength(2);
+  });
+
+  it("keeps the recent searches after many queries and lets the oldest go", async () => {
+    render();
+    const total = SEARCHES_KEPT + 10;
+    for (let i = 0; i < total; i++) {
+      search(`q${i}`);
+      await typed();
+      await act(async () => searchRequests()[i].resolve({ results: [hit({ ...oldEntry, id: `q${i}`, name: `Guide ${i}` })] }));
+    }
+    expect(searches.size).toBe(SEARCHES_KEPT);
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    render();
+
+    // The oldest query was let go: coming back to it searches as on a first visit.
+    search("q0");
+    expect(host.textContent).toContain("搜索中");
+    expect(host.textContent).not.toContain("Guide 0");
+
+    // The oldest query still kept paints at once.
+    const recent = total - SEARCHES_KEPT;
+    search(`q${recent}`);
+    expect(host.textContent).toContain(`Guide ${recent}`);
+    expect(host.textContent).not.toContain("搜索中");
   });
 });

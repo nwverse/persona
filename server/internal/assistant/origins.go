@@ -7,6 +7,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Where an assistant conversation comes from (docs/protocol/protocol.md "Where assistant conversations come from", #3264): the user's own (the app,
+// Where an assistant conversation comes from (docs/protocol/protocol.md "Origin of assistant chats", #3264): the user's own (the app,
 // a channel's /new) or one the hub opened by itself (the inbox's AI twin, a scheduled task, conversation_new, a
 // plugin's /agent). The apps keep the user's in "Recent" and fold the others away. An origin is noted when the hub starts
 // the conversation and never changes; conversations from before are backfilled from what the hub can still tell
@@ -54,6 +55,9 @@ type convOrigin struct {
 	Ref       string    `json:"ref,omitempty"`
 	By        string    `json:"by"`
 	At        time.Time `json:"at"`
+	// Ext is the extension whose token opened it (SessionView.OpenedBy): noted by the start only, never backfilled, so
+	// one opened before it was noted has none.
+	Ext string `json:"ext,omitempty"`
 }
 
 type originBook struct {
@@ -99,9 +103,9 @@ func (s *Service) saveOriginsLocked(ctx context.Context) error {
 	return st.PutSetting(ctx, originsKey, s.origins.m)
 }
 
-// originSet notes where a conversation the hub just started comes from: it replaces whatever the backfill may have
-// guessed from the list in between.
-func (s *Service) originSet(ctx context.Context, machine, id, origin, ref string) {
+// originSet notes where a conversation the hub just started comes from, and the extension that opened it (ext, "" for
+// none): it replaces whatever the backfill may have guessed from the list in between.
+func (s *Service) originSet(ctx context.Context, machine, id, origin, ref, ext string) {
 	if id == "" {
 		return
 	}
@@ -114,11 +118,11 @@ func (s *Service) originSet(ctx context.Context, machine, id, origin, ref string
 		b.mu.Unlock()
 		return
 	}
-	if o := b.m[id]; o != nil && o.By == originByStart && o.Origin == origin && o.Ref == ref {
+	if o := b.m[id]; o != nil && o.By == originByStart && o.Origin == origin && o.Ref == ref && o.Ext == ext {
 		b.mu.Unlock()
 		return
 	}
-	b.m[id] = &convOrigin{MachineID: machine, Origin: origin, Ref: ref, By: originByStart, At: time.Now().UTC()}
+	b.m[id] = &convOrigin{MachineID: machine, Origin: origin, Ref: ref, Ext: ext, By: originByStart, At: time.Now().UTC()}
 	err := s.saveOriginsLocked(ctx)
 	b.mu.Unlock()
 	if err != nil {
@@ -127,7 +131,35 @@ func (s *Service) originSet(ctx context.Context, machine, id, origin, ref string
 	s.publish(ctx)
 }
 
-type shownOrigin struct{ origin, ref, machine string }
+// originMadeMain drops the extension that opened conversation id, which becomes the main one: it is the user's from
+// then on, also once another one is main. An error (the book could not be read or saved) leaves it as it was.
+func (s *Service) originMadeMain(ctx context.Context, id string) error {
+	b := &s.origins
+	b.mu.Lock()
+	if !s.originsLocked(ctx) {
+		b.mu.Unlock()
+		return errors.New("the conversations' origins could not be read")
+	}
+	o := b.m[id]
+	if o == nil || o.Ext == "" {
+		b.mu.Unlock()
+		return nil
+	}
+	mine := *o
+	mine.Ext = ""
+	b.m[id] = &mine
+	err := s.saveOriginsLocked(ctx)
+	if err != nil {
+		b.m[id] = o
+	}
+	b.mu.Unlock()
+	if err == nil {
+		s.publish(ctx)
+	}
+	return err
+}
+
+type shownOrigin struct{ origin, ref, machine, ext string }
 
 // conversationOrigins are the origins to show, by session id; false while they could not be read.
 func (s *Service) conversationOrigins() (map[string]shownOrigin, bool) {
@@ -139,7 +171,7 @@ func (s *Service) conversationOrigins() (map[string]shownOrigin, bool) {
 	}
 	out := make(map[string]shownOrigin, len(b.m))
 	for id, o := range b.m {
-		out[id] = shownOrigin{o.Origin, o.Ref, o.MachineID}
+		out[id] = shownOrigin{o.Origin, o.Ref, o.MachineID, o.Ext}
 	}
 	return out, true
 }
@@ -465,4 +497,42 @@ func (s *Service) originRoutes() {
 		}
 		apierr.WriteJSON(w, res)
 	})
+}
+
+// originRecord is one conversation's origin as originsOf lists it.
+type originRecord struct{ session, machine, ref string }
+
+// originsOf are the conversations of origin, by session id (ordered); none while the book cannot be read.
+func (s *Service) originsOf(ctx context.Context, origin string) []originRecord {
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return nil
+	}
+	var out []originRecord
+	for id, o := range b.m {
+		if o.Origin == origin {
+			out = append(out, originRecord{session: id, machine: o.MachineID, ref: o.Ref})
+		}
+	}
+	slices.SortFunc(out, func(a, b originRecord) int { return strings.Compare(a.session, b.session) })
+	return out
+}
+
+// originDrop forgets conversation id's origin (a meeting's room deleted with its transcript).
+func (s *Service) originDrop(ctx context.Context, id string) {
+	b := &s.origins
+	b.mu.Lock()
+	if !s.originsLocked(ctx) || b.m[id] == nil {
+		b.mu.Unlock()
+		return
+	}
+	delete(b.m, id)
+	err := s.saveOriginsLocked(ctx)
+	b.mu.Unlock()
+	if err != nil {
+		s.logf("save conversation origins: %v", err)
+	}
+	s.publish(ctx)
 }

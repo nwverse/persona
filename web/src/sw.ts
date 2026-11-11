@@ -1,9 +1,11 @@
 // The web client's service worker (docs/web/web.md "Install as an app"): built on its own to /sw.js (vite.config.ts) and
 // registered by lib/pwa.ts. It makes the installed app start fast and still open when the hub can't be reached: the
-// shell (index.html) comes from the hub when it answers in time, else from the cache; hashed assets from the cache.
+// shell (index.html) comes from the hub when it answers in time, else from the cache (but anything a layer in front of
+// the hub answers with, a redirect, 0/401/403/407/511, reaches the browser; a sign-in page is never cached); hashed assets from the cache.
 // The API is never touched (lib/sw-routes.ts).
 import { clickNotification, type ClickClients } from "./lib/sw-click";
 import { ASSET_CACHE, ASSET_LIMIT, assetsIn, SHELL_CACHE, SHELL_TIMEOUT_MS, strategy } from "./lib/sw-routes";
+import { isShell, shellResponse } from "./lib/sw-shell";
 
 // The tsconfig has the DOM's types, not the worker's: the few this file uses.
 interface ExtendableEvent extends Event {
@@ -27,11 +29,11 @@ const worker = self as unknown as {
   addEventListener(type: "fetch", f: (e: FetchEvent) => void): void;
 };
 
-const isHTML = (r: Response) => r.ok && (r.headers.get("Content-Type") ?? "").startsWith("text/html");
-
 // Keeps a fresh shell and the assets it loads up front.
 async function keepShell(res: Response) {
   const html = await res.clone().text();
+  // A 200 page that loads none of the app's files is a sign-in page of a layer in front of the hub, not the shell.
+  if (assetsIn(html).length === 0) return;
   await (await caches.open(SHELL_CACHE)).put("/", res);
   const assets = await caches.open(ASSET_CACHE);
   await Promise.all(
@@ -53,7 +55,7 @@ async function trim(cache: Cache) {
 worker.addEventListener("install", (e) => {
   e.waitUntil(
     fetch("/", { cache: "no-cache" })
-      .then((r) => (isHTML(r) ? keepShell(r) : undefined))
+      .then((r) => (isShell(r) ? keepShell(r) : undefined))
       .catch(() => {})
       .then(() => worker.skipWaiting()),
   );
@@ -81,23 +83,22 @@ worker.addEventListener("fetch", (e) => {
   }
 });
 
-// The hub's shell when it answers within SHELL_TIMEOUT_MS (and it's kept for next time); the cached one when it's slow
-// or unreachable. Without a cached shell, whatever the hub does.
-async function shell(e: FetchEvent): Promise<Response> {
-  const net = fetch(e.request).then((r) => {
-    if (isHTML(r)) e.waitUntil(keepShell(r.clone()).catch(() => {}));
-    return r;
+// The hub's shell when it answers within SHELL_TIMEOUT_MS (and it's kept for next time); the cached one when it's slow,
+// unreachable or fails; a redirect or 401/403 (an expired sign-in) goes to the browser so it follows it
+// (lib/sw-shell.ts). Without a cached shell, whatever the hub does.
+function shell(e: FetchEvent): Promise<Response> {
+  return shellResponse({
+    fetch: () => fetch(e.request),
+    cached: () => caches.match("/", { cacheName: SHELL_CACHE }),
+    keep: keepShell,
+    waitUntil: (p) => e.waitUntil(p),
+    timeoutMs: SHELL_TIMEOUT_MS,
   });
-  e.waitUntil(net.catch(() => {}));
-  const saved = await caches.match("/", { cacheName: SHELL_CACHE });
-  if (!saved) return net;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<Response>((resolve) => (timer = setTimeout(() => resolve(saved), SHELL_TIMEOUT_MS)));
-  try {
-    return await Promise.race([net.then((r) => (r.ok ? r : saved), () => saved), late]);
-  } finally {
-    clearTimeout(timer);
-  }
+}
+
+// A file worth keeping: a real, unredirected answer that is not a page (a sign-in page answering for a script or icon).
+function cacheable(r: Response): boolean {
+  return r.ok && !r.redirected && !(r.headers.get("Content-Type") ?? "").startsWith("text/html");
 }
 
 async function asset(req: Request): Promise<Response> {
@@ -107,7 +108,7 @@ async function asset(req: Request): Promise<Response> {
   const hit = await cache.match(req, { ignoreVary: true });
   if (hit) return hit;
   const r = await fetch(req);
-  if (r.ok) await cache.put(req, r.clone()).then(() => trim(cache)).catch(() => {});
+  if (cacheable(r)) await cache.put(req, r.clone()).then(() => trim(cache)).catch(() => {});
   return r;
 }
 
@@ -116,7 +117,7 @@ async function fresh(req: Request): Promise<Response> {
   const cache = await caches.open(SHELL_CACHE);
   try {
     const r = await fetch(req);
-    if (r.ok) await cache.put(req, r.clone()).catch(() => {});
+    if (cacheable(r)) await cache.put(req, r.clone()).catch(() => {});
     return r;
   } catch {
     return (await cache.match(req)) ?? Response.error();

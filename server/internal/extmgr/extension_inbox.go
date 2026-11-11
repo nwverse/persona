@@ -2,8 +2,6 @@ package extmgr
 
 import (
 	"context"
-	"errors"
-	"net/http"
 	"slices"
 
 	"github.com/nwverse/persona/server/internal/connector"
@@ -11,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// The inbox's common rules for plugins (#1730, docs/extensions/extensions.md "Common inbox rules"). A plugin connector with an
+// The inbox's common rules for plugins (#1730, docs/extensions/extensions.md "General rules for the Inbox"). A plugin connector with an
 // inbox and no fallback of its own (capability fallback) leaves sorting to the assistant's model (inbox.triage,
 // "message triage"): its new items without a tier are not let in while the model cannot sort them (the manager's
 // inbox_admit.go). So such a plugin is not switched on while that model cannot be called, and the model is not cleared
@@ -92,14 +90,4 @@ func (h *Manager) hubJSONWaitsForTriageModel(ctx context.Context, p *extension.E
 	}
 	usable, err := h.triageUsable(ctx)
 	return err == nil && !usable // while the assistant can't be asked, it is not said to need setting up
-}
-
-// writeExtensionErr answers a refused plugin change: 409 needs_triage_model when the triage model is missing, else
-// status with code.
-func writeExtensionErr(w http.ResponseWriter, status int, code string, err error) {
-	if errors.Is(err, errNeedsTriageModel) {
-		writeErrCode(w, http.StatusConflict, "needs_triage_model", err)
-		return
-	}
-	writeErrCode(w, status, code, err)
 }

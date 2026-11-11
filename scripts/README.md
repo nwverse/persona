@@ -10,7 +10,7 @@ Scripts are grouped by purpose and resolve their own repository root. Build/depl
 | `release/` | App / binary releases, signing and artifact checks | `release/release.sh`, `release/publish.sh`, `release/asc_testflight.py`, `release/entitlements.py` |
 | `migrate/` | One-shot, explicitly approved offline maintenance | `migrate/persona-cutover.py` (plan only by default; never starts a service) |
 | `mock/` | Synthetic hub and screenshot/demo fixtures | `mock/mock_hub.py`, `mock/mock_scenarios.py`, `mock/make_demo_data.py` |
-| `assets/` | Icons and avatar packages | `assets/make_icon.py`, `assets/make_alt_icons.py`, `assets/make_persona.py` |
+| `assets/` | Icons, avatar packages and the website's generated assets | `assets/make_icon.py`, `assets/make_alt_icons.py`, `assets/make_persona.py`, `assets/make_site_assets.py` |
 | `diag/` | Push replay, client traffic and redacted transcript diagnostics | `diag/hub_traffic_report.py`, `diag/agentsync_replay.py`, `diag/pane_probe.py`, `diag/redact_transcript.py` |
 | `test/` | Server, protocol, source and script regression checks | `test/check-fast.sh`, `test/test-server.sh`, `test/test_doc_paths.py` |
 | `hooks/` | Privacy hooks and PR merging | `hooks/merge-pr.sh` |
@@ -19,6 +19,7 @@ Scripts are grouped by purpose and resolve their own repository root. Build/depl
 
 ## Shared tools
 
+- `mock/turn_folding_hub.py` serves isolated synthetic Apple chats for running/completed execution and compaction with a failed tool. Run it on an unused loopback port and point `AppleTurnFoldingTests` at it; never use a production hub for this suite.
 - `persona_config.py` reads private build/deploy configuration and generates Xcode settings without changing registered app IDs.
 - `persona_identity.py --service hub|node|link` resolves only a matching canonical service's root. It honors unit resets, ordered drop-ins, XDG paths, HOME-only environment files and unset rules; it never executes configuration or exposes other credentials. `--prepare` creates only the selected directory, with no directory aliases. `--prefix` resolves remote paths using the remote HOME.
 - `privacy_check.py` scans repository/staged content. Git hooks, web builds and CI use it.
@@ -31,6 +32,7 @@ Use synthetic fixtures and an isolated outer HOME for script tests. Server tests
 ```sh
 n=0 failed=""
 for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do
+  grep -q unittest "$f" || continue  # a verification script, not a suite: CI skips it too (scripts/ci/python-tests.py)
   n=$((n + 1))
   (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"
 done

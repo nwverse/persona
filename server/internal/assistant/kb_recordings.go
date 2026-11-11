@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -28,7 +29,8 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		status, err := e.PutRecording(r.PathValue("id"), u, time.Now())
+		put, err := e.PutRecording(r.PathValue("id"), u, time.Now())
+		status := put.Status
 		switch {
 		case errors.Is(err, kb.ErrRecordingDeleted):
 			apierr.WriteCode(w, http.StatusGone, codeRecordingDeleted, err)
@@ -41,7 +43,23 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 			return
 		}
 		id, _ := kb.RecordingID(r.PathValue("id"))
-		apierr.WriteJSON(w, map[string]any{"id": id, "revision": u.Revision, "status": status})
+		if status == kb.RecordingStored && u.Complete {
+			s.kbWake() // its summary and minutes now, not at the next round
+		}
+		// The role in effect, always (an older manager leaves it out, so the phone stops attending), and what was
+		// wrong with the upload's attendance fields, which never fail it.
+		out := map[string]any{"id": id, "revision": u.Revision, "status": status, "attendance": put.Attendance}
+		if put.AttendanceProblem != "" {
+			out["attendance_problem"] = put.AttendanceProblem
+		}
+		if put.Room { // a room meeting (meeting_room.go): its room's state, at least none; only an older manager leaves it out
+			room := &kb.RoomView{State: kb.RoomNone}
+			if put.Meeting != nil && put.Meeting.Room != nil {
+				room = put.Meeting.RoomView()
+			}
+			out["room"] = room
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("DELETE /api/v1/recordings/{id}", func(w http.ResponseWriter, r *http.Request) {
 		e := engine(w, r)
@@ -57,6 +75,9 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
+		if deleted { // its room goes with it (meeting_room.go); the retention pass asks again if the node is away
+			go s.meetingRoomsSweep(context.WithoutCancel(r.Context()), e)
+		}
 		apierr.WriteJSON(w, map[string]any{"deleted": deleted})
 	})
 	s.handle("GET /api/v1/recordings", func(w http.ResponseWriter, r *http.Request) {
@@ -67,4 +88,6 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		kept, deleted := e.RecordingStates()
 		apierr.WriteJSON(w, map[string]any{"days": e.RecordingDays(), "recordings": kept, "deleted": deleted})
 	})
+	s.minutesRoutes(engine)
+	s.meetingRoutes()
 }

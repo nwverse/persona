@@ -17,7 +17,7 @@ import (
 
 // The inbox's AI twin (docs/assistant/inbox.md): model 1 triages every new item (inbox_triage.go), every "Needs you" item
 // (and what an inbox policy hands it, inbox_policies.go) goes to an agent, model 2 links it to one of the user's
-// tasks (linkTask), and the agent (model 3, a headless Claude Code in the assistant's
+// tasks (linkTaskFor), and the agent (model 3, a headless Claude Code in the assistant's
 // directory, with its tools: a conversation the assistant starts itself, untitled) looks into it and drafts the reply
 // (inbox_draft). The draft waits in the inbox; nothing is sent until the user taps "Send" (POST /api/v1/inbox/{id}/reply).
 
@@ -100,6 +100,9 @@ type InboxAgent struct {
 	// to its count, and the ones queued since are the newest. Pending is trimmed to the latest 20, so its length
 	// cannot tell how many came since.
 	told int
+	// signaled is the handling chain's newest received batch an inbox signal to the linked task's supervisor counted
+	// (in memory only, supervise_inbox.go): the next one counts the messages after it.
+	signaled int
 }
 
 // queueNote adds a note to Pending, kept to the latest 20.
@@ -180,18 +183,24 @@ func (s *Service) handPass(ctx context.Context) {
 	now := time.Now()
 	s.sweepInboxAgents(ctx, cfg, now)
 	escalated := b.escalate(now.Add(-agentMaxAge(cfg)), now)
+	linked := map[*InboxItem]bool{}
 	if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
 		for _, w := range escalated {
 			b.mu.Lock()
 			fresh := w.it.Agent != nil && w.it.Agent.SessionID == "" && w.it.Agent.TodoID == ""
 			b.mu.Unlock()
-			if fresh {
-				s.linkTaskFor(ctx, w.it, tasks, w)
+			if fresh && s.linkTaskFor(ctx, w.it, tasks, w) {
+				linked[w.it] = true
 			}
 		}
 	}
 	// A failed row gives the event back its old state: the next pass escalates it again.
 	s.saveWrites(ctx, escalated, "its escalation")
+	items := make([]*InboxItem, 0, len(escalated))
+	for _, w := range escalated {
+		items = append(items, w.it)
+	}
+	s.superviseInbox(ctx, items, linked) // a supervised task's supervisor hears of its new messages (supervise_inbox.go)
 	s.deliverPending(ctx)
 	s.startInboxAgents(ctx, cfg)
 }
@@ -304,6 +313,7 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 			continue
 		}
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
+		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
 		a := b.inboxAgentFor(it, owner, linked[it.Agent.TodoID], larkDefault, loc)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
 		jobs = append(jobs, job{it, kbChatOf(it), func(kbc *prompts.KBContext) string { a.KB = kbc; return prompts.RenderInboxAgent(a) },
@@ -507,20 +517,6 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 	s.saveWrites(ctx, changed, "its settled conversation")
 }
 
-// inboxAgentPrompt is the AI twin's first message for an item (prompts/inbox/agent.md).
-func (b *inboxBook) inboxAgentPrompt(it *InboxItem, owner string, kbc *prompts.KBContext) string {
-	return b.inboxAgentPromptFor(it, owner, kbc, nil, 1, time.UTC)
-}
-
-// inboxAgentPromptFor is inboxAgentPrompt for an item about one of the user's tasks (linked: its progress).
-// larkDefault is lark.account: the Feishu account lark_messages reads unless the prompt names another.
-// loc: the user's time zone, which the chain's times are read in.
-func (b *inboxBook) inboxAgentPromptFor(it *InboxItem, owner string, kbc *prompts.KBContext, linked *prompts.InboxTask, larkDefault int, loc *time.Location) string {
-	a := b.inboxAgentFor(it, owner, linked, larkDefault, loc)
-	a.KB = kbc
-	return prompts.RenderInboxAgent(a)
-}
-
 // inboxAgentFor is what the AI twin's first message is made of, but the knowledge base's part.
 func (b *inboxBook) inboxAgentFor(it *InboxItem, owner string, linked *prompts.InboxTask, larkDefault int, loc *time.Location) prompts.InboxAgent {
 	a := prompts.InboxAgent{Owner: owner, EventID: it.ID, Title: it.Title, Item: b.promptItem(it), Task: it.Agent.Task, Reason: it.Agent.Reason,
@@ -586,7 +582,7 @@ func messageCardOf(it *InboxItem) *MessageCard {
 		return nil
 	}
 	return &MessageCard{TodoID: it.Agent.TodoID, Source: it.Source, Account: it.AccountName, Chat: it.Title, Sender: it.Sender,
-		Text: clip(strings.TrimSpace(it.Preview), 400), Draft: it.Agent.Draft}
+		Text: clip(strings.TrimSpace(it.Preview), 400), Draft: it.Agent.Draft, MessageVersion: it.Last}
 }
 
 // inboxRepliedAt is when those of the inbox items ids the user replied to were replied to (the message cards say

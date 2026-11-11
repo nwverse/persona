@@ -4,7 +4,7 @@
 // width; driving, the key bar has the keys a phone's keyboard lacks. The logic is in terminal/feed.ts; xterm loads only
 // when a terminal opens.
 //
-// Beside that single-pane surface the panel has a second, "Full view" (docs/integrations/terminal.md "The full herdr UI"): herdr's own
+// Beside that single-pane surface the panel has a second, "Full view" (docs/integrations/terminal.md "Full herdr UI"): herdr's own
 // client with its sidebar, tabs and splits (terminal/FullTerminal.tsx). The header's switch chooses, and the two give
 // way to each other with a short slide and fade. Each surface draws its own controls into the header's slot.
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
@@ -20,6 +20,7 @@ import {
   LAST_MODE_KEY,
   PREFERENCE_KEY,
   SURFACE_MS,
+  inHerdrClient,
   noFullClient,
   otherMode,
   pickMode,
@@ -32,7 +33,7 @@ import {
 import { Button, cx, Dialog, IconButton, Loading, Menu, Spinner, toast, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { prefersReducedMotion } from "../../ui/stream/motion";
-import { PanelHeader } from "../SidePanel";
+import { PanelHeader } from "../../ui/PanelHeader";
 import { DrawnRows, rowsStyle } from "./terminal/DrawnRows";
 import { TerminalFeed, type FeedView } from "./terminal/feed";
 import { FindBar } from "./terminal/FindBar";
@@ -436,7 +437,7 @@ export function TerminalPanel({
 }) {
   const session = useStore(() => getSession(mid, sid));
   const machine = useStore((s) => machineWithHub(mid, s.machines));
-  const supported = useStore((s) => s.features.includes("herdr_client"));
+  const supported = useStore((s) => s.features.includes("herdr_client")) && inHerdrClient(sid, session?.pane_id);
   const key = `${mid}\n${sid}`;
   const root = useRef<HTMLDivElement>(null);
   const [slot, setSlot] = useState<HTMLElement | null>(null);

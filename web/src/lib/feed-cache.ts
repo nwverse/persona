@@ -1,6 +1,10 @@
 // One main conversation's newest page, for rendering before the hub answers. This is never a source of authority.
 import { BASE } from "./base";
-import type { Item } from "./types";
+import { credentialEpoch } from "./credential-epoch";
+import type { AssistantInfo, Item } from "./types";
+import { injectedOf } from "./injected";
+import { hasPrivateRefusal, publicRefusalItem } from "./refusal-public";
+import { taskCalls } from "./task-association";
 
 const PREFIX = "persona.feedCache.v1:";
 export const FEED_CACHE_MAX_BYTES = 256 * 1024;
@@ -25,10 +29,10 @@ function fingerprint(value: string): string {
 }
 
 /** Includes the proxy prefix: two hubs behind the same origin must not share their cached conversation. */
-export function feedCacheKey(hub: string, token: string, deviceID = ""): string | null {
+export function feedCacheKey(hub: string, token: string, deviceID = "", epoch = ""): string | null {
   if (!token) return null;
   // A saved device id can be stale after pasting a different jd_ token or pairing against an older hub.
-  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify([deviceID, token]))}`;
+  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify(epoch ? [deviceID, token, epoch] : [deviceID, token]))}`;
 }
 
 let generation = 0;
@@ -41,11 +45,12 @@ export function feedCacheScope(): string | null {
     const token = localStorage.getItem("persona.token") ?? "";
     const deviceID = localStorage.getItem("persona.tokenId") ?? "";
     const hub = location.origin + BASE;
-    const now = JSON.stringify([hub, token, deviceID]);
+    const epoch = credentialEpoch();
+    const now = JSON.stringify([hub, token, deviceID, epoch]);
     if (identity !== now) {
       if (identity) clearFeedCache();
       identity = now;
-      key = feedCacheKey(hub, token, deviceID);
+      key = feedCacheKey(hub, token, deviceID, epoch);
     }
     return key ? `${key}.${generation}` : null;
   } catch {
@@ -56,6 +61,7 @@ export function feedCacheScope(): string | null {
 /** Sign-out and credential replacement remove every cached feed of this origin, including other proxy prefixes. */
 export function clearFeedCache(): void {
   generation++;
+  clearMemoryPages();
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const stored = localStorage.key(i);
@@ -85,6 +91,8 @@ function validItem(value: unknown): value is Item {
   if (value.tool_input !== undefined && !object(value.tool_input)) return false;
   if (value.compact !== undefined && (!object(value.compact) || !strings(value.compact, ["trigger"]) || !numbers(value.compact, ["pre_tokens"])
     || (value.compact.notes !== undefined && (!Array.isArray(value.compact.notes) || !value.compact.notes.every((note) => typeof note === "string"))))) return false;
+  if (value.source !== undefined && (!object(value.source) || typeof value.source.kind !== "string"
+    || !strings(value.source, ["conversation_id", "title"]))) return false;
   if (value.injected !== undefined && (!object(value.injected) || typeof value.injected.kind !== "string" || typeof value.injected.line !== "string"
     || !strings(value.injected, ["state", "title", "machine", "todo_id", "detail"]))) return false;
   if (value.task !== undefined && (!object(value.task) || typeof value.task.kind !== "string" || typeof value.task.status !== "string"
@@ -129,7 +137,8 @@ export function readFeedCache(scope: string | null = feedCacheScope()): FeedCach
     const parsed: unknown = JSON.parse(raw);
     if (!validFeed(parsed)) return null;
     // A record with embedded image bytes was not written by this version. Never hydrate an unsanitized record.
-    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw)) {
+    // Nor one an older version wrote with a refusal record's whole line in it (#2528): it is never shown again.
+    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw) || parsed.items.some(hasPrivateRefusal)) {
       discardFeedCache(scope);
       return null;
     }
@@ -144,20 +153,39 @@ function containsCredential(raw: string): boolean {
   return !!token && [token, encodeURIComponent(token), JSON.stringify(token).slice(1, -1)].some((value) => raw.includes(value));
 }
 
-/** Only the newest two turns, matching GET items?turns=2. Older pages and expanded folds belong only in memory. */
+/** Only the newest two user-question turns, matching GET items?turns=2; injected prompts do not consume the budget. */
+function newestTurns(value: FeedCache): FeedCache {
+  const userQuestion = (item: Item) => item.role === "user" && item.kind === "text" && !item.queued && !item.wake && !injectedOf(item);
+  let start = value.items.length, turns = 0;
+  while (start > 0 && turns < 2) {
+    if (userQuestion(value.items[--start])) turns++;
+  }
+  // A retained report must not lose the earlier launch it belongs under. Extend the contiguous prefix, including
+  // that call's user turn, rather than caching a detached call that would break paging coverage.
+  const calls = taskCalls(value.items);
+  const needed = new Set<string>();
+  for (let at = value.items.length - 1; at >= 0 && (at >= start || needed.size); at--) {
+    const item = value.items[at];
+    if (item.task?.kind === "agent") {
+      const call = item.tool_use_id || calls.get(item.id);
+      if (call) needed.add(call);
+    }
+    if (item.kind === "tool_use" && (item.tool_name === "Agent" || item.tool_name === "Task") && needed.delete(item.tool_use_id ?? "") && at < start) {
+      start = at;
+      while (start > 0 && !userQuestion(value.items[start])) start--;
+    }
+  }
+  while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
+  return {
+    machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,
+    items: value.items.slice(start).map(publicRefusalItem), hasMore: value.hasMore || start > 0, history: value.history,
+  };
+}
+
 export function writeFeedCache(scope: string | null, value: FeedCache): boolean {
   if (!scope || scope !== feedCacheScope()) return false;
   try {
-    let start = value.items.length, turns = 0;
-    while (start > 0 && turns < 2) {
-      const item = value.items[--start];
-      if (item.role === "user" && item.kind === "text" && !item.queued) turns++;
-    }
-    while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
-    const page: FeedCache = {
-      machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,
-      items: value.items.slice(start), hasMore: value.hasMore || start > 0, history: value.history,
-    };
+    const page = newestTurns(value);
     const raw = JSON.stringify(page, withoutImageBodies);
     if (!validFeed(page) || new TextEncoder().encode(raw).length > FEED_CACHE_MAX_BYTES || containsCredential(raw)) {
       discardFeedCache(scope);
@@ -169,4 +197,47 @@ export function writeFeedCache(scope: string | null, value: FeedCache): boolean 
     discardFeedCache(scope);
     return false;
   }
+}
+
+// Every other chat's newest page, for reopening it at once while the hub refreshes it. Memory only, unlike the main
+// conversation's above. The key starts with the scope, so another hub or login never matches an entry.
+export const MEMORY_PAGES = 20;
+const memory = new Map<string, FeedCache>();
+const memoryKey = (scope: string, mid: string, sid: string) => JSON.stringify([scope, mid, sid]);
+
+export function clearMemoryPages(): void {
+  memory.clear();
+}
+
+export function readMemoryPage(scope: string | null, mid: string, sid: string): FeedCache | null {
+  if (!scope || scope !== feedCacheScope()) return null;
+  const key = memoryKey(scope, mid, sid);
+  const page = memory.get(key);
+  if (!page) return null;
+  // A Map iterates in insertion order: the first key is always the least recently used.
+  memory.delete(key);
+  memory.set(key, page);
+  return page;
+}
+
+export function discardMemoryPage(scope: string | null, mid: string, sid: string): void {
+  if (scope) memory.delete(memoryKey(scope, mid, sid));
+}
+
+/** An empty page is not kept: it would stand in for the loading state with nothing to show. */
+export function writeMemoryPage(scope: string | null, value: FeedCache): void {
+  if (!scope || scope !== feedCacheScope()) return;
+  const key = memoryKey(scope, value.machineID, value.sessionID);
+  memory.delete(key);
+  if (!value.items.length) return;
+  memory.set(key, newestTurns(value));
+  if (memory.size > MEMORY_PAGES) memory.delete(memory.keys().next().value!);
+}
+
+/** A confirmed main stays on its routing node when the new-chat default changes. */
+export function mainConversationMachine(assistant: AssistantInfo | null | undefined): string | undefined {
+  if (!assistant?.main) return assistant?.machine_id;
+  return assistant.main_machine_id ||
+    assistant.conversations.find((c) => c.session_id === assistant.main)?.machine_id ||
+    assistant.machine_id;
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -23,6 +24,13 @@ type messageReceipts struct {
 	Source string               `json:"source"`
 	Chat   string               `json:"chat"`
 	IDs    map[string]time.Time `json:"ids"`
+	// Lines binds a receipt to the rendered speaker and body, without keeping another copy of the text.
+	Lines map[string]messageReceiptLine `json:"lines,omitempty"`
+}
+
+type messageReceiptLine struct {
+	Hash string `json:"hash"`
+	Mine bool   `json:"mine"`
 }
 
 // An intent is installed before any day, receipt or metadata is replaced. Repeating
@@ -34,6 +42,17 @@ type ingestIntent struct {
 	Days     map[string][]byte `json:"days"`
 	Receipts messageReceipts   `json:"receipts"`
 	Meta     json.RawMessage   `json:"meta"`
+	// Retention: the chat's retention ledger as it becomes (retention.go); none when the write changes it not.
+	Retention json.RawMessage `json:"retention,omitempty"`
+}
+
+// ingestLine is a line Ingest writes, with its deciding rule (the ledger's) and whether it is late: older than lines
+// written before it (the mine rule's context, stored once the owner's message came), so it goes in at its time
+// instead of at the end.
+type ingestLine struct {
+	Line
+	rule string
+	late bool
 }
 
 func archiveWrite(path string, data []byte) error {
@@ -95,6 +114,7 @@ func (s *Store) ingestState(source string, sc SourceChat, cut time.Time) (*Chat,
 			_, err := os.Stat(s.path(KindChat, id, "messages", at.In(zone).Format("2006-01-02")+".md"))
 			if os.IsNotExist(err) {
 				delete(r.IDs, key)
+				delete(r.Lines, key)
 			}
 		}
 	}
@@ -120,6 +140,39 @@ func (s *Store) recoverIngest(id string) error {
 	s.lockArchive()
 	defer s.unlockArchive()
 	return s.recoverIngestLocked(id)
+}
+
+// SettleIngest completes a previously installed intent for a source chat.
+// A caller holding a source commit reservation must settle failed writes before
+// releasing that reservation, because recovery itself can publish messages.
+func (s *Store) SettleIngest(source, chat string) error {
+	if s.ReadOnly() {
+		return ErrReadOnly
+	}
+	id := ChatID(source, chat)
+	recovered := false
+	err := func() error {
+		s.ingestMu.Lock()
+		defer s.ingestMu.Unlock()
+		s.chatMu.Lock()
+		defer s.chatMu.Unlock()
+		if _, err := os.Stat(s.path(KindChat, id, ingestJournal)); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if err := s.recoverIngest(id); err != nil {
+			return err
+		}
+		recovered = true
+		return nil
+	}()
+	if err == nil && recovered {
+		s.notify(KindChat, id, "messages")
+		s.notify(KindChat, id, "metadata")
+	}
+	return err
 }
 
 func (s *Store) recoverIngestLocked(id string) error {
@@ -149,6 +202,13 @@ func (s *Store) finishIngestLocked(in *ingestIntent) error {
 		days = append(days, d)
 	}
 	sort.Strings(days)
+	// The ledger first: one ahead of its lines only names lines that are not there (harmless), one behind would
+	// leave lines of a longer rule judged by a shorter one.
+	if len(in.Retention) > 0 {
+		if err := s.writeIngest(s.ledgerPath(in.ChatID), in.Retention); err != nil {
+			return err
+		}
+	}
 	for _, d := range days {
 		if err := s.writeIngest(s.path(KindChat, in.ChatID, "messages", d+".md"), in.Days[d]); err != nil {
 			return err
@@ -178,8 +238,9 @@ func (s *Store) finishIngestLocked(in *ingestIntent) error {
 
 // commitIngest holds the day and metadata locks from snapshot through commit. The
 // existing protected-field merge also applies here, so manual edits remain intact.
-// The caller holds chatMu and has filtered identities before building attachments.
-func (s *Store) commitIngest(c *Chat, lines []Line, r messageReceipts) (err error) {
+// The caller holds chatMu and has filtered identities before building attachments. selected: the lines went through
+// the selection, and the chat's retention ledger (begun with usual) records those another rule decided.
+func (s *Store) commitIngest(c *Chat, lines []ingestLine, r messageReceipts, selected bool, usual string) (err error) {
 	s.lockArchive()
 	defer func() {
 		s.unlockArchive()
@@ -195,8 +256,11 @@ func (s *Store) commitIngest(c *Chat, lines []Line, r messageReceipts) (err erro
 		return err
 	}
 	in := ingestIntent{Version: 1, ChatID: c.ID, Receipts: r, Days: map[string][]byte{}}
+	zone := s.zoneLocked()
+	keys := map[string]map[string]bool{} // the line keys of each day, for the ledger
+	var notes []ledgerNote
 	for _, l := range lines {
-		d := l.At.In(s.zoneLocked()).Format("2006-01-02")
+		d := l.At.In(zone).Format("2006-01-02")
 		if _, ok := in.Days[d]; !ok {
 			raw, err := os.ReadFile(s.path(KindChat, c.ID, "messages", d+".md"))
 			if err != nil && !os.IsNotExist(err) {
@@ -206,8 +270,30 @@ func (s *Store) commitIngest(c *Chat, lines []Line, r messageReceipts) (err erro
 				raw = fmt.Appendf(nil, "# %s · %s\n\n", c.Name, d)
 			}
 			in.Days[d] = raw
+			if selected {
+				keys[d] = map[string]bool{}
+				_, _, have := dayLines(string(raw))
+				for _, h := range have {
+					keys[d][h.key] = true
+				}
+			}
 		}
-		in.Days[d] = append(in.Days[d], l.Format(s.zoneLocked())...)
+		if l.late {
+			out, _ := mergeDayLines(string(in.Days[d]), []Line{l.Line}, zone, false)
+			in.Days[d] = []byte(out)
+		} else {
+			in.Days[d] = append(in.Days[d], l.Format(zone)...)
+		}
+		if selected {
+			key := lineKey(strings.TrimSuffix(l.Format(zone), "\n"))
+			notes = append(notes, ledgerNote{day: d, key: key, rule: l.rule, existed: keys[d][key]})
+			keys[d][key] = true
+		}
+	}
+	if selected {
+		if in.Retention, err = s.applyLedger(c.ID, usual, notes); err != nil {
+			return err
+		}
 	}
 	current := map[string]json.RawMessage{}
 	if _, err := readJSON(s.entityPath(KindChat, c.ID), &current); err != nil {
@@ -280,6 +366,7 @@ func (s *Store) pruneReceipts(id, cut string, zone *time.Location) error {
 			_, err := os.Stat(s.path(KindChat, id, "messages", at.In(zone).Format("2006-01-02")+".md"))
 			if errors.Is(err, os.ErrNotExist) {
 				delete(r.IDs, key)
+				delete(r.Lines, key)
 				changed = true
 			}
 		}

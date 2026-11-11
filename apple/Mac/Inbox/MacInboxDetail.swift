@@ -34,9 +34,9 @@ struct MacInboxDetail: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Inbox")
-        } else if case .item(let id)? = sel.first, let item = state.item(id) {
+        } else if case .item(let key)? = sel.first, let item = state.item(key) {
             MacInboxItemDetail(item: item, accounts: state.accounts)
-                .id(item.id)
+                .id(item.key)
         } else if case .agent(let id)? = sel.first, let ix = model.pendingInteractions.first(where: { $0.id == id }), ix.isSessionless {
             // A card on no session has no chat to open: the whole card, answered here (#4059).
             ScrollView {
@@ -96,14 +96,16 @@ struct MacInboxItemDetail: View {
     /// and list for the link panel); a standalone window never touches the main window's layout (#3477).
     static func writesSharedReading(standalone: Bool) -> Bool { !standalone }
 
-    /// Whether the detail takes the list's one-shot AI Draft Reply / Hand to AI signal for `itemID` and opens the sheet:
-    /// only the inbox page's detail does. A standalone window of the same item took it too, whichever came first, and
+    /// Whether the detail takes the list's one-shot AI Draft Reply / Hand to AI signal for its item (`InboxItem.key`) and
+    /// opens the sheet: only the inbox page's detail does. A standalone window of the same item took it too, whichever came first, and
     /// opened the sheet in the window behind (#3817); its own buttons still open its sheets.
     static func takesListSignal(_ signalID: String?, itemID: String, standalone: Bool) -> Bool {
         !standalone && signalID == itemID
     }
 
-    private var current: InboxItem { InboxStore.shared.items.first { $0.id == item.id } ?? item }
+    private var current: InboxItem { InboxStore.shared.items.first { $0.key == item.key } ?? item }
+    /// The manager the item's chat and the links opened from the item read through: the item's; nil for the default's.
+    private var linkManager: String? { model.linkManager(item.manager) }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -117,9 +119,9 @@ struct MacInboxItemDetail: View {
         }
         .environment(\.feishuOpen) { route in
             // Documents read beside the item; people and chats replace it (back returns).
-            if case .doc(let url, _) = route, let u = URL(string: url) { link = LinkTarget(url: u) } else { path.append(route) }
+            if case .doc(let url, _, let manager) = route, let u = URL(string: url) { link = LinkTarget(url: u, manager: manager) } else { path.append(route) }
         }
-        .macOpensLinksInPanel($link)
+        .macOpensLinksInPanel($link, manager: linkManager)
         .macLinkPanel($link, wide: true)
         // Outside the link panel: the actions stay at the window's edge, the document opens between them and the item.
         // While a document is open they are a row over the item; embedded in the page the filters and the list fold
@@ -140,10 +142,10 @@ struct MacInboxItemDetail: View {
         .sheet(isPresented: $drafting) { InboxDraftSheet(item: current, accounts: accounts).macSheet() }
         .sheet(isPresented: $handingOff) { InboxHandOffSheet(item: current).macSheet() }
         .onChange(of: MacInboxState.shared.drafting, initial: true) { _, d in
-            if Self.takesListSignal(d?.id, itemID: item.id, standalone: standalone) { drafting = true; MacInboxState.shared.drafting = nil }
+            if Self.takesListSignal(d?.key, itemID: item.key, standalone: standalone) { drafting = true; MacInboxState.shared.drafting = nil }
         }
         .onChange(of: MacInboxState.shared.handingOff, initial: true) { _, d in
-            if Self.takesListSignal(d?.id, itemID: item.id, standalone: standalone) { handingOff = true; MacInboxState.shared.handingOff = nil }
+            if Self.takesListSignal(d?.key, itemID: item.key, standalone: standalone) { handingOff = true; MacInboxState.shared.handingOff = nil }
         }
         #if DEBUG
         // `-showInboxAction draft|handoff`: open that sheet; `-openInboxLink <url>`: the link panel (screenshots).
@@ -153,7 +155,7 @@ struct MacInboxItemDetail: View {
             case "handoff": handingOff = true
             default: break
             }
-            if let s = UserDefaults.standard.string(forKey: "openInboxLink"), let u = URL(string: s) { link = LinkTarget(url: u) }
+            if let s = UserDefaults.standard.string(forKey: "openInboxLink"), let u = URL(string: s) { link = LinkTarget(url: u, manager: linkManager) }
         }
         #endif
     }
@@ -171,9 +173,9 @@ struct MacInboxItemDetail: View {
             // GitHub, Telegram…: the thread as the connector draws it, as on iOS and the web (#2611).
             InboxConnectorDetailView(item: current)
         } else if let m = current.moment {
-            LarkMomentsPostView(postID: m.postID, pushed: true) // the Moments post and its comments
+            LarkMomentsPostView(postID: m.postID, pushed: true, manager: linkManager) // the Moments post and its comments
         } else if let c = item.larkConversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: linkManager)
         } else if let m = item.mailSummary {
             MailDetailView(summary: m, accounts: accounts)
         } else {
@@ -186,11 +188,12 @@ struct MacInboxItemDetail: View {
 struct MacInboxItemWindow: View {
     static let id = "inbox-item"
     @Environment(AppModel.self) private var model
+    /// The item's `InboxItem.key`.
     var itemID: String?
 
     var body: some View {
         Group {
-            if let itemID, let item = InboxStore.shared.items.first(where: { $0.id == itemID }) {
+            if let itemID, let item = InboxStore.shared.items.first(where: { $0.key == itemID }) {
                 MacInboxItemDetail(item: item, accounts: MacInboxState.shared.accounts, standalone: true)
             } else {
                 EmptyStateView(symbol: Theme.Icon.inbox, title: String(localized: "This Item Is No Longer in the Inbox"), message: String(localized: "It may have expired. Check the main window."))
@@ -201,7 +204,7 @@ struct MacInboxItemWindow: View {
     }
 }
 
-/// The inbox page until the window's three columns take the pieces over (docs/apple/mac.md「三栏接口」): the filters, the
+/// The inbox page until the window's three columns take the pieces over (docs/apple/mac.md「Current Mac UI」): the filters, the
 /// list and the detail side by side, the list's width dragged and remembered.
 struct MacInboxPage: View {
     @AppStorage("mac.inbox.listWidth") private var listWidth: Double = Theme.Size.macInboxListIdeal

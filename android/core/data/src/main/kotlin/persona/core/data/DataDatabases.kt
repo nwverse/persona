@@ -191,6 +191,9 @@ data class SessionCursorRow(
 
 data class SessionCacheSize(val machine: String, val session: String, val bytes: Long, val accessed: Long)
 
+/** One stored row of a session without its key columns: what a save compares the new window with. */
+data class StoredItem(val id: String, val seq: Int, val part: Int, val json: String)
+
 @Dao
 interface ItemsDao {
     @Query("SELECT i.machine, i.session, SUM(length(CAST(i.json AS BLOB))) AS bytes, " +
@@ -198,6 +201,11 @@ interface ItemsDao {
         "i.scope = c.scope AND i.machine = c.machine AND i.session = c.session " +
         "WHERE i.scope = :scope GROUP BY i.machine, i.session ORDER BY accessed, i.machine, i.session")
     suspend fun sizes(scope: String): List<SessionCacheSize>
+
+    /** One session's share of [sizes], read along the primary key's prefix. */
+    @Query("SELECT COALESCE(SUM(length(CAST(json AS BLOB))), 0) FROM items " +
+        "WHERE scope = :scope AND machine = :machine AND session = :session")
+    suspend fun size(scope: String, machine: String, session: String): Long
 
     @Query("UPDATE cursors SET accessed_at = :accessed WHERE scope = :scope AND machine = :machine AND session = :session")
     suspend fun touch(scope: String, machine: String, session: String, accessed: Long)
@@ -217,11 +225,19 @@ interface ItemsDao {
     @Query("DELETE FROM items WHERE scope = :scope AND machine = :machine AND session = :session")
     suspend fun clear(scope: String, machine: String, session: String)
 
+    /** One session's rows as a save compares them, read along the primary key's prefix. */
+    @Query("SELECT id, seq, part, json FROM items WHERE scope = :scope AND machine = :machine AND session = :session")
+    suspend fun stored(scope: String, machine: String, session: String): List<StoredItem>
+
+    /** Takes three variables besides [ids]: callers keep [ids] under SQLite's limit (999 before 3.32, API 30). */
+    @Query("DELETE FROM items WHERE scope = :scope AND machine = :machine AND session = :session AND id IN (:ids)")
+    suspend fun delete(scope: String, machine: String, session: String, ids: List<String>)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(items: List<ItemRow>)
 }
 
-@Database(entities = [ItemRow::class, SessionCursorRow::class], version = 3,
+@Database(entities = [ItemRow::class, SessionCursorRow::class], version = 4,
     autoMigrations = [AutoMigration(from = 2, to = 3)], exportSchema = true)
 abstract class ItemsDatabase : RoomDatabase() {
     abstract fun items(): ItemsDao
@@ -232,6 +248,18 @@ abstract class ItemsDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `cursors` (`scope` TEXT NOT NULL, `machine` TEXT NOT NULL, " +
                     "`session` TEXT NOT NULL, `history` TEXT, `covered` INTEGER NOT NULL, `has_more` INTEGER, " +
                     "PRIMARY KEY(`scope`, `machine`, `session`))")
+            }
+        }
+
+        /**
+         * The same tables; what an older build kept is dropped, since it decoded items without fields added since (a
+         * refusal notice's `model_refusal`, #2528) and the chat keeps a cached item over the hub's newer copy. A cache:
+         * the chats load again from the hub.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DELETE FROM `items`")
+                db.execSQL("DELETE FROM `cursors`")
             }
         }
     }

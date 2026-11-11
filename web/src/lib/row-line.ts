@@ -9,7 +9,8 @@ import { interactionAsk } from "./inbox";
 import { plainMarkdown } from "./plain-markdown";
 import type { Interaction, Session } from "./types";
 
-/** What kind of card waits, in a word: "Asking you" / "Plan to approve" / "Needs permission" / "Terminal dialog" / "MCP request". */
+/** What kind of card waits, in a few words (docs/design/DESIGN_SYSTEM.md 5.6): "Has a question" / "Plan awaiting approval" /
+ *  "Needs your permission" / "Terminal needs you" / "MCP request". */
 export function interactionKicker(ix: Pick<Interaction, "kind"> | undefined): string {
   switch (ix?.kind) {
     case "plan":
@@ -30,7 +31,7 @@ const MAX = 160;
 
 /**
  * The second line of an agent's sidebar row: for one that needs you, its card's kind and what it asks
- * ("Asking you: which test framework?"), else why it waits (sessionPreview: the host's reason, the error, the hub's triage, its
+ * ("Has a question: which test framework?"), else why it waits (sessionPreview: the host's reason, the error, the hub's triage, its
  * last words); for one that finished unseen, what it did ("✓ conclusion" or its last words, as plain text); for one seen and
  * awaiting the user's reply (`awaiting`, lib/agent-groups.ts awaitsReply, #5096), "Awaiting your reply:" and what it asks.
  * Undefined for every other state, and when there is nothing to say. `lead` is the colored part (`tone`: red for

@@ -270,12 +270,25 @@ export interface Permissions {
    * user names, machine names or IP addresses). Needed by contributes.error_reports.
    */
   error_reports?: boolean;
+  storage?: StoragePermission;
   /**
    * It is handed the authorization links the user's Agents stop at (only links its contributes.auth_relay names,
    * printed by the Agent's own command) to complete them with the account it is signed in with. Needed by
    * contributes.auth_relay.
    */
   auth_relay?: boolean;
+}
+
+/**
+ * Default-deny installation-scoped business data, separate from credentials. Only declared logical keys or literal
+ * prefixes ending in *; no filesystem, SQL, hub or network access. CAS and transactions use existing RPC limits and
+ * host quotas. Queue and blob methods additionally require their flags.
+ */
+export interface StoragePermission {
+  keys?: string[];
+  patterns?: string[];
+  queues?: boolean;
+  blobs?: boolean;
 }
 
 /**
@@ -286,6 +299,7 @@ export interface Contributes {
   voice?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
+  iphone?: NamedItem[];
   quota?: QuotaItem[];
   providers?: ProviderItem[];
   api?: APIItem[];
@@ -305,6 +319,7 @@ export interface Contributes {
   tunnels?: TunnelItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
+  secret_providers?: SecretProviderItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -399,7 +414,7 @@ export interface LookAvatar {
 }
 
 /**
- * An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+ * An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
  */
 export interface LookPalette {
   primary?: string;
@@ -441,8 +456,8 @@ export interface LookDot {
 }
 
 /**
- * A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
- * app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+ * A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+ * package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
  */
 export interface LookItem {
   id: string;
@@ -480,6 +495,19 @@ export interface AuthRelayItem {
 }
 
 /**
+ * Secret values it supplies for references of its schemes (op://vault/item/field): the manager calls secrets.describe
+ * and secrets.resolve when a setting holds such a reference or the user approves handing one to an Agent run. Needs
+ * the program to speak the protocol. A scheme another installed extension claims fails the install.
+ */
+export interface SecretProviderItem {
+  id: string;
+  /** Whose secrets these are, in a few words (1Password): the settings say From <name>. */
+  name: string;
+  /** The reference schemes it resolves, without :// (op). */
+  schemes: string[];
+}
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -491,7 +519,8 @@ export interface ErrorReportsItem {
 
 /**
  * A tunnel the apps can reach this hub through when its own addresses do not answer (docs "In-app tunnels"): an
- * in-app tunnel core built into the app, going to the configuration's target_host and target_port.
+ * in-app tunnel core built into the app, going to the configuration's target_host and target_port; an optional
+ * integer ssh_port is the hub machine's SSH port, for an SSH tunnel the app dials through this tunnel.
  */
 export interface TunnelItem {
   id: string;
@@ -877,6 +906,29 @@ export interface UIParams {
   item?: UIInboxItem;
 }
 
+/**
+ * ui.image's parameters (UI version 6): the hub asks the extension for a picture it drew as a ref, for the ui
+ * contribution that drew it. width is the pixel width the app wants (320, 640, 1280 or 2048; 0 when it says nothing);
+ * the extension may ignore it.
+ */
+export interface UIImageParams {
+  contribution: string;
+  ref: string;
+  width?: number;
+  placement?: Placement;
+}
+
+/**
+ * What ui.image answers: the picture's bytes in base64 (png, jpeg, webp or gif, at most 4 MB decoded and 8192 pixels
+ * a side; the hub reads the type from the bytes, not from mime) and how long the hub may keep it (seconds, 60 when
+ * absent; a camera 5 to 10, a still 86400).
+ */
+export interface UIImage {
+  mime: string;
+  data: string;
+  max_age?: number;
+}
+
 export interface UIMachine {
   id: string;
   name: string;
@@ -1221,6 +1273,64 @@ export interface AuthRelayResult {
 }
 
 /**
+ * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
+ * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
+ * user approved it on the phone, id the variable's name, machine and session the Agent's).
+ */
+export interface SecretPurpose {
+  kind: string;
+  id: string;
+  machine?: string;
+  session?: string;
+}
+
+/**
+ * secrets.describe's parameters: a reference of one of the contribution's schemes.
+ */
+export interface SecretsDescribeParams {
+  contribution: string;
+  reference: string;
+}
+
+/**
+ * What secrets.describe answers: words for people (the item and field), never a value.
+ */
+export interface SecretsDescribeResult {
+  title: string;
+  detail?: string;
+}
+
+/**
+ * secrets.resolve's parameters: the reference and what it is resolved for. Only the manager calls it.
+ */
+export interface SecretsResolveParams {
+  contribution: string;
+  reference: string;
+  purpose: SecretPurpose;
+}
+
+/**
+ * What secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in, rate_limited
+ * (data.retry_after), refused.
+ */
+export interface SecretsResolveResult {
+  value: string;
+}
+
+/**
+ * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
+ * page shows. Never the value.
+ */
+export interface SecretsUsedEvent {
+  contribution: string;
+  reference: string;
+  purpose: SecretPurpose;
+  at: string;
+  /** settings (a reference saved in Settings), rule (an Always rule) or the approving device's id. */
+  approved_by?: string;
+}
+
+/**
  * extension_notification in an extension's alert push: whose it is, the page a tap opens (ui with state) and its
  * buttons (category ext.<extension>.<hash of the action ids>, registered by the app as it meets it).
  */
@@ -1304,8 +1414,8 @@ export const PLATFORMS = ["ios", "mac", "android", "web"] as const;
  * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
  * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
  */
-export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
-export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
+export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "music" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
+export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
 
 export interface View {
   title?: string;
@@ -2299,8 +2409,11 @@ export interface Review {
   discard?: Action;
 }
 
-export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | (string & {});
-export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar"] as const;
+/**
+ * ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days, people).
+ */
+export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | "ring" | (string & {});
+export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar", "ring"] as const;
 
 /**
  * The assistant's ```persona-card block (#886): one JSON object. Joins the components in #1850; this form keeps
@@ -3027,24 +3140,114 @@ export interface MessagingError {
 }
 
 /**
+ * catalog.list: subscribable sources. An empty catalog is an empty sources list.
+ */
+export interface ConnectorCatalog {
+  sources: ConnectorCatalogSource[];
+}
+
+/**
+ * A stable source id, independent of its display name. Tool names are short and unique within this source.
+ */
+export interface ConnectorCatalogSource {
+  id: string;
+  name: string;
+  icon?: NavIcon;
+  service?: string;
+  min_interval_seconds?: number;
+  /** A shared connector/account budget, across all its sources. */
+  max_calls_per_hour?: number;
+  tools: ConnectorCatalogTool[];
+  recipes?: ConnectorSubscriptionRecipe[];
+}
+
+export interface ConnectorCatalogTool {
+  name: string;
+  title?: string;
+  description: string;
+  /** A JSON object containing the tool input schema. */
+  input_schema: unknown;
+  read_only: boolean;
+  annotations?: ConnectorCatalogAnnotations;
+}
+
+/**
+ * When present, hints must agree with read_only: true and destructive: false.
+ */
+export interface ConnectorCatalogAnnotations {
+  read_only_hint?: boolean;
+  destructive_hint?: boolean;
+}
+
+/**
+ * catalog.call: a source and one of its read-only short tool names. args is an object, default {}.
+ */
+export interface ConnectorCatalogCallParams {
+  contribution: string;
+  source: string;
+  tool: string;
+  args?: unknown;
+}
+
+export type ConnectorSubscriptionMode = "items" | "snapshot" | (string & {});
+export const CONNECTOR_SUBSCRIPTION_MODES = ["items", "snapshot"] as const;
+
+export type ConnectorSubscriptionGroup = "source" | "thread" | (string & {});
+export const CONNECTOR_SUBSCRIPTION_GROUPS = ["source", "thread"] as const;
+
+export type ConnectorSubscriptionKind = "sub_mail" | "sub_message" | "sub_notice" | "sub_deadline" | "sub_event" | "sub_update" | "sub_digest" | (string & {});
+export const CONNECTOR_SUBSCRIPTION_KINDS = ["sub_mail", "sub_message", "sub_notice", "sub_deadline", "sub_event", "sub_update", "sub_digest"] as const;
+
+/**
+ * Paths relative to one item. Only $, .field and [index] are supported; no expressions or recursive descent.
+ */
+export interface ConnectorSubscriptionFields {
+  id?: string;
+  thread?: string;
+  title?: string;
+  sender?: string;
+  time?: string;
+  body?: string;
+  link?: string;
+  due_date?: string;
+}
+
+/**
+ * A pull recipe, not a schedule. args is an object (default {}); strings may contain {{since}} or {{since_date}}.
+ * items_path defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime
+ * argument/schema and mapped-value validation belongs to the subscription runner.
+ */
+export interface ConnectorSubscriptionRecipe {
+  mode: ConnectorSubscriptionMode;
+  tool: string;
+  args?: unknown;
+  items_path?: string;
+  fields?: ConnectorSubscriptionFields;
+  kind: ConnectorSubscriptionKind;
+  group_by: ConnectorSubscriptionGroup;
+}
+
+/**
  * error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call / actions.do, and the
  * hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), why credentials.gh_token
  * has no token, and what recall answers: not_recallable (nothing was sent: the program cannot take that message back)
  * and recall_unknown (the request may have taken effect). not_signed_in, offline and rate_limited also say that
- * recall could not act now.
+ * recall could not act now. not_read_only refuses a catalog.call outside the current read-only catalog.
  */
-export type ConnectorErrorCode = "rate_limited" | "no_machine" | "offline" | "node_too_old" | "no_gh" | "not_signed_in" | "not_recallable" | "recall_unknown" | (string & {});
-export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in", "not_recallable", "recall_unknown"] as const;
+export type ConnectorErrorCode = "rate_limited" | "no_machine" | "offline" | "node_too_old" | "no_gh" | "not_signed_in" | "not_recallable" | "recall_unknown" | "not_read_only" | (string & {});
+export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in", "not_recallable", "recall_unknown", "not_read_only"] as const;
 
 /**
  * What a connector declares (ConnectorItem.capabilities): the hub calls only the methods of declared ones. fallback
  * has no method: every inbox thing promises extra.rule_tier. recall is the program's word that it can take back what
- * it sent: the hub then calls connector.recall (only after the user agreed), and the install preview says so. history
- * (needs archive) is history.chats and archive.history, history_anchors (needs history) is history.anchors. An
- * extension's connector with one this hub does not know loses only that capability.
+ * it sent: the hub calls recall.can / recall.do after the user agreed, or legacy connector.recall for a program
+ * without those methods, and the install preview says so. history (needs archive) is history.chats and
+ * archive.history, history_anchors (needs history) is history.anchors. catalog lists subscribable read-only sources
+ * and calls their short tool names. An extension's connector with one this hub does not know loses only that
+ * capability.
  */
-export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | (string & {});
-export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors"] as const;
+export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | (string & {});
+export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"] as const;
 
 /**
  * ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.
@@ -3157,6 +3360,10 @@ export interface ConnectorStatus {
   error?: string;
   /** How to fix it, a step a sentence. */
   guide?: string[];
+  /** Optional HTTPS page the App may open for the fix; never a secret. */
+  guide_url?: string;
+  /** Permissions the connector can identify as absent. */
+  missing_scopes?: string[];
   last_sync?: string;
   last_event?: string;
 }
@@ -3266,12 +3473,61 @@ export interface ConnectorRecallParams {
 }
 
 /**
- * recall's answer: recalled true is the program's word that the service confirmed the message is no longer there.
- * Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes nothing and lets the
- * user ask again.
+ * Legacy recall's answer: recalled true is the program's word that the service confirmed the message is no longer
+ * there. Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes nothing and
+ * lets the user ask again.
  */
 export interface ConnectorRecallResult {
   recalled: boolean;
+}
+
+/**
+ * recall.can's read-only, memory-only preflight. The hub asks it immediately before recall.do, not for every row of a
+ * ledger page. age_seconds is the sent row's age, clamped at zero for a future timestamp.
+ */
+export interface ConnectorRecallCanParams {
+  contribution: string;
+  action: string;
+  age_seconds: number;
+}
+
+/**
+ * recall.can's answer. can false stops before any write and means not_recallable.
+ */
+export interface ConnectorRecallCanResult {
+  can: boolean;
+}
+
+/**
+ * recall.do takes back one message after the user agreed on their own full device. request_id is stable for this
+ * connector and external message: concurrent duplicates share one operation, and a confirmed success can be replayed
+ * after a lost answer. A failure or unknown outcome may be tried again explicitly. at is retained for connectors
+ * whose own recall window counts from the send. No message text, origin, approval record, account or credential is
+ * included.
+ */
+export interface ConnectorRecallDoParams {
+  contribution: string;
+  request_id: string;
+  action: string;
+  message_ref: string;
+  target?: Record<string, unknown>;
+  at?: string;
+}
+
+/**
+ * recall.do's outcome. Only done and already_recalled say the message is known to be gone. unknown may have taken
+ * effect and is never success.
+ */
+export type ConnectorRecallOutcome = "done" | "already_recalled" | "not_recallable" | "unavailable" | "refused" | "unknown" | (string & {});
+export const CONNECTOR_RECALL_OUTCOMES = ["done", "already_recalled", "not_recallable", "unavailable", "refused", "unknown"] as const;
+
+/**
+ * recall.do's result. error is one human-readable sentence for a non-success status, never a secret or the message's
+ * text. An empty or unrecognized status is treated as unknown by the hub.
+ */
+export interface ConnectorRecallDoResult {
+  status: ConnectorRecallOutcome;
+  error?: string;
 }
 
 /**
@@ -3924,6 +4180,10 @@ export interface ConnectorPrompt {
   /** Seconds between asks of a device_code or qr step. */
   interval?: number;
   qr?: ConnectorQRCode;
+  /** An absolute URL where this step's action is completed; empty means no link. */
+  link?: string;
+  /** The label for the optional link. */
+  link_text?: string;
   hint?: string;
   error?: string;
   done?: boolean;
@@ -4302,8 +4562,8 @@ export interface ChannelEditParams {
   text: string;
 }
 
-export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | (string & {});
-export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
+export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | "topics" | (string & {});
+export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"] as const;
 
 /**
  * error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params,
@@ -4433,7 +4693,10 @@ export interface KBDetail {
   id: string;
   /** Where it is on the manager's machine, for its own file tools. */
   path: string;
-  /** The entity's own fields (meta.json). */
+  /**
+   * The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+   * Status uses the same locked_fields and provenance as other corrected fields.
+   */
   meta: unknown;
   summary?: string;
   log?: string[];
@@ -4441,6 +4704,36 @@ export interface KBDetail {
   links?: KBEntry[];
   moments?: KBMomentRef[];
   segments?: KBRecordingSegment[];
+  /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
+  minutes?: unknown;
+  /** A topic's knowledge points (docs/assistant/knowledge.md "Topics"). */
+  points?: KBTopicPoint[];
+}
+
+/**
+ * One knowledge point of a topic, under up to two levels of subtopics (path).
+ */
+export interface KBTopicPoint {
+  id: string;
+  path?: string[];
+  kind: string;
+  text: string;
+  /** A decision's reason, a pitfall's cause. */
+  why?: string;
+  sources?: KBTopicSource[];
+  /** YYYY-MM-DD: when it was last confirmed. */
+  when?: string;
+}
+
+/**
+ * An entry a knowledge point came from.
+ */
+export interface KBTopicSource {
+  /** projects or chats */
+  kind: string;
+  id: string;
+  /** YYYY-MM-DD */
+  day?: string;
 }
 
 /**
@@ -4482,12 +4775,24 @@ export interface KBDayResult {
   messages: KBDayMessage[];
   prev: string;
   next: string;
+  /**
+   * available means ledger matching ran, not that unmarked messages are human-authored. missing_scope requires
+   * sent.read; unavailable means the service cannot provide provenance. Older hosts omit this field: treat absence as
+   * unavailable.
+   */
+  sent_origin: string;
 }
 
 export interface KBDayMessage {
   /** The message's first line in the day's file, from 1. */
   n: number;
   text: string;
+  /** Present only for a unique match in the sent-as-user ledger, with sent.read. */
+  sent_by?: string;
+  /** The matching ledger row. */
+  sent_ledger_id?: number;
+  /** When this matched send was recalled; the archive may still contain its text. */
+  recalled_at?: string;
 }
 
 /**
@@ -4530,6 +4835,10 @@ export interface KBUpdateParams {
   name?: string;
   /** A project's: short or long. */
   project_kind?: string;
+  /**
+   * People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+   * ignored. Omitted or empty keeps the current status; active restores a person.
+   */
   status?: string;
   goal?: string;
   my_role?: string;
@@ -4609,17 +4918,24 @@ export interface TodoEventThread {
 }
 
 /**
- * event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed to start), or the
- * thread it is bound to changed. Changes within about a second of each other are told once, as the to-do is at the
- * end of them. title, thread and done are as after the change (the last ones for a deleted to-do); thread is left out
- * when the to-do has none, done unless the to-do is done (closed, or its task failed to start). Notes, agents and
- * decisions changing do not send it (decisions have event.todo.decision). Read the to-do again if it matters.
+ * event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed to start), its
+ * supervisor, or the thread it is bound to changed. Changes within about a second of each other are told once, as the
+ * to-do is at the end of them. title, thread and done are as after the change (the last ones for a deleted to-do);
+ * thread is left out when the to-do has none, done unless the to-do is done (closed, or its task failed to start).
+ * supervisor is the conversation that supervises it (the main conversation or a leader, see leaders.schema.json),
+ * left out when none does; a change of supervisor (the task moved to another leader) sends it too. kind is concern
+ * for something the owner raised in the main conversation and wants an answer to; such a to-do is done only once its
+ * outcome was reported to the owner (an event.todo.decision of source reported comes with it), never on its own; kind
+ * is left out for a to-do or a task and never changes. Notes, agents and decisions changing do not send it (decisions
+ * have event.todo.decision). Read the to-do again if it matters.
  */
 export interface TodoChangedEvent {
   id: string;
   title: string;
   thread?: TodoEventThread;
   done?: boolean;
+  supervisor?: string;
+  kind?: string;
   what: string;
 }
 
@@ -4627,7 +4943,8 @@ export interface TodoChangedEvent {
  * A decision on a to-do: what was asked and chosen (reason and supersedes_id left out when empty), and where it came
  * from: manual (written in the to-do), card (the user answered an Agent's question card), outcome (pulled out of an
  * Agent's finished work, not made by the user), agent (an Agent noted it), thread (the user's reply in the to-do's
- * chat thread).
+ * chat thread), reported (what the main conversation told the owner of a concern's outcome, as choice; it closes the
+ * concern).
  */
 export interface TodoEventDecision {
   id: string;
@@ -4649,6 +4966,50 @@ export interface TodoDecisionEvent {
   title: string;
   thread?: TodoEventThread;
   decision: TodoEventDecision;
+}
+
+/**
+ * event.leader.changed: a leader conversation was made (a side conversation added to assistant.leaders), its title
+ * changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
+ * deleted) or it was made a leader again. id is the leader conversation's session id, the key a work-log record
+ * keeps; title its title as the apps show it; name what the direction is called, to show it by (the name the owner or
+ * the secretary gave it, else its knowledge-base project's name, else the title without its "MMDD | kind | " prefix;
+ * always sent by a hub that has it, #3679); project the knowledge-base project's slug, left out while it has none;
+ * ended true once it is no longer a leader, left out while it is.
+ */
+export interface LeaderChangedEvent {
+  id: string;
+  title: string;
+  name?: string;
+  project?: string;
+  ended?: boolean;
+}
+
+/**
+ * event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it), needs the owner's
+ * decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's Start), or is stuck
+ * (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours); those are written by
+ * the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary of its direction at
+ * the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck), needs_you (what the
+ * owner has to do) and links (evidence; link is the first), text the three put together, todo "". id names the report
+ * (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's to-do id (GET
+ * /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the waiting plan's
+ * id (only on a decision about a plan), text at most 300 characters in the owner's language, link the task's PR or
+ * delivery link when it has one, at when what it reports happened.
+ */
+export interface LeaderReportEvent {
+  id: string;
+  leader: string;
+  kind: string;
+  todo: string;
+  plan?: string;
+  text: string;
+  link?: string;
+  at: string;
+  reached?: string;
+  doing?: string;
+  needs_you?: string;
+  links?: string[];
 }
 
 /**
@@ -4826,6 +5187,185 @@ export const ASSISTANT_ROLES = ["user", "assistant"] as const;
 export interface AssistantMessagesResult {
   messages: AssistantMessage[];
   next_seq?: number;
+}
+
+export interface StorageEmptyParams {
+}
+
+/**
+ * Opaque timestamped request identity from the host. Retry only the same ID and payload; expires after five minutes
+ * and is never automatically regenerated for an unknown effect.
+ */
+export interface StorageRequestResult {
+  request_id: string;
+}
+
+export interface StorageKeyParams {
+  key: string;
+}
+
+/**
+ * Canonical base64 business bytes, at most64KiB decoded; revision is an opaque CAS token.
+ */
+export interface StorageEntry {
+  revision: string;
+  data: string;
+}
+
+export interface StorageListParams {
+  prefix?: string;
+  after?: string;
+  limit?: number;
+}
+
+export interface StorageMutationItem {
+  key: string;
+  revision?: string;
+  deleted?: boolean;
+  job_id?: string;
+}
+
+export interface StorageListResult {
+  items: StorageMutationItem[];
+  more: boolean;
+}
+
+/**
+ * One atomic operation. Empty revision means require absence; missing revision is unconditional. Queue enqueue/ack
+ * require separate queue permission; their job and progress changes commit atomically.
+ */
+export interface StorageOperation {
+  kind: string;
+  key: string;
+  data?: string;
+  revision?: string;
+  dedup?: string;
+  not_before?: number;
+  job_id?: string;
+  lease?: string;
+}
+
+export interface StorageTransactionParams {
+  request_id: string;
+  operations: StorageOperation[];
+}
+
+export interface StorageTransactionResult {
+  items: StorageMutationItem[];
+}
+
+export interface StorageQueueListParams {
+  key: string;
+  after?: string;
+  limit?: number;
+}
+
+export interface StorageJob {
+  id: string;
+  dedup: string;
+  data: string;
+  state: string;
+  not_before: number;
+  attempts: number;
+  lease?: string;
+  lease_until?: number;
+}
+
+export interface StorageQueueListResult {
+  items: StorageJob[];
+  more: boolean;
+}
+
+export interface StorageEnqueueParams {
+  request_id: string;
+  key: string;
+  dedup: string;
+  data: string;
+  not_before?: number;
+}
+
+export interface StorageJobResult {
+  id: string;
+  state?: string;
+}
+
+export interface StorageClaimParams {
+  request_id: string;
+  key: string;
+  lease_seconds: number;
+}
+
+/**
+ * One claimed job; job is absent when no pending job is due.
+ */
+export interface StorageClaimResult {
+  job?: StorageJob;
+}
+
+export interface StorageSettleParams {
+  request_id: string;
+  key: string;
+  id: string;
+  lease?: string;
+}
+
+export interface StorageRetryParams {
+  request_id: string;
+  key: string;
+  id: string;
+  lease: string;
+  not_before: number;
+}
+
+export interface StorageDeleteResult {
+  deleted: boolean;
+}
+
+export interface StorageBlobCreateParams {
+  request_id: string;
+  key: string;
+}
+
+export interface StorageBlobCreateResult {
+  handle: string;
+}
+
+export interface StorageBlobWriteParams {
+  request_id: string;
+  key: string;
+  handle: string;
+  offset: number;
+  data: string;
+}
+
+export interface StorageBlobWriteResult {
+  bytes: number;
+}
+
+export interface StorageBlobMutateParams {
+  request_id: string;
+  key: string;
+  handle: string;
+}
+
+export interface StorageBlobFinishResult {
+  handle: string;
+  bytes: number;
+  complete: boolean;
+}
+
+export interface StorageBlobReadParams {
+  key: string;
+  handle: string;
+  offset: number;
+  limit: number;
+}
+
+export interface StorageBlobReadResult {
+  data: string;
+  offset: number;
+  bytes: number;
+  eof: boolean;
 }
 
 /**
@@ -5173,12 +5713,16 @@ export interface Call {
 export const CALLS: Record<string, Call> = {
   "connector.status": { from: "hub", params: "ConnectorParams", result: "ConnectorStatus" },
   "connector.manifest": { from: "hub", params: "ConnectorParams", result: "ConnectorManifest" },
+  "connector.catalog.list": { from: "hub", params: "ConnectorParams", result: "ConnectorCatalog" },
+  "connector.catalog.call": { from: "hub", params: "ConnectorCatalogCallParams", result: "ConnectorCallResult" },
   "connector.tools.list": { from: "hub", params: "ConnectorParams", result: "ConnectorTools" },
   "connector.tools.call": { from: "hub", params: "ConnectorCallParams", result: "ConnectorCallResult" },
   "connector.actions.list": { from: "hub", params: "ConnectorParams", result: "ConnectorTools" },
   "connector.actions.describe": { from: "hub", params: "ConnectorCallParams", result: "ConnectorDescribeResult" },
   "connector.actions.do": { from: "hub", params: "ConnectorDoParams", result: "ConnectorCallResult" },
   "connector.recall": { from: "hub", params: "ConnectorRecallParams", result: "ConnectorRecallResult" },
+  "connector.recall.can": { from: "hub", params: "ConnectorRecallCanParams", result: "ConnectorRecallCanResult" },
+  "connector.recall.do": { from: "hub", params: "ConnectorRecallDoParams", result: "ConnectorRecallDoResult" },
   "connector.thread.page": { from: "hub", params: "ConnectorThreadParams", result: "ConnectorThreadPage" },
   "connector.thread.media": { from: "hub", params: "ConnectorMediaParams", result: "ConnectorMedia" },
   "connector.inbox.collect": { from: "hub", params: "ConnectorParams", result: "ConnectorCollectResult" },
@@ -5228,7 +5772,24 @@ export const CALLS: Record<string, Call> = {
   "event.kb.forgotten": { from: "hub", params: "KBForgottenEvent", event: true },
   "event.todo.changed": { from: "hub", params: "TodoChangedEvent", event: true },
   "event.todo.decision": { from: "hub", params: "TodoDecisionEvent", event: true },
+  "event.leader.changed": { from: "hub", params: "LeaderChangedEvent", event: true },
+  "event.leader.report": { from: "hub", params: "LeaderReportEvent", event: true },
   "model.complete": { from: "program", params: "ModelCompleteParams", result: "ModelCompleteResult" },
   "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
+  "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
+  "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },
+  "storage.list": { from: "program", params: "StorageListParams", result: "StorageListResult" },
+  "storage.transaction": { from: "program", params: "StorageTransactionParams", result: "StorageTransactionResult" },
+  "storage.queue.list": { from: "program", params: "StorageQueueListParams", result: "StorageQueueListResult" },
+  "storage.queue.enqueue": { from: "program", params: "StorageEnqueueParams", result: "StorageJobResult" },
+  "storage.queue.claim": { from: "program", params: "StorageClaimParams", result: "StorageClaimResult" },
+  "storage.queue.ack": { from: "program", params: "StorageSettleParams", result: "StorageJobResult" },
+  "storage.queue.forget": { from: "program", params: "StorageSettleParams", result: "StorageDeleteResult" },
+  "storage.queue.retry": { from: "program", params: "StorageRetryParams", result: "StorageJobResult" },
+  "storage.blob.create": { from: "program", params: "StorageBlobCreateParams", result: "StorageBlobCreateResult" },
+  "storage.blob.write": { from: "program", params: "StorageBlobWriteParams", result: "StorageBlobWriteResult" },
+  "storage.blob.finish": { from: "program", params: "StorageBlobMutateParams", result: "StorageBlobFinishResult" },
+  "storage.blob.delete": { from: "program", params: "StorageBlobMutateParams", result: "StorageDeleteResult" },
+  "storage.blob.read": { from: "program", params: "StorageBlobReadParams", result: "StorageBlobReadResult" },
 };

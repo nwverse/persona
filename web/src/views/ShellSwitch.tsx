@@ -1,8 +1,11 @@
 // "Assistant | Agents" in the middle of a phone's top bar (#1996), like the iOS app's new shell (docs/apple/ios.md "New shell"): the
 // main conversation and the Agents page, side by side. Agents carries how many agents are waiting for you (quiet ones
-// are told about in the main conversation, not counted here). Narrow screens only; wide ones have the sidebar.
+// are told about in the main conversation, not counted here), the current assistant's with several. Narrow screens only;
+// wide ones have the sidebar.
 import { href, onLinkClick, type Route } from "../lib/router";
-import { useCounts } from "../lib/sessions";
+import { useScopedCounts } from "../lib/current-assistant";
+import { othersWaiting } from "../lib/sessions";
+import type { Session } from "../lib/types";
 import { cx, IconButton } from "../ui/atoms";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./chat/header";
 import { t } from "../i18n";
@@ -11,11 +14,29 @@ type ShellPage = "assistant" | "agents";
 
 const SHELL_PAGES: { page: ShellPage; label: string; to: Route }[] = [
   { page: "assistant", label: t("shellswitch.assistant"), to: { name: "persona" } },
-  { page: "agents", label: t("shellswitch.agents"), to: { name: "agent-list" } },
+  { page: "agents", label: t("work-entry.title"), to: { name: "terminal" } },
 ];
 
 export function ShellSwitch({ page }: { page: ShellPage }) {
-  return <ShellSwitchView page={page} waiting={useCounts().badge} />;
+  return <ShellSwitchView page={page} waiting={useScopedCounts().badge} />;
+}
+
+function WaitingBadge({ count, className }: { count: number; className?: string }) {
+  return <span aria-hidden className={cx("flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", className)}>{count}</span>;
+}
+
+/** A chat header's way to the sidebar on a narrow screen, carrying how many other agents are waiting for you. `counted` is
+ *  off where the header's switch already shows that number. */
+export function ChatSidebarButton({ session, counted, onClick }: { session?: Session; counted: boolean; onClick: () => void }) {
+  const { badge, quietCounted } = useScopedCounts();
+  const waiting = counted ? othersWaiting(badge, session, quietCounted) : 0;
+  const label = t("chat-chatview.sidebar");
+  return (
+    <span className="relative flex shrink-0 lg:hidden">
+      <IconButton icon="sidebar" label={waiting ? t("shellswitch.waiting_label", { label, count: waiting }) : label} onClick={onClick} />
+      {waiting > 0 && <WaitingBadge count={waiting} className="pointer-events-none absolute -top-1 -right-1" />}
+    </span>
+  );
 }
 
 /** A phone's top bar around the switch, in ChatView's header slots (chat/header.ts): sidebar on the left, `end` on the
@@ -54,7 +75,7 @@ export function ShellSwitchView({ page, waiting }: { page: ShellPage; waiting: n
             )}
           >
             {p.label}
-            {badge > 0 && <span aria-hidden className="flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums">{badge}</span>}
+            {badge > 0 && <WaitingBadge count={badge} />}
           </a>
         );
       })}

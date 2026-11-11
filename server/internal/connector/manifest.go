@@ -23,6 +23,7 @@ type Capability string
 const (
 	CapStatus   Capability = "status"   // Accounts
 	CapTools    Capability = "tools"    // ReadTools
+	CapCatalog  Capability = "catalog"  // Catalog
 	CapActions  Capability = "actions"  // Actions
 	CapEvents   Capability = "events"   // Events
 	CapInbox    Capability = "inbox"    // Inbox
@@ -56,6 +57,7 @@ type capability struct {
 var capabilities = []capability{
 	{CapStatus, reflect.TypeFor[Accounts](), true},
 	{CapTools, reflect.TypeFor[ReadTools](), true},
+	{CapCatalog, reflect.TypeFor[Catalog](), true},
 	{CapActions, reflect.TypeFor[Actions](), true},
 	{CapEvents, reflect.TypeFor[Events](), true},
 	{CapInbox, reflect.TypeFor[Inbox](), true},
@@ -76,7 +78,7 @@ var capabilities = []capability{
 	{CapHistoryAnchors, reflect.TypeFor[HistoryAnchors](), true},
 }
 
-// Manifest is what a connector says it is and does, in one place (docs/extensions/connectors.md "2 · 1"): read whenever the
+// Manifest is what a connector says it is and does, in one place (docs/extensions/connectors.md "Capability declarations: one explicit manifest"): read whenever the
 // hub needs it, so it answers from memory. A program's (connector/proc) is what the program said when it started.
 type Manifest struct {
 	Capabilities []Capability

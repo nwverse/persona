@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -420,5 +421,48 @@ func TestBriefRoutineWithoutACardTellsTheModelToListTheRows(t *testing.T) {
 	sent, _ := newBriefRunEnvWith(t, true, func(e *briefRunEnv) { e.features(FeishuFeatures{Main: true}) }).f.lastSend(t)["text"].(string)
 	if !strings.Contains(sent, "这次不会发飞书卡片") || strings.Contains(sent, "你不用再逐条列") || !strings.Contains(sent, "旧的问题") {
 		t.Errorf("a run without a card:\n%s", sent)
+	}
+}
+
+// The answer the card quotes is cut as Markdown: a code block the cut lands in is closed and an emphasis or link the cut
+// lands in is dropped, so the quoted answer does not turn the rest of itself into code or show half a marker.
+func TestBriefCardQuotesItsAnswerAsMarkdown(t *testing.T) {
+	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)}
+	card := func(answer string) string {
+		t.Helper()
+		c, _, _ := (&Service{}).briefCard(f, "Morning brief", answer)
+		return cardMarkdown(t, c)
+	}
+	long := func(s string) string {
+		t.Helper()
+		if n := len([]rune(s)); n <= briefAnswerRunes {
+			t.Fatalf("the fixture is %d runes, not over %d", n, briefAnswerRunes)
+		}
+		return s
+	}
+	prose := strings.Repeat("Nothing needs you this morning. ", 44) // 1408 runes, so the cut lands inside the marker
+
+	code := card(long("**Today**\n\n```\n" + strings.Repeat("log line\n", 200) + "```\n\nAll good.\n"))
+	if n := strings.Count(code, "```"); n%2 != 0 {
+		t.Errorf("%d fence lines, so the block swallows the rest of the answer: %q", n, code[max(0, len(code)-160):])
+	}
+	if !strings.HasSuffix(code, "…") {
+		t.Errorf("the cut is not marked with an ellipsis: %q", code[max(0, len(code)-160):])
+	}
+
+	bold := card(long(prose + "**" + strings.Repeat("still to come ", 15)))
+	if n := strings.Count(bold, "**"); n%2 != 0 {
+		t.Errorf("%d emphasis markers, so the cut left one open: %q", n, bold[max(0, len(bold)-160):])
+	}
+	link := card(long(prose + "[the long page](https://example.com/notes/2026/11/" + strings.Repeat("a", 80) + ")"))
+	if strings.Contains(link, "example.com") {
+		t.Errorf("half a link is left in the answer: %q", link[max(0, len(link)-160):])
+	}
+
+	// A chart the model drew is still drawn as numbers on the card: cutting must not leave it as the block clipMarkdown
+	// would drop it to.
+	chart := card(long("```persona-card\n" + `{"type":"line","title":"Sleep this week","unit":"h","points":[{"label":"Mon","value":7.2},{"label":"Tue","value":6.5}]}` + "\n```\n\n" + strings.Repeat("Nothing needs you this morning. ", 44)))
+	if strings.Contains(chart, "persona-card") || !strings.Contains(chart, "Mon") || !strings.Contains(chart, "7.2") {
+		t.Errorf("the chart is not drawn as numbers: %q", chart[max(0, len(chart)-200):])
 	}
 }

@@ -1,5 +1,5 @@
 // Settings › General › Appearance's "Theme color" and "Text size" (the app's Settings › Appearance › Theme color and Interface style › Text size, apple/Shared/Design/ColorSpec.swift and
-// TextSize.swift; docs/web/web.md "Appearance"). Both live in this browser only. The defaults add nothing to the page: no attribute,
+// TextSize.swift; docs/web/web.md "Theme color and text size"). Both live in this browser only. The defaults add nothing to the page: no attribute,
 // no style element, so the page is what it was before these existed. An extension theme (ExtensionThemePicker) still
 // lays its colors over whichever theme color is chosen: its tokens are inline on <html>, above any stylesheet.
 import { useSyncExternalStore } from "react";

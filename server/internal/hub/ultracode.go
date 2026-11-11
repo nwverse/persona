@@ -31,6 +31,34 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
 		return
 	}
+	if pr := principalOf(r.Context()); pr.Role == roleExtension { // extension_modes.go
+		if why := h.extensionModeRefused(pr, m.cfg.ID, r.PathValue("sid"), p); why != "" {
+			mode, _ := p["permission_mode"].(string)
+			h.refuseExtensionMode(w, r, pr, m.cfg.ID, r.PathValue("sid"), mode, why)
+			return
+		}
+	}
+	// Keep speed separate from session.modes, which older nodes ignore unknown fields in.
+	if tier, exists := p["service_tier"]; exists {
+		if value, ok := tier.(string); !ok || value == "" || len(p) != 1 {
+			writeErr(w, http.StatusBadRequest, errors.New("service_tier must be a nonempty string in a separate request"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		var out json.RawMessage
+		if err := m.call(ctx, "session.speed", map[string]any{"session_id": r.PathValue("sid"), "service_tier": tier}, &out); err != nil {
+			var re *rpc.Error
+			if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
+				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "rpc-errors.node_outdated"), nil)
+				return
+			}
+			callErr(w, err)
+			return
+		}
+		writeJSON(w, out)
+		return
+	}
 	ultra := map[string]any{"session_id": r.PathValue("sid")}
 	for _, field := range []struct{ http, rpc string }{{"ultracode", "ultracode"}, {"ultracode_dismiss_lost", "dismiss_lost"}} {
 		if v, exists := p[field.http]; exists {

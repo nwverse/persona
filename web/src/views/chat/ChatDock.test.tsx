@@ -8,7 +8,10 @@ import { Header, spaceAgentsItem } from "./ChatView";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { Composer } from "./Composer";
 import { PendingCards, permissionFrom } from "./Interactions";
-import { QueueStrip } from "./QueueStrip";
+import { QueueStrip, restoreQueued } from "./QueueStrip";
+import { onDraftEvent, type DraftEvent } from "../../lib/drafts";
+import { getContexts, removeContext, withContexts } from "../../lib/links";
+import { parseQueued } from "../../lib/queue";
 import { AttachmentTray } from "../../ui/AttachmentTray";
 
 // stores without a server snapshot: renderToStaticMarkup needs one
@@ -133,7 +136,7 @@ describe("PendingCards", () => {
     // a question's lines already carry what was asked
     const q = ix("q", "question", { questions: [{ question: "用哪个框架？", options: [{ label: "A" }] }] as Interaction["questions"] });
     expect(cards({ narrow: false, interactions: [], answered: [{ ix: q, resolution: { answers: { "用哪个框架？": "A" } } }] })).not.toContain("data-answered-about");
-    // a plan says its first line, not "Plan awaits your approval"; a bare one says nothing extra
+    // a plan says its first line, not "Plan awaiting approval"; a bare one says nothing extra
     const plan = ix("l", "plan", { plan: "\n## 改用 **vitest**\n1. 换配置" });
     const planHtml = cards({ narrow: false, interactions: [], answered: [{ ix: plan, resolution: { approve: true } }] });
     expect(planHtml).toContain("改用 vitest");
@@ -144,8 +147,10 @@ describe("PendingCards", () => {
     const dialogHtml = cards({ narrow: false, interactions: [], answered: [{ ix: dialog, resolution: { option: "1" } }] });
     expect(dialogHtml).not.toContain("data-answered-about");
     expect(dialogHtml).not.toContain("终端等你处理");
-    // handed back: nothing was decided about it
-    expect(cards({ narrow: false, interactions: [], answered: [{ ix: perm, resolution: { dismiss: true } }] })).not.toContain("data-answered-about");
+    // handed back (#2450): nothing was decided, so no answer line repeats the head; the line says which request went back
+    const handed = cards({ narrow: false, interactions: [], answered: [{ ix: perm, resolution: { dismiss: true } }] });
+    expect(handed).toContain("data-answered-about");
+    expect(handed).not.toContain("交回电脑处理");
   });
 
   it("says which subagent asks for a permission", () => {
@@ -170,7 +175,7 @@ describe("PendingCards", () => {
     const html = cards({ narrow: false });
     expect(html).not.toContain("data-chat-cards");
     expect(html).not.toContain("还有");
-    expect(html).toContain("计划待批准");
+    expect(html).toContain("计划等你审批");
     expect(html).toContain("用哪个框架？");
     expect(html).toContain("允许使用 Bash？");
   });
@@ -202,6 +207,24 @@ describe("PendingCards", () => {
 
   it("is nothing without cards", () => {
     expect(cards({ narrow: true, interactions: [] })).toBe("");
+  });
+
+  // #3112: on a phone and in a side panel the open cards sit in folds; a fold that still clipped once open was the box
+  // a card's sticky buttons stuck in, so a card taller than the cards' box (a long command) had its Allow / Deny below
+  // the fold, out of sight. The layout itself is checked in a browser (scripts/test/web_card_scroll_e2e.py).
+  it("doesn't clip the open cards' folds on a narrow screen, so a tall card's buttons stick in view (#3112)", () => {
+    const long = ix("p", "permission", { tool_input: { command: "python3 -c \"" + "print(1)\n".repeat(80) + "\"" } });
+    const html = renderToStaticMarkup(<PendingCards interactions={[long, three[1]]} answered={[]} narrow keyboard={false} onDismissKeyboard={() => {}} />);
+    const box = html.slice(html.indexOf("data-chat-cards"));
+    // the first card's fold is open: its clip box is not a scroller (no overflow-hidden), the card's footer sticky
+    const first = box.match(/<div class="grid [^"]*"[^>]*><div class="([^"]*)"/);
+    expect(first?.[1]).toBeDefined();
+    expect(first![1].split(/\s+/)).not.toContain("overflow-hidden");
+    expect(box).toMatch(/data-card-actions="[^"]*" class="sticky -bottom-1 /);
+    // the folded one (2 more) still clips: it is closed
+    const folds = [...box.matchAll(/<div class="grid [^"]*"[^>]*><div class="([^"]*)"/g)].map((m) => m[1]);
+    expect(folds).toHaveLength(2);
+    expect(folds[1]).toContain("overflow-hidden");
   });
 });
 
@@ -251,9 +274,9 @@ describe("tap areas", () => {
     for (const label of ["添加图片或文件", "引用文件或会话", "命令", "发送"]) expect(hit(html, label), label).toBe(true);
   });
 
-  it("covers a card's ×, a question's options and its arrows", () => {
+  it("covers a card's hand back, a question's options and its arrows", () => {
     const html = cards({ narrow: false });
-    expect(hit(html, "交回电脑处理")).toBe(true);
+    expect(hit(html, "交给电脑处理")).toBe(true);
     expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*class="touch-hit /);
     expect(hit(html, "下一题") || hit(html, "发送回答")).toBe(true);
   });
@@ -291,6 +314,94 @@ describe("QueueStrip", () => {
     expect(codex).not.toContain("data-send-now");
     expect(codex).toContain("忙完会依次处理");
     expect(renderToStaticMarkup(<QueueStrip session={{ ...queued, agent: "claude" }} draftKey="t" canEdit={false} />)).not.toContain("data-send-now");
+  });
+
+  it("in a Persona chat offers Send now for the user's own messages, in the persona's name; relayed ones alone get none (#4342)", () => {
+    const persona = { ...queued, agent: undefined, assistant: true, queued: ["顺便把截图换掉", "来自「日报」：今天的汇总"], queued_relayed: 1 } as Session;
+    const html = renderToStaticMarkup(<QueueStrip session={persona} draftKey="t" canEdit persona="Nova" />);
+    expect(html).toContain("data-send-now");
+    expect(html).toContain("Nova 下一步就会依次接收");
+    const relayedOnly = renderToStaticMarkup(<QueueStrip session={{ ...persona, queued_relayed: 2 }} draftKey="t" canEdit persona="Nova" />);
+    expect(relayedOnly).not.toContain("data-send-now");
+    expect(relayedOnly).toContain("Nova 忙完会依次处理");
+    // the relayed one says it arrives when the turn ends; the user's own don't
+    expect(html.match(/data-queue-note/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="排队的第 2 条：来自「日报」：今天的汇总 · 本轮结束后送达"');
+  });
+
+  it("marks the photos a Persona chat's queued message went with when this browser sent it (#4342)", () => {
+    const persona = { ...queued, assistant: true, queued: ["请看图片", "顺便把截图换掉"] } as Session;
+    const html = renderToStaticMarkup(<QueueStrip session={persona} draftKey="t" canEdit persona="Nova" photosOf={(q) => (q === "请看图片" ? 2 : 0)} />);
+    expect(html.match(/data-queue-mark="photo"/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="排队的第 1 条：2 张图片"');
+    expect(html).not.toContain(">请看图片<");
+  });
+
+  // made-up words and paths, in the shape Claude Code queues a message sent with photos (#3032)
+  const photo = (name: string) => `/Users/me/.persona/uploads/2026-11-10/${name}.jpg`;
+  const withPhotos = `[Image #1] [Image #2]\n\n\n把这两张截图对一下\n<attached_images>\npath: ${photo("a1")}\npath: ${photo("b2")}\n</attached_images>`;
+
+  it("shows a queued message's words and a mark per kind of attachment, never Claude's queue text (#3032)", () => {
+    const photoOnly = `[Image #3] 请看图片\n\n<attached_images>\npath: ${photo("c3")}\n</attached_images>`;
+    const html = renderToStaticMarkup(<QueueStrip session={{ ...session, queued: [withPhotos, photoOnly] } as Session} draftKey="t" canEdit />);
+    expect(html).toContain("把这两张截图对一下");
+    expect(html).not.toContain("[Image #");
+    expect(html).not.toContain("attached_images");
+    expect(html).not.toContain("path: ");
+    expect(html).not.toContain("请看图片");
+    expect(html.match(/data-queue-mark="photo"/g)).toHaveLength(2);
+    // the label says what came with it
+    expect(html).toContain('aria-label="排队的第 1 条：把这两张截图对一下 · 2 张图片"');
+    expect(html).toContain('aria-label="排队的第 2 条：1 张图片"');
+  });
+});
+
+describe("restoreQueued (#3032)", () => {
+  const photo = "/Users/me/.persona/uploads/2026-11-10/a1.jpg";
+  const gone = "/Users/me/.persona/uploads/2026-11-10/gone.jpg";
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const c of getContexts("rq")) removeContext("rq", c.id);
+  });
+
+  it("puts the words in the box, the photos in the tray, the contexts on their chips and a lost photo in as its path", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("localStorage", { getItem: () => "tok", setItem: () => {}, removeItem: () => {} });
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      return url.includes(encodeURIComponent(photo)) ? new Response(new Blob([new Uint8Array([1, 2, 3])], { type: "image/jpeg" })) : new Response("", { status: 404 });
+    });
+    const events: DraftEvent[] = [];
+    const off = onDraftEvent("rq", (e) => void events.push(e));
+    try {
+      const workspace = { kind: "workspace" as const, title: "web", url: "", text: "~/code/web", attrs: { machine: "laptop", cwd: "/home/me/code/web" } };
+      const raw = `${withContexts([workspace], "Fix the header", true)} <persona-file kind="file" path="/tmp/spec.pdf" name="spec.pdf"/>\n\n<attached_images>\npath: ${photo}\npath: ${gone}\n</attached_images>`;
+      await restoreQueued("rq", session, parseQueued(raw));
+      expect(urls).toHaveLength(2);
+      expect(urls[0]).toContain("/machines/m/file/download?path=");
+      expect(events).toEqual([
+        { type: "append", text: "Fix the header /tmp/spec.pdf" },
+        { type: "image", image: { name: "a1.jpg", mime: "image/jpeg", data: "AQID" } },
+        { type: "append", text: gone },
+      ]);
+      expect(getContexts("rq").map(({ kind, title, text, attrs }) => ({ kind, title, text, attrs }))).toEqual([{ kind: "workspace", title: "web", text: "~/code/web", attrs: workspace.attrs }]);
+    } finally {
+      off();
+    }
+  });
+});
+
+describe("restoreQueued in a Persona chat (#4342)", () => {
+  it("puts the photos that came back with the message in the tray, without the stand-in words", async () => {
+    const events: DraftEvent[] = [];
+    const off = onDraftEvent("rqp", (e) => void events.push(e));
+    try {
+      const images = [{ mime: "image/png", data: "AQID" }];
+      await restoreQueued("rqp", session, parseQueued("请看图片", images.length), images);
+      expect(events).toEqual([{ type: "image", image: { name: "photo-1.png", mime: "image/png", data: "AQID" } }]);
+    } finally {
+      off();
+    }
   });
 });
 

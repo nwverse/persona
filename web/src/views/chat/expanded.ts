@@ -1,6 +1,5 @@
-// Which work groups, cards and thoughts the reader opened (cindy's useExpandedBlockMemory), kept for the page's life:
-// a group that goes from live to done, or remounts when a page of history lands above it, stays as the reader left it.
-import { useCallback, useEffect, useState } from "react";
+// Reader-controlled expansion survives live remounts and history paging; a run's completion collapses its summary.
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 
 const opened = new Map<string, boolean>();
 /** The drawn groups, told when something outside them opened theirs (`openExpanded`). */
@@ -20,6 +19,7 @@ const foldRanges = new Map<string, [number, number][]>();
 /** Forget what was opened: for tests, whose rows reuse the same ids. */
 export function forgetExpanded() {
   opened.clear();
+  liveOverrides.clear();
   foldRanges.clear();
 }
 
@@ -48,4 +48,40 @@ export function useExpanded(key: string, initial = false): [boolean, (next: bool
     [key, initial],
   );
   return [value, set];
+}
+
+/** Manual run overrides for every conversation style: dropped at completion, retained across live remounts. */
+const liveOverrides = new Map<string, boolean>();
+
+/** A run's manual override (initially collapsed), retained across remounts and dropped on completion. */
+export function useLiveOverride(key: string, running: boolean): [boolean | undefined, (next: boolean) => void] {
+  const [, bump] = useState(0);
+  useLayoutEffect(() => {
+    if (running) {
+      // Mark even an untouched run: a previously opened historical summary must fold again when this run ends.
+      if (!liveOverrides.has(key)) liveOverrides.set(key, false);
+      // Jump-to-call and search reveal use openExpanded, not the header's own toggle.
+      const listen = (keys: ReadonlySet<string>) => {
+        if (!keys.has(key)) return;
+        liveOverrides.set(key, true);
+        bump((n) => n + 1);
+      };
+      openListeners.add(listen);
+      return () => void openListeners.delete(listen);
+    }
+    if (!liveOverrides.has(key)) return;
+    liveOverrides.delete(key);
+    // An external reveal may also have saved `opened`: completion still collapses the run before paint.
+    opened.set(key, false);
+    const keys = new Set([key]);
+    openListeners.forEach((l) => l(keys));
+  }, [key, running]);
+  const set = useCallback(
+    (next: boolean) => {
+      liveOverrides.set(key, next);
+      bump((n) => n + 1);
+    },
+    [key],
+  );
+  return [running ? liveOverrides.get(key) : undefined, set];
 }

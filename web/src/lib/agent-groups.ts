@@ -23,23 +23,28 @@ export function agentGrouping(value: string | null): AgentGrouping {
 }
 
 // the host kinds a pane ref may be prefixed with (keep in step with Kinds in server/internal/host/host.go); herdr's ids go bare and may hold a colon
-const HOST_KINDS = ["orca", "herdr-core", "botmux"];
+const HOST_KINDS = ["orca", "herdr-core", "tern", "botmux"];
 
-/** The host tool a session lives in, from its pane ref (`botmux:…`, `orca:…`; anything else is herdr's); "" for none. */
-export function sessionHost(s: Session): string {
-  if (!s.pane_id) return "";
-  const kind = s.pane_id.slice(0, s.pane_id.indexOf(":"));
+/** The host tool a pane belongs to, from its ref (`botmux:…`, `orca:…`, `tern:…`; anything else is herdr's); "" for none. */
+export function paneHost(pane: string | undefined): string {
+  if (!pane) return "";
+  const kind = pane.slice(0, pane.indexOf(":"));
   return HOST_KINDS.includes(kind) ? kind : "herdr";
 }
 
+/** The host tool a session lives in, from its pane ref; "" for none. */
+export function sessionHost(s: Session): string {
+  return paneHost(s.pane_id);
+}
+
 /** Where an agent was opened (#2526): "feishu" for a botmux session (a Feishu group's topic), "terminal" for a pane of a
- *  terminal engine (herdr, the Herdr App's and Orca's terminals), "desktop" for a desktop app's own chat (a Codex App
- *  thread, an Orca native chat, a Paseo agent); undefined for the rest (other runtimes, history no host lists), which
- *  carry no mark. */
+ *  terminal engine (herdr, the Herdr App's, Orca's and Tern's terminals), "desktop" for a desktop app's own chat (a
+ *  Codex App thread, an Orca native chat, a Paseo agent); undefined for the rest (other runtimes, history no host
+ *  lists), which carry no mark. */
 export type SessionSource = "feishu" | "terminal" | "desktop";
 
 export function sessionSource(s: Session): SessionSource | undefined {
-  if (s.space_kind === "codex_app" || s.host === "paseo" || (s.source_kind === "runtime" && s.source_instance_id === "orca")) return "desktop";
+  if (s.space_kind === "codex_app" || s.host === "paseo" || s.host === "cindy" || (s.source_kind === "runtime" && s.source_instance_id === "orca")) return "desktop";
   const host = sessionHost(s);
   if (host === "botmux") return "feishu";
   return host ? "terminal" : undefined;

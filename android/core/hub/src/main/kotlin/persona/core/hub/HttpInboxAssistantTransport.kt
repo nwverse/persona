@@ -71,6 +71,13 @@ class HttpInboxAssistantTransport private constructor(
     // Connectors' items too (`sources=all`): each opens as its connector's thread (#2726); without it the hub lists
     // Feishu and mail only.
     override suspend fun inbox() = json(url("api", "v1", "inbox").newBuilder().addQueryParameter("sources", "all").build())
+    override suspend fun doneHistory(manager: String?, before: String?, beforeId: String?, limit: Int) =
+        json(url("api", "v1", "inbox", "done").newBuilder().addQueryParameter("sources", "all").addQueryParameter("limit", limit.toString())
+            .apply { if (before != null) { addQueryParameter("before", before); beforeId?.let { addQueryParameter("before_id", it) } } }
+            .build().pinned(manager))
+    override suspend fun doneDays(manager: String?, tz: String) =
+        json(url("api", "v1", "inbox", "done", "days").newBuilder().addQueryParameter("tz", tz).addQueryParameter("sources", "all")
+            .build().pinned(manager))
     override suspend fun larkConversations(cursor: String?) = larkConversationsForAccount(null, cursor)
     override suspend fun larkConversationsForAccount(account: Int?, cursor: String?) = json(
         url("api", "v1", "lark", "conversations").newBuilder().apply {
@@ -165,9 +172,17 @@ class HttpInboxAssistantTransport private constructor(
         buildJsonObject { put("prompt", ""); put("main", main) })
     override suspend fun createConversation(main: Boolean, launcher: String) = json(url("api", "v1", "assistant", "conversations"),
         buildJsonObject { put("prompt", ""); put("main", main); put("launcher", launcher) })
+    // A space's requests carry `?space=` on the URL too (as the web's do): with it the hub client names no manager, since
+    // a space is the default manager's (isAssistantPath).
+    override suspend fun assistantIn(space: String) =
+        json(url("api", "v1", "assistant").newBuilder().addQueryParameter("space", space).build())
+    override suspend fun createConversationIn(space: String) =
+        json(url("api", "v1", "assistant", "conversations").newBuilder().addQueryParameter("space", space).build(),
+            buildJsonObject { put("prompt", ""); put("space", space) })
     // `?manager=` names the manager for this request alone: the hub client sends no header over it (an empty one is
     // the default, dropped before it goes).
     override suspend fun assistantOf(manager: String?) = json(url("api", "v1", "assistant").pinned(manager))
+    override suspend fun assistantLeadersOf(manager: String?) = json(url("api", "v1", "assistant", "leaders").pinned(manager))
     override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
             put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }
@@ -255,6 +270,21 @@ class HttpInboxAssistantTransport private constructor(
     override suspend fun unmuteInbox(id: String) {
         require(id.isNotBlank())
         json(url("api", "v1", "inbox", "mutes", id), method = "DELETE")
+    }
+
+    override suspend fun inboxPolicies() = json(url("api", "v1", "inbox", "policies"))
+    override suspend fun setInboxPolicy(itemId: String, tag: String, tier: String, twin: String): JsonObject {
+        require(itemId.isNotBlank() && tag.isNotBlank())
+        return json(url("api", "v1", "inbox", "policies"),
+            buildJsonObject { put("item_id", itemId); put("tag", tag); put("tier", tier); put("twin", twin) })
+    }
+    override suspend fun updateInboxPolicy(id: String, tier: String, twin: String): JsonObject {
+        require(id.isNotBlank())
+        return json(url("api", "v1", "inbox", "policies", id), buildJsonObject { put("tier", tier); put("twin", twin) }, method = "PATCH")
+    }
+    override suspend fun removeInboxPolicy(id: String) {
+        require(id.isNotBlank())
+        json(url("api", "v1", "inbox", "policies", id), method = "DELETE")
     }
 
     override suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?) = json(

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
@@ -22,16 +23,22 @@ import persona.core.contracts.AssistantViewActionEvent
 import persona.core.contracts.AssistantViewBlockEvent
 import persona.core.contracts.AssistantViewEvent
 import persona.core.contracts.FeedItem
+import persona.core.contracts.FeedResponse
 import persona.core.contracts.Session
 import persona.core.contracts.PlanTask
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.TaskPlanEvent
 import persona.core.contracts.Todo
+import persona.core.contracts.TodoDue
+import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoSpace
 import persona.core.contracts.TodosEvent
 import persona.core.contracts.draftPlaceholder
+import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
+import persona.core.contracts.api.RequestManager
+import persona.core.contracts.api.hubCodedFailure
 import persona.core.contracts.api.TasksApi
 import persona.core.domain.views.AssistantCardActions
 import persona.core.domain.views.AssistantViewStore
@@ -40,6 +47,11 @@ import persona.core.domain.views.AssistantViewStore
  * The to-dos last read from this pairing's hub, kept on the phone (iOS TodoStore's StateCache): a cold start or an open
  * without the hub shows them instead of "No to-dos" until the hub answers.
  */
+/** A brief row's durable action result, shared by every copy of the same round in the conversation. */
+enum class BriefOutcome { Taken, Completed, MarkedHandled, AlreadyHandled, HubTooOld }
+fun briefAcceptOutcomeKey(todoId: String, askedAt: String) = "accept:$todoId:$askedAt"
+fun briefLaterOutcomeKey(questionId: String) = "later:$questionId"
+
 interface TodoCache {
     suspend fun read(): List<Todo>?
     suspend fun write(todos: List<Todo>)
@@ -47,6 +59,7 @@ interface TodoCache {
 
 /** How long a Today card is held before an open asks the hub again whether its day has moved on (#5194). */
 private val todayRecheck = Duration.ofMinutes(10)
+private const val maximumFeedPages = 64
 
 class TasksStore(
     private val api: TasksApi,
@@ -54,13 +67,16 @@ class TasksStore(
     private val scope: CoroutineScope,
     private val cache: TodoCache? = null,
     private val clock: Clock = Clock.systemDefaultZone(),
-) {
+) : TodoDecisionsSource {
     private val _todos = MutableStateFlow<List<Todo>>(emptyList())
     val todos: StateFlow<List<Todo>> = _todos.asStateFlow()
     /** Guards [answered] with the list: the cached list never replaces one the hub has given. */
     private val todosLock = Any()
     /** The hub's last answer (a list, or an older hub's 404 as none); null until it answers, while the cache shows. */
     private var answered: List<Todo>? = null
+    private val acceptedAsks = mutableSetOf<Pair<String, String>>()
+    /** Confirmed writes fence only reads already in flight; a later read may legitimately reopen the task. */
+    private val finishedTasks = mutableMapOf<String, Pair<TodoAsk, Todo>>()
     private val writing = Mutex()
     private val refreshingTodos = Mutex()
     private val agentLookup = TaskAgentLookup(api, scope)
@@ -69,19 +85,31 @@ class TasksStore(
 
     /** Called by the visible conversation; exact lookups never change the Agents list window. */
     fun watchAgents(keys: Set<persona.core.contracts.SessionKey>) = agentLookup.watch(keys)
+
+    /**
+     * The whole row of one session, as the hub holds it: list rows are summaries, which carry only where a closeout
+     * stands (#3612), not what the agent said it did and verified. Null from a hub without the exact lookup.
+     */
+    suspend fun sessionDetail(key: persona.core.contracts.SessionKey): persona.core.contracts.Session? = api.taskAgent(key)
     private var written: List<Todo>? = null
     private val _todosSupported = MutableStateFlow(true)
     val todosSupported: StateFlow<Boolean> = _todosSupported.asStateFlow()
     private val _plans = MutableStateFlow<Map<String, TaskPlan>>(emptyMap())
     val plans: StateFlow<Map<String, TaskPlan>> = _plans.asStateFlow()
     private val _feeds = MutableStateFlow<Map<String, List<FeedItem>>>(emptyMap())
+    private val feedLock = Any()
+    private val feedVersions = mutableMapOf<String, Long>()
     val feeds: StateFlow<Map<String, List<FeedItem>>> = _feeds.asStateFlow()
+    private val _taskCards = MutableStateFlow<Map<String, List<persona.core.contracts.AssistantTaskCard>>>(emptyMap())
+    val taskCards: StateFlow<Map<String, List<persona.core.contracts.AssistantTaskCard>>> = _taskCards.asStateFlow()
     /** Conversations whose whole feed has been read once: a live item alone does not make a later load incremental (#4689). */
     private val loaded = MutableStateFlow<Set<String>>(emptySet())
     /** Conversation → the task the next message goes straight to ("Say to 'xx'"). */
     val routes = MutableStateFlow<Map<String, String>>(emptyMap())
     val busy = MutableStateFlow<Set<String>>(emptySet())
-    /** Message cards (inbox item ids) put off with "Later". */
+    private val _briefOutcomes = MutableStateFlow<Map<String, BriefOutcome>>(emptyMap())
+    val briefOutcomes = _briefOutcomes.asStateFlow()
+    /** Message card ids put off with "Later"; another draft for the same inbox item remains visible. */
     val later = MutableStateFlow<Set<String>>(emptySet())
     /** Conversation → when the Today card was last asked for, and the day of the card the hub gave (null while asking). */
     private val todayAsked = HashMap<String, Pair<Instant, LocalDate?>>()
@@ -101,7 +129,7 @@ class TasksStore(
                 when (e) {
                     is TodosEvent -> reloadTodos()
                     is persona.core.contracts.SessionsListEvent -> agentLookup.refresh()
-                    is AssistantFeedEvent -> received(listOf(e.item))
+                    is AssistantFeedEvent -> { api.noteFeedOwner(e.item, e.manager); received(listOf(e.item)) }
                     is TaskPlanEvent -> _plans.update { it + (e.plan.id to e.plan) }
                     is AssistantViewEvent -> cards.view(e.conversation, e.view)
                     is AssistantViewActionEvent -> cards.answer(e.conversation, e.action)
@@ -119,10 +147,23 @@ class TasksStore(
         scope.launch {
             refreshingTodos.withLock {
                 try {
+                    val completionsBeforeRead = synchronized(todosLock) { finishedTasks.toMap() }
                     val list = api.todos()
                     _todosSupported.value = true
                     todosLoaded = true
-                    synchronized(todosLock) { answered = list; if (list != _todos.value) _todos.value = list }
+                    synchronized(todosLock) {
+                        val shown = list.map { todo ->
+                            val completion = finishedTasks[todo.id]?.takeIf { it != completionsBeforeRead[todo.id] }
+                            when {
+                                completion != null && (todo.ask == null || todo.ask == completion.first) -> completion.second
+                                todo.ask?.askedAt?.let { (todo.id to it) in acceptedAsks } == true -> todo.copy(ask = null)
+                                else -> todo
+                            }
+                        }
+                        finishedTasks.keys.retainAll(shown.map { it.id }.toSet())
+                        answered = shown
+                        if (shown != _todos.value) _todos.value = shown
+                    }
                     dropStaleRoutes()
                     remember()
                 } catch (cancelled: CancellationException) {
@@ -175,6 +216,31 @@ class TasksStore(
         }
     }
 
+    /**
+     * Moves a to-do's due date (#2045, the calendar): drawn there at once, then the hub's answer; a failed save puts
+     * back only this to-do, unless something else has changed it since, and throws.
+     */
+    suspend fun setTodoDue(id: String, due: TodoDue): Todo {
+        val before = _todos.value.firstOrNull { it.id == id } ?: error("no to-do $id")
+        val moved = before.withDue(due)
+        _todos.update { list -> list.map { if (it.id == id) moved else it } }
+        return try {
+            val updated = api.setTodoDue(id, due)
+            _todos.update { list -> list.map { if (it.id == updated.id) updated else it } }
+            updated
+        } catch (t: Throwable) {
+            _todos.update { list -> list.map { if (it.id == id && it == moved) before else it } }
+            throw t
+        }
+    }
+
+    /** The detail page's due date, reminder and priority (#4636); the list follows the hub's answer. */
+    suspend fun setTodoPlan(id: String, plan: persona.core.contracts.TodoPlan): Todo {
+        val updated = api.setTodoPlan(id, plan)
+        _todos.update { list -> list.map { if (it.id == updated.id) updated else it } }
+        return updated
+    }
+
     suspend fun updateTodo(id: String, title: String? = null, notes: String? = null): Todo {
         val updated = api.patchTodo(id, title = title, notes = notes)
         _todos.update { list -> list.map { if (it.id == updated.id) updated else it } }
@@ -192,6 +258,18 @@ class TasksStore(
         val ids = _todos.value.mapTo(HashSet()) { it.id }
         routes.update { r -> r.filterValues { it in ids }.takeIf { it.size != r.size } ?: r }
     }
+
+    /** A hub's router answers 404 for a route it doesn't have (isLegacySpacesRoute): one from before decisions shows none. */
+    override suspend fun decisions(todoId: String): List<persona.core.contracts.TodoDecision>? = try {
+        api.todoDecisions(todoId)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (isLegacySpacesRoute(e)) null else throw e
+    }
+
+    override suspend fun addDecision(todoId: String, question: String, choice: String, reason: String, supersedesId: String) =
+        api.addTodoDecision(todoId, question, choice, reason, supersedesId)
 
     suspend fun linkTodoAgent(todoId: String, machineId: String, sessionId: String) {
         api.linkTodoAgent(todoId, machineId, sessionId)
@@ -250,19 +328,60 @@ class TasksStore(
     fun load(conversation: String, whole: Boolean = false) {
         scope.launch {
             val held = _feeds.value[conversation].orEmpty()
-            val unsent = held.indexOfFirst { it.kind == "message" && it.sent == null }
+            val unsent = held.indexOfFirst { it.kind == "message" && it.sent == null && it.dismissedAt == null }
             val since = when {
                 whole || conversation !in loaded.value -> null
                 unsent >= 0 -> held.take(unsent).lastOrNull { it.at != held[unsent].at }?.at // reads are after `since`: skip ties
                 else -> held.lastOrNull()?.at
             }
-            runCatching { api.feed(conversation, since) }.onSuccess { res ->
+            val versions = synchronized(feedLock) { feedVersions.toMap() }
+            runCatching { readFeedPages(conversation, since) }.onSuccess { res ->
                 if (res.plans.isNotEmpty()) _plans.update { it + res.plans }
+                res.taskCards?.takeIf { it.isNotEmpty() }?.let { cards ->
+                    _taskCards.update { held ->
+                        val merged = held[conversation].orEmpty().associateBy { it.id }.toMutableMap()
+                        cards.forEach { card ->
+                            val old = merged[card.id]
+                            val previousAt = AssistantLines.time(old?.updatedAt)
+                            val updatedAt = AssistantLines.time(card.updatedAt)
+                            if (old == null || previousAt == null || (updatedAt != null && !updatedAt.isBefore(previousAt)))
+                                merged[card.id] = card
+                        }
+                        held + (conversation to merged.values.toList())
+                    }
+                }
                 cards.snapshot(conversation, res.views, res.viewActions, res.viewBlocks)
-                received(res.items, conversation)
+                received(res.items, conversation, versions)
                 loaded.update { it + conversation }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                // Do not advance the next read past a partial range, including rows with tied creation times.
+                loaded.update { it - conversation }
             }
         }
+    }
+
+    private suspend fun readFeedPages(conversation: String, since: String?): FeedResponse {
+        val reader = api.feedPages(conversation)
+        val seen = HashSet<String>()
+        var cursor: String? = null
+        var result = FeedResponse()
+        repeat(maximumFeedPages) {
+            val page = reader.read(since, cursor)
+            val heldCards = result.taskCards
+            val pageCards = page.taskCards
+            result = page.copy(items = result.items + page.items, plans = result.plans + page.plans,
+                taskCards = when {
+                    heldCards == null -> pageCards
+                    pageCards == null -> heldCards
+                    else -> heldCards + pageCards
+                })
+            val next = page.nextCursor
+            if (next.isNullOrEmpty()) return result // Missing: an older hub; empty: explicit EOF, even on a full page.
+            check(seen.add(next)) { "Repeated feed cursor" }
+            cursor = next
+        }
+        error("Feed page limit exceeded")
     }
 
     private var main: String? = null
@@ -294,7 +413,9 @@ class TasksStore(
         val now = clock.instant()
         val today = LocalDate.now(clock)
         todayAsked[conversation]?.let { (at, day) ->
-            if (LocalDate.ofInstant(at, clock.zone) == today &&
+            // at.atZone(…).toLocalDate(), not LocalDate.ofInstant: that one is Java 9, on Android only from API 34, and this
+            // module is plain JVM (no lint, no desugaring), so it built fine and threw NoSuchMethodError on API 30–33 (#5227).
+            if (at.atZone(clock.zone).toLocalDate() == today &&
                 (day == null || day > today || now < at + todayRecheck)) return
         }
         todayAsked[conversation] = now to null
@@ -306,17 +427,23 @@ class TasksStore(
         }
     }
 
-    private fun received(items: List<FeedItem>, conversation: String? = null) {
+    private fun received(items: List<FeedItem>, conversation: String? = null, readVersions: Map<String, Long>? = null) = synchronized(feedLock) {
+        // A response captured before a write or live update cannot resurrect a dismissed draft or undo an Undo.
+        val current = items.filter { readVersions == null || readVersions[it.id] == feedVersions[it.id] }
         // A live card's creation item carries the card as it was then: drawn even if its assistant_view was missed.
-        items.filter { it.kind == "view" }.forEach { item ->
+        current.filter { it.kind == "view" }.forEach { item ->
             ((item.body as? JsonObject)?.get("view"))?.let { cards.view(item.conversation, it) }
+        }
+        current.forEach { item ->
+            val old = _feeds.value[item.conversation].orEmpty().firstOrNull { it.id == item.id }
+            if (old != item) feedVersions[item.id] = (feedVersions[item.id] ?: 0L) + 1L
         }
         _feeds.update { feeds ->
             var next = conversation?.let { if (it in feeds) feeds else feeds + (it to emptyList()) } ?: feeds
-            for ((c, list) in items.groupBy { it.conversation }) next = next + (c to AssistantLines.merge(next[c].orEmpty(), list))
+            for ((c, list) in current.groupBy { it.conversation }) next = next + (c to AssistantLines.merge(next[c].orEmpty(), list))
             next
         }
-        if (items.any { it.kind == "task" || it.kind == "receipt" }) reloadTodos()
+        if (current.any { it.kind == "task" || it.kind == "receipt" }) reloadTodos()
     }
 
     fun tasksOf(conversation: String): List<Todo> = _todos.value.filter { it.origin == conversation }
@@ -341,14 +468,25 @@ class TasksStore(
             { it.agentState.priority }).thenByDescending { it.updatedAt.orEmpty() })
 
     /** [edits] is "Edit": the plan's tasks as the user changed them, by index (null: as planned). */
-    fun startPlan(plan: TaskPlan, remember: Boolean, onError: (Throwable) -> Unit, edits: List<PlanTask>? = null) = act(plan.id, onError) {
-        val p = if (edits == null) api.startPlan(plan.id, remember) else api.startPlan(plan.id, remember, edits)
+    fun startPlan(plan: TaskPlan, remember: Boolean, onError: (Throwable) -> Unit, edits: List<PlanTask>? = null, manager: String? = null) = act(plan.id, onError) {
+        val p = withContext(planOwner(plan, manager)) { if (edits == null) api.startPlan(plan.id, remember) else api.startPlan(plan.id, remember, edits) }
         _plans.update { it + (p.id to p) }; reloadTodos()
     }
 
-    fun dismissPlan(plan: TaskPlan, onError: (Throwable) -> Unit) = act(plan.id, onError) {
-        val p = api.dismissPlan(plan.id); _plans.update { it + (p.id to p) }
+    fun dismissPlan(plan: TaskPlan, onError: (Throwable) -> Unit, manager: String? = null) = act(plan.id, onError) {
+        val p = withContext(planOwner(plan, manager)) { api.dismissPlan(plan.id) }; _plans.update { it + (p.id to p) }
     }
+
+    /**
+     * A plan's routes (`task-plans/<id>/…`) name no conversation, so the hub would take them to the default manager: they
+     * name the manager of the plan's conversation (the one a page listed it under), whichever assistant is current, as
+     * every other request about another assistant's thing does (docs/assistant/managers.md "Clients"). The conversation's own
+     * session row says it ([manager]; it survives a restart, a list's registry doesn't), else the manager a page listed it under.
+     * None for the default's.
+     */
+    private fun planOwner(plan: TaskPlan, manager: String?): kotlin.coroutines.CoroutineContext =
+        (manager ?: AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", plan.conversation)))?.let(::RequestManager)
+            ?: kotlin.coroutines.EmptyCoroutineContext
 
     /**
      * "Retry" on a task whose agent did not start (#1396): the hub starts the same task again in the same todo, which it
@@ -370,12 +508,160 @@ class TasksStore(
         reloadTodos()
     }
 
+    fun acceptTask(todo: Todo, onError: (Throwable) -> Unit, onChanged: () -> Unit) {
+        val ask = todo.ask ?: return
+        if (ask.askedAt.isBlank()) return
+        act("accept:${todo.id}", onError) {
+            if (_todos.value.firstOrNull { it.id == todo.id }?.ask != ask) { onChanged(); return@act }
+            api.acceptTask(todo.id, ask.askedAt)
+            synchronized(todosLock) {
+                acceptedAsks += todo.id to ask.askedAt
+                _todos.update { rows -> rows.map { if (it.id == todo.id && it.ask == ask) it.copy(ask = null) else it } }
+            }
+            reloadTodos()
+        }
+    }
+
+    /**
+     * Answers a decision's round as the owner read it (#3804): one of its options, or a fixed response. [onDone] hears
+     * whether the hub took it; a round answered elsewhere meanwhile (409) is not an error: it took nothing, and the
+     * to-dos are read again. An option ends the decision, so its ask goes at once; a fixed response leaves it to the hub.
+     */
+    fun answerTask(todo: Todo, answer: persona.core.contracts.api.AskAnswer, onError: (Throwable) -> Unit,
+        onChanged: () -> Unit, onDone: (taken: Boolean) -> Unit) {
+        val ask = todo.ask ?: return
+        if (ask.askedAt.isBlank()) return
+        act("accept:${todo.id}", onError) {
+            if (_todos.value.firstOrNull { it.id == todo.id }?.ask != ask) { onChanged(); return@act }
+            val taken = try {
+                withManager(todo.manager) { api.answerTask(todo.id, ask.askedAt, answer) }
+                true
+            } catch (error: Throwable) {
+                if (error is CancellationException || hubCodedFailure(error)?.status != 409) throw error
+                false
+            }
+            onDone(taken)
+            if (taken && answer is persona.core.contracts.api.AskAnswer.Option) synchronized(todosLock) {
+                acceptedAsks += todo.id to ask.askedAt
+                _todos.update { rows -> rows.map { if (it.id == todo.id && it.ask == ask) it.copy(ask = null) else it } }
+            }
+            reloadTodos()
+        }
+    }
+
+    /** Ask the hub to accept the exact round carried by a brief; a superseded round ends in 409. */
+    fun acceptBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit, manager: String? = null) {
+        if (todoId.isBlank() || askedAt.isBlank()) return
+        val key = briefAcceptOutcomeKey(todoId, askedAt)
+        if (key in _briefOutcomes.value) return
+        act("accept:$todoId", onError) {
+            try {
+                withManager(manager) { api.acceptTask(todoId, askedAt) }
+                synchronized(todosLock) {
+                    acceptedAsks += todoId to askedAt
+                    _todos.update { rows -> rows.map { if (it.id == todoId && it.ask?.askedAt == askedAt) it.copy(ask = null) else it } }
+                }
+                _briefOutcomes.update { it + (key to BriefOutcome.Taken) }
+                reloadTodos()
+            } catch (error: Throwable) {
+                if (!briefActionTerminal(key, error)) throw error
+            }
+        }
+    }
+
+    /** Complete only the decision round still current in the shared to-do list. */
+    fun finishBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit, manager: String? = null) {
+        if (todoId.isBlank() || askedAt.isBlank()) return
+        val key = briefAcceptOutcomeKey(todoId, askedAt)
+        if (key in _briefOutcomes.value) return
+        finishDecision(todoId, askedAt, expectedAsk = null, manager = manager, onError = onError,
+            onChanged = { _briefOutcomes.update { it + (key to BriefOutcome.AlreadyHandled) } },
+            onCompleted = { _briefOutcomes.update { it + (key to BriefOutcome.Completed) } })
+    }
+
+    /** Remove a question from the hub's later-briefing queue. */
+    fun markBriefHandled(questionId: String, onError: (Throwable) -> Unit, manager: String? = null) {
+        if (questionId.isBlank()) return
+        val key = briefLaterOutcomeKey(questionId)
+        if (key in _briefOutcomes.value) return
+        act("later:$questionId", onError) {
+            try {
+                withManager(manager) { api.markLaterHandled(questionId) }
+                _briefOutcomes.update { it + (key to BriefOutcome.MarkedHandled) }
+            } catch (error: Throwable) {
+                if (!briefActionTerminal(key, error)) throw error
+            }
+        }
+    }
+
+    /** 409 / 404 are terminal answers, not a retry that could repeat a completed action. */
+    private fun briefActionTerminal(key: String, error: Throwable): Boolean {
+        val outcome = when (hubCodedFailure(error)?.status) {
+            409 -> BriefOutcome.AlreadyHandled
+            404 -> BriefOutcome.HubTooOld
+            else -> null
+        } ?: return false
+        _briefOutcomes.update { it + (key to outcome) }
+        return true
+    }
+
+    /** User completion is not acceptance: no recommendation is sent and no agent is resumed. */
+    fun finishTaskNow(todo: Todo, onError: (Throwable) -> Unit, onChanged: () -> Unit) {
+        val ask = todo.ask?.takeIf { it.outcome == "decide" } ?: return
+        if (todo.isDone || todo.cancelledAt != null) return
+        finishDecision(todo.id, ask.askedAt, expectedAsk = ask, manager = null, onError = onError, onChanged = onChanged)
+    }
+
+    /** Both direct-completion entries share the current-round fence and the confirmed local merge. */
+    private fun finishDecision(
+        todoId: String,
+        askedAt: String,
+        expectedAsk: TodoAsk?,
+        manager: String?,
+        onError: (Throwable) -> Unit,
+        onChanged: () -> Unit,
+        onCompleted: () -> Unit = {},
+    ) {
+        // Shares acceptance's guard so contradictory actions cannot be submitted together.
+        act("accept:$todoId", onError) {
+            val current = _todos.value.firstOrNull { it.id == todoId }
+            if (current == null) {
+                // No hub answer yet is not proof that the round ended; load it and leave the action available.
+                if (synchronized(todosLock) { answered != null }) onChanged() else reloadTodos()
+                return@act
+            }
+            val ask = current.ask
+            if (ask == null || ask.askedAt != askedAt || ask.outcome != "decide" ||
+                expectedAsk != null && ask != expectedAsk || current.isDone || current.cancelledAt != null) {
+                onChanged()
+                return@act
+            }
+            val completed = withManager(manager) { api.patchTodo(todoId, done = true) }
+            check(completed.id == todoId && completed.isDone) { "Completion was not confirmed" }
+            synchronized(todosLock) {
+                val confirmed = completed.copy(ask = null)
+                finishedTasks[todoId] = ask to confirmed
+                _todos.update { rows -> rows.map { if (it.id == todoId && it.ask == ask) confirmed else it } }
+                answered = (answered ?: written)?.map { if (it.id == todoId && it.ask == ask) confirmed else it }
+            }
+            routes.update { routes -> routes.filterValues { it != todoId } }
+            remember()
+            onCompleted()
+            reloadTodos()
+        }
+    }
+
+    private suspend fun <T> withManager(manager: String?, block: suspend () -> T): T =
+        if (manager == null) block() else withContext(RequestManager(manager)) { block() }
+
     private fun act(id: String, onError: (Throwable) -> Unit, block: suspend () -> Unit) {
         if (id in busy.value) return
         busy.update { it + id }
         scope.launch {
-            runCatching { block() }.onFailure(onError)
-            busy.update { it - id }
+            try { block() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Throwable) { onError(error) }
+            finally { busy.update { it - id } }
         }
     }
 
@@ -414,7 +700,41 @@ class TasksStore(
         }
     }
 
-    fun putOff(itemId: String) = later.update { it + itemId }
+    fun putOff(cardId: String) = later.update { it + cardId }
+
+    fun dismissMessage(card: FeedItem, onError: (Throwable) -> Unit, onDismissed: (persona.core.contracts.api.MessageDraftDismissal) -> Unit) {
+        val latest = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id } ?: card
+        val original = card.field("draft") ?: return
+        if (latest.kind != "message" || !latest.canSend || latest.field("draft") != original) return
+        act(card.id, onError) {
+            val dismissal = api.dismissMessage(card.id, original)
+            check(dismissal.item.id == card.id && dismissal.item.conversation == card.conversation)
+            synchronized(feedLock) {
+                val current = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id } ?: card
+                if (current.field("draft") == original && current.sent == null && current.filedAt == null) {
+                    received(listOf(dismissal.item))
+                    onDismissed(dismissal)
+                }
+            }
+        }
+    }
+
+    fun undoDismissMessage(dismissal: persona.core.contracts.api.MessageDraftDismissal, onError: (Throwable) -> Unit) {
+        val card = dismissal.item
+        val captured = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id } ?: return
+        if (captured.field("dismissal_id") != dismissal.dismissalId || captured.sent != null || captured.filedAt != null) return
+        act(card.id, onError) {
+            val restored = api.undoDismissMessage(card.id, dismissal.dismissalId)
+            check(restored.id == card.id && restored.conversation == card.conversation)
+            synchronized(feedLock) {
+                val current = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id }
+                if (current == captured) {
+                    later.update { it - card.id }
+                    received(listOf(restored))
+                }
+            }
+        }
+    }
 
     companion object {
         /** The [busy] key of a task's "Retry". */

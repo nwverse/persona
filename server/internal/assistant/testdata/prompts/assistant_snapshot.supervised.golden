@@ -2,11 +2,14 @@
 - 模型档位：未设置（model_profiles_list 查看，model_profile_switch 切换）
 - 在线的电脑：
 - Agents：需要你 0 个，完成未看 0 个，工作中 0 个（详情用 agents_list）
-- 从对话开的任务（task_plan；用 agent_send 对它的 Agent 说话）：
+- 从对话开的任务（task_plan；问已有结果看这里，不够用 agent_read 读它的对话；要它新查、新做或改方向才用 agent_send）：
   - 部署 hub（todo_2）：停着；督办：等你决定，验收标准 1 条
   - 修登录崩溃（todo_1）：做完了（用户还没看）；督办：待验收，验收标准 2 条
   - 跑 UI 测试（todo_3）：在做；督办：卡住 35 分钟，没写验收标准
   - 迁移数据库（todo_4）：在做；督办：正常，验收标准 1 条；它最近向你汇报（4 分钟前）：进度，第 3/5 步：在跑迁移脚本
   - 整理文档（todo_5）：停着；督办：正常，没写验收标准；它最近向你汇报（刚刚）：要你拍板：放 docs 还是 wiki？
-- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请他打开 App
+  - 升级依赖（todo_6）：被打断了，没有 Agent 在做了（Agent 被模型服务报错打断后关掉了，不会自己重试）；督办：没人在做，没写验收标准，box session_id=c3d4e5f6：API Error: 400 prompt is too long
+  - 清理旧分支（todo_7）：停着，没有 Agent 在做了（Agent 的标签已关闭，没有排定的唤醒）
+  - 跑回归（todo_8）：停着，没有 Agent 在做了（Agent 所在的电脑离线）
+- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
 - 已安排的跟进：没有

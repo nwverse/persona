@@ -13,7 +13,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -59,7 +62,7 @@ class MainActivity : ComponentActivity() {
     override fun attachBaseContext(base: android.content.Context) = super.attachBaseContext(persona.core.designsystem.AppLanguages.wrap(base))
 
     @Inject lateinit var settingsServices: SettingsServices
-    /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source marks"). */
+    /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source markers"). */
     @Inject lateinit var channelDirectory: persona.core.contracts.api.ChannelDirectory
     @Inject lateinit var connection: HubConnection
     @Inject lateinit var shell: AppServices
@@ -219,6 +222,10 @@ class MainActivity : ComponentActivity() {
             openNavigation.value = { it.parse(RouteInput.Notification(session)) }
         }
         val uri = intent.data ?: return
+        if (uri.host == "password-login") {
+            persona.android.platform.PasswordBrowserLogin.complete(uri)
+            return
+        }
         if (uri.host == "pair") {
             pendingPairLink.value = uri.toString()
             return

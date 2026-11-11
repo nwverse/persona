@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// An answer made speakable (docs/assistant/voice.md "Results"): code blocks, tables, inline code, paths, file:line, hashes, links
+// An answer made speakable (docs/assistant/voice.md "Result"): code blocks, tables, inline code, paths, file:line, hashes, links
 // and the Markdown marks become short stand-ins (prompts/voice/spoken.md), so the voice model has the whole answer to
 // sum up and to answer follow-up questions from, with nothing in it that it would read out sign by sign. The answer
 // itself stays in the conversation, on the screen.

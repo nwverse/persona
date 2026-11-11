@@ -128,11 +128,7 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 		return false, fmt.Errorf("%s names %q: %w", zoneFile, name, err)
 	}
 
-	type entry struct {
-		at   time.Time
-		text string
-	}
-	byDay := map[string][]entry{}
+	byDay := map[string][]rezoneEntry{}
 	chatName := ""
 	if c, ok := s.Chat(id); ok {
 		chatName = c.Name
@@ -142,39 +138,43 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		var cur *entry
-		flush := func() {
-			if cur != nil {
-				day := cur.at.In(to).Format("2006-01-02")
-				byDay[day] = append(byDay[day], *cur)
-				cur = nil
-			}
+		for _, e := range rezoneDay(string(raw), d, from, to, &chatName) {
+			day := e.at.In(to).Format("2006-01-02")
+			byDay[day] = append(byDay[day], e)
 		}
-		for _, l := range strings.Split(string(raw), "\n") {
-			switch {
-			case strings.HasPrefix(l, "# "):
-				if chatName == "" {
-					chatName = strings.TrimSuffix(l[2:], " · "+d)
-				}
-			case strings.HasPrefix(l, "- "):
-				flush()
-				at, err := time.ParseInLocation("2006-01-02 15:04", d+" "+safeSlice(l, 2, 7), from)
-				if err != nil {
-					// Not a message line as Line.Format writes them: kept on its day, as it is.
-					at, _ = time.ParseInLocation("2006-01-02", d, to)
-					cur = &entry{at: at, text: l}
-					continue
-				}
-				cur = &entry{at: at, text: "- " + at.In(to).Format("15:04") + l[7:]}
-			case strings.HasPrefix(l, "  ") && cur != nil:
-				cur.text += "\n" + l
-			default:
-				flush()
-			}
-		}
-		flush()
 	}
 
+	// The retention ledger keys lines by their day and minute, which move: their entries move with them. The ledger
+	// is written with both keys before the swap (a move cut short still finds either) and with the new ones after.
+	ledger, hasLedger, err := s.readLedger(id)
+	if err != nil {
+		hasLedger = false // one that does not read stays as it is (pruning keeps such a chat's lines longest)
+	}
+	moved := retentionLedger{Version: 1, Rule: ledger.Rule}
+	both := retentionLedger{Version: 1, Rule: ledger.Rule, Lines: map[string]map[string]string{}}
+	for d, keys := range ledger.Lines {
+		both.Lines[d] = map[string]string{}
+		for k, r := range keys {
+			both.Lines[d][k] = r
+		}
+	}
+	for d, es := range byDay {
+		for _, e := range es {
+			if e.old == "" || !hasLedger {
+				continue
+			}
+			if r, ok := ledger.Lines[e.oldDay][lineKey(e.old)]; ok {
+				key := lineKey(e.text)
+				moved.note(d, key, r, false)
+				both.note(d, key, r, false)
+			}
+		}
+	}
+	if hasLedger {
+		if err := writeJSON(s.ledgerPath(id), both); err != nil {
+			return false, err
+		}
+	}
 	for d, es := range byDay {
 		sort.SliceStable(es, func(i, j int) bool { return es[i].at.Before(es[j].at) })
 		var b strings.Builder
@@ -197,7 +197,68 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 		return false, err
 	}
 	_ = os.RemoveAll(old)
+	if hasLedger {
+		if err := writeJSON(s.ledgerPath(id), moved); err != nil {
+			return true, err
+		}
+	}
 	return true, nil
+}
+
+// rezoneEntry is one message (or other line) of a day file being moved into another zone, with its continuation lines.
+type rezoneEntry struct {
+	at   time.Time
+	text string
+	// oldDay and old: the day and text it had before (a message line's), to carry its retention ledger entry.
+	oldDay, old string
+}
+
+// rezoneDay reads the day file d, written in the zone from, into its entries in file order, with every message line's
+// minute moved into the zone to. A heading names the chat when *chatName is still "". Each entry's continuation lines
+// are joined once when it ends, so a pasted log of many lines costs its size rather than its size times its lines.
+func rezoneDay(raw, d string, from, to *time.Location, chatName *string) []rezoneEntry {
+	var out []rezoneEntry
+	var cur *rezoneEntry
+	var more []string // cur's continuation lines
+	flush := func() {
+		if cur == nil {
+			return
+		}
+		if len(more) > 0 {
+			rest := strings.Join(more, "\n")
+			cur.text += "\n" + rest
+			if cur.old != "" {
+				cur.old += "\n" + rest
+			}
+			more = more[:0]
+		}
+		out = append(out, *cur)
+		cur = nil
+	}
+	for _, l := range strings.Split(raw, "\n") {
+		switch {
+		case strings.HasPrefix(l, "# "):
+			if *chatName == "" {
+				*chatName = strings.TrimSuffix(l[2:], " · "+d)
+			}
+		case strings.HasPrefix(l, "- "):
+			flush()
+			at, err := time.ParseInLocation("2006-01-02 15:04", d+" "+safeSlice(l, 2, 7), from)
+			if err != nil {
+				// Not a message line as Line.Format writes them: kept on its day, as it is.
+				at, _ = time.ParseInLocation("2006-01-02", d, to)
+				cur = &rezoneEntry{at: at, text: l}
+				continue
+			}
+			cur = &rezoneEntry{at: at, text: "- " + at.In(to).Format("15:04") + l[7:], oldDay: d, old: l}
+		case strings.HasPrefix(l, "  ") && cur != nil:
+			more = append(more, l)
+		default:
+			flush()
+		}
+	}
+	flush()
+	return out
 }
 
 func safeSlice(s string, i, j int) string {

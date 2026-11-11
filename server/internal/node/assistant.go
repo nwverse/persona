@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -32,21 +34,29 @@ import (
 
 // A long conversation is compacted (docs/assistant/assistant.md "Compaction"): every restart after the prompt cache expired (an hour)
 // writes the whole context again, half a million tokens for an assistant conversation that had never been compacted.
-// Claude Code compacts on its own once the context nears the auto-compact window, also under -p (tested on 2.1.314):
-// CLAUDE_CODE_AUTO_COMPACT_WINDOW lowers that from the model's 1M to 200K. Its own idle compaction only runs in
-// interactive sessions, so a process about to be let go with more than assistantIdleCompact in context is sent
-// /compact first, while its cache is still warm: the next start reads a summary instead, and nobody waits for it.
-const (
-	assistantCompactWindow     = 200_000
-	assistantIdleCompact       = 150_000
-	assistantMainCompactWindow = 400_000
-	assistantMainIdleCompact   = 300_000
-)
+// Claude Code compacts on its own once the context nears the auto-compact window, also under -p (tested on 2.1.314), by
+// default the model's own window. Persona sets no window of its own (#3066): the main conversation and every other
+// follow what the launcher declares (CLAUDE_CODE_AUTO_COMPACT_WINDOW, CLAUDE_CODE_MAX_CONTEXT_TOKENS, a managed
+// launcher's CompactWindow / MaxContext / model window), else the model (assistant_compaction_policy.go). Codex alike
+// with model_auto_compact_token_limit. Claude Code's own idle compaction only runs in interactive sessions, so a process
+// about to be let go with more than 75% of its window in context (the declared one, else the one Claude Code reports;
+// assistantIdleCompact until either is known) is sent /compact first, while its cache is still warm: the next start
+// reads a summary instead, and nobody waits for it.
+//
+// assistantIdleCompact is 75% of standardWindow, the smallest window Claude Code holds a current model to (and the one
+// it assumes for a model it does not know). Claude Code reports the real window at the end of every turn, before a
+// process can be idle, so it only stands for an agent that reports none: there it never waits past a 200K window.
+const assistantIdleCompact = standardWindow / 4 * 3
 
 // assistantAllowedTools run without asking: Persona's own tools (the hub asks the phone itself before the ones that
 // send something on the user's behalf — mail_send, phone writes; Feishu writes through an extension's gated command pass larkgate.go). Without this every notify_user or
 // schedule_followup waited for a tap on the phone, so a follow-up firing at night just stalled.
 const assistantAllowedTools = "mcp__persona"
+
+// assistantBuiltinTools keeps the headless assistant's file, shell, web, skill and sub-agent capabilities without
+// the software-development, notebook, worktree, LSP, workflow and Claude-specific scheduling surfaces. Persona MCP
+// tools are not affected by this built-in allow-list; scheduling and user questions use their Persona tools instead.
+const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch"
 
 type assistantProc struct {
 	id       string
@@ -58,6 +68,9 @@ type assistantProc struct {
 	stdin    io.WriteCloser
 	exited   chan struct{}
 	born     time.Time
+	// personaMCPOnly is fixed at a Claude or Codex process start. A warm spare must still match
+	// the hub's current capability before it becomes a new conversation.
+	personaMCPOnly bool
 	// stderrDone closes when its stderr ends (watchAssistantStderr has read all of it): what a failed start printed
 	// is complete only then. nil for Codex.
 	stderrDone chan struct{}
@@ -71,11 +84,15 @@ type assistantProc struct {
 	settingsMu sync.Mutex                               // serializes settings until their control responses arrive
 	controls   map[string]chan assistantControlResponse // guarded by mu
 
-	mu            sync.Mutex
-	mode          string // permission mode / effort level acknowledged by Claude (modes.go)
-	effort        string
-	model         modelExecution
-	fingerprint   string
+	mu          sync.Mutex
+	mode        string // permission mode / effort level acknowledged by Claude (modes.go)
+	effort      string
+	model       modelExecution
+	fingerprint string
+	// instructions is the digest of the CLAUDE.md / AGENTS.md in cwd when it started (instructionsDigest): the agent
+	// reads them only at start, so once the hub rewrites them (new prompts, assistant.prepare) the next idle message
+	// resumes the conversation in a fresh process (instructionsStale).
+	instructions  string
 	canBypass     bool // started with --permission-mode bypassPermissions: only then can it switch there (needsRestartFor)
 	busy          bool
 	lastActive    time.Time
@@ -94,6 +111,12 @@ type assistantProc struct {
 	runtime       string   // proto.AssistantRuntimeAgentSDK when it runs on the bridge (assistant_sdk.go), "" on the CLI
 	fallback      string   // why it runs on the CLI though asked to run on the Agent SDK
 	sdkVersion    string   // the bridge's SDK version (its ready line)
+	claudeVersion string   // the Claude Code its system/init named (claude_code_version), "" before it
+
+	// declaredWindow: the window the launcher declares (assistantCompaction.declared), 0 for none; replyModel: the
+	// model of the conversation's last reply. compactIdleAt follows the window Claude Code reports for it (followWindow).
+	declaredWindow int
+	replyModel     string
 
 	// usageChecked: how far the transcript was checked for an impossible usage at the end of its turns
 	// (assistant_usage.go); 0: from the start.
@@ -101,6 +124,10 @@ type assistantProc struct {
 
 	turnError     string // the latest turn failed on the model service, as Codex's app-server said it (#2571)
 	turnErrorKind string // proto.TurnErrorTransient, User or UsageLimit
+
+	// written: the user's messages written to Claude, in order, until its command_lifecycle says it started, cancelled
+	// or finished them; the ones it said it queued are the conversation's queue (assistant_queue.go, #4342).
+	written []assistantInput
 
 	// owner: the Node that took it over from an earlier connection of a resident node (assistant_keep.go); nil: the
 	// one that started it.
@@ -131,7 +158,11 @@ func (p *assistantProc) alive() bool {
 }
 
 // isAssistantSession tells assistant conversations (headless) apart from herdr sessions.
-func (n *Node) isAssistantSession(id string) bool {
+func (n *Node) isAssistantSession(id string) bool { return n.isAssistantSessionIn(id, nil) }
+
+// isAssistantSessionIn is isAssistantSession with the assistant's project name and a Codex rollout's stat taken once
+// per list pass (codexListPass).
+func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	n.mu.Lock()
 	_, ok := n.procs[id]
 	a := n.agents[id]
@@ -144,11 +175,11 @@ func (n *Node) isAssistantSession(id string) bool {
 	if a.PaneID != "" {
 		return false
 	}
-	if st, ok := n.state.get(id); ok && identity.IsAssistantDir(st.Cwd) {
+	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || n.roomState(st)) {
 		return true
 	}
-	if p := n.transcriptPath(id); p != "" && (compat.IsAssistantTranscript(filepath.Base(filepath.Dir(p))) ||
-		isAssistantProject(filepath.Base(filepath.Dir(p)), n.assistantProject())) {
+	if p := n.transcriptPathIn(id, pass); p != "" && (compat.IsAssistantTranscript(filepath.Base(filepath.Dir(p))) ||
+		isAssistantProject(filepath.Base(filepath.Dir(p)), pass.assistantProject(n))) {
 		return true
 	}
 	// A conversation an agent runtime runs (assistant_runtime.go), listed before this node kept its state.
@@ -185,19 +216,73 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
+	if id != "" {
+		defer n.typing.lock(id)()
+	}
+	recovery, restart := assistantRecoveryOf(ctx)
+	if recovery != nil {
+		n.mu.Lock()
+		valid := n.recoveries[id] == recovery
+		p := n.procs[id]
+		n.mu.Unlock()
+		if !valid {
+			return "", errAssistantRecoveryCancelled
+		}
+		if restart {
+			if p == nil {
+				return "", errAssistantRecoveryTasks
+			}
+			// A successful explicit empty list is the only proof that a restart kills no background work.
+			if p.agent == "codex" && p.cx != nil {
+				p.cx.syncTasks()
+			} else if p.agent == "claude" {
+				p.syncClaudeTasks(ctx)
+			}
+			p.mu.Lock()
+			safe := p.tasksObserved && len(p.tasks) == 0
+			p.mu.Unlock()
+			if !safe {
+				return "", errAssistantRecoveryTasks
+			}
+			// The old process stops below, once the new start is checked: one refused here keeps the conversation (#3495).
+		}
+	} else {
+		n.cancelAssistantRecovery(id)
+	}
+	restartForRecovery := recovery != nil && restart
 	if err := validModes(mode, effort); err != nil {
 		return "", err
 	}
 	resume := id != ""
 	st, _ := n.state.get(id)
 	isMain := executionOption(options).IsMain
+	interject := executionOption(options).Interject // this message, not the conversation (assistant_interject.go)
 	if len(options) == 0 {
 		isMain = st.IsMain
 	}
 	// A guest conversation (assistant_guest.go): a new one asked for, or one that is.
-	guest := st.Guest
+	guest, guestKind := st.Guest, st.GuestKind
 	if !resume {
-		guest = guestFrom(ctx)
+		guest, guestKind = guestFrom(ctx), guestKindFrom(ctx)
+	} else if n.roomState(st) {
+		// A meeting's room: never resumed without its tools (its record lost them: refused), nor without its kind
+		// (lost by a manager that did not keep it: its directory says, and the record has it again).
+		if guest == nil {
+			return "", errRoomRecord
+		}
+		if guestKind != guestMeeting {
+			guestKind, st.GuestKind = guestMeeting, guestMeeting
+			n.state.put(id, st)
+		}
+	}
+	if mode == "" && guest == nil {
+		mode = st.AppMode
+		if mode == "" {
+			mode = n.assistantModeOf(id)
+		}
+		if mode == "" {
+			mode = proto.ModeBypass
+		}
 	}
 	if guest != nil {
 		if resume {
@@ -220,6 +305,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if execution.ConfigDir != "" {
+			return "", errors.New("config_dir is only supported for Claude assistant conversations")
+		}
 		if id != "" && (onRuntime == nil || !runs) && !(runs && launcher == "") { // another kind of agent than its own
 			return "", errors.New("换到另一种 Agent 需要新建对话")
 		}
@@ -250,6 +338,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if launcher == "" {
 		launcher = "claude"
 	}
+	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
+		return "", err
+	}
+	if recovery == nil && id != "" {
+		execution = n.heldFallback(id, launcher, execution) // the fallback that answered, for a while (#3788)
+	}
 	if execution.Model != "" {
 		if _, err := n.launcherModelCheck(ctx, launcher, execution.Model); err != nil {
 			return "", err
@@ -263,11 +357,23 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil && (agent != "claude" || execution.Runtime != "") {
 		return "", errGuestAgent
 	}
+	if agent == "claude" {
+		asked := n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
+		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, execution.Runtime, asked, resume)
+		if err != nil {
+			return "", err
+		}
+	} else if executionOption(options).ConfigDir != "" {
+		return "", errors.New("config_dir is only supported for Claude assistant conversations")
+	}
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
-		id = newUUID()
-		n.state.put(id, sessionState{Launcher: launcher, Cwd: cwd, Guest: guest})
+		// Under the id the hub asked for when it gave one (a meeting's room: made once, also across a restart).
+		id = cmp.Or(newIDFrom(ctx), newUUID())
+		n.state.put(id, sessionState{Launcher: launcher, Cwd: cwd, Guest: guest, GuestKind: guestKind})
+	} else if id == "" && newIDFrom(ctx) != "" && agent == "claude" {
+		id = newIDFrom(ctx) // never the spare either: it has an id of its own
 	} else if id == "" {
 		// The spare was started without --permission-mode, and bypassPermissions can't be switched to later.
 		if p = n.adoptSpareFor(cwd, launcher, mode, execution); p != nil {
@@ -288,12 +394,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		go func(id string) { snapc <- n.assistantContext(id) }(id)
 	}
 	if id == "" { // a new Codex conversation: the thread's id is Codex's to pick
-		if p, err = n.spawnCodex("", cwd, launcher, false, false, execution); err != nil {
+		if p, err = n.spawnCodexWithMode("", cwd, launcher, false, false, mode, execution); err != nil {
 			return "", err
 		}
 		id = p.id
 	}
 
+	// One at a time with restoreModel and compactions on this conversation's process (model_restore.go): a restore
+	// either sees the process this send made busy, or this send starts a new one after the restore closed it.
+	defer n.assistantLife.lock(id)()
 	n.mu.Lock()
 	p = n.procs[id]
 	n.mu.Unlock()
@@ -306,11 +415,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if want == "" && p != nil {
 		want, _ = n.modesOf(id)
 	}
-	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want)) {
+	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale()) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		p.mu.Unlock()
-		if active && p.alive() {
+		if active && p.alive() && !restartForRecovery { // a recovery's busy is its own hold on the failed turn
 			// Answering, or running background tasks a new process would kill: the message goes to this process on
 			// what it runs, and the switch waits for the first message after it is idle. Refusing it left the user
 			// unable to send while the conversation kept starting tasks (#1554).
@@ -321,22 +430,19 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			}
 			p.mu.Unlock()
 		} else {
-			n.stopAssistant(id) // model switch, dead process or bypassPermissions (start-only): resume in a fresh one
+			n.stopAssistantProcess(id) // model switch, dead process, bypassPermissions (start-only) or new instructions: resume in a fresh one
 			n.rememberTasks(id, nil)
 			p = nil
 		}
 	}
 	n.noteModes(id, mode, effort)
-	if !resume {
-		n.persistModes(id, mode, effort) // the mode a new conversation was started in, as if set from the app
-	}
 	fresh := p == nil
 	if p == nil {
 		if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
 			return "", err
 		}
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain || st.ConfigDir != execution.ConfigDir {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -344,9 +450,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Launcher, st.Cwd, st.StartedAt = launcher, cwd, started
 		st.Model, st.ModelFingerprint, st.ModelEffort, st.Runtime = execution.Model, execution.Fingerprint, execution.Effort, execution.Runtime
 		st.IsMain = execution.IsMain
+		st.ConfigDir = execution.ConfigDir
 		n.state.put(id, st)
 	}
 
+	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
+	n.noteAssistantRecoveryProcess(ctx, p)
 	live, commit := n.turnContext(id, <-snapc)
 	if p.agent == "codex" {
 		p.mu.Lock()
@@ -366,9 +475,13 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 
+	interject = interject && !fresh && p.interjects()
 	content := []map[string]any{}
 	if live != "" {
 		content = append(content, map[string]any{"type": "text", "text": live})
+	}
+	if interject {
+		content = append(content, interjectNote())
 	}
 	for _, img := range images {
 		content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": img.Mime, "data": img.Data}})
@@ -376,7 +489,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if strings.TrimSpace(text) != "" || len(images) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
-	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": content}})
+	in := assistantInput{text: text, images: images, content: content}
 	retryMode, retryEffort := n.modesOf(id)
 	for attempt := 1; ; attempt++ {
 		controlErr := n.syncAssistantModes(ctx, p) // a new or resumed process starts without them
@@ -394,11 +507,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		p.mu.Unlock()
 		werr := controlErr
 		if werr == nil {
-			werr = p.write(line)
+			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
 		}
 		switch {
 		case werr != nil && !fresh:
-			n.stopAssistant(id)
+			n.stopAssistantProcess(id)
 			return "", fmt.Errorf("send to claude: %w", werr)
 		case werr != nil:
 			werr = p.startFailure() // it is gone already: say why, not that the pipe is closed (#2581)
@@ -406,9 +519,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			werr = p.awaitStart(assistantStartWait)
 		}
 		if werr == nil {
+			if interject {
+				n.backgroundForeground(p)
+			}
 			break
 		}
-		n.stopAssistant(id)
+		n.stopAssistantProcess(id)
 		if !p.missingCommand() || attempt > assistantStartRetries {
 			return "", p.startRefusal(werr)
 		}
@@ -426,6 +542,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
 			return "", err
 		}
+		n.noteAssistantRecoveryProcess(ctx, p) // the replacement is the process the recovery follows now (#3495)
 	}
 	commit()
 	n.notifySessions()
@@ -473,7 +590,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Subtype  string                   `json:"subtype"`
 			Tasks    json.RawMessage          `json:"tasks"`
 			Tools    []string                 `json:"tools"`
+			Version  string                   `json:"claude_code_version"`
 			Response assistantControlResponse `json:"response"`
+			Command  string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
+			State    string                   `json:"state"`        // and what became of it (assistant_queue.go)
 			Event    struct {
 				Type  string `json:"type"`
 				Delta struct {
@@ -481,6 +601,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					Text string `json:"text"`
 				} `json:"delta"`
 				Message struct {
+					Model string `json:"model"`
 					Usage struct {
 						Input       int `json:"input_tokens"`
 						CacheRead   int `json:"cache_read_input_tokens"`
@@ -491,9 +612,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Compact struct {
 				Post int `json:"post_tokens"`
 			} `json:"compact_metadata"`
-			ParentToolUseID *string `json:"parent_tool_use_id"`
-			IsError         bool    `json:"is_error"`
-			Result          string  `json:"result"`
+			ParentToolUseID *string                     `json:"parent_tool_use_id"`
+			IsError         bool                        `json:"is_error"`
+			Result          string                      `json:"result"`
+			ModelUsage      map[string]claudeModelUsage `json:"modelUsage"`
 		}
 		if json.Unmarshal(line, &ev) != nil {
 			p.invalidateUpdateTasks()
@@ -502,6 +624,11 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		switch ev.Type {
 		case "system":
 			if ev.Subtype == "init" {
+				if ev.Version != "" {
+					p.mu.Lock()
+					p.claudeVersion = ev.Version
+					p.mu.Unlock()
+				}
 				n.toolsAtStart(p.id, ev.Tools)
 				continue
 			}
@@ -528,6 +655,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			n.rememberTasks(p.id, tasks)
 		case "control_response":
 			p.controlResponse(ev.Response)
+		case "command_lifecycle":
+			if p.commandLifecycle(ev.Command, ev.State) {
+				n.notifySessions() // the queue strip shows it, or no longer
+			}
 		case "stream_event":
 			if ev.ParentToolUseID != nil && *ev.ParentToolUseID != "" {
 				// A subagent's stream (#4495): its words are not the conversation's live text, its start does not clear
@@ -561,6 +692,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					// the other replies of a turn say nothing either: the last real one stands
 					if tokens > 0 {
 						p.context = tokens
+					}
+					if m := ev.Event.Message.Model; m != "" {
+						p.replyModel = m
 					}
 					first, p.requested = !p.requested, true
 				}
@@ -598,14 +732,29 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.emitDelta(p.id, text)
 			}
 		case "result":
+			var kinds []string
+			if ev.IsError {
+				kinds = n.claudeResultKinds(p.id)
+			}
+			recovering := n.recoverAssistantResult(p, ev.IsError, ev.Result, kinds...)
+			if !recovering {
+				n.clearAssistantRecovery(p, !ev.IsError)
+			}
 			p.mu.Lock()
 			manual := p.manual
 			p.manual = false
+			window := reportedWindow(ev.ModelUsage, p.replyModel)
+			changed, idleAt := p.followWindow(window), p.compactIdleAt
 			p.compacting = false
-			p.busy = false
+			if !recovering {
+				p.busy = false
+			}
 			p.lastActive = time.Now()
 			p.partial.Reset()
 			p.mu.Unlock()
+			if changed {
+				n.logger.Printf("assistant %s: the model's window is %d tokens, idle compaction at %d", p.id[:8], window, idleAt)
+			}
 			if manual { // the user's /compact ended without a boundary: it did not compact
 				n.compactionEnded(p.id, compactFailure(ev.IsError, ev.Result))
 			}
@@ -613,8 +762,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.refresh(p.id, f)
 			}
 			n.emitDelta(p.id, "")
-			n.notifySessions()
-			go n.checkTurnUsage(p, ev.IsError && promptTooLong(ev.Result))
+			if !recovering {
+				n.notifySessions()
+				go n.checkTurnUsage(p, ev.IsError && promptTooLong(ev.Result))
+			}
 		}
 	}
 	stopUnreadAssistant(p.ownerOr(started).logger, p, short(p.id), sc.Err())
@@ -664,9 +815,9 @@ func (n *Node) rememberTasks(id string, tasks []string) {
 }
 
 // recoverAssistantTasks runs once the session state is loaded: conversations whose background tasks or monitors
-// were running when the node went down (a deploy restarts it, and systemd kills claude and its children with it)
-// get a message saying so, which wakes them up to re-arm what still matters. Without it they would wait forever
-// for a notification that cannot come. send delivers the message (assistantSend).
+// were running when the node went down (its connection ended and it stopped its conversations, stopAtConnectionEnd,
+// or a service restart killed them with it) get a message saying so, which wakes them up to re-arm what still matters.
+// Without it they would wait forever for a notification that cannot come. send delivers the message (assistantSend).
 func (n *Node) recoverAssistantTasks(send func(id, text string) error) {
 	n.state.mu.Lock()
 	lost := map[string][]string{}
@@ -699,21 +850,34 @@ func (n *Node) assistantSessions() []proto.Session {
 	for _, p := range n.procs {
 		procs = append(procs, p)
 	}
+	recovering := make(map[string]bool, len(n.recoveries))
+	for id, r := range n.recoveries {
+		recovering[id] = true
+		if _, running := n.procs[id]; !running && r.running && r.proc != nil {
+			// A model switch has already stopped the old process and not registered its replacement yet. Keep the turn
+			// working: an offline row here can fail and rerun a scheduled task while its fallback is still starting.
+			procs = append(procs, r.proc)
+		}
+	}
 	n.mu.Unlock()
 	var out []proto.Session
 	for _, p := range procs {
 		p.mu.Lock()
-		busy := p.busy
-		status := proto.StatusDone // finished turn; the hub turns it into idle once seen
+		busy := p.busy || recovering[p.id] // a registered replacement is still starting until its recovery message is sent
+		status := proto.StatusDone         // finished turn; the hub turns it into idle once seen
 		if busy {
 			status = proto.StatusWorking
 		}
 		updated := p.lastActive
 		turnError := p.turnError
 		turnErrorKind := p.turnErrorKind
+		var queued []string
+		if busy {
+			queued = queuedTexts(p.queuedLocked()) // typed while it works and not taken yet (assistant_queue.go)
+		}
 		p.mu.Unlock()
 		s := proto.Session{SessionID: p.id, Cwd: p.cwd, Status: status, Launcher: p.launcher, UpdatedAt: updated.UTC(),
-			Runtime: p.runtime, RuntimeFallback: p.fallback}
+			Runtime: p.runtime, RuntimeFallback: p.fallback, Queued: queued}
 		if p.agent == "codex" {
 			s.Agent = "codex"
 		}
@@ -721,9 +885,14 @@ func (n *Node) assistantSessions() []proto.Session {
 		if path := n.transcriptPath(p.id); path != "" {
 			if st, err := os.Stat(path); err == nil {
 				m := n.meta(path, st)
-				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(m.lastText), st.Size()
+				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(assistantAnswer(m)), st.Size()
 				s.PermissionMode, s.Effort = n.currentModes(p.id, m)
 				setContext(&s, m)
+				// Background shells outlive the turn, as in a pane's session: a channel run (Lark) waits for the turn
+				// they start, and a list shows them (channel.Background).
+				n.setBackground(&s, m)
+				s.ModelFallback = m.modelFallback
+				n.setModelRestore(&s, path, m)
 				untitled(&s, m)
 				if !busy {
 					s.UpdatedAt = lastUsed(m, st)
@@ -737,21 +906,40 @@ func (n *Node) assistantSessions() []proto.Session {
 			}
 			record.set(&s)
 		}
+		if p.agent == "codex" && p.cx != nil {
+			p.cx.speedRow(&s)
+		}
 		n.decorate(&s)
 		out = append(out, s)
 	}
 	return out
 }
 
-// notifySessions pushes the session list right away instead of waiting for the next poll.
+// notifySessions pushes the session list right away instead of waiting for the next poll. A list the manager holds
+// already, byte for byte, does not go again (sessions_sent.go).
 func (n *Node) notifySessions() {
 	if n.peer == nil {
 		return
 	}
-	list := n.sessionList(context.Background(), false)
+	n.notifyList(n.sessionList(context.Background(), false))
+}
+
+// notifyList is notifySessions with the list built.
+func (n *Node) notifyList(list []proto.Session) {
 	n.mu.Lock()
 	n.lastList = listKey(list)
 	n.revsChanged(list)
 	n.mu.Unlock()
-	_ = n.peer.Notify("sessions.changed", map[string]any{"sessions": list})
+	n.sendSessions(list)
+}
+
+// assistantAnswer is what a conversation's row says it last said: its latest turn's answer from the first words on
+// (transcript.Meta.TurnAnswer), the push body when the turn ends, so a report written before a tool call is not left
+// out for the line after it. Its last words when those are an error notice (the push marks the turn cut off by
+// their start, assistantwire.CutOff) or the tail read held none of the turn's words.
+func assistantAnswer(m quickMeta) string {
+	if m.answer == "" || assistantwire.CutOff(m.lastText) {
+		return m.lastText
+	}
+	return m.answer
 }

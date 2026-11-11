@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import pty
 import select
 import subprocess
@@ -188,7 +189,7 @@ class PersonaInstallTests(unittest.TestCase):
                 if terminal:
                     self.assertEqual(os.readlink(state / 'bin' / (FORMER_NAME + 'd')), 'personad')
 
-    def test_publish_fixture_indexes_node_and_compatibility_artifacts(self):
+    def test_publish_fixture_indexes_only_current_product_artifacts(self):
         import shutil
         publisher = (ROOT / 'scripts/release/publish.sh').read_text()
         start = publisher.index('for bin in "$OUT/bin"/personad-*')
@@ -211,12 +212,9 @@ class PersonaInstallTests(unittest.TestCase):
             sums = [line.split() for line in (binaries / 'SHA256SUMS').read_text().splitlines()]
             names = {name for digest, name in sums}
             self.assertIn('persona-node-linux-amd64.gz', names)
-            for current, old in (('personad', FORMER_NAME + 'd'), ('persona-link', FORMER_NAME + '-link')):
-                current_file = binaries / (current + '-linux-amd64.gz')
-                old_file = binaries / (old + '-linux-amd64.gz')
-                self.assertEqual(current_file.read_bytes(), old_file.read_bytes())
-                self.assertIn(current_file.name, names)
-                self.assertIn(old_file.name, names)
+            self.assertEqual({name for name in names if name.startswith(FORMER_NAME)}, set())
+            for current in ('personad', 'persona-link'):
+                self.assertIn(current + '-linux-amd64.gz', names)
             for digest, name in sums:
                 self.assertEqual(hashlib.sha256((binaries / name).read_bytes()).hexdigest(), digest)
 
@@ -397,6 +395,25 @@ class PersonaInstallTests(unittest.TestCase):
                 result = self.run_install(home, programs=('persona-manager',), release='3', extra=extra)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn('no persona-hub', result.stderr)
+
+    def test_a_binary_property_list_is_read_quietly(self):
+        # Vendors' launchd files are often binary property lists, which are not UTF-8: the check reads past them and
+        # says nothing (the system awk on macOS, in a UTF-8 locale, stops on them and prints their bytes).
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            bin_dir = home / '.persona/bin'
+            self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS).returncode, 0)
+            agent = home / 'Library/LaunchAgents/com.example.updater.plist'
+            agent.parent.mkdir(parents=True)
+            data = plistlib.dumps({'Label': 'com.example.updater', 'RunAtLoad': True,
+                                   'ProgramArguments': ['/Library/Application Support/Example/updater', 'run']},
+                                  fmt=plistlib.FMT_BINARY)
+            self.assertRaises(UnicodeDecodeError, data.decode)
+            agent.write_bytes(data)
+            result = self.run_install(home, programs=('persona-manager',), release='3')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'{bin_dir}/persona-hub stays as it was', result.stderr)
+            self.assertNotIn(agent.name, result.stdout + result.stderr)
 
     def test_other_computers_do_not_get_the_hubs_programs(self):
         # A device's node service, a computer that runs only an app-made manager, and one asked "not the hub": as before.

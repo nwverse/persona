@@ -47,7 +47,10 @@ type Question struct {
 
 type Interaction struct {
 	// Manager is the manager it belongs to (docs/assistant/managers.md, "Ownership"); the hub stamps it on what it sends the apps.
-	Manager         string          `json:"manager,omitempty"`
+	Manager string `json:"manager,omitempty"`
+	// Private: a Just me turn raised it (docs/assistant/meeting-minutes.md "Just me"): its push and the Fleet Live
+	// Activity say nothing of what it asks, as a health conversation's card, and it never goes to Lark or a channel.
+	Private         bool            `json:"private,omitempty"`
 	ID              string          `json:"id"`
 	MachineID       string          `json:"machine_id"`
 	SessionID       string          `json:"session_id"`
@@ -100,8 +103,17 @@ type Interaction struct {
 	// answers a later card whose keys are all kept by itself: the agent's own session rule dies with its process
 	// (docs/assistant/assistant.md "Always allow in this session"). Absent on Agents sessions' cards.
 	AlwaysKeys []string `json:"always_keys,omitempty"`
+	// AlwaysHonored is the manager's word on whether an answer of "Always allow" on this permission card is kept
+	// (docs/protocol/protocol.md "Always allow"): true when it is (a node's card with AlwaysKeys the manager remembers,
+	// a card of its own that says what it keeps in AlwaysLabel), false when nothing would keep it (the manager's other
+	// cards: the extensions' tools, persona_settings…), so the apps offer only Allow and Deny. Absent (an older manager,
+	// and Agents sessions' cards, whose agent keeps it itself) the apps keep their own rule.
+	AlwaysHonored *bool `json:"always_honored,omitempty"`
+	// ToolTitle is the tool's name for people in the user's language ("iPhone control" for iphone_do), set by the
+	// manager on its own tools' cards only; the apps name the tool with it, else with ToolName as before.
+	ToolTitle string `json:"tool_title,omitempty"`
 	// Delegating: the assistant is deciding whether it may answer this question for the user (agents.delegate,
-	// docs/assistant/assistant.md "The assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
+	// docs/assistant/assistant.md "Assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
 	// given there wins.
 	Delegating bool `json:"delegating,omitempty"`
 	// Delegate is what the assistant found when it left the question to the user: the context it filled in.

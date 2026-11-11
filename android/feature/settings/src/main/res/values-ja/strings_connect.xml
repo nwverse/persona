@@ -18,7 +18,10 @@
     <string name="settings_pairing_welcome_connect">ハブに接続</string>
     <string name="settings_pairing_failed_title">接続できませんでした</string>
     <string name="settings_pairing_failed_body">下の案内に沿って対処してから、もう一度お試しください。</string>
-    <string name="settings_pairing_stopped_at">「%1$s」で停止：%2$s</string>
+    <string name="settings_pairing_stopped_at">「%1$s」で停止</string>
+    <plurals name="settings_pairing_tried_again">
+        <item quantity="other">%1$d回試しましたが、まだ接続できません。</item>
+    </plurals>
     <string name="settings_pairing_reload_machines">マシンを再読み込み</string>
     <string name="settings_pairing_diagnostics">接続診断</string>
     <string name="settings_pairing_rescan">再スキャン</string>
@@ -35,6 +38,7 @@
     <string name="settings_pairing_address_label">ハブのアドレスかペアリングリンク</string>
     <string name="settings_pairing_code_label">ペアリングコード</string>
     <string name="settings_pairing_http_warning">HTTPは暗号化されません。LANかVPNの中だけで使い、外では暗号化された接続を使ってください。</string>
+    <string name="settings_pairing_manual_invalid">アドレスを確認してください（例: hub.local:18660）</string>
     <string name="settings_pairing_next">次へ</string>
     <string name="settings_pairing_paste">リンクを貼り付け</string>
     <string name="settings_pairing_back_to_scan">スキャンに戻る</string>
@@ -59,7 +63,7 @@
     <string name="settings_pairing_primary">メインアドレス</string>
     <string name="settings_pairing_alternate">予備アドレス%1$d</string>
     <string name="settings_pairing_identity_note">接続時にハブの身元を確認します。</string>
-    <string name="settings_pairing_stage_parse">QRコードを読み取り</string>
+    <string name="settings_pairing_stage_parse">ペアリング情報を読み取り</string>
     <string name="settings_pairing_stage_probe">アドレスを探索</string>
     <string name="settings_pairing_stage_verify">証明書とハブを検証</string>
     <string name="settings_pairing_stage_exchange">認証情報を取得</string>
@@ -72,6 +76,8 @@
     <string name="settings_pairing_failure_timeout">ハブに接続できません。自宅では、スマートフォンとハブのあるパソコンが同じネットワークにつながっているか確認してください。外出先では、自宅のルーターが外部からの接続を許可しているか確認してください。</string>
     <string name="settings_pairing_failure_local">自宅でハブに接続するには、Personaにローカルネットワークへのアクセスを許可してください。</string>
     <string name="settings_pairing_failure_certificate">証明書かハブの身元が一致しません。ハブを入れ直した場合は、ログイン済みのデバイスで新しいコードを出してもう一度読み取ってください。</string>
+    <string name="settings_pairing_failure_proxy_certificate">%1$s の証明書はこのスマートフォンで信頼されていません。このアドレスはリバースプロキシかトンネルを経由しているため、その証明書がこのドメイン名に有効か確認してください。ハブ自体は問題なく、コードを作り直しても解決しません。</string>
+    <string name="settings_pairing_failure_proxy_this_address">このアドレス</string>
     <string name="settings_pairing_failure_expired">このコードは期限切れか、すでに使われています。ログイン済みのデバイスで新しいコードを出してください。</string>
     <string name="settings_pairing_failure_incompatible">接続コンポーネントかハブがこのペアリング方法に対応していません。更新してからもう一度お試しください。</string>
     <string name="settings_pairing_failure_tls_required">このアドレスには暗号化された接続が必要です。HTTPSのアドレスでペアリングし直してください。</string>
@@ -188,7 +194,7 @@
     <string name="settings_hub_update_footer">更新はアシスタントとすべてのエージェントがアイドルになってからハブを再起動します。新しいバージョンが起動しない場合は自動で前のバージョンに戻ります。再起動中は接続がしばらく切れます。</string>
     <string name="settings_hub_update_auto_notice">ハブはアイドル時に自動で更新されます。</string>
     <string name="settings_hub_update_auto_footer">オンにすると、新しいバージョンがあればアシスタントとすべてのエージェントがアイドルのときに自動でインストールし、完了後に通知します。</string>
-    <string name="settings_hub_update_nodes_footer">ハブの更新後、各コンピューターのpersonadも同じバージョンに切り替わります。切り替わらなかったものは開いて「再デプロイ」してください。</string>
+    <string name="settings_hub_update_nodes_footer">ハブを更新しても、各コンピューターのpersonadは元のバージョンのままです（hub.jsonでauto_update_nodesがオンの場合を除く）。更新するには、開いて「再デプロイ」してください。</string>
     <string name="settings_hub_update_now_warning">終了を待たずに更新します。ハブを待っている操作（アシスタントの応答、アップロード中のファイル、ターミナル接続）は中断されます。herdrのエージェントには影響せず、ハブが起動すると自動で再接続します。</string>
     <string name="settings_hub_update_unsupported">このハブのバージョンは古いため、アプリでバージョンの確認や更新ができません。ハブのマシンでinstall.shを使って一度更新すると使えるようになります。</string>
 

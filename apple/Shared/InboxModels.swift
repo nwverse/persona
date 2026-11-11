@@ -19,16 +19,18 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var summary: String?
     var reason: String?
     var read: Bool?
+    /// Navigation counts only unread Needs you items; reading never files them.
+    var isUnreadAction: Bool { read != true && !isDone && triage == .action }
     var doneAt: Date?
     var doneBy: String?
     var lark: Lark?
     var mail: Mail?
-    /// A Feishu document's @me / comment: the rows about the user with their status columns (docs/assistant/inbox.md「云文档」).
+    /// A Feishu document's @me / comment: the rows about the user with their status columns (docs/assistant/inbox.md「Docs: mentions in sheets, bases, and documents」).
     var doc: Doc?
     /// New foreign mail translated by the hub as it came in, by target language (subject and preview here; the body
     /// comes with the mail).
     var translations: [String: Translated]?
-    /// A Moments post where someone commented on, replied to or @ed the user (docs/assistant/inbox.md「公司圈」).
+    /// A Moments post where someone commented on, replied to or @ed the user (docs/assistant/inbox.md「Moments」).
     var moment: Moment?
     /// Only in GET /api/v1/inbox/{id}: the conversation as text.
     var context: String?
@@ -41,8 +43,14 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     /// What it holds now, as the hub listed it: a bulk Done sends it back so an item that took new messages since
     /// is left open (older hubs leave it out).
     var version: String?
-    /// What it grew out of (docs/assistant/inbox.md「thread line」, #2128): another item, a todo or an agent session; older hubs leave it out.
+    /// What it grew out of (docs/assistant/inbox.md「Relationships: parents and children」, #2128): another item, a todo or an agent session; older hubs leave it out.
     var parent: InboxParent?
+    /// The manager it belongs to, as the hub stamps a merged list (docs/protocol/protocol.md "Per-manager routing"); nil
+    /// from a hub before managers. What is done to it goes to that manager (`APIClient.manager(_:)`).
+    var manager: String?
+    /// Its place in the list: each manager numbers its own items, so two managers may both have an `id`.
+    var key: String { Self.key(id: id, manager: manager) }
+    static func key(id: String, manager: String?) -> String { manager.map { "\($0)\u{0}\(id)" } ?? id }
     /// Inbox phase 1 (docs/assistant/inbox.md): the section the hub put an open item in (action | working | fyi | noise;
     /// nil from an older hub: the list goes by `tier`), urgent (someone waits), the manager's recap, the processing
     /// conversation, the current suggestion, the chain and related items. Older hubs leave them all out.
@@ -69,6 +77,15 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
             case "repo": String(localized: "Mute This Repository")
             case "chat": String(localized: "Mute This Chat")
             default: String(localized: "Mute This Sender")
+            }
+        }
+
+        /// The menu's words for setting a rule on it (docs/assistant/inbox.md "Policies").
+        var policyTitle: String {
+            switch tag {
+            case "repo": String(localized: "Rule for This Repository…")
+            case "chat": String(localized: "Rule for This Chat…")
+            default: String(localized: "Rule for This Sender…")
             }
         }
     }
@@ -248,7 +265,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, source, kind, account, title, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
-        case status, urgent, recap, handling, suggestion, chain, related
+        case status, urgent, recap, handling, suggestion, chain, related, manager
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
     }
 
@@ -362,6 +379,16 @@ nonisolated struct InboxTriageStatus: Codable, Hashable, Sendable {
         var state: String
         var reason: String?
         var waiting: Int
+        /// timeout | rate_limited | login_refused | failed: this round could not read the source, so its items may be old.
+        var readError: String? = nil
+        /// The failed read in the hub's words; older hubs may omit it.
+        var readReason: String? = nil
+
+        private enum CodingKeys: String, CodingKey {
+            case source, name, state, reason, waiting
+            case readError = "read_error"
+            case readReason = "read_reason"
+        }
     }
 }
 
@@ -369,6 +396,30 @@ nonisolated struct InboxTriageStatus: Codable, Hashable, Sendable {
 nonisolated struct InboxListing: Decodable, Sendable {
     var items: [InboxItem]
     var triage: InboxTriageStatus?
+}
+
+/// A page of the hub's done history (GET /api/v1/inbox/done, #2200): done items older than the list's few days, newest
+/// done first; `next` is where the following page starts, present when this one is full.
+nonisolated struct InboxDonePage: Decodable, Sendable {
+    nonisolated struct Cursor: Codable, Sendable, Equatable {
+        var before: String
+        var beforeID: String
+        enum CodingKeys: String, CodingKey {
+            case before
+            case beforeID = "before_id"
+        }
+    }
+    var items: [InboxItem]
+    var next: Cursor?
+}
+
+/// GET /api/v1/inbox/done/days' answer (#2967): the done items per calendar day in the zone asked for.
+nonisolated struct InboxDoneDays: Decodable, Sendable {
+    nonisolated struct Day: Decodable, Sendable {
+        var day: String
+        var count: Int
+    }
+    var days: [Day]
 }
 
 extension APIClient {
@@ -387,6 +438,29 @@ extension APIClient {
     /// The same with how triage stands.
     func inboxListing(connectors: Bool = false) async throws -> InboxListing {
         try await Self.decodeInbox(request("GET", "/api/v1/inbox", query: connectors ? ["sources": "all"] : [:]))
+    }
+
+    /// A page of done items older than the list's (GET /api/v1/inbox/done, #2200), from `after` (nil: the newest).
+    /// `before` without a cursor is a moment: the items done before it (a Done group's end, #2969).
+    func inboxDone(after cursor: InboxDonePage.Cursor?, before moment: Date? = nil, limit: Int = 100, connectors: Bool = false) async throws -> InboxDonePage {
+        var query = ["limit": String(limit)]
+        if connectors { query["sources"] = "all" }
+        if let cursor {
+            query["before"] = cursor.before
+            query["before_id"] = cursor.beforeID
+        } else if let moment {
+            query["before"] = moment.formatted(.iso8601)
+        }
+        return try await JSON.decoder.decode(InboxDonePage.self, from: request("GET", "/api/v1/inbox/done", query: query))
+    }
+
+    /// The done items per calendar day in `zone` (GET /api/v1/inbox/done/days, #2967): "YYYY-MM-DD" → count. 404 on a
+    /// hub from before them.
+    func inboxDoneDays(zone: String, connectors: Bool = false) async throws -> [String: Int] {
+        var query = ["tz": zone]
+        if connectors { query["sources"] = "all" }
+        let page = try JSON.decoder.decode(InboxDoneDays.self, from: try await request("GET", "/api/v1/inbox/done/days", query: query))
+        return Dictionary(page.days.map { ($0.day, $0.count) }, uniquingKeysWith: +)
     }
 
     /// Collects Feishu and mail now, then lists.
@@ -427,7 +501,7 @@ extension APIClient {
                        as: InboxBulkResult.self)
     }
 
-    /// Clear All (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「全部清理」): `action` is `dismiss` (the hub takes `done` too),
+    /// Clear All (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「Clean up all」): `action` is `dismiss` (the hub takes `done` too),
     /// each item with the version it was listed at (the hub leaves one that took new messages since: `skipped`, changed).
     func bulkInbox(_ action: String, _ items: [InboxItem]) async throws -> InboxBulkReply {
         try await post("/api/v1/inbox/bulk",
@@ -455,6 +529,40 @@ extension APIClient {
     }
 
     func unmuteInbox(_ id: String) async throws { try await delete("/api/v1/inbox/mutes/" + id) }
+
+    private nonisolated struct InboxPolicies: Decodable, Sendable { var policies: [InboxPolicy]? }
+    private nonisolated struct PolicyBody: Encodable, Sendable {
+        var itemID: String?
+        var tag: String?
+        var tier: InboxPolicy.Tier
+        var twin: InboxPolicy.Twin
+        enum CodingKeys: String, CodingKey { case tag, tier, twin, itemID = "item_id" }
+    }
+    /// Only the count is read: a rule that setting neither part removed still comes back as an object.
+    private nonisolated struct PolicyApplied: Decodable, Sendable { var applied: Int? }
+
+    /// The user's rules, in every source (docs/assistant/inbox.md "Policies"); an older hub answers 404.
+    func inboxPolicies() async throws -> [InboxPolicy] {
+        try await get("/api/v1/inbox/policies", as: InboxPolicies.self).policies ?? []
+    }
+
+    /// Sets the rule of what the item has under `tag` (the hub reads the value off the item): a rule for the same target is
+    /// changed, one left with neither part is removed. Answers how many open items took its tier at once.
+    @discardableResult
+    func setInboxPolicy(itemID: String, tag: String, tier: InboxPolicy.Tier, twin: InboxPolicy.Twin) async throws -> Int {
+        try await post("/api/v1/inbox/policies", body: PolicyBody(itemID: itemID, tag: tag, tier: tier, twin: twin),
+                       as: PolicyApplied.self).applied ?? 0
+    }
+
+    /// Changes a rule by id, both parts as they should be; neither removes it.
+    @discardableResult
+    func updateInboxPolicy(_ id: String, tier: InboxPolicy.Tier, twin: InboxPolicy.Twin) async throws -> Int {
+        let data = try await request("PATCH", "/api/v1/inbox/policies/" + id, body: PolicyBody(tier: tier, twin: twin))
+        return try JSON.decoder.decode(PolicyApplied.self, from: data).applied ?? 0
+    }
+
+    /// Removes a rule: items keep the tier it gave until new content is triaged again.
+    func deleteInboxPolicy(_ id: String) async throws { try await delete("/api/v1/inbox/policies/" + id) }
 
     private struct InboxText: Codable { var text: String }
     private struct InboxReplyBody: Encodable { var text: String; var changes: [InboxItem.DocChange]?; var card: String? }
@@ -529,6 +637,8 @@ nonisolated struct InboxMute: Codable, Identifiable, Hashable, Sendable {
     var value: String
     var name: String
     var createdAt: Date?
+    /// Whose mute it is (several managers: each keeps its own, and the Muted list stamps it); nil: the default's.
+    var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, source, tag, value, name
@@ -542,6 +652,111 @@ nonisolated struct InboxMute: Codable, Identifiable, Hashable, Sendable {
         case "chat": String(localized: "Session")
         default: String(localized: "From")
         }
+    }
+}
+
+/// A rule the user set (GET /api/v1/inbox/policies, docs/assistant/inbox.md "Policies"): items of `source` with `value`
+/// under `tag` get its tier after triage, and the AI twin takes them first or never. The hub decides in code.
+nonisolated struct InboxPolicy: Decodable, Identifiable, Hashable, Sendable {
+    /// Where its items go; `unset` leaves it to triage.
+    enum Tier: String, Codable, CaseIterable, Sendable {
+        case unset = "", action, fyi, noise
+
+        var title: String {
+            switch self {
+            case .unset: String(localized: "Leave to Triage [Inbox Policy]")
+            case .action: String(localized: "Always Needs You [Inbox Policy]")
+            case .fyi: String(localized: "FYI [Inbox Policy]")
+            case .noise: String(localized: "Collapsed [Inbox Policy]")
+            }
+        }
+    }
+
+    /// What the AI twin does with them; `unset` as configured.
+    enum Twin: String, Codable, CaseIterable, Sendable {
+        case unset = "", first, never
+
+        var title: String {
+            switch self {
+            case .unset: String(localized: "As Set [Inbox Policy]")
+            case .first: String(localized: "AI Twin First [Inbox Policy]")
+            case .never: String(localized: "Never AI Twin [Inbox Policy]")
+            }
+        }
+    }
+
+    var id: String
+    var source: String
+    var sourceName: String?
+    var tag: String // sender | chat | repo
+    var value: String
+    var name: String
+    var tier: Tier
+    var twin: Twin
+    var createdAt: Date?
+    var updatedAt: Date?
+    /// Whose rule it is (several managers: each keeps its own, and the Rules list stamps it); nil: the default's.
+    var manager: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, source, tag, value, name, tier, twin
+        case sourceName = "source_name", createdAt = "created_at", updatedAt = "updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        source = try c.decode(String.self, forKey: .source)
+        sourceName = try c.decodeIfPresent(String.self, forKey: .sourceName).flatMap { $0.isEmpty ? nil : $0 }
+        tag = try c.decode(String.self, forKey: .tag)
+        value = try c.decode(String.self, forKey: .value)
+        name = try c.decodeIfPresent(String.self, forKey: .name).flatMap { $0.isEmpty ? nil : $0 } ?? value
+        // A part a newer hub added reads as unset rather than failing the whole list.
+        tier = (try? c.decodeIfPresent(String.self, forKey: .tier)).flatMap(Tier.init(rawValue:)) ?? .unset
+        twin = (try? c.decodeIfPresent(String.self, forKey: .twin)).flatMap(Twin.init(rawValue:)) ?? .unset
+        createdAt = try? c.decodeIfPresent(Date.self, forKey: .createdAt)
+        updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
+    }
+
+    /// What it targets, as an item's mute option.
+    var option: InboxItem.MuteOption { .init(tag: tag, value: value, name: name) }
+
+    /// The tags a rule can name, the most specific first: a sender's rule beats its chat's (the hub's order).
+    static let precedence = ["sender", "chat", "repo"]
+
+    /// The rule that applies to an item, as the hub picks it: the same source, one of its mute options, sender before
+    /// chat before repository.
+    static func applying(to item: InboxItem, in policies: [InboxPolicy]) -> InboxPolicy? {
+        var best: (rank: Int, policy: InboxPolicy)?
+        for o in item.mutes ?? [] {
+            guard let r = precedence.firstIndex(of: o.tag), r < (best?.rank ?? precedence.count) else { continue }
+            if let p = policies.first(where: { $0.source == item.source && $0.tag == o.tag && $0.value == o.value }) { best = (r, p) }
+        }
+        return best?.policy
+    }
+
+    /// The newest first, by time (`created_at`); one without a time last.
+    static func newestFirst(_ list: [InboxPolicy]) -> [InboxPolicy] {
+        list.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+    }
+
+    /// What it does, for people: "Always Needs You · AI Twin First", one part when it sets one.
+    var summary: String {
+        [tier == .unset ? nil : tier.title, twin == .unset ? nil : twin.title].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// What kind of thing a tag names, for people, in the web's words: Repository / Chat / Sender.
+    static func kindName(_ tag: String) -> String {
+        switch tag {
+        case "repo": String(localized: "Repository [Inbox Rule Kind]")
+        case "chat": String(localized: "Chat [Inbox Rule Kind]")
+        default: String(localized: "Sender [Inbox Rule Kind]")
+        }
+    }
+
+    /// The Rules list's second line: where it is from, what kind of thing, what it does.
+    var detail: String {
+        [sourceName ?? source, Self.kindName(tag), summary].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }
 
@@ -596,8 +811,29 @@ nonisolated struct InboxBulkResult: Decodable, Sendable, Equatable {
     nonisolated struct Skip: Decodable, Sendable, Equatable {
         var id: String
         var reason: String
+        /// The manager that was asked (`stamped`); its answer names none.
+        var manager: String? = nil
+        var key: String { InboxItem.key(id: id, manager: manager) }
+
+        enum CodingKeys: String, CodingKey { case id, reason }
     }
     var changed: [InboxItem]
     var unchanged: [String]
     var skipped: [Skip]
+
+    static let none = InboxBulkResult(changed: [], unchanged: [], skipped: [])
+
+    /// The answer of the manager asked, its items stamped with it as its list stamped them (`InboxItem.key`).
+    func stamped(_ manager: String?) -> InboxBulkResult {
+        guard let manager else { return self }
+        return InboxBulkResult(changed: changed.map { var it = $0; it.manager = it.manager ?? manager; return it },
+                               unchanged: unchanged,
+                               skipped: skipped.map { var s = $0; s.manager = manager; return s })
+    }
+
+    mutating func add(_ other: InboxBulkResult) {
+        changed += other.changed
+        unchanged += other.unchanged
+        skipped += other.skipped
+    }
 }

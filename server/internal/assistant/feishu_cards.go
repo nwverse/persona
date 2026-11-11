@@ -38,6 +38,7 @@ const (
 	maxScreenRunes       = 2500  // runes of the terminal screen kept
 	maxScreenLineRunes   = 300   // runes per terminal line
 	maxPermissionReason  = 1000  // runes of a permission's reason
+	maxPlanRunes         = 5000  // runes of a plan shown on its card (clipPlan)
 	maxAnsweredQuestions = 3     // questions shown on an answered card
 	maxAnsweredQRunes    = 150   // runes per question on an answered card
 	maxCardJSONBytes     = 24000 // serialized size above which safeCard falls back (Feishu rejects ~30 KB)
@@ -59,6 +60,9 @@ func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bo
 	f, ready := s.feishuFeatures(ctx)
 	if !ready || !f.Cards {
 		return false
+	}
+	if ix.Private {
+		return false // a Just me turn's card: never on Lark (meeting_justme.go)
 	}
 	// "All cards" does not take a health conversation's: only one the chat drives itself (health.go).
 	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixInHealth(ctx, ix)) {
@@ -141,7 +145,7 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 	case proto.IxQuestion:
 		fallback = "❓ " + clip(firstQuestion(ix), 100)
 	case proto.IxPermission:
-		fallback = "🔐 " + toolDisplayName(ix.ToolName)
+		fallback = "🔐 " + ixToolName(ix)
 	case proto.IxPlan:
 		fallback = "📋 " + clip(firstLine(ix.Plan), 100)
 	case proto.IxScreen:
@@ -519,11 +523,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		return safeCard(l, c.Buttons(open, feishubot.Btn(i18n.T(l, "assistant-feishu_cards.dismiss"), feishubot.Default, val(map[string]any{"dismiss": "1"}))), open)
 	case proto.IxPlan:
 		c := feishubot.NewCard("📋 "+i18n.T(l, "assistant-feishu_cards.plan_title", i18n.Args{"where": s.ixWhere(ctx, ix)}), feishubot.Blue, i18n.T(l, "assistant-feishu_cards.plan_summary"))
-		plan := ix.Plan
-		if r := []rune(plan); len(r) > 5000 {
-			plan = string(r[:5000]) + i18n.T(l, "assistant-feishu_cards.plan_clipped")
-		}
-		c.Markdown(feishubot.CardMarkdown(plan))
+		c.Markdown(feishubot.CardMarkdown(clipPlan(ix.Plan, i18n.T(l, "assistant-feishu_cards.plan_clipped"))))
 		c.Buttons(
 			feishubot.Btn(i18n.T(l, "assistant-feishu_cards.approve_run"), feishubot.Primary, val(map[string]any{"approve": "1", "mode": "bypassPermissions"})),
 			feishubot.Btn(i18n.T(l, "assistant-feishu_cards.approve_edits"), feishubot.Default, val(map[string]any{"approve": "1", "mode": "acceptEdits"})),
@@ -532,11 +532,11 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 			feishubot.Submit(i18n.T(l, "assistant-feishu_cards.send_back"), feishubot.Danger, "plan_reject", val(map[string]any{"approve": "0"})))
 		return safeCard(l, c.Buttons(open), open)
 	case proto.IxPermission:
-		c := feishubot.NewCard("🔐 "+i18n.T(l, "assistant-feishu_cards.permission_title", i18n.Args{"where": s.ixWhere(ctx, ix)}), feishubot.Orange, i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": toolDisplayName(ix.ToolName)}))
+		c := feishubot.NewCard("🔐 "+i18n.T(l, "assistant-feishu_cards.permission_title", i18n.Args{"where": s.ixWhere(ctx, ix)}), feishubot.Orange, i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": ixToolName(ix)}))
 		var b strings.Builder
-		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(toolDisplayName(ix.ToolName)))
+		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(ixToolName(ix)))
 		if ix.Reason != "" {
-			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clipRunes(ix.Reason, maxPermissionReason)))
+			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
 		}
 		c.Markdown(b.String())
 		if sum := strings.TrimSpace(ix.Summary); sum != "" {
@@ -558,6 +558,12 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		// Claude's session rule (node/runtimes.go), so the button there would only allow once and ask again.
 		label := ix.AlwaysLabel
 		if label == "" && (ix.Agent == "" || ix.Agent == "claude") && ix.SessionID != "" {
+			label = i18n.T(l, "assistant-feishu_cards.always_allow")
+		}
+		// The manager's word wins where it gave one (#3590): no button that would only allow once.
+		if kept := ix.AlwaysHonored; kept != nil && !*kept {
+			label = ""
+		} else if kept != nil && label == "" {
 			label = i18n.T(l, "assistant-feishu_cards.always_allow")
 		}
 		if label != "" {
@@ -620,6 +626,19 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		return safeCard(l, s.elicitationCard(ctx, ix, open), open)
 	}
 	return safeCard(l, feishubot.NewCard(where, feishubot.Grey, "").Buttons(open), open)
+}
+
+// clipPlan is a plan longer than maxPlanRunes cut to its first channel.Split piece, then note. The piece ends at a line
+// break where it can and closes a code block it cuts into, so the note reads as text, not as the code's last line.
+func clipPlan(plan, note string) string {
+	if len([]rune(plan)) <= maxPlanRunes {
+		return plan
+	}
+	head := channel.Split(plan, maxPlanRunes)[0]
+	if r := []rune(head); len(r) > maxPlanRunes { // Split hands back a plan of only line breaks whole
+		head = string(r[:maxPlanRunes])
+	}
+	return head + note
 }
 
 // safeCard returns c, or, when it would still be too big for Feishu after the clipping above, a short card that sends
@@ -710,9 +729,9 @@ func firstQuestion(ix proto.Interaction) string {
 func questionText(l i18n.Lang, q proto.Question) string {
 	s := ""
 	if q.Header != "" {
-		s = "**" + feishubot.EscapeMarkdown(clipRunes(q.Header, 60)) + "**\n"
+		s = "**" + feishubot.EscapeMarkdown(clip(q.Header, 60)) + "**\n"
 	}
-	s += feishubot.EscapeMarkdown(clipRunes(q.Question, maxQuestionRunes))
+	s += feishubot.EscapeMarkdown(clip(q.Question, maxQuestionRunes))
 	descBudget := maxOptionDescBudget
 	clippedOptions := 0
 	for i, o := range q.Options {
@@ -721,9 +740,9 @@ func questionText(l i18n.Lang, q proto.Question) string {
 			break
 		}
 		if o.Description != "" && descBudget > 0 {
-			desc := clipRunes(o.Description, maxOptionDescRunes)
+			desc := clip(o.Description, maxOptionDescRunes)
 			if len([]rune(desc)) > descBudget {
-				desc = clipRunes(desc, descBudget)
+				desc = clip(desc, descBudget)
 			}
 			descBudget -= len([]rune(desc))
 			s += "\n- " + feishubot.EscapeMarkdown(clip(o.Label, 40)) + "：" + feishubot.EscapeMarkdown(desc)
@@ -748,13 +767,13 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 			qs = qs[:maxAnsweredQuestions]
 		}
 		for _, q := range qs {
-			c.Markdown(feishubot.EscapeMarkdown(clipRunes(q.Question, maxAnsweredQRunes)))
+			c.Markdown(feishubot.EscapeMarkdown(clip(q.Question, maxAnsweredQRunes)))
 		}
 		if more > 0 {
 			c.Note(strings.TrimSpace(i18n.T(s.botLang(ctx), "assistant-feishu_cards.clipped")))
 		}
 	case proto.IxPermission:
-		c.Markdown(feishubot.EscapeMarkdown(ix.ToolName + " " + clip(oneLine(ix.Summary), 200)))
+		c.Markdown(feishubot.EscapeMarkdown(ixToolName(ix) + " " + clip(oneLine(ix.Summary), 200)))
 	case proto.IxPlan:
 		c.Markdown(feishubot.EscapeMarkdown(clip(planTitle(ix.Plan), 200)))
 	}
@@ -813,16 +832,21 @@ func (s *Service) webBase(ctx context.Context) string {
 	return strings.TrimRight(st.PublicURL, "/")
 }
 
-// sessionLink is a conversation's page in the web app at web (web/src/lib/router.ts): a Persona conversation is
-// /persona/<id>, an agent /s/<machine>/<id>; "" when web is.
+// sessionLink is a conversation's page in the web app at web; "" when web is.
 func sessionLink(web, machine, session string, assistant bool) string {
 	if web == "" {
 		return ""
 	}
+	return web + sessionPath(machine, session, assistant)
+}
+
+// sessionPath is a conversation's path in the web app (web/src/lib/router.ts): a Persona conversation is
+// /persona/<id>, an agent /s/<machine>/<id>.
+func sessionPath(machine, session string, assistant bool) string {
 	if assistant {
-		return web + "/persona/" + url.PathEscape(session)
+		return "/persona/" + url.PathEscape(session)
 	}
-	return web + "/s/" + url.PathEscape(machine) + "/" + url.PathEscape(session)
+	return "/s/" + url.PathEscape(machine) + "/" + url.PathEscape(session)
 }
 
 // todoLink is a todo's page in the web app at web, "" when web is.

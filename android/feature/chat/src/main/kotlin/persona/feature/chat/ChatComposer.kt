@@ -296,16 +296,25 @@ fun ChatComposer(
     val offersExpand = enabled && composerOffersExpand(lineCount, growLines)
     LaunchedEffect(enabled) { if (!enabled) expandedEditor = false }
     val canSend = enabled && state.ready && !sending
+    val homeAssistant = LocalHomeChrome.current?.let { it.items.firstOrNull()?.key == it.selected } == true
+    val fullToolbar = !homeAssistant || state.focused || hasContent
+    // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
+    // this change, so moving the controls cannot dispose the field and cancel the tap or the IME.
+    val expanded = state.focused || hasContent
+    val composerPlaceholder = if (homeAssistant) stringResource(R.string.chat_composer_ask_persona, LocalPersonaName.current) else placeholder
 
     ComposerFrame(
         // Blank space around the field (its padding, beside the buttons) types too: one tap, not a hunt for the line.
         onBlankTap = { if (enabled) { focusRequester.requestFocus(); keyboard?.show() } },
+        expanded = expanded,
         leading = {
             JIconButton(PhIcons.Plus, stringResource(R.string.chat_composer_add), { menu = true }, enabled = !sending && enabled)
-            if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), {
-                state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++
-            }, enabled = enabled)
-            leading?.invoke(this)
+            if (expanded) {
+                if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), {
+                    state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++
+                }, enabled = enabled)
+                leading?.invoke(this)
+            }
         },
         trailing = {
             // The mic stays (iOS ShellComposerBar): more can be dictated after what is typed. Send beside it once there is
@@ -333,8 +342,8 @@ fun ChatComposer(
             if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.cautionText)
             ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
-            accessory?.invoke(this)
-            modeHint?.let { JChip(it, icon = PhIcons.SlidersHorizontal) }
+            if (fullToolbar) accessory?.invoke(this)
+            if (fullToolbar) modeHint?.let { JChip(it, icon = PhIcons.SlidersHorizontal) }
             if (working && hasContent && enabled) Text(stringResource(R.string.chat_composer_will_queue), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             // A draft that is one "/" word: the quick messages it can be, right above the field.
             ComposerSuggestions(quick.map { ComposerSuggestion(it.title, it.extensionName, key = "${it.extension}/${it.id}", flexible = true) },
@@ -358,7 +367,7 @@ fun ChatComposer(
             cursorBrush = SolidColor(PersonaTheme.palette.ink),
             decorationBox = { field ->
                 Box {
-                    if (state.value.text.isEmpty()) Text(if (working && enabled) stringResource(R.string.chat_composer_placeholder_working) else placeholder,
+                    if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
                         style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     field()
                 }
@@ -366,7 +375,7 @@ fun ChatComposer(
         if (offersExpand) ComposerExpandButton(expanded = false, onClick = { expandedEditor = true }, modifier = Modifier.align(Alignment.TopEnd))
     }
     // Same draft and caret as the field; collapsing puts the caret back in the field. Sending closes it.
-    if (expandedEditor) ExpandedComposer(state.value, { state.beginEdit(); state.value = it }, placeholder,
+    if (expandedEditor) ExpandedComposer(state.value, { state.beginEdit(); state.value = it }, composerPlaceholder,
         onCollapse = { expandedEditor = false; state.focusRequest++ }, enabled = enabled) {
         SendButton(onClick = { expandedEditor = false; onSend() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }

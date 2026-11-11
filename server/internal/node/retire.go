@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Retiring a finished task's agent (hub tasks_close.go, docs/assistant/todos.md "Closing the agent of a finished task"): its pane closes and
+// Retiring a finished task's agent (hub tasks_close.go, docs/assistant/todos.md "Close Agents for completed tasks"): its pane closes and
 // the agent process with it, while everything needed to bring it back stays — the session id, its transcript, and in
 // the node's state the launcher, directory and model it ran with. The next message to it resumes it (send: claude
 // --resume, codex resume, traex resume) in a new tab of the same engine. Only an agent that can come back that way is
@@ -79,6 +80,55 @@ func (n *Node) retire(ctx context.Context, id string) (closed bool, err error) {
 	return true, nil
 }
 
+// resumed is what a Claude session that is not running is resumed with: the directory, launcher and model it was
+// started with, the modes it ran in and its title as the tab's name.
+type resumed struct {
+	cwd, launcher, mode, effort, tab string
+	execution                        modelExecution
+}
+
+// resumeWith is how a Claude session that is not running comes back, by a message (send) or by a start that resumes
+// it and leaves these out (session.start, fillResume).
+func (n *Node) resumeWith(id string, opts sendOpts) resumed {
+	st, _ := n.state.get(id)
+	r := resumed{cwd: st.Cwd, tab: n.resumeTabName(id)}
+	r.launcher, r.execution = n.resumeLauncher(st, id, opts)
+	if r.cwd == "" {
+		if p := n.transcriptPath(id); p != "" {
+			if fi, err := os.Stat(p); err == nil {
+				r.cwd = n.meta(p, fi).cwd
+			}
+		}
+	}
+	r.mode, r.effort = n.modesOf(id)
+	return r
+}
+
+// fillResume: a start that resumes a Claude session that is not running (the app's Resume Session, #4328) keeps what
+// the session ran with for whatever the start leaves out (asked), as a message that resumes it does; before, it ran
+// on the launcher's default model and wrote that over the one the session remembered. The model comes along only
+// with the launcher it was picked for. A Codex or compatible thread resumes its own way (codex_resume.go), and a
+// running session is not started again: both keep what was asked.
+func (n *Node) fillResume(id string, asked resumed) resumed {
+	if !validID(id) {
+		return asked
+	}
+	if _, live := n.agent(id); live || n.codexPath(id) != "" || n.traexPath(id) != "" {
+		return asked
+	}
+	r := n.resumeWith(id, sendOpts{})
+	out := asked
+	out.launcher = cmp.Or(asked.launcher, r.launcher)
+	if out.launcher == r.launcher && asked.execution.Model == "" && asked.execution.Fingerprint == "" {
+		out.execution.Model, out.execution.Fingerprint = r.execution.Model, r.execution.Fingerprint
+	}
+	out.cwd = cmp.Or(asked.cwd, r.cwd)
+	out.mode = cmp.Or(asked.mode, r.mode)
+	out.effort = cmp.Or(asked.effort, r.effort)
+	out.tab = cmp.Or(asked.tab, r.tab)
+	return out
+}
+
 // resumeTabName names the tab a session is resumed in: its title (Claude's AI title, or the one it was given), so
 // the tab reads as it did before it was closed rather than agent-<n>.
 func (n *Node) resumeTabName(id string) string {
@@ -117,6 +167,21 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	if fi, err := os.Stat(st.Cwd); err != nil || !fi.IsDir() {
 		return fmt.Errorf("directory %s does not exist", st.Cwd)
 	}
+	codex := n.codexPath(id) != ""
+	var argv []string
+	if codex {
+		var ok bool
+		argv, ok = n.codexLauncher(ctx, st.Launcher)
+		if !ok {
+			return fmt.Errorf("启动器「%s」不再运行 Codex，没法接着这个会话", st.Launcher)
+		}
+		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
+			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
+		}
+		if st.Model != "" {
+			argv = append(withoutModelArgs(argv), "--model", st.Model)
+		}
+	}
 	paths, err := n.saveImages(images)
 	if err != nil {
 		return err
@@ -129,16 +194,9 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		return err
 	}
 	tab := n.resumeTabName(id)
-	if n.codexPath(id) == "" { // a compatible CLI: `<launcher> resume <id> <message>`
+	if !codex { // a compatible CLI: `<launcher> resume <id> <message>`
 		_, err = n.startOtherAgent(ctx, launch, st.Cwd, st.Launcher, traexAgent, text, id, ws, tab)
 		return uncertain(err)
-	}
-	argv, ok := n.codexLauncher(ctx, st.Launcher)
-	if !ok {
-		return fmt.Errorf("启动器「%s」不再运行 Codex，没法接着这个会话", st.Launcher)
-	}
-	if st.Model != "" {
-		argv = append(withoutModelArgs(argv), "--model", st.Model)
 	}
 	return uncertain(n.resumeCodex(ctx, launch, id, st, argv, text, ws, tab))
 }
@@ -166,7 +224,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	pane := created.Pane.String()
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
-	shells := paneShells(ctx)
+	shells := paneShells(ctx, created)
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
 		return err // the tab is closed: no pane to bind
@@ -197,11 +255,18 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	if c := adoptedPane(ctx); c != nil { // "Run Agent Here": the pane the user picked, not a new tab (panes_actions.go)
 		return c, nil
 	}
+	if c, ok := ctx.Value(reusedTabKey{}).(*host.Created); ok && c != nil { // a failed start's kept tab (startremedy.go)
+		return c, nil
+	}
 	var created *host.Created
 	var err error
 	if ws == "" {
 		if created, err = launch.CreateSpace(ctx, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
-			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, nil))
+			var taken map[string]bool
+			if _, ok := launch.(*herdrCoreHost); ok {
+				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder.
+			}
+			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
 	} else {
 		created, err = launch.CreateSlot(ctx, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))

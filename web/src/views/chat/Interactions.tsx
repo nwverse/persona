@@ -1,19 +1,20 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { answerCard } from "../../lib/card-answer";
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
 import { allowBody, denyBody } from "../../lib/quick-answers";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
+import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import type { Interaction } from "../../lib/types";
 import { defaults, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, urlHost, urlTarget, validate, type ElicitationAction, type Field, type Values } from "../../lib/elicitation";
 import { answerLines } from "../../lib/answered";
-import { sessionCan, sessionTitle } from "../../lib/format";
+import { interactionCanAnswer, sessionTitle } from "../../lib/format";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
-import { mcpServerLabel, toolDisplayName } from "../../lib/turns";
+import { cardToolName, mcpServerLabel } from "../../lib/turns";
 import { isSecretRun, optionDisplay, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
@@ -26,8 +27,9 @@ import { cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnswered } from "./dock
 import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
-import { alwaysScope } from "../../lib/always-scope";
+import { alwaysScope, offersAlways } from "../../lib/always-scope";
 import { StatusMark } from "../../ui/StatusMark";
+import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
@@ -89,37 +91,62 @@ type CardKeys = ReturnType<typeof useCardKeys>;
  * `cardKeys`: the card's own keyboard (useCardKeys); without it the card is only reachable by pointer, as before.
  * `shrink-0`: the box above the input scrolls (ChatView's dock), and a card with `overflow-hidden` would otherwise let
  * flex squeeze it below its content — its footer (the very buttons that answer it) out of sight below the fold.
+ * `overflow-clip` rather than `overflow-hidden`: it clips to the rounded corners the same, but is not a scroll container,
+ * so the footer's `sticky` follows the dock's scrolling and the buttons stay at its bottom edge while the card is taller
+ * than the dock. `-bottom-1` cancels the dock's `p-1` (`bottom-0` would leave 4px of the body under the buttons).
  */
+/** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
+const AskedByVoice = createContext(false);
+/** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none, or for its first
+ *  moment online. InteractionCard says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables
+ *  every answer meanwhile. */
+const SendingAnswer = createContext("");
+
 function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
+  const asked = useContext(AskedByVoice);
+  const sending = useContext(SendingAnswer);
   return (
-    <div {...(cardKeys?.root ?? {})} aria-label={title} className="shrink-0 overflow-hidden rounded-card bg-surface shadow-card outline-none focus-visible:ring-2 focus-visible:ring-accent" style={{ animation: `fade-up 350ms ${EASE} both` }}>
+    <div {...(cardKeys?.root ?? {})} aria-label={title} className="shrink-0 overflow-clip rounded-card bg-surface shadow-card outline-none focus-visible:ring-2 focus-visible:ring-accent" style={{ animation: `fade-up 350ms ${EASE} both` }}>
       <div className="px-3.5 pt-3 pb-2.5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className={cx("mb-0.5 flex items-center gap-1.5 text-[11px] font-medium", looking ? "text-ink-3" : "text-attention")}>
               <StatusMark state={looking ? "working" : "needs_you"} size="sm" label={false} />
               {kicker}
+              {/* the card stays a quiet surface: a neutral chip, the voice's color only on its mark */}
+              {asked && (
+                <span data-testid="voice-asking" className="ml-0.5 inline-flex min-w-0 items-center gap-1 rounded-full bg-inset px-1.5 py-px text-[10.5px] font-medium whitespace-nowrap text-ink-2 shadow-hairline">
+                  <Icon name="voice" size={10} stroke={2.4} className="shrink-0 text-ai" />
+                  <span className="truncate">{t("voice.asking_mark")}</span>
+                </span>
+              )}
             </div>
             <div className="text-[13.5px] font-medium text-ink">{title}</div>
           </div>
-          {onDismiss && (
+        </div>
+        <div className="mt-2">{children}</div>
+        {/* Hand back (dismiss) leaves the request to the computer's terminal, and the hub takes no other answer for this card
+            after it: so it says so in words on a row of its own (Android's action row), never a bare × that reads as "close" */}
+        {onDismiss && (
+          <div className="mt-2 flex">
             <button
               type="button"
               aria-label={t("chat-interactions.hand_back")}
-              title={t("chat-interactions.hand_back")}
               onClick={onDismiss}
               disabled={busy}
               data-card-answer
-              className="touch-hit flex size-6 shrink-0 items-center justify-center rounded-[6px] text-ink-3 transition-colors enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40"
+              className="touch-hit -ml-1.5 rounded-[6px] px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40"
             >
-              <Icon name="x" size={14} stroke={2.2} />
+              {t("chat-interactions.hand_back")}
             </button>
-          )}
-        </div>
-        <div className="mt-2">{children}</div>
+          </div>
+        )}
       </div>
       {/* data-card-actions: what answers the card (with hand back above), for the sync scenarios (spec/fixtures/sync) */}
-      <div data-card-actions className="flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2">{footer}</div>
+      <div data-card-actions className={cx("sticky -bottom-1 flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2", sending && "flex-wrap")}>
+        {sending && <p data-card-pending role="status" className="basis-full truncate text-[12px] text-ink-2">{sending}</p>}
+        {footer}
+      </div>
     </div>
   );
 }
@@ -151,6 +178,40 @@ function SendArrow({ ready, onClick, label, busy, kbd }: { ready: boolean; onCli
         <Icon name="up" size={14} stroke={2.5} />
       </button>
     </span>
+  );
+}
+
+function ToolLoopCard({ ix }: { ix: Interaction }) {
+  const [busy, setBusy] = useState(false);
+  const sending = useRef(false);
+  const keys = useCardKeys();
+  const q = ix.questions?.[0];
+  const options = q?.options;
+  if (!q || !options || options.length !== 2) return null;
+  const send = async (label: string) => {
+    if (sending.current) return;
+    sending.current = true;
+    setBusy(true);
+    try {
+      await resolve(ix, { answers: { [q.question]: label } });
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
+  };
+  return (
+    <Card
+      kicker={t("chat-interactions.tool_loop_kicker")}
+      title={q.question}
+      cardKeys={keys}
+      footer={options.map((option, i) => (
+        <Button key={i} tone={i === 0 ? "quiet" : "primary"} className="min-w-0 shrink" title={option.label} disabled={busy} onClick={() => void send(option.label)}>
+          <span className="truncate">{option.label}</span>
+        </Button>
+      ))}
+    >
+      {null}
+    </Card>
   );
 }
 
@@ -292,7 +353,9 @@ function QuestionCard({ ix }: { ix: Interaction }) {
             onKeyDown={(e) => e.key === "Enter" && !composing(e.nativeEvent) && (last ? all && void send() : answered(qi) && setQi(qi + 1))}
             placeholder={t("chat-interactions.custom_placeholder")}
             aria-label={t("chat-interactions.custom_answer")}
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
+            // focused in a box that scrolls, it lands clear of the card's sticky answer row below and of a sticky title
+            // above (the assistant's Pending tray), rather than under either
+            className="min-w-0 flex-1 scroll-my-14 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
           />
         </label>
       </div>
@@ -367,7 +430,7 @@ function PlanCard({ ix }: { ix: Interaction }) {
         )
       }
     >
-      <div className="overflow-y-auto rounded-[8px] bg-inset px-3 py-2.5 shadow-hairline" style={{ maxHeight: PLAN_MAX }}>
+      <div className="overflow-y-auto rounded-[8px] bg-inset px-3 py-2.5 shadow-hairline" style={{ maxHeight: PLAN_MAX }} data-scroll-box>
         <Markdown text={ix.plan ?? ""} small />
       </div>
     </Card>
@@ -392,7 +455,7 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   return (
     <Card
       kicker={t("chat-interactions.permission_kicker")}
-      title={t("chat-interactions.permission_title", { tool: toolDisplayName(ix.tool_name) })}
+      title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })}
       cardKeys={keys}
       onDismiss={() => go({ dismiss: true })}
       busy={busy}
@@ -402,8 +465,8 @@ function PermissionCard({ ix }: { ix: Interaction }) {
             {t("chat-interactions.deny")}
           </Button>
           <span className="flex gap-1.5">
-            {/* Claude's "Always allow"; another agent's card (Codex, an agent runtime) only when it says what always allows. */}
-            {(!ix.agent || ix.agent === "claude" || ix.always_label) && (
+            {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
+            {offersAlways(ix) && (
               <Button tone="secondary" disabled={busy} onClick={() => go({ allow: true, always: true })}>
                 {t("chat-interactions.always_allow")}
               </Button>
@@ -577,6 +640,28 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
   );
 }
 
+function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolean }) {
+  const session = useStore(() => getSession(ix.machine_id, ix.session_id));
+  const [confirming, setConfirming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  if (!session || session.assistant || session.status !== "blocked") return null;
+  const close = async () => {
+    if (closing) return;
+    setClosing(true);
+    await archiveAgent(session, true, { ...appArchiveDeps, archive: s => archiveSession(s, true, true) });
+    setClosing(false);
+    setConfirming(false);
+  };
+  if (!confirming) return <Button className="min-h-11" disabled={disabled} onClick={() => setConfirming(true)}>{t("chat-interactions.close_agent")}</Button>;
+  return <div className="flex min-w-0 flex-col gap-2">
+    <p className="text-ink-2">{t("chat-interactions.close_agent_hint")}</p>
+    <div className="flex flex-wrap gap-2">
+      <Button className="min-h-11" disabled={disabled || closing} onClick={() => setConfirming(false)}>{t("chat-interactions.close_agent_cancel")}</Button>
+      <Button className="min-h-11" tone="danger" busy={closing} disabled={disabled || closing} onClick={() => void close()}>{t("chat-interactions.close_agent_confirm")}</Button>
+    </div>
+  </div>;
+}
+
 function ScreenCard({ ix }: { ix: Interaction }) {
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
@@ -617,8 +702,9 @@ function ScreenCard({ ix }: { ix: Interaction }) {
       cardKeys={keys}
       onDismiss={() => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
-      footer={
-        d?.options?.length ? (
+      footer={<div className="flex w-full min-w-0 flex-col gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+        {d?.options?.length ? (
           <span className="text-[11.5px] text-ink-3">{t("chat-interactions.screen_hint")}</span>
         ) : (
           <>
@@ -639,8 +725,10 @@ function ScreenCard({ ix }: { ix: Interaction }) {
               {keys.focused && <Kbd>Enter</Kbd>}
             </Button>
           </>
-        )
-      }
+        )}
+        </div>
+        <CloseBlockedAgent ix={ix} disabled={busy !== null} />
+      </div>}
     >
       {d?.detail && <p className="mb-2 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2">{d.detail}</p>}
       {d?.options?.length ? (
@@ -795,7 +883,7 @@ function ElicitationCard({ ix }: { ix: Interaction }) {
   // a card that moves on the page (the one above it answered) is drawn anew: it picks up what was typed and opened
   const [values, setValues] = useState<Values>(() => elicitationDraft(ix.id)?.values ?? defaults(form?.requested_schema));
   const [opened, setOpened] = useState<string | undefined>(() => elicitationDraft(ix.id)?.opened);
-  const canApprove = useStore(() => sessionCan(getSession(ix.machine_id, ix.session_id), "approve"));
+  const canApprove = useStore(() => interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id)));
   useEffect(() => saveElicitationDraft(ix.id, form?.requested_schema, { values, opened }), [ix.id, form?.requested_schema, values, opened]);
   const [busy, setBusy] = useState<ElicitationAction | "dismiss" | null>(null);
   const go = async (body: Record<string, unknown>, key: ElicitationAction | "dismiss") => {
@@ -960,17 +1048,19 @@ export function receiptAbout(ix: Interaction): string {
 
 /** A card this page answered: what was asked and the picks, read-only, for a moment (lib/store.ts endInteraction). */
 export function AnsweredCard({ card }: { card: Answered }) {
-  const lines = answerLines(card.ix, card.resolution);
+  // handed back: its head says so, and the line under it is which request went back to the computer, not those words again
+  const handedBack = card.resolution.dismiss === true;
+  const lines = handedBack ? [] : answerLines(card.ix, card.resolution);
   // a card with one unlabeled answer ("Allow", "Approve", a terminal option) says what it was about (#4353): which command was
   // allowed, not only that something was
-  const about = lines.length === 1 && !lines[0].label && card.resolution.dismiss !== true ? receiptAbout(card.ix) : "";
+  const about = handedBack || (lines.length === 1 && !lines[0].label) ? receiptAbout(card.ix) : "";
   return (
-    <div role="status" data-answered={card.ix.id} className="overflow-hidden rounded-card bg-surface px-3.5 py-2.5 shadow-card" style={{ animation: `fade-up 300ms ${EASE} both` }}>
+    <div role="status" data-answered={card.ix.id} className="shrink-0 overflow-hidden rounded-card bg-surface px-3.5 py-2.5 shadow-card" style={{ animation: `fade-up 300ms ${EASE} both` }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-green">
             <Icon name="check" size={11} stroke={3} />
-            {card.resolution.dismiss === true ? t("chat-interactions.handed_back") : t("chat-interactions.answered")}
+            {handedBack ? t("chat-interactions.handed_back") : t("chat-interactions.answered")}
           </div>
           <div className="flex flex-col gap-1">
             {about && <span data-answered-about className="block truncate text-[12px] text-ink-3" title={about}>{about}</span>}
@@ -997,14 +1087,28 @@ export function AnsweredCard({ card }: { card: Answered }) {
 }
 
 export function InteractionCard({ ix }: { ix: Interaction }) {
-  const canApprove = useStore(() => sessionCan(getSession(ix.machine_id, ix.session_id), "approve"));
-  const card = ix.kind === "question" ? <QuestionCard ix={ix} />
+  const canApprove = useStore(() => interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id)));
+  // an answer still on its way (the hub away, apiOp retrying) holds the card, also after leaving the chat and coming back
+  const { pending, line } = usePendingLine(ix);
+  const card = ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
+    : ix.kind === "question" ? <QuestionCard ix={ix} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
-  // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was
-  return <div data-card={ix.id} className="contents">{canApprove ? card : <fieldset disabled>{card}</fieldset>}</div>;
+  const asked = useVoiceAsking(ix);
+  // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was.
+  // The fieldset is always there (switching it in would remount the card): disabled, it stops every answer and the
+  // card's keys (lib/card-keys.ts) while the session can't be approved here or an answer is on its way
+  return (
+    <div data-card={ix.id} className="contents">
+      <AskedByVoice.Provider value={asked}>
+        <SendingAnswer.Provider value={line}>
+          <fieldset disabled={!canApprove || pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+        </SendingAnswer.Provider>
+      </AskedByVoice.Provider>
+    </div>
+  );
 }
 
 /**
@@ -1042,15 +1146,17 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   return (
     <div className="flex min-h-0 shrink flex-col gap-2">
       {/* the box clips what is in it: its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
-      <div data-chat-cards className={cx("-m-1 flex min-h-0 shrink flex-col overflow-y-auto overscroll-contain p-1", !done.length && !full && "hidden")}>
+      <div data-chat-cards data-scroll-box className={cx("-m-1 flex min-h-0 shrink flex-col overflow-y-auto overscroll-contain p-1", !done.length && !full && "hidden")}>
         {done.length > 0 && <div className="flex flex-col gap-2">{done}</div>}
+        {/* unclipped once open (#3112): a clipping fold is the box a card's sticky footer sticks in, so a card taller than
+            data-chat-cards (a long command) left its buttons below the fold, out of sight, with no way to bring them up */}
         {count > 0 && (
-          <Collapse open={full >= 1}>
+          <Collapse open={full >= 1} unclipped>
             <div className={cx(done.length > 0 && "pt-2")}>{cards[0]}</div>
           </Collapse>
         )}
         {count > 1 && (
-          <Collapse open={full > 1}>
+          <Collapse open={full > 1} unclipped>
             <div className="flex flex-col gap-2 pt-2">{cards.slice(1)}</div>
           </Collapse>
         )}

@@ -1,6 +1,4 @@
-// The chat's lines other than an exchange (iOS ChatView.lineView): the wake that opens new work, the chip under an
-// answer for background tasks that reported back (and its drawer), recaps (and their drawer, and the strip above the
-// composer), model API errors as cards, and the header of a split exchange.
+// Transcript notices, recaps and model errors. Background continuation belongs to the normal execution summary.
 import { memo, useMemo, useState } from "react";
 import { lineItemIds } from "../../lib/chat-search";
 import { useChatContext } from "./chat-context";
@@ -8,15 +6,17 @@ import { useExpanded } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { ago, clock } from "../../lib/format";
 import { retryable, type APIErrorInfo } from "../../lib/api-errors";
+import { refusalFacts } from "../../lib/model-fallback";
 import { runAction, turnErrorFix } from "../../lib/readiness";
 import { wakeSummary } from "../../lib/tasks";
-import { wakeDrawer, workSegment, type ChatLine, type OpenRecap, type Turn } from "../../lib/turns";
+import { type ChatLine, type OpenRecap } from "../../lib/turns";
+import { sourceLabel } from "../../lib/message-source";
 import type { Item } from "../../lib/types";
 import { Button, Collapse, copyText, cx, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { Answer, SegmentView } from "./SegmentView";
-import { CompactDivider, NoticeRow } from "./Steps";
+import { SegmentView } from "./SegmentView";
+import { CompactDivider } from "./Steps";
 import { t } from "../../i18n";
 import { ScrollFold } from "./fold-scroll";
 
@@ -28,6 +28,7 @@ export interface LineProps {
   expandFold: (f: Item) => Promise<void>;
   /** "Retry" on an API error card (only on the last line, while the agent is not working). */
   onRetry?: () => void;
+  onEditLastMessage?: () => void;
   /** The hub's word on what to fix for this line's model error (the session's turn_error_code, last line only). */
   fix?: { title: string; detail: string; action: string } | null;
   /** A Persona conversation: a model error's text may name a fix in Persona's settings. Agent sessions keep "Retry". */
@@ -36,6 +37,8 @@ export interface LineProps {
   limit?: string;
   /** Inside an opened supervision trace, show complete injected inputs. */
   trace?: boolean;
+  /** A finished exchange before the last two may skip drawing off screen (SegmentView `offscreen`). */
+  offscreen?: (section: HTMLElement) => () => void;
 }
 
 export const ChatLineView = memo(function ChatLineView(props: LineProps) {
@@ -47,7 +50,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assistant, limit, trace }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, onRetry, onEditLastMessage, fix, assistant, limit, trace, offscreen }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} />;
@@ -62,7 +65,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assista
           streaming={line.live ? streaming : undefined}
           batchedWords={!assistant}
           expandFold={expandFold}
-          beforeWords={line.wakes && <WakeChip turn={line.wakes} mid={mid} sid={sid} expandFold={expandFold} />}
+          offscreen={offscreen}
         />
       );
     case "notice":
@@ -75,7 +78,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assista
       if (limit) return <UsageLimitLine text={limit} />;
       // the text-derived fix points at Persona's model settings: only for Persona's own conversations
       const f = assistant ? (fix ?? turnErrorFix(line.info.code)) : null;
-      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={f} onRetry={onRetry && retryable(line.info) && !f ? onRetry : undefined} />;
+      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={f} onRetry={onRetry && retryable(line.info) && !f ? onRetry : undefined} onEditLastMessage={!assistant && line.info.code === "safeguards" ? onEditLastMessage : undefined} />;
     }
   }
 }
@@ -91,9 +94,10 @@ function SupervisionLine({ line, ...props }: LineProps & { line: Extract<ChatLin
     return () => setOpen(false);
   });
   return (
-    <section className="flex min-w-0 flex-col gap-3" data-supervision={line.live ? "running" : "done"}>
+    <section className="flex min-w-0 flex-col gap-3" data-supervision={line.live ? "running" : "done"} data-background-round={line.source?.kind}>
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="touch-hit flex w-full min-w-0 items-center gap-1.5 rounded-control py-1 text-left text-[length:var(--chat-secondary)] whitespace-nowrap text-ink-3 hover:text-ink-2">
-        <span className="min-w-0 truncate">{t(line.live ? "chat-lines.supervision_running" : "chat-lines.supervision_done")}</span>
+        <span className={cx("text-accent-ink", line.source ? "max-w-[60%] min-w-0 shrink-0 truncate" : "shrink-0")}>@{line.source ? sourceLabel(line.source) : t("chat-messages.source_supervision")} · </span>
+        <span className="min-w-0 truncate">{t(line.source ? (line.live ? "chat-lines.background_running" : "chat-lines.background_done") : line.live ? "chat-lines.supervision_running" : "chat-lines.supervision_done")}</span>
         <Icon name="chevronRight" size={14} className="shrink-0" style={{ transform: open ? "rotate(90deg)" : undefined }} />
       </button>
       {open && <div className="flex min-w-0 flex-col gap-3 border-l-2 border-tool-rail pl-3" data-supervision-trace>
@@ -106,6 +110,7 @@ function SupervisionLine({ line, ...props }: LineProps & { line: Extract<ChatLin
 /** A notice on a line of its own: a wake opening new work (a centered capsule), "Interrupted", a long local command's output. */
 function LineNotice({ item }: { item: Item }) {
   const [open, setOpen] = useState(false);
+  if (item.model_refusal) return <RefusalNotice item={item} />;
   if (item.wake) {
     const w = wakeSummary(item);
     return (
@@ -135,50 +140,34 @@ function LineNotice({ item }: { item: Item }) {
   );
 }
 
-// ── background tasks that woke the agent: a chip above its newest words, their runs in a drawer (#3783) ──
-
-function WakeChip({ turn, mid, sid, expandFold }: { turn: Turn; mid: string; sid: string; expandFold: (f: Item) => Promise<void> }) {
-  const [open, setOpen] = useState(false);
-  const notices = turn.wakes;
-  const failed = notices.some((n) => wakeSummary(n).failed);
-  const text = notices.length === 1 ? wakeSummary(notices[0]).text : t("chat-lines.wake_count", { count: notices.length });
+/** A Claude Code model_refusal_* record (#2528): the refused model, the one Claude Code switched to, the category and
+ *  scope as recorded, and the refusal's own words verbatim (never reworded, never the record's line). */
+function RefusalNotice({ item }: { item: Item }) {
+  const r = item.model_refusal!;
+  const f = refusalFacts(r);
+  const fallback = r.subtype === "model_refusal_fallback" && f.fallback;
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label={t("chat-lines.wake_open")}
-        className="flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-full bg-inset px-3 py-1 text-[12px] text-ink-2 shadow-hairline transition-colors hover:bg-hover-2"
-      >
-        <Icon name="bell" size={12} className={cx("shrink-0", failed ? "text-red" : "text-accent")} />
-        <span className="min-w-0 truncate">{text}</span>
-        <Icon name="chevronRight" size={12} stroke={2.2} className="shrink-0 text-ink-3" />
-      </button>
-      <Dialog open={open} onClose={() => setOpen(false)} title={notices.length > 1 ? t("chat-lines.wake_count", { count: notices.length }) : t("chat-lines.wake_single")} width={640}>
-        {open && <WakeDrawerBody turn={turn} mid={mid} sid={sid} expandFold={expandFold} />}
-      </Dialog>
-    </>
-  );
-}
-
-/** Each wake (its reports, then what the agent answered to them), newest first; the steps in between fold into one
- *  work row at the end. */
-function WakeDrawerBody({ turn, mid, sid, expandFold }: { turn: Turn; mid: string; sid: string; expandFold: (f: Item) => Promise<void> }) {
-  const d = wakeDrawer(turn);
-  const work = workSegment(`dw-${turn.id}`, d.process);
-  return (
-    <div className="flex max-h-[65vh] flex-col gap-5 overflow-y-auto pr-1">
-      {d.groups.map((g) => (
-        <section key={g.id} className="flex flex-col gap-2">
-          <div className="flex flex-col gap-0.5">
-            {g.notices.map((n) => (
-              <NoticeRow key={n.id} item={n} mid={mid} sid={sid} />
-            ))}
-          </div>
-          {g.answer && <Answer item={g.answer} mid={mid} sid={sid} />}
-        </section>
-      ))}
-      {work.steps.length > 0 && <SegmentView seg={work} live={false} mid={mid} sid={sid} expandFold={expandFold} />}
+    <div role="note" data-testid="refusal-notice" title={clock(item.ts)} className="flex w-full items-start gap-2 rounded-card bg-orange-tint px-3 py-2 text-left shadow-hairline">
+      <Icon name="warning" size={13} className="mt-[3px] shrink-0 text-orange" />
+      <span className="flex min-w-0 flex-col gap-0.5 text-[12.5px] leading-relaxed text-ink-2">
+        <span className="font-semibold text-ink">{t("chat-modelfallback.refusal_title")}</span>
+        {fallback ? (
+          <span className="[overflow-wrap:anywhere]">{t("chat-modelfallback.refusal_fallback", { from: f.original ?? "?", to: f.fallback! })}</span>
+        ) : (
+          <span>{t("chat-modelfallback.refusal_no_switch")}</span>
+        )}
+        {fallback && f.scope === "session" && <span>{t("chat-modelfallback.refusal_session")}</span>}
+        {f.category && <span className="[overflow-wrap:anywhere]">{t("chat-modelfallback.refusal_category", { category: f.category })}</span>}
+        {f.explanation && <span className="whitespace-pre-wrap">{t("chat-modelfallback.refusal_explanation", { text: f.explanation })}</span>}
+        {f.text && (
+          <span className="flex min-w-0 flex-col">
+            <span className="text-ink-3">{t("chat-modelfallback.refusal_text")}</span>
+            <span className="whitespace-pre-wrap [overflow-wrap:anywhere]" data-testid="refusal-text">
+              {f.text}
+            </span>
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -212,7 +201,7 @@ function RecapChip({ items }: { items: Item[] }) {
 function RecapDrawer({ items, open, onClose }: { items: Item[]; open: boolean; onClose: () => void }) {
   return (
     <Dialog open={open} onClose={onClose} title={items.length > 1 ? t("chat-lines.recap_title_many", { count: items.length }) : t("chat-lines.recap")} width={600}>
-      <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1">
+      <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1" data-scroll-box>
         {[...items].reverse().map((it, n) => (
           <section key={it.id} className={cx("flex flex-col gap-2", n > 0 && "border-t border-line pt-4")}>
             {it.ts && (
@@ -220,7 +209,7 @@ function RecapDrawer({ items, open, onClose }: { items: Item[]; open: boolean; o
                 {t(n === 0 && items.length > 1 ? "chat-lines.recap_newest_written" : "chat-lines.recap_written", { ago: ago(it.ts) })}
               </span>
             )}
-            <Markdown text={it.text ?? ""} />
+            <Markdown text={it.text ?? ""} lineBreaks />
           </section>
         ))}
       </div>
@@ -251,7 +240,7 @@ function RecapStrip({ item, onClose }: { item: Item; onClose: () => void }) {
           {item.ts && <span className="font-normal text-ink-3">· {ago(item.ts)}</span>}
         </span>
         <ScrollFold className="max-h-[6lh] text-[13px] leading-relaxed text-ink-2">
-          <Markdown text={item.text ?? ""} small />
+          <Markdown text={item.text ?? ""} small lineBreaks />
         </ScrollFold>
       </div>
       <button type="button" onClick={onClose} aria-label={t("chat-lines.recap_close")} title={t("chat-lines.close")} className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink">
@@ -300,7 +289,7 @@ function UsageLimitLine({ text }: { text: string }) {
 
 /** A model API error: why, whether it passes by itself, the original under the fold, "Retry". One the user must fix (not
  *  signed in, a wrong key, a model that is not there) says so instead, with "Fix it" (docs/assistant/onboarding.md 4.4). */
-function APIErrorCard({ info, count, at, onRetry, fix }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; fix?: { title: string; detail: string; action: string } | null }) {
+function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; onEditLastMessage?: () => void; fix?: { title: string; detail: string; action: string } | null }) {
   const [open, setOpen] = useState(false);
   const sub = fix ? fix.detail : info.transient === true ? t("chat-lines.api_transient") : info.transient === false ? t("chat-lines.api_permanent") : "";
   const reason = fix ? fix.title : info.reason;
@@ -344,6 +333,7 @@ function APIErrorCard({ info, count, at, onRetry, fix }: { info: APIErrorInfo; c
           </Button>
         </div>
       )}
+      {onEditLastMessage && <div><Button icon="pencil" onClick={onEditLastMessage}>{t("rewind.edit_last")}</Button></div>}
     </div>
   );
 }

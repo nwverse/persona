@@ -210,10 +210,26 @@ func (s *Service) noteStop(machine, sid string, p map[string]any) {
 	}
 }
 
-// notifyFinished decides, after the delay, whether this end of a turn is worth a push and to which devices.
+// notifyFinished decides, after the delay, whether this end of a turn is worth a push and to which devices. The delay
+// is a timer: a goroutine asleep through it would hold a stack per pending turn end (#2472).
 func (s *Service) notifyFinished(machine, id string, gen int) {
 	t := s.notifyTimings()
-	time.Sleep(t.doneDelay())
+	time.AfterFunc(t.doneDelay(), func() { s.notifyFinishedNow(machine, id, gen, t) })
+}
+
+// notifyFinishedNow is notifyFinished once its delay is over, with the timings it was read with.
+func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings) {
+	if s.justMeNow(machine, id) {
+		// A Just me turn: never on a screen but the meeting page (meeting_justme.go). Over all the same unless its
+		// background work goes on (the turn that work's report wakes keeps the mark): its start and its hold are not
+		// the next turn's (#4133).
+		if sess, ok := s.decoratedSession(machine, id); !ok || sess.Status != proto.StatusWorking && !backgroundRunning(sess) {
+			if start, dropped := s.turnsBook().drop(machine+"/"+id, gen); dropped {
+				s.reportTurn(id, start)
+			}
+		}
+		return
+	}
 	sess, ok := s.decoratedSession(machine, id)
 	if ok && s.completionChildrenRunning(machine, sess) {
 		// Only the completion decision uses this copy; session state and reports stay intact.
@@ -252,6 +268,8 @@ func (s *Service) notifyFinished(machine, id string, gen int) {
 	if verdict == finishStale || verdict == finishHold {
 		return // the turn goes on: its mark waits for how it ends
 	}
+	// A supervision turn about a failed start ended: what it left of the start ends too (start_remedy.go, #2570).
+	go s.remedyTurnEnded(context.Background(), id)
 	// "Only long-running turns" is for turns the user started: a quick answer is read where it was asked. A morning briefing or a task notice
 	// has nobody waiting for it; a quick one was never pushed and the user had to go and look (#3438). The mark is
 	// used up by this turn whether it is pushed or dropped (notify_user, seen, muted): left over, the user's own next
@@ -270,7 +288,7 @@ func (s *Service) notifyFinished(machine, id string, gen int) {
 	// The own conversation of a scheduled task that pushes only what its runs send, finished normally (#2396): its
 	// news, if any, went out with notify_user. Decided after settle, not as a push: a turn held for its background
 	// work stays followed, and the wake that ends it is judged on its own (an error there is pushed).
-	if s.quietTaskFinish(sess) {
+	if s.quietTaskFinish(sess) || s.quietScheduledInput(context.Background(), machine, sess) {
 		return
 	}
 	// A turn a follow-up (supervision) message started, finished normally (#3124): what the user needs to know went out with notify_user.
@@ -411,10 +429,26 @@ func (s *Service) kbAgentDone(machine string, sess proto.Session) {
 		Title: sess.Title, Line: workLogLine(sess)})
 }
 
-// notifyInteraction pushes a new card to the devices that take "needs you" pushes.
-func (s *Service) notifyInteraction(ix proto.Interaction, machine string) {
-	s.deliver(Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
-		Interaction: &ix})
+// linkRangWait is how long a card's push waits, all told, for Persona Link to confirm it (liveLoop looks within 100 ms,
+// a summary goes out and its notification is handed over in milliseconds): past it the phone is pushed as ever.
+const linkRangWait = 2 * time.Second
+
+// notifyInteraction pushes a new card to the devices that take "needs you" pushes. covered: Persona Link's summary is
+// to ring for it (linkCovers); then the push waits until one of the manager's Persona Link desktops confirmed it
+// handed the card's notification to Notification Center (LinkRang), and says so (LinkCovered) only if one did: a
+// summary merged with newer cards may list it in More, a notification may be dropped before it is handed over, a link
+// may go.
+func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covered bool) {
+	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
+		Interaction: &ix}
+	if !covered || s.devs == nil {
+		s.deliver(n)
+		return
+	}
+	go func() {
+		n.LinkCovered = s.devs.LinkRang(s.runCtx(), ix.ID, linkRangWait)
+		s.deliver(n)
+	}()
 }
 
 // deliver has the hub deliver a push the manager decided on (notify.request), off the caller's way.
@@ -464,7 +498,7 @@ func (s *Service) mainSessionRep(machine, session string) bool {
 	r.mu.RLock()
 	p := r.profile
 	r.mu.RUnlock()
-	return p != nil && p.Main == session && p.MachineID == machine
+	return p != nil && p.Main == session && p.MainRouteMachine() == machine
 }
 
 // taskSessionRep says whether session is a scheduled task's own conversation as the last snapshot has it, whatever

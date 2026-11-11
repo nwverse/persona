@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -164,7 +165,7 @@ func TestUltracodeWaitsForTheStateToLoad(t *testing.T) {
 		}
 		n.state.beginLoad()
 		row := proto.Session{SessionID: ultraProcessTestID, Agent: "claude", PaneID: "test-pane", Status: proto.StatusIdle}
-		n.ultracodeRow(&row)
+		n.ultracodeRow(&row, nil)
 		if row.Ultracode != nil {
 			t.Fatalf("shown before the boundary is known: %v", *row.Ultracode)
 		}
@@ -175,7 +176,7 @@ func TestUltracodeWaitsForTheStateToLoad(t *testing.T) {
 		n.state.merge(map[string]sessionState{ultraProcessTestID: stored()})
 		n.ultracodeStateLoaded()
 		row = proto.Session{SessionID: ultraProcessTestID, Agent: "claude", PaneID: "test-pane", Status: proto.StatusIdle}
-		n.ultracodeRow(&row)
+		n.ultracodeRow(&row, nil)
 		if row.Ultracode == nil || *row.Ultracode {
 			t.Fatalf("an old process's evidence counted: %v", row.Ultracode)
 		}
@@ -480,7 +481,7 @@ func TestStoredObservationOnlyRecordsAreNotPersonas(t *testing.T) {
 		t.Fatal("its global hooks' reports are dropped")
 	}
 	row := proto.Session{SessionID: reportSession, Agent: "claude", Status: proto.StatusOffline}
-	n.ultracodeRow(&row)
+	n.ultracodeRow(&row, nil)
 	if row.Ultracode != nil || row.UltracodeLostAt != nil {
 		t.Fatalf("the old observation came back: %+v", row)
 	}
@@ -797,7 +798,7 @@ func TestUltracodeVersionGateWaitsForThisProcess(t *testing.T) {
 	}
 	// Offline, nothing of a version is shown.
 	row := proto.Session{SessionID: sidA, Agent: "claude", Status: proto.StatusOffline}
-	n.ultracodeRow(&row)
+	n.ultracodeRow(&row, nil)
 	if row.UltracodeNote != "" {
 		t.Fatalf("offline note %q", row.UltracodeNote)
 	}
@@ -959,6 +960,8 @@ func TestStartUltracodeCommandLeftInTheBoxHoldsTheFirstPrompt(t *testing.T) {
 	}{{"a draft", false}, {"no screen", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, home := herdrNode(t)
+			var logs bytes.Buffer
+			n.logger = log.New(&logs, "", 0)
 			cwd := mkdir(t, filepath.Join(home, "project"))
 			plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
 			typedTxt, typedANSI := screenFixture(t, "claude-2.1.312-typed-162.txt"), screenFixture(t, "claude-2.1.312-typed-162.ansi")
@@ -991,6 +994,9 @@ func TestStartUltracodeCommandLeftInTheBoxHoldsTheFirstPrompt(t *testing.T) {
 			}
 			if lost, ok := n.lostFirst.get(startedID(f)); !ok || lost.why != lostUltracode {
 				t.Fatalf("lost first prompt: %+v %v", lost, ok)
+			}
+			if got := logs.String(); !strings.Contains(got, "first message held back after ultracode") || !strings.Contains(got, "ultracode: timeout") {
+				t.Fatalf("expected diagnostics through the node's logger, got %q", got)
 			}
 		})
 	}

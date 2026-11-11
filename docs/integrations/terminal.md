@@ -1,7 +1,7 @@
 # Terminal: building a real terminal
 
 The Terminal tab should behave like a real terminal: full colors, cursor, alternate screen, wide-character / Chinese alignment, resuming after disconnection, and complete long lines on the phone (wrapping),
-**without moving the session out of herdr**. This records the measured results of the 2026-10-29 spike and the resulting design.
+**without moving the session out of herdr**. This describes the resulting design; the measurements behind it, from the 2026-10-29 spike on, are in `docs/archive/integrations/terminal-records.md`.
 
 The initial constraint was "don't resize the computer's pane", followed by sections 1–10 (mirror the pane, wrap on the phone). The user changed direction the same day: real phone dimensions like Moshi,
 with the phone taking control of the pane when opening the Terminal tab (section 11); mirroring remains as Computer Size mode and fallback when control can't be acquired.
@@ -112,7 +112,7 @@ glyph shapes are what makes it "look like a terminal", and a Latin font is only 
 - Chinese glyphs are about 1 em wide, while two cells are 1.2 em, leaving visible gaps at native size (one cause of tab4's uneven-spacing report).
   Wide glyphs now grow to about 92% of two cells, capped at 86% of line height and 1.25×.
 
-## 7. Typing directly in the terminal (2026-10-29)
+## 7. Typing directly in the terminal
 
 - The terminal view (`TerminalScrollView`) implements `UITextInput` itself (`TerminalInput.swift`); tap makes it first responder, with the keyboard acting directly on the terminal.
   - Its document only holds the IME's composing marked text (pinyin), drawn at the cursor and sent only after commit.
@@ -155,50 +155,22 @@ This caused missing Chinese characters and apparently large spacing in tab4 scre
 Now the right half is written separately (`putRightHalf`), clearing only the next wide character it overlaps. Verification: two real recordings from lab panes replay identically, row by row, to
 `herdr pane read` (`terminal-observe-mixed` / `-permission` `.jsonl` + `.txt`).
 
-## 10. Measurements (2026-10-29, lab pane w9:p5, Claude 2.1.312)
+## 10. Latency and frame coalescing
 
-| Item | Value | Method |
-| --- | --- | --- |
-| Echo (key sent → frame containing it arrives) | Median 37 ms, fastest about 20 ms, occasional 150–175 ms (two rounds of 12) | Locally through production hub: after `POST /keys` (keep-alive), wait for a frame containing the character in the WebSocket terminal stream. Route: local → hub → node (local) → herdr → observe → hub → local. Phone adds its network round trip and one rendered frame |
-| herdr itself | 45–48 ms | tab4: `pane send-text`, then poll `pane read` (CLI starts a process each time, slower than streaming) |
-| Streaming frame rate | Median interval 113 ms, p95 239 ms, about 9 fps while outputting; whole passage including thinking pauses averages 6 fps | Ask Claude for 500 characters, record each frame arrival |
-| Frame size | Median 117 bytes, maximum 18 KB (full screen) | Same |
-| Phone frame processing (parse + wrap + draw) | Median 11.8 ms, p95 16 ms, first full frame 44 ms | `TerminalFrameCostTests`, simulator Debug, 76 recorded frames |
-| Rows visible with keyboard | About 20 (27 without keyboard) | iPhone 17 Pro simulator, 13pt |
+Measured on a lab pane on 2026-10-29 (the tables, the per-segment breakdown and the retest after #48 are in `docs/archive/integrations/terminal-records.md`):
+- typing echo through the production hub has a median of about 37 ms;
+- the phone parses, wraps and draws a frame in about 12 ms (`TerminalFrameCostTests`);
+- Claude Code redraws about every 110 ms while streaming. Node, hub and WebSocket neither accumulate nor throttle frames, so that cadence is Claude's own.
 
-### Breaking down streaming frame intervals (added same day)
-
-The sources of the 113 ms median interval, measured segment by segment:
-
-| Segment | Result | Method |
-| --- | --- | --- |
-| Claude Code's own redraw cadence | About one frame per 105–125 ms while streaming. Almost every frame changes only spinner/timer; body redraws in several large full-screen batches (about 20 KB, over 800 Chinese characters per frame) | Local observe, inspect frame content |
-| herdr observe | One frame per 16–19 ms when the screen changes quickly (about 60 fps), not the bottleneck; no tunable flags except `--cols/--rows` | Print a line every 10 ms in a shell pane, time local observe |
-| node → hub (SSH) | About 3 ms one-way (`ssh -T` round trip: median 5.6 ms; one 20 KB line: median 12.5 ms) | Local → hub → local through `ssh -T`, same clock |
-| Local network to hub | RTT about 4 ms | ping |
-| herdr frame → client receipt, end to end | One-way median 24 ms, p90 78 ms; same frame count (67 vs 67), no drops or accumulation | Receive local observe and hub WebSocket simultaneously, pair in order |
-
-The 24 ms breakdown:
-- Frame-phase difference between two independent observers: 0–16 ms, an artifact of the measurement; the real path has only the node observer.
-- SSH about 3 ms, network about 2 ms.
-- Remaining few milliseconds: hub JSON processing and WebSocket.
-
-Conclusion: 113 ms is Claude Code's own redraw cadence. Node, hub and WebSocket neither accumulate nor throttle frames, so Claude can't be tuned to one frame per 30 ms.
-The tunable end is fast-changing panes (Codex-like 60 fps TUIs, long logs run through `!`, vim paging): herdr emits every 16 ms,
-previously forwarded unchanged, exceeding the phone's roughly 12 ms per-frame processing capacity. The node now coalesces with `termMinGap = 30 ms`:
+The tunable end is fast-changing panes (Codex-like 60 fps TUIs, long logs run through `!`, vim paging): herdr then emits a frame every 16 ms, and at about 12 ms per frame (16 ms at p95) the phone would have almost no idle time if every frame were forwarded. The node coalesces with `termMinGap = 30 ms`:
 - First frame after quiet is sent immediately (typing echo doesn't wait).
 - Subsequent frames within 30 ms merge: concatenate delta bytes; a full frame discards preceding deltas. Send at the end of 30 ms.
 - Flush accumulated frames when the stream ends.
 - No extra frames while idle. Claude's roughly 110 ms cadence is unaffected.
 
-Retest after deploying #48 (same day after 16:20, lab pane w9:p5):
-- Echo: four-round medians 44 / 35 / 30 / 36 ms, matching before deployment (37 ms); the first frame after quiet isn't delayed by coalescing. The 44 ms round was immediately after node restart.
-- Claude streaming: direct herdr median 110 ms, hub median 112 ms. 71 frames became 69 at the client; two pairs arriving within 30 ms merged, with the same cadence as before.
-- In Claude, `!` running a loop printing every 5 ms: median intervals 101 / 107 ms. Claude redraws command output at its own ~100 ms cadence too, not herdr's 60 fps.
-- Thus none of the available sessions (all Claude) really saturated the coalescing window. `TestFrameGateMergesBurstsOnly` guarantees correctness;
-  with an Agent redrawing tens of frames per second (Codex-like), recheck using the measurement method under `/tmp` (local observe versus hub WebSocket).
+`TestFrameGateMergesBurstsOnly` guarantees correctness. Every session measured was Claude, which never saturated the window; recheck with an Agent redrawing tens of frames per second (Codex-like).
 
-## 11. Phone control: real phone dimensions (option A, decided 2026-10-29)
+## 11. Phone control: real phone dimensions (option A)
 
 When mirroring, Claude Code thinks the terminal is 172 columns wide and lays out for the computer, then the phone wraps again: the wrong experience. Opening the Terminal tab now **takes control** of the terminal:
 the program sees columns × rows computed from the phone's current font size; Claude lays out at phone width (permission dialogs, diffs and spinner all drawn by Claude),
@@ -248,33 +220,14 @@ Content scrolling more than a screen within one frame can't be recovered (herdr 
 Pre-control content isn't carried over (previously computer-width pane history was read once and placed above, wrapping unreadably on the phone; removed). Scrolling up shows only output produced since control began; see section 12.
 Real-frame verification: replaying `terminal-control-scroll.jsonl` (Claude writing 60 lines at 44×30) gives history + screen with 1. through 60. exactly once, whether replayed frame-by-frame, node 30 ms coalescing, or coarse 250 ms merging (`TerminalControlTests`).
 
-### Measurements (local test hub → local node → lab pane w9:p5, before deployment)
+### Latency
 
-| Item | Result |
-| --- | --- |
-| Acquire control (subscription → `active`) | 25 ms (node control startup to first frame about 70 ms, included in watch) |
-| Echo (key sent → frame containing it) | After control, WebSocket median 24 ms, slowest 37 ms; same route with `POST /keys` median 23 ms, slowest 122 ms. No local network; remeasure after deployment through production hub |
-| Direct node stdin write → frame | 13–23 ms (herdr's 16 ms frames are the floor) |
-| Restoration | Leaving tab immediate; App background about 5 s; killing App about 2 s; phone disappears without closing connection 27 s (hub ping timeout); hub `kill -9` 0.1 s; node `kill -9` immediate |
-| Busy / takeover | Occupied: `busy`, mirrored view; after `takeover`, old client exits, pane becomes phone-sized |
+Through the production hub, acquiring control takes under 100 ms and typing under control echoes in about 40–50 ms median; the slow tail is half that of `POST /keys`, because typing no longer queues behind separate HTTP requests and herdr processes.
+Control returns to the computer as soon as the tab closes, about 5 s after the App goes to the background, and about 27 s after a phone vanishes without closing its connection (hub ping timeout).
+A node without `session control` still observes and returns `control: false`; the App gets `unsupported` and only mirrors (`TestTerminalControlOnAnOldNodeOnlyWatches`).
+The measurements are in `docs/archive/integrations/terminal-records.md`.
 
-After deploying c6bec7b, retest through production hub (same day after 10:50, local test machine's lab pane w9:p5, two rounds each, 12 trials per round):
-
-| Item | Result |
-| --- | --- |
-| Acquire control (subscription → `active`) | 75 / 95 ms |
-| Echo, typing through WebSocket under control | Median 46 / 40 ms, slowest 80 / 83 ms |
-| Echo, `POST /keys` (keep-alive) | Median 44 / 47 ms, slowest 157 / 147 ms |
-
-Similar medians (mostly herdr's 16 ms cadence and hub round trip), but the slow tail halves: typing no longer queues behind separate HTTP requests and herdr processes.
-Local-to-hub is LAN with persistent connections; on phone cellular links with requests requeued, the difference should be larger. Measure on a real device after TestFlight.
-
-herdr versions: all six machines (one 0.9.5, five 0.9.3) have `terminal session control` with identical `--takeover`, `--cols`, `--rows` flags.
-On 0.9.5, control at original pane size (no resize or occupied-slot takeover) gives full frame, same-size resize gives full frame, stdin close returns `detached`, matching 0.9.3.
-Full resize/restoration/busy/takeover tests ran on local 0.9.3. Without `session control`, the node still observes and returns `control: false`;
-App receives `unsupported` and only mirrors (`TestTerminalControlOnAnOldNodeOnlyWatches`).
-
-## 12. What scrolling up shows (decision, evening 2026-10-29)
+## 12. What scrolling up shows
 
 The user wants the terminal to be a phone-sized PTY, with upward swipes scrolling within it; Claude Code in default mode, no environment variables or fullscreen configuration.
 **Cleared history after resize / resume is normal and expected.** Upward scrolling therefore shows output since control began (phone width), not pre-control history or appended transcripts.
@@ -302,18 +255,20 @@ Now all swipes under control are herdr wheel events; locally accumulated history
 Tried, not adopted: render the transcript in Claude style above the terminal on the phone (branch `lane/terminal-transcript`, `TerminalHistory.swift`, sanitized long-chat fixtures and seam alignment).
 User rejected it: the terminal should contain only what it emitted.
 
-## 14. Terminal rises from the bottom, Moshi-style key bar (requested 2026-10-30)
+## 14. Terminal rises from the bottom, Moshi-style key bar
 
 - Previously Terminal was a chat-page tab under the header (title, companion bar, tabs). Scrolling or keyboard-driven header expansion changed terminal height, **resizing the pane under control** and making Claude reflow every time.
-- Tapping Terminal now opens from the bottom over the full page (`TerminalCover`, fullScreenCover + transparent background). Only a thin top bar (size, handle, settings), following a downward drag;
-  dismiss after 140pt or projected travel over 420pt, otherwise spring back. Tapping the handle closes too (Close Terminal, test `terminal-close`). Dimensions only change with keyboard. Measured 47×35 (previous tab 45×29).
+- Tapping Terminal now opens from the bottom over the full page (`TerminalCover`, fullScreenCover + transparent background). Only a thin top bar (size, handle, settings, Close), following a downward drag;
+  dismiss after 140pt or projected travel over 420pt, otherwise spring back. Tapping the handle or Close (Close Terminal, 44pt, test `terminal-close`; the bar is `terminal-bar`) closes too, as does VoiceOver's escape. Dimensions only change with keyboard. Measured 47×35 (previous tab 45×29).
+- The bar sits above the screen, so it is there in every state (#4328: the no-terminal state used to replace the view that held it, and nothing closed the cover). With no terminal (the stream ends "not running") the screen is an `EmptyStateView`: a Claude Code session offers **Resume Session** (`POST /api/v1/sessions` with `resume_session_id`; the node keeps the launcher, model, modes, directory and tab name it ran with), other agents say a message resumes them; the key bar is hidden and the area drags down like the bar (`TerminalNotRunningTests`).
+  Android (#4345) shows the same empty state in place of the terminal, drawn in the dark palette since the terminal is dark in either appearance (`TerminalScreen.kt` `TerminalNotRunning`); Resume Session retries the stream at once on success and shows the hub's words on failure (`TerminalViewModel.resume`, `TerminalCriticalPathTest`). Its key bar stays: the page has its own Back.
 - Key bar follows Moshi's Toolbar (measured its settings preview): glass capsule (`TerminalKeyBar`), 44pt high, padding 5 horizontal / 4 vertical, 36pt keys, gap 6.
   Ctrl / Esc / Tab use JetBrains Mono, others SF Symbols (Moshi uses Lucide; not added). Double-tap Keyboard = Return. Previously separate 40pt glass circles.
 - Chat top bar no longer has Chat / Terminal / Git / Files tabs: Terminal is top-right button; Files / Git via left swipe or ··· menu (`docs/apple/ios.md`).
 - Keyboard reduces terminal rows (`testDrivingTheTerminalSendsItsBytes`). Caveat: XCUITest typing switches the simulator to hardware-keyboard mode; afterward soft keyboard doesn't appear and terminal doesn't yield rows,
   failing this test (also on clean master). Without Simulator.app this can't be reversed; create a new simulator through `scripts/app/sim-boot.sh "<new name>"`.
 
-## 15. Tap terminal = click inside it; keyboard only from the key-bar button (requested 2026-10-30)
+## 15. Tap terminal = click inside it; keyboard only from the key-bar button
 
 - Claude Code fullscreen has clickable areas: pinned top questions (jump to them), Jump to bottom. Previously every phone terminal tap opened the keyboard.
 - Now like Moshi: under control, tap = left-click that cell (`terminal_input.click` → hub → node `terminal.click` → herdr `terminal.mouse` press + release, zero-based column/row;
@@ -324,7 +279,7 @@ User rejected it: the terminal should contain only what it emitted.
   A drag starting on a handle neither scrolls the view nor sends terminal wheel events (`gestureRecognizerShouldBegin`).
 
 
-## 16. Codex won't scroll upward: wheel events need a cell and one event per line (user feedback, 2026-10-30)
+## 16. Codex won't scroll upward: wheel events need a cell and one event per line
 
 User: phone-controlled Codex terminal won't scroll upward, while Claude does. Measured on a Linux development machine (herdr 0.9.3, Codex 0.163.0) and hub machine (herdr 0.9.5, same Codex),
 lab pane at 45×30. Codex config was temporarily overridden with `-c`, never changing user config:
@@ -364,7 +319,7 @@ Claude works because it accepts wheels anywhere (row 0 and input included) and a
 
 Remaining difference (same as Moshi/real terminals): starting a swipe on Codex input/status or pinned question doesn't scroll, since it only accepts wheels in the chat area; Claude accepts anywhere.
 
-## 17. Control is sluggish over a slow link (user feedback, 2026-11-01)
+## 17. Control is sluggish over a slow link
 
 User: a development machine connected through a SOCKS5 proxy on the hub machine (`docs/server/server.md`, NAS section step 7) becomes very sluggish for scrolling and input when its terminal is controlled.
 
@@ -389,7 +344,7 @@ Under control, each key or wheel movement needs that round trip before echo; una
 
 Phone rendering (`dumpsys gfxinfo`) and real-session key/wheel round trips weren't measured: the former needs the user's phone on adb, the latter requires injecting keys into active user sessions.
 
-## 18. Web clipboard: paste images/files, copy, OSC 52 (2026-11-04)
+## 18. Web clipboard: paste images/files, copy, OSC 52
 
 Web terminal clipboard works both inward (screenshots/files, like Moshi web) and outward (selected text, program OSC 52). Both share `lib/terminal-clipboard.ts` (pure logic) and
 `session/terminal/clipboard.ts` (browser side); hints use page toasts, upload status appears at the terminal top.
@@ -406,7 +361,7 @@ Paste screenshots with ⌘V / Ctrl+V or drag files from a file manager. Files up
    Still true in Single pane (use Ctrl+Shift+V or key-bar Paste); Full view handles Ctrl+V now, see section 26. Text-only clipboard uses the original text-paste path unchanged.
 2. Accept only **while controlling**: View Only (or control taken elsewhere) shows "Take over the terminal before pasting files", uploading nothing.
 3. Each file: `POST /api/v1/machines/{mid}/files?name=<filename>&dest=terminal` (raw bytes, `application/octet-stream`, same API as chat Send File and new-Agent attachments,
-   `docs/protocol/protocol.md`, "Send files"; web also shares `sendFile` in `lib/attachments.ts`). Hub forwards 1 MB chunks to that node (`file.upload.begin / chunk / end`, `begin` carries `dest`),
+   `docs/protocol/protocol.md`, "Sending files"; web also shares `sendFile` in `lib/attachments.ts`). Hub forwards 1 MB chunks to that node (`file.upload.begin / chunk / end`, `begin` carries `dest`),
    never holding the whole file in memory. Timeout 60 seconds + 1 second per 100 KB. Unnamed clipboard images get type-based names (`image.png`, `image.jpg`…).
 4. Node stores at `<node directory>/uploads/terminal/<YYYY-MM-DD>/<16 random hex digits>-<sanitized filename>` (directories 0700, files 0600), returning an absolute path.
    Separate from chat image attachments (`uploads/<date>`), so cleanup doesn't affect those.
@@ -468,7 +423,7 @@ End-to-end: `scripts/test/web_files_drag_e2e.py` (fake hub `MOCK_TERMINAL_STREAM
 
 Copying was prompted by Moshi's browser copying herdr content on the user's machine. It works because Moshi is a full herdr client (herdr emits OSC 52 when considered remote;
 user forced this with `SSH_CONNECTION` in a systemd drop-in, otherwise herdr invokes `wl-copy` on the computer). Browser `@xterm/addon-clipboard` writes received content to `navigator.clipboard`.
-Persona web observes/control streams; "Measurements" below checks whether these carry it. Web implements:
+Single pane reads herdr's observe/control streams, which don't carry it ("Program OSC 52 and color queries never reach pane streams" below). Web implements:
 
 - **Copy selected text** (`keyDecision` in `lib/terminal.ts`, `copyWith` / `copyNotice` in `lib/terminal-clipboard.ts`, `terminal/clipboard.ts`): with selection, ⌃C / ⌘C / ⌃⇧C copies; without, ^C goes to the program as before.
   Clear selection after success (otherwise next ⌃C copies again instead of interrupting). Try `navigator.clipboard.writeText`, then hidden textarea + `execCommand("copy")` if denied or non-HTTPS, explaining
@@ -476,29 +431,17 @@ Persona web observes/control streams; "Measurements" below checks whether these 
   Touch xterm.js lacks drag selection; phones currently select in wrapping mode (View Only screen drawn by page, system long-press selection available).
 - **OSC 52**: load pinned `@xterm/addon-clipboard` 0.2.0 (for `@xterm/xterm` 6.0.0). Program clipboard writes directly; browsers requiring a gesture (Safari, Firefox) show "The terminal program wants to copy text" + Copy if blocked.
   **Read queries (`OSC 52;c;?`) always denied**: provider `readText` returns empty; programs cannot read the user's clipboard (empty-clipboard response). Empty writes and writes over 1 MiB ignored.
-  Currently unreachable in herdr streams ("Measurements" below); ready if herdr or another path later passes it through.
+  Unreachable in Single pane streams ("Program OSC 52 and color queries never reach pane streams" below); Full view loads the same addon and receives it (section 24).
 - **IME**: page key handling (Shift+Enter, copy) yields on `isComposing` or `keyCode === 229`, leaving composition to xterm.
 - **Fonts**: before opening xterm, wait for `document.fonts.load("<size>px <font stack>", "W中")` (中 is the CJK measurement glyph), up to 1.5 seconds, avoiding late fonts and wrong cell measurements. JetBrains Mono in `--font-mono` currently has no `@font-face`, using local fonts,
   so this returns nearly immediately today; useful once web fonts are bundled.
 - **Shift+Enter → `ESC CR`** already existed (`encodeKey` and key handling in `feed.ts`); moved to `keyDecision` with IME exception added.
 
-### Measurements: none of herdr's three streams carries program OSC 52 or color queries
+### Program OSC 52 and color queries never reach pane streams
 
-In a new temporary tab (`herdr tab create --no-focus`, `tab close` afterward; no existing panes touched), herdr server environment had `SSH_CONNECTION`.
-Ran `printf '\033]52;c;<base64>\007'` and a small query/response script in the pane, receiving bytes through all three paths:
-
-| Stream | Program OSC 52 | Queries such as `OSC 10;?` / `CSI ? 996 n` |
-| --- | --- | --- |
-| `session observe` (with `--cols/--rows`) | No (only OSC 8 appears) | No |
-| `session control --takeover` (Persona control) | No | No |
-| `terminal attach <terminal_id> --takeover` (read in PTY) | No | No |
-
-All three are VT **redraws** of herdr's pane grid, not raw program output. Internally herdr (libghostty-vt based) handles program OSC 52 through its own clipboard writes
-(`OSC 52 clipboard write` queue in `src/pane.rs`, `write_osc52_bytes` in `src/selection.rs`), sending only to full herdr TUI clients (`herdr` / `herdr session attach`, like Moshi),
-not pane-level streams.
-
-Not verified: whether full TUI client (`herdr session attach`) always carries OSC 52. Attaching to the user's session adds a client and could affect layout/focus, so not done.
-**(Update 2026-11-05: verified in our own temporary session; it does, see section 24.)**
+None of herdr's three pane-level streams (`session observe`, `session control --takeover`, `terminal attach --takeover`) carries program OSC 52 or color queries: they are VT redraws of herdr's pane grid, not raw program output.
+herdr (libghostty-vt based) handles program OSC 52 with its own clipboard writes and sends them only to full herdr TUI clients. Full view is one (section 24), so OSC 52 works there and not in Single pane.
+The measurement, in a temporary tab, is in `docs/archive/integrations/terminal-records.md`.
 
 ### Can herdr's own copying reach the web?
 
@@ -521,7 +464,7 @@ Queries never appear in any of the three streams (browser xterm never sees them)
 
 Not verified: whether herdr proactively emits `CSI ? 997 ; n n` on theme changes after DEC 2031 is enabled (only query/reply tested).
 
-## 19. Standalone terminal: open without an Agent (2026-11-04, web)
+## 19. Standalone terminal: open without an Agent (web)
 
 User asked "Doesn't Persona have a terminal?" It always did, but only in an Agent session's side panel (`sessionCan(s, "terminal")`),
 not ordinary shell panes without Agents, new shells on a computer, or herdr spaces/tabs/panes. Moshi web has a computer → herdr workspace → tab → pane tree,
@@ -574,12 +517,12 @@ A pane terminal is a full shell on that computer, stricter than an Agent-session
 
 ### Not implemented
 
-- iOS has no standalone terminal yet (session terminal only, `terminal_subscribe` uses session id). Protocol already suffices: same API/address. Android has it (#2972): Terminal in Agents List Settings, see `docs/android/android.md` ("Second batch of module entries").
+- iOS has no standalone terminal yet (session terminal only, `terminal_subscribe` uses session id). Protocol already suffices: same API/address. Android has it (#2972): Terminal in Agents List Settings, see `docs/android/android.md` ("App shell and direct page entry").
 - Close panes/tabs, rename, split: outside this version, do it on the computer when needed.
 - Hosts without sessions or herdr (Paseo, botmux): no panes, empty list.
-- ⌘K palette now searches panes too (#2330, `docs/web/web.md`, "Shortcuts"): reads each online computer's `panes.list` once on opening, lists ordinary shells and sessionless panes (Agent panes with sessions already appear as session results); terminal page Jump To unchanged.
+- ⌘K palette now searches panes too (#2330, `docs/web/web.md`, "Pages"): reads each online computer's `panes.list` once on opening, lists ordinary shells and sessionless panes (Agent panes with sessions already appear as session results); terminal page Jump To unchanged.
 
-### Verification
+### Tests
 
 `TestPanesListHasShellsAndAgents`, `TestPanesListRefreshesAStaleLayout`, `TestPaneAddressReachesOnlyTheTerminal`, `TestTerminalWatchStreamsAShellByPaneAddress`,
 `TestNewShellOpensATabInTheWorkspace` (node); `TestPaneTerminalNeedsAFullDevice`, `TestPaneScreenReadsNeedAFullDevice`, `TestNewShellIsAFullDevicesAndNamesNoDirectory`,
@@ -587,7 +530,7 @@ A pane terminal is a full shell on that computer, stricter than an Agent-session
 Real herdr: `PERSONA_LIVE_PANES=1 go test -tags herdrlive -run TestLivePanes ./internal/node/` (`panes_live_test.go`): list spaces/tabs/panes (snapshot includes sessionless panes, herdr 0.9.5),
 create a temporary tab with `tab create --no-focus`, receive frames via addressed `terminal.watch`, then close it; no existing panes touched or typing injected.
 
-## 20. Web terminal details: URLs, context menu, search, cursor options, focus (2026-11-05, #2331)
+## 20. Web terminal details: URLs, context menu, search, cursor options, focus (#2331)
 
 Interactions added after comparison with Moshi web. All web-side: `web/src/lib/terminal-details.ts`, `web/src/lib/terminal-search.ts` (tested pure logic), `web/src/views/session/terminal/` (`feed.ts`, `FindBar.tsx`, `focus.ts`, `TerminalOptions.tsx`), `TerminalPanel.tsx`. No protocol/hub/node changes.
 
@@ -637,7 +580,7 @@ Not tested on real herdr: these changes don't touch protocol.
 
 ## 21. Node menus: close, split, rename, start an Agent in a shell, Git (2026-11-05, web, #2329)
 
-Computer-changing actions in terminal/sidebar-tree node menus (`docs/web/web.md`, "Node menus"). Hub routes are **`full`-device-only** (`nodeAction` in `hub/panes.go`: `answer` devices and extension tokens 403, `route_scopes.txt` `-`),
+Computer-changing actions in terminal/sidebar-tree node menus (`docs/web/web.md`, "Node menu"). Hub routes are **`full`-device-only** (`nodeAction` in `hub/panes.go`: `answer` devices and extension tokens 403, `route_scopes.txt` `-`),
 with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / `tabs.close` / `tabs.rename` (`node/panes_actions.go`). Common rules: only host-listed panes/tabs/workspaces (refresh snapshot once if missing), directory comes from the pane, no request field for arbitrary directory or command.
 
 - **Host capability**: `host.SlotCloser` (whole tab), `host.Splitter` (split), implemented only by herdr. Orca, herdr-core, botmux return `unsupported`, and web hides actions. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
@@ -646,11 +589,14 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
 - **Rename tab**: 1–80 characters, whitespace collapsed to single spaces. Agent tabs use existing `session.rename`; others `tabs.rename`.
 - **Run Agent Here…**: only panes at shell prompts (no Agent, no bound session, all foreground programs shells; unreadable foreground also rejected). `panes.agent {pane, launcher}` reuses the full `start` pipeline—
   same launcher command, trust-dialog handling, readiness wait, pane binding, continuation command—without creating a tab, replacing `newTab` with selected pane in `context` (`withAdoptedPane`). Failure **doesn't** close this pane (new-tab failures do close the new tab).
+  It answers `{session_id}`, and the clients open that agent's chat as New Agent opens the one it starts (#3287).
   Web lists only Claude Code launchers (Codex/compatible Codex forks startup needs a first message, menu has no composer).
-- **Git**: run in pane directory (workspace uses its own), reject non-repositories ("Not a Git repository"). **Pull** uses existing `gitPull`: fast-forward only, reject uncommitted changes; **Fetch** `git fetch --no-recurse-submodules`.
-  **Push** requires branch/upstream and pending commits (otherwise "No commits to push"), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. Remote rejects behind branches, with original reason shown in menu.
+- **Git**: run in pane directory (workspace uses its own), reject non-repositories (`not_a_repository`).
+  Results and refusals are codes (#1888): success carries an `outcome` (`fetched`, `up_to_date`, `pulled`, `nothing_to_push`, `pushed`) that web and iOS say in their own strings, with an English `message` for older clients; each refusal is a coded 409 the hub words in the client's language (`rpc-errors`: `no_directory`, `detached_head`, `no_upstream`, `uncommitted_changes`, `not_fast_forward`, `push_rejected`; `pull_failed` / `push_failed` / `fetch_failed` carry git's words), the node's words as `detail`. **Pull** uses existing `gitPull`: fast-forward only, reject uncommitted changes; **Fetch** `git fetch --no-recurse-submodules`.
+  **Push** asks first in every client (#1883, like the Git panel's Push; Pull and Fetch don't change the remote and run at once). It requires branch/upstream and pending commits (otherwise the `nothing_to_push` outcome), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. A remote that rejects a branch behind it is `push_rejected` (pull first; git's words in `detail`).
   All timeout after 60 seconds, don't prompt for passwords (`GIT_TERMINAL_PROMPT=0`, askpass `false`), retain only last 2 KB output.
-- **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Node menus"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
+- **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Information architecture"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
+- **Apple errors** (#3586): an uncoded node refusal reaches the hub as 502 `internal`. `APIClient.nodeAction` marks that call so the existing sheet / toast keeps the node's actionable reason; other `internal` 5xx responses stay generic instead of exposing private exceptions.
 - **Measured** (herdr 0.9.5, local temporary tab): `go test -tags herdrlive -run TestLiveMenuActions ./internal/herdr/` (`HERDR_LIVE_WORKSPACE=<workspace id>`) creates/renames tab, splits twice, closes pane/tab, matching fake herdr node tests.
 - **Tests**: `node/panes_actions_test.go` (fake herdr close/rename/split calls, rejection doesn't touch herdr, run in shell pane, rejection/failure preserves pane; real Git fetch/pull/push, force-push config ineffective, reject nonrepo/dirty/detached HEAD),
   `hub/panes_test.go` (every route denies `answer`/extension tokens before node receives it, forwards only named fields, absent from `answer` allowlist, route scopes `-`).
@@ -665,7 +611,7 @@ Moshi switches Term/Chat in the same session page's center (top segmented contro
 - Controlled size is the session-page center; a right Files/Git panel narrows it, with debounced resize sent (same as dragging the old side panel narrower).
 - Verification: count outgoing WebSocket `terminal_subscribe` / `terminal_unsubscribe` on fake hub (`MOCK_TERMINAL_STREAM=1 MOCK_TERMINAL_CONTROL=1 MOCK_TERMINAL_PANES=1`): page open 0, terminal switch 1, repeated ⌘J/segmented switches still 1 and no unsubscribe, changing page unsubscribes.
 
-## 23. New worktree…: create a Git worktree from a workspace repository (2026-11-05, web, #2431)
+## 23. New worktree…: create a Git worktree from a workspace repository (web, #2431)
 
 Workspace context/⋯ menu New Worktree… (W), same command in palette. Dialog has **Branch** and **Checkout Path**; Create and Open adds a worktree on the computer, opens it as a herdr workspace grouped under the original, and navigates web to its first terminal.
 Same shape as Moshi `worktree/prepare` + `worktree/create`.
@@ -689,16 +635,20 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
 - **Old herdr without `worktree`**: node falls back to `git worktree add` (existing local branch unchanged, otherwise `-b` from repository HEAD, no `--force`), then `workspace create` for an ordinary workspace in checkout (no herdr grouping).
   If checkout succeeds but workspace creation fails, keep checkout and explain in error. Other hosts (herdr-core, botmux) don't support it; menu hidden.
 - **Capability**: each host in `GET /machines/{mid}/panes` adds boolean `worktree` alongside `new_tab`; older nodes without it hide menu.
-- **Default path**: herdr convention `<worktrees.directory>/<repo name>/<branch slug>`, reading `[worktrees] directory` in `~/.config/herdr/config.toml`, default `~/.herdr/worktrees`; `~`/relative paths resolved against user home.
+- **Default path**: herdr convention `<worktrees.directory>/<repo name>/<branch slug>`, reading `[worktrees] directory` from the config file herdr reads (`$HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`, `%APPDATA%\herdr\config.toml` on Windows), default `~/.herdr/worktrees`; `~`/relative paths resolved against user home.
   Slug matches herdr: lowercase, consecutive non-ASCII-alphanumeric characters become one `-`, stripped from ends (`Feat/A_b.c` → `feat-a-b-c`, `fix/中文` → `fix`, demonstrating CJK stripping). Measured on herdr 0.9.5 on 2026-11-05; `herdr.WorktreeSlug` and web `branchSlug` both tested.
 - **Node guards** (`worktreeCreate`, before herdr/git): workspace must be host-listed and in Git repo; branch passes `git check-ref-format --branch`, can't start `-` or be a revision expression such as `@{-1}`.
   Checkout path absolute (`~/` expanded), not an existing file, existing directory must be empty (Git can reuse it), never inside repo `.git`. Git rejection (branch checked out elsewhere, bad path…) returns original `fatal:` line; no forcing, deleting or partial artifacts on failure.
 - **Dialog** (`views/NewWorktree.tsx`, logic `lib/worktree.ts`): reads repo on open ("Reading repository…"); path follows branch until manually changed, clears to restore auto-follow; immediate branch validation (empty: "Enter a branch name").
   Creation shows spinner and disables dismissal; failure inside dialog ("Couldn't create worktree: …"), missing old-hub/node API says "Persona on this computer is too old; update to create worktrees". Success: toast, reload tree, open new workspace terminal.
-- **iOS / Mac** (#3099): space ⋯ in Agents list has New Worktree…, same two routes/form rules (`WorktreeForm`); success opens New Chat prefilled with new workspace instead of terminal (`docs/apple/ios.md`, "New worktree…").
+- **iOS / Mac** (#3099): space ⋯ in Agents list has New Worktree…, same two routes/form rules (`WorktreeForm`); success opens New Chat prefilled with new workspace instead of terminal (`docs/apple/ios.md`, "Information architecture").
 - **Tests**: `node/worktree_test.go` (real Git + fake herdr: prepare repo name/branch/config directory/linked worktree/detached HEAD/nonrepo; herdr creation with new/existing branches; rejected paths/branches never touch herdr; Git errors; Git fallback/repeated checkout; `panes.list` includes `worktree`),
   `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a workspace Orca does not list),
   `herdr/worktrees_test.go` (config parsing, slug, folder name, socket args, CLI fallback), `hub/panes_test.go` (permissions, named fields only), `web/src/lib/worktree.test.ts`, `node-actions.test.ts`, `node-palette.test.ts`, `views/NewWorktree.test.tsx`.
+
+### Advanced Orca worktree actions
+
+The local Orca adapter also provides a capability-gated composer, GitHub issue/PR source lookup, sparse presets and preview-confirmed workspace removal. The exact HTTP fields, adapter/runtime capability distinction, receipt handling and deletion reconciliation are specified in [the protocol](../protocol/protocol.md#orca-worktree-composer-and-removal). Legacy branch/path creation remains available. Removal keeps branches by default, unregisters folder workspaces without deleting their directories, and requires a fresh instance-bound preview when identity or dirty content changes. A background acknowledgement is not completion; clients reconcile without automatically repeating the destructive request.
 
 ### A new agent in a worktree (#6115)
 
@@ -716,7 +666,7 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   - **The branch** goes only with `delete_branch` (`git branch -d`, or `-D` with `force`).
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
-## 24. Full herdr UI: a PTY client, switchable beside Single pane (2026-11-05, #2357)
+## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)
 
 Moshi web defaults to a full herdr client (herdr sidebar, tabs, splits); Control mode shows only the selected pane, Persona's original observe/control approach (sections 1–20). User wants both, easy switching and a little animation,
 **and decided on 2026-11-05 that opening terminal defaults to Full view** (Single pane remains switchable, and automatic fallback when machine/herdr/system is unsupported or client can't start).
@@ -791,31 +741,19 @@ hub → browser: `herdr_state {id, state: "open", cols, rows}`, `herdr_data {id,
 - **Inactive**: retained but hidden terminals (`inert`) and fading-out views release computer clients (don't occupy four slots or compete for layout), reconnect when shown.
 - **Automatic Single pane fallback**: view ends **before ever connecting** (`unsupported`, `forbidden`, `too_many`, immediate client exit… except offline). Show "Full view couldn't open: reason. Switched to Single pane" and switch;
   remember machine unsupported for this page's lifetime, other terminals on it use Single pane immediately (manually selecting Full view retries).
+- **Terminals of other hosts** (#2449): Full view is herdr's own client, so a terminal of any other host (a botmux session, in botmux's own tmux) is never in it. Its panel opens as Single pane with no switch (`inHerdrClient`, from the session's `pane_id` or the `pane:` address).
 - **First-use hint**: once on first connection: "Full view is herdr's own client. Operations here lay out the computer's panes at this panel's size; operating on the computer changes them back." (`persona.terminal.fullHint`).
 
-### Measurements (herdr 0.9.5, our temporary `persona-fullui-test` session, default untouched; `session stop` + `session delete` afterward)
+### Two clients on one session
 
-Python `pty` started two `herdr --session persona-fullui-test` clients (A simulating computer 120×34, B browser). Layout from `herdr pane layout`, screens inspected with pyte:
-
-| Case | Pane layout area (`area` in `pane layout`) |
-| --- | --- |
-| No client | 120×40 (last size retained) |
-| A (120×34) connects | 94×33 (terminal width −26 sidebar, height −1 status row) |
-| A + B (80×24) connects | 54×23 (**B's size**) |
-| B resizes to 100×30 | 74×29 |
-| A resizes to 140×40 | 114×39 (**A's size**) |
-| B resizes to 60×20 | 60×18 (below 64 columns uses herdr mobile single-column layout, no sidebar) |
-| B exits | 114×39 (A's size restored) |
-| A types after B | A's size; B types again and B's size returns |
+Measured with two `herdr --session` clients on a temporary session (herdr 0.9.5; the size table and the startup sequences are in `docs/archive/integrations/terminal-records.md`):
 
 - **Most recently active client wins** (connect, resize, typing), not smallest/largest. Layout and program-visible dimensions are session-wide—**with browser Full view connected, Claude on the computer reflows at browser size until a computer keypress switches it back**;
   alternating input alternates size. Same class of cost as Single pane control (section 11), explained in first-use hint; default was therefore user-decided, not chosen by us.
-- Computer window A only received 55 bytes in the second after B connected; its drawn pane geometry didn't change (pyte observation; pyte isn't full terminal emulation, so only establishes no full-screen redraw was observed) until its next activity. We didn't measure disrupted computer-window layout, only changed dimensions seen by the pane program.
 - **Focus (current space/tab) is session-wide**: `tab focus` makes both A/B jump; B opens displaying current tab. Initial focus on the requested pane therefore requires changing shared focus (Initial Focus above).
 - **OSC 52**: mouse selection in herdr (SGR press/drag/release) emits `ESC ] 52 ; c ; <base64> BEL`; program-issued OSC 52 also appears unchanged in client output.
   Without a display environment (or nonexistent `WAYLAND_DISPLAY`), this machine emits OSC 52 with or without `SSH_CONNECTION`. Behavior with display/clipboard tools wasn't measured (avoid writing user's real clipboard), so `SSH_CONNECTION` remains set.
   **Real herdr → browser clipboard**: `scripts/test/web_herdr_full_live.py` passes (fake hub `MOCK_TERMINAL_FULL_EXEC` runs real `herdr session attach` in PTY; Chrome drag-selects `LIVE_COPY_MARK`, clipboard reads `LIVE_COPY_MARK`).
-- **Startup terminal sequences** (`TERM=xterm-256color`): `?1049h` alternate screen, `>7u` and `?u` kitty keyboard, DA1, `?1016$p`, `?1000/1002/1003/1015/1006h` mouse, `?2004h` bracketed paste, `?1004h` focus events, `?2031h`, `OSC 10;? / 11;?`, `CSI ? 996 n`, `CSI 16 t`, `?2026h` synchronized output.
 - herdr `[ui] mobile_width_threshold = 64`: ≤64 columns uses single-column layout, so phone Full view (390px, about 46 columns) has no sidebar, only pane and tab bar.
 - `sidebar_collapsed_mode` is herdr **shared config**; Moshi Hide collapsed Herdr sidebar changes it (`POST /gateway/v1/pty?mux=herdr&hideSidebar=…`, warns "Changes Herdr's shared config"). Persona doesn't change user herdr config; collapse sidebar with herdr prefix+b.
 
@@ -831,13 +769,13 @@ Python `pty` started two `herdr --session persona-fullui-test` clients (A simula
 | No session/pane selection, current herdr focus | Focus requested pane's tab on open | Clicking a pane in /terminal should show it |
 | `pagehide` destroys all terminals | Hub closes on disconnect, unmount sends `herdr_close`, lease fallback | No leftover node processes, tested |
 
-### Verification
+### Tests
 
 - Go: `go test -count=1 ./internal/herdr ./internal/host ./internal/node ./internal/hub ./internal/proto`; real herdr: `PERSONA_LIVE_FULL_SESSION=<temporary session> go test -tags herdrlive -run 'TestLiveFullClient|TestLiveFocusPane' ./internal/herdr/`.
 - Web: `cd web && npm test && npm run build` (`terminal-mode.test.ts`, `Surface.test.tsx`, shortcut registry).
 - End-to-end: `scripts/test/web_herdr_full_e2e.py` (fake hub `MOCK_TERMINAL_FULL=1`, usage at script top: default Full view, ack, color replies, typing, OSC 52 clipboard, switching/mid-animation/remember choice/shortcut/resize/close, Settings, Reduce Motion, reconnect after end, unsupported fallback, old hub hides switch; dark/light × wide/390px screenshots), and `scripts/test/web_herdr_full_live.py` (real herdr, above).
 
-## 25. Mouse: click, drag, buttons and modifiers (2026-11-05, web, #2441)
+## 25. Mouse: click, drag, buttons and modifiers (web, #2441)
 
 User: "Old terminal doesn't even support mouse clicks". Previously control only supported non-dragged left-click (`terminal_input.click`), no drag/right/middle/modifiers. Now full mouse input reaches herdr.
 
@@ -904,13 +842,13 @@ Same routes/messages as web: `apple/Mac/Terminal/MacTerminalMouse.swift` (pure b
 - Wheel unchanged `terminal_input.scroll`; hover `move` not implemented, like web.
 - Unit tests `PersonaMacTests/MacTerminalMouseTests` (routing, bits, throttling, clamping), `MacTerminalMouseViewTests` (AppKit events: down/drag/outside/up, right, Shift selection, Select locally, legacy click without forwarding).
 
-### Verification
+### Tests
 
 `go test ./internal/herdr ./internal/hub ./internal/node` (encoding, driver-only, order), `npm test` (`terminal-mouse.test.ts`),
 `scripts/test/web_terminal_mouse_e2e.py` (fake hub records `terminal_input.mouse`, Playwright click/drag/right/Shift/settings),
 `go test -tags herdrlive -run TestLiveControlMouse` (`PERSONA_LIVE_MOUSE_PANE`, vim in temporary real herdr tab: click moves cursor to cell, drag creates visual selection).
 
-## 26. Full view conflicts: herdr right-click, prefix, mouse and paste (2026-11-05, web, #2700)
+## 26. Full view conflicts: herdr right-click, prefix, mouse and paste (web, #2700)
 
 User feedback after deployment: "Right-click seems to conflict with herdr, and images can't be pasted", asking for an audit of similar conflicts. Same principle as Moshi (give the terminal area to herdr):
 **herdr owns Full view; Persona only keeps unused actions or actions requiring modifiers herdr doesn't bind.** Single pane behavior unchanged.
@@ -976,7 +914,7 @@ Shared `views/session/terminal/transfer.ts` (`FileTransfer`, also used by Single
 - Linux PRIMARY middle-paste and triple-click copying unchanged, measurements inconclusive.
 - Mouse: Select locally setting only affects Single pane. Full view always sends to herdr, with Shift reserved for page.
 
-### Verification
+### Tests
 
 - `cd web && npm test`: `terminal-conflicts.test.ts` (right-click/link/prefix/Ctrl+V decisions, only Mod+B among Persona defaults overlaps herdr), `transfer.test.ts` (upload, escaping, disconnect/switch guards, drops, Files entries), `shortcuts.test.ts` (Full view Ctrl+B doesn't open panel, unchanged in Single pane/page).
 - `scripts/test/web_herdr_full_conflicts_e2e.py` (fake hub `MOCK_TERMINAL_FULL=1`; fake herdr enables mouse/bracketed paste like real, right-click menu, displays bracketed text after prompt, full `herdr_input` recorded in `/mock/herdr_client`):
@@ -984,7 +922,7 @@ Shared `views/session/terminal/transfer.ts` (`FileTransfer`, also used by Single
   wheel only SGR; left drag reports, Shift-drag doesn't; Ctrl+Shift+V text, text-only Ctrl+V still `^V`; Ctrl+V image → upload + bracketed paths; bar image/text paste; file drop outline; Files entries; other-computer rejected; Mac file `paste` event.
 - `scripts/test/web_herdr_full_conflicts_live.py` (real herdr, temporary `persona-conflict-test`, stop/delete afterward): right-click herdr pane menu without Persona; Shift-right-click Persona without herdr; Ctrl+V image path reaches real pane prompt.
 
-## 27. Character width and CJK alignment: crooked Chinese table borders in Full view (2026-11-05, web, #2751)
+## 27. Character width and CJK alignment: crooked Chinese table borders in Full view (web, #2751)
 
 User screenshot: Claude table rows containing Chinese/fullwidth punctuation shift right border by 1–2 cells, adjacent fish pane's left border becomes jagged `||`. Moshi web lacks the issue, so its implementation was checked:
 
@@ -993,33 +931,14 @@ User screenshot: Claude table rows containing Chinese/fullwidth punctuation shif
 
 So rather than copy "switch to WebGL", measurements were taken in a temporary session first.
 
-### Measurements
+### Cause
 
-Environment: temporary herdr 0.9.5 session (`herdr --session <name>`), two side-by-side panes; left `cat` displays a bordered table with Chinese, fullwidth punctuation, symbols, Japanese, Korean and emoji. Fake hub `MOCK_TERMINAL_FULL_EXEC="herdr session attach <name>"` forwards real client bytes to headless Chrome 156, JetBrainsMono Nerd Font. `session stop` + `session delete` afterward.
+- herdr positions the cursor before each wide glyph, so xterm's width decisions never shift buffer columns; they leave dirty cells instead.
+- In the DOM renderer, the browser's `text-spacing-trim: normal` (Chrome 123+ default) compresses fullwidth punctuation, and xterm's letter-spacing correction then draws `「` `」` `）` `，` about three cells wide, so borders after them drift.
+- xterm's default Unicode 6 width table disagrees with herdr on emoji (herdr draws them two cells wide and skips the second); Unicode 15 with grapheme clusters leaves only characters added after Unicode 15.
+- Font fallback is ruled out (`cjk.ts` already sizes CJK glyphs to exactly two cells). WebGL draws the borders straight but changes the default look, so it stays off.
 
-1. **herdr positions the cursor before each wide glyph**: captured `herdr session attach` bytes show `开` as `ESC[6;32H开`, next `ESC[6;34H关` (Chinese example glyphs); after emoji also `ESC[14;38H`. Thus xterm width decisions **don't shift buffer columns** (all `│` columns compared per row: 25 / 26 / 27 / 56 / 83 / 100 / 101 / 174, matching herdr). Misalignment is rendering, not buffer state.
-2. **DOM borders really misrender in fullwidth-punctuation rows**. Range measurements for each `│` (cells, minus buffer column):
-
-   | Row | Content | Borders at columns 56 / 83 / 100 / 174 |
-   | --- | --- | --- |
-   | ASCII, ordinary Chinese, Japanese, Korean, symbols | `Ctrl+B 是 herdr 的前缀键` ("Ctrl+B is herdr's prefix key")… | +0.04 … +0.27 (same every row, single-cell rounding) |
-   | `「开关右侧面板」（快捷键）` ("Toggle right panel (shortcut)") | Fullwidth brackets | **−2.84 / −3.81 / −3.78 / −3.67** (rightward drift) |
-   | `、：；！？ 逗号顿号` (fullwidth punctuation, "comma and enumeration comma") | Fullwidth punctuation | **−0.85 / −0.84 / −0.82 / −0.70** |
-
-   Per character: `「` `」` `）` `，` each occupy **2.97 cells** (should be 2); `（` `：` 1.97; Chinese ideographs 2.00.
-3. **Cause: browser `text-spacing-trim: normal` (Chrome 123+, default)** compresses fullwidth punctuation beside punctuation or at line ends to half width. xterm DOM adds `letter-spacing = cell width × cell count − measured glyph width`, measuring 32 repeats in a hidden element (`WidthCache._measure`): repeated `「「「「…` compresses each to ~1 cell (8.03px), leading to +7.57px spacing. Real `「` beside ideographs isn't compressed, so full 2 cells + spacing becomes 2.97. Context-dependent compression causes jagged borders and accumulated error based on punctuation count. Setting `.xterm` to `text-spacing-trim: space-all` restores those rows to +0.04 … +0.27, matching ASCII.
-4. **Not font fallback**: `cjk.ts` adjusts system CJK font to exactly two cells; ideographs without adjacent punctuation consistently occupy 2.00. Resetting `term.options.fontFamily` (clearing width cache) doesn't change drift.
-5. **xterm and herdr width tables differ, causing dirty cells rather than shifted columns**. Scanned 8266 characters (Latin-1, Hangul Jamo, all 2000–2BFF, CJK symbols/kana/compatibility, first 512 PUA, FE10–FE6F, FF00–FFEF, assigned 1F000–1FAFF), plus 30+ sequences including ZWJ family, flags, variation selectors, accented letters. herdr widths inferred from following `a` column distance (5268 narrow, 2997 wide), compared with xterm tables:
-
-   | xterm width table | Differences from herdr (8266 characters) |
-   | --- | --- |
-   | Unicode 6 (xterm default) | 1283 (mostly herdr 2 cells, xterm 1: 😀 🚀 ✅ ⭐ ⚡ ⌚ and other emoji) |
-   | Unicode 11 (`addon-unicode11`) | 160 |
-   | Unicode 15 | 99 |
-   | Unicode 15 + grapheme clusters (`addon-unicode-graphemes`) | 88, including 85 post-Unicode-15 additions (☰ and other trigrams, 2FFC–2FFF, newer emoji from 1FA75), plus 3 byte-reading measurement errors (`ㄷ`, `💪` redraw separately at 2 cells, matching xterm); ZWJ families, flags, `❤️` sequences all match |
-
-   Effect: herdr assumes emoji occupy two cells and doesn't write the second; xterm uses one, leaving old contents in the next cell. Screenshots show dark background after emoji (`rgb(24, 24, 37)`, not page light background). Unicode 15 + graphemes removes it. herdr doesn't query DEC 2027 (grapheme mode), so its output remains unchanged.
-6. **WebGL positions correctly, but isn't the fix here**: temporary `WebglAddon` on same page showed straight borders/normal emoji, with cell width rounded to 7px (DOM 7.8px), making text tighter; pixel positions weren't measured. CSS already fixes DOM, while WebGL changes default appearance, so default remains unchanged. Full view has no WebGL switch, none added for this issue.
+The measurements (a temporary herdr session, headless Chrome) are in `docs/archive/integrations/terminal-records.md`.
 
 ### Changes
 
@@ -1030,16 +949,16 @@ Environment: temporary herdr 0.9.5 session (`herdr --session <name>`), two side-
 ### Unresolved / caveats
 
 - Slow 0.04 … 0.27-cell drift from cell-width rounding (rightmost at 175 columns +0.27) is xterm DOM measurement rounding, identical per row, not jagged; unchanged.
-- 85 post-Unicode-15 characters above still occupy one cell in xterm versus two in herdr, leaving dirty cells; update when xterm supplies newer tables.
+- 85 characters added after Unicode 15 still occupy one cell in xterm versus two in herdr, leaving dirty cells; update when xterm supplies newer tables.
 - `a🏿` (skin-tone modifier after non-emoji) is 3 cells in herdr, 2 in xterm; unhandled.
 
-### Verification
+### Tests
 
 - `cd web && npm test`: new `widths.test.ts` (default 😀 ✅ width 1; with addon, emoji/ZWJ family/flags/`❤️` width 2; ideographs/fullwidth punctuation 2; Latin/borders/`⌘ ✓ ★ →` 1).
 - `scripts/test/web_herdr_full_cjk_e2e.py` (fake hub acting as client, positions each wide glyph like real herdr): four `│` borders per row within 0.25 cells of ASCII row (after fix max 0.08, without CSS max 4.77); second emoji cell has no previous-frame residue (without width table, `Z` remains); light/dark each once.
-- `scripts/test/web_herdr_full_live.py` / `web_herdr_full_conflicts_live.py` use same approach with real temporary herdr session; measurements above used it.
+- `scripts/test/web_herdr_full_live.py` / `web_herdr_full_conflicts_live.py` use same approach with real temporary herdr session; the archived measurements (`docs/archive/integrations/terminal-records.md`) used it.
 
-## 28. Focus synchronization: herdr and Persona sidebars move together (2026-11-05, web, #3021)
+## 28. Focus synchronization: herdr and Persona sidebars move together (web, #3021)
 
 User: "The selected session in Persona's herdr sidebar and the outer sidebar don't seem linked; Moshi links them, learn from it." Neither direction worked:
 herdr sidebar/tab pane changes didn't change Persona page/sidebar; choosing another pane in Persona sidebar/palette//terminal tree didn't reliably focus herdr
@@ -1090,15 +1009,11 @@ herdr sidebar/tab pane changes didn't change Persona page/sidebar; choosing anot
 - **Follow navigation doesn't request focus again**: `followTo` calls `FocusGuard.noteFollow(address)` before navigation; new page `claim` consumes `consumeFollow(address)` and only records "herdr is already here", without `herdr_focus` (one-use, 2-second validity).
 - Already at address (`same`): no action; `mine` changes followed only when foreground and connected.
 
-### Measurements
-
-- **Real herdr 0.9.5, temporary session**: `PERSONA_LIVE_FULL_SESSION=persona-focus-test go test -tags herdrlive -run TestLiveFocusSync ./internal/node/` (`focus_live_test.go`): node focus watcher connected to temporary session; `herdr tab focus` from another API client → `other`; `onFocusRequest` → `persona` with requesting view id; **real full client** (`session attach` in PTY) receives `ctrl+b` then `1` → `client` with client id, first tab; no extra events for 500ms after each step. Passed; session stopped/deleted, default untouched.
-- **Fake hub + browser** (`scripts/test/web_herdr_focus_e2e.py`, usage at script top): sidebar selects another session → one `herdr_focus` within ~160ms, no `herdr_open` / `herdr_close`, same xterm element, echo doesn't navigate. `/mock/herdr_focus` simulates this client's focus change → Agent terminal page, sidebar highlighted/visible, no outgoing `herdr_focus`; shell → `/terminal/<machine>/pane%3A…`; external (`other`, another browser) leaves page unchanged with hint, click follows. Chat → terminal doesn't restart; computer change opens its client, previous releases; old hub without `herdr_focus` sends none. Dark/light × wide/390px screenshots.
-
 ### Tests
 
 - Go: `node/focus_test.go` (input activity, all source attribution, most recent client, mouse motion excluded, request/echo, replaced requests, reject missing view/pane, old-herdr fallback), `hub/herdrclient_test.go` (full-only, own view, bad parameters not forwarded, `mine` per view, other-computer node rejected), `-tags herdrlive` `TestLiveFocusSync`.
 - Web: `lib/herdr-focus.test.ts` (follow decisions, echoes, guards, routes), `terminal/full-registry.test.ts` (one per computer, retained on page change, destroyed only after last leaves).
+- End-to-end: `scripts/test/web_herdr_focus_e2e.py` (fake hub + browser, usage at script top); `TestLiveFocusSync` runs against a temporary session named by `PERSONA_LIVE_FULL_SESSION`. Their last runs are in `docs/archive/integrations/terminal-records.md`.
 
 ### Not implemented
 

@@ -9,11 +9,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The web's full herdr view (docs/integrations/terminal.md "Full herdr view"): on request the node runs the host's own client in a
+// The web's full herdr view (docs/integrations/terminal.md "Full herdr UI"): on request the node runs the host's own client in a
 // PTY (herdr: `herdr session attach`) and relays its bytes to the hub (herdr.client.data); keys, resizes and acks come
 // back as events. One client per browser view. Whatever ends a view — the hub says so, its lease runs out, this
 // connection to the hub ends, the browser stops reading, the client quits — ends the client process too; nothing is
@@ -63,6 +64,10 @@ type fullClient struct {
 	// leaseFor is fullLease when the client opened: watch outlives the call that opened it, so it does not read the
 	// package variable again.
 	leaseFor time.Duration
+
+	// session is the herdr session the client is attached to ("" the own server): it shows that server's panes only
+	// (#2196, focusSession).
+	session string
 }
 
 var errNoFullClient = fmt.Errorf("%w: this machine has no host that can run a full client (herdr on Linux or macOS)", host.ErrUnsupported)
@@ -109,6 +114,9 @@ func (n *Node) fullOpen(ctx context.Context, params json.RawMessage) (any, error
 	cctx, cancel := context.WithCancel(context.Background())
 	f := &fullClient{n: n, id: a.ClientID, ctx: cctx, end: cancel, in: make(chan []byte, fullInputQueue),
 		acked: make(chan struct{}, 1), gone: make(chan struct{}), lease: time.Now(), leaseFor: fullLease}
+	if opts.Pane != nil && opts.Pane.Kind == host.Herdr {
+		f.session, _ = herdr.SplitID(opts.Pane.ID)
+	}
 	n.mu.Lock()
 	switch {
 	case n.fulls[f.id] != nil:
@@ -162,8 +170,9 @@ func (f *fullClient) emit(b []byte) {
 			return
 		}
 	}
+	b = f.n.scrubBytes(b) // base64 below: the connection's own hiding cannot see into it (secretenv.go)
 	f.mu.Lock()
-	f.sent += int64(len(b))
+	f.sent += int64(len(b)) // what goes, as the browser counts it
 	f.mu.Unlock()
 	if f.n.peer != nil {
 		_ = f.n.peer.Notify("herdr.client.data", map[string]any{"client_id": f.id, "data": base64.StdEncoding.EncodeToString(b)})

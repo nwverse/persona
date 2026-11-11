@@ -93,11 +93,15 @@ type Probe struct {
 	Args  []string
 	Env   map[string]string
 	File  string
+	// Shell is the shell's environment before the launcher ran (what ~/.zshrc exports for everything); nil when it
+	// was not seen (a wrapper script read from its text).
+	Shell map[string]string
 }
 
 func parseProbe(out string) (Probe, bool) {
 	p := Probe{Env: map[string]string{}}
 	base := map[string]string{}
+	p.Shell = base
 	found := false
 	pairs := func(s string, into map[string]string) {
 		for _, kv := range strings.Split(s, "\x00") {
@@ -187,7 +191,7 @@ func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (
 	if p.File != "" { // a file on PATH the list does not have as a wrapper script (yet): read, never run
 		sp, err := scriptProbe(p.File, args)
 		if err != nil {
-			return Probe{}, err
+			return p, err
 		}
 		return withSettingsEnv(sp, n.home), nil
 	}

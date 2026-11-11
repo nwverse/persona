@@ -326,6 +326,11 @@ struct MachineCard: View {
                 // Sized before the stretching part above: second in line, the values (which may shrink to fit) came
                 // out smaller than in a card of their own.
                 .layoutPriority(1)
+            } else if let manager = model.offlineManager(of: machine, group: machine.group) {
+                // Offline with its manager on a hub with several (#1919): the hub's words would blame the computer.
+                Text("Its assistant “\(manager.name)” is offline. It comes back online once the assistant is back.")
+                    .font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(3)
+                    .accessibilityIdentifier("machine.managerOffline")
             } else if let lines = AddComputerText.machineLines(machine) {
                 // A known error_code in words (docs/assistant/onboarding.md 5.3), or the hub's error read in plain words with
                 // the raw one under it; the whole of it is on its page (Details).
@@ -605,6 +610,7 @@ struct DeployRow: View {
 
     var body: some View {
         let busy = machine.deploying == true || starting
+        let canDeploy = NodeHealth.canDeploy(machine)
         HStack(spacing: Theme.Space.m) {
             Label(text(busy), systemImage: busy ? Theme.Icon.retry : Theme.Icon.errorFilled)
                 .font(Theme.Font.label)
@@ -618,13 +624,17 @@ struct DeployRow: View {
                 }
             }
             .themedButton()
-            .disabled(busy)
+            .disabled(busy || !canDeploy)
             .accessibilityLabel(busy ? String(localized: "Deploying") : String(localized: "Redeploy"))
         }
     }
 
     private func text(_ busy: Bool) -> String {
-        if busy { return String(localized: "Installing the hub's Persona build on this computer…") }
+        if busy {
+            if machine.deploying == true, let phase = MachineDeployPhase.of(machine) { return phase.message }
+            return String(localized: "Installing the hub's Persona build on this computer…")
+        }
+        if !NodeHealth.canDeploy(machine), let reason = NodeHealth.deployReason(machine) { return reason }
         if let e = machine.deployError, !e.isEmpty { return String(localized: "Last deploy failed: \(e)") }
         return String(localized: "Persona on this computer isn't from the same deploy as the hub")
     }

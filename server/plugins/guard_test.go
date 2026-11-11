@@ -31,7 +31,7 @@ const (
 // within says the import path p is path or a package under it.
 func within(p, path string) bool { return p == path || strings.HasPrefix(p, path+"/") }
 
-// pluginOf is the plugin an import path belongs to (…/plugins/wechat/ilink → …/plugins/wechat), "" for none.
+// pluginOf is the plugin an import path belongs to (…/plugins/example/client → …/plugins/example), "" for none.
 func pluginOf(p string) string {
 	rel, ok := strings.CutPrefix(p, plugins+"/")
 	if !ok {
@@ -79,7 +79,7 @@ func resolved(t *testing.T, path string) string {
 }
 
 // inside says the location path is dir or under it, ignoring case where the file system does by default (macOS,
-// Windows): a link to …/PLUGINS/wechat leads into the plugins there.
+// Windows): a link to …/PLUGINS/example leads into the plugins there.
 func inside(path, dir string) bool {
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		path, dir = strings.ToLower(path), strings.ToLower(dir)
@@ -223,9 +223,6 @@ func TestPluginsDependOnlyOnTheSDK(t *testing.T) {
 			t.Errorf("plugins/%s: plugins/ holds the plugins, not a package of its own", e.Name())
 		}
 	}
-	if len(mine) == 0 {
-		t.Fatal("no plugins found")
-	}
 	// The programs that run a plugin: every directory under cmd/ whose code imports one. Only they (and tests) may import
 	// a plugin (TestOnlyProgramsImportPlugins), and the SDK imports nothing of the server's, so a program cannot reach a
 	// plugin through another package.
@@ -271,9 +268,6 @@ func TestPluginsDependOnlyOnTheSDK(t *testing.T) {
 			t.Errorf("cmd/%s runs %v: a program runs one plugin (each in a directory of its own in cmd/)", e.Name(),
 				slices.Sorted(maps.Keys(used)))
 		}
-	}
-	if !slices.Contains(mine["cmd/personad-wechat"].allowed, plugins+"/wechat") {
-		t.Fatalf("the WeChat plugin's program not found: %v", mine)
 	}
 	dirs := slices.Sorted(maps.Keys(mine))
 	for _, dir := range dirs {
@@ -339,9 +333,17 @@ type pkg struct{ path, dir, platform string }
 // node on Windows (docs/operations/windows.md).
 var platforms = []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"}
 
-// buildTags are the tag sets the server is built with: the release builds' public, and none (the Docker image,
-// scripts/deploy/deploy.sh). A `// +build` line still counts, so a file can differ between them.
-var buildTags = []string{"", "public"}
+// buildTags are the tag sets the server is built with: none (go build, the tests) and server/build-tags.txt (the
+// release, the Docker image, scripts/deploy/deploy.sh), its public marker alone too. A `// +build` line still counts,
+// so a file can differ between them.
+func buildTags(t *testing.T) []string {
+	t.Helper()
+	b, err := os.ReadFile("../build-tags.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{"", "public", strings.TrimSpace(string(b))}
+}
 
 // localDir is the template that prints a package's directory when its code is local: the main module's, or a module's
 // put in place by a directory. The standard library and published modules print nothing (their directories can be
@@ -373,8 +375,9 @@ func deps(t *testing.T, dir string, tests bool) []pkg {
 	}
 	type build struct{ platform, tags string }
 	var builds []build
+	tagSets := buildTags(t)
 	for _, platform := range platforms {
-		for _, tags := range buildTags {
+		for _, tags := range tagSets {
 			builds = append(builds, build{platform, tags})
 		}
 	}

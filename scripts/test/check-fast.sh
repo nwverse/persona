@@ -7,19 +7,27 @@
 #   scripts/check-fast.sh --base main     # diff against another ref
 #   scripts/check-fast.sh --all           # every local fast check except iOS/macOS builds and the Postgres suite,
 #                                         # including every scripts/**/test_*.py suite CI's Scripts tests job runs
+#                                         # (a test_*.py that never mentions unittest is a SKIP line, as in
+#                                         # scripts/ci/python-tests.py; diff mode skips it too)
 #   scripts/check-fast.sh -h|--help
 #
 # Path mapping (diff mode):
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
 #                              typecheck, vitest run
-#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, scripts/mock/inbox_events.json
+#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, spec/fixtures/attention/**,
+#   scripts/mock/inbox_events.json
 #                              also the web check: web/src and its vitest suite read these files. They are the inputs
 #                              outside web/ of the web lane in scripts/ci/paths.py; test_check_fast.py keeps the two in sync
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
 #   site/**                    node --test site/worker.test.mjs
 #   sdk/ts/**                  bun test (skipped with a reason when bun is absent)
+#   sdk/ts/src/**              also go test ./internal/extension/denohost/...: the trusted Deno adapter bundles it,
+#                              and TestTrustedAdapterMatchesOfficialSDK fails while the committed one is stale (#4221)
 #   sdk/go/**                  go test ./... inside the sdk/go module
-#   server/internal/foo/**     go test ./internal/foo/...   (cmd/ likewise; uncategorized server changes: go build ./...)
+#   server/internal/foo/**     go test ./internal/foo/...   (cmd/<x>/** and plugins/<x>/** likewise; other server
+#                              changes: go build ./...)
+#   server/**, sdk/go/**       also the server's repo-wide guard tests (GO_GUARD_PKGS, GO_GUARD_TESTS), which fail on
+#                              code outside their own package; --all runs them as part of go test ./...
 #   server/internal/db/migrations/**, scripts/ci/migration_freeze.py
 #                              python3 scripts/ci/migration_freeze.py (a migration already on the base must not be
 #                              edited, deleted or renamed; comment- and whitespace-only edits pass; a new file may be
@@ -39,9 +47,14 @@
 #                              ambiguous (a case "*" matches slashes, so scripts/* covers nested paths too); plus
 #                              each changed scripts/<dir>/test_*.py and the test_<name>.py of each changed script
 #                              <name>.py / <name>.sh (- read as _; db.sh's is test_db_sh.py), run from its
-#                              directory as CI does (#3968)
+#                              directory as CI does (#3968). scripts/hooks/** also runs
+#                              scripts/test/test_privacy_check.py (it runs the hooks); scripts/privacy_check.py also
+#                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
-#                              CLAUDE.md doc index), test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
+#                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#   server/**, web/src/**, web/e2e/**, scripts/**, sdk/**, apple/**, android/**, integrations/**, spec/**, schema/**
+#                              also test_doc_sections.py: it reads the code comments there too (its SOURCE_DIRS)
 #   server/internal/{proto,hub,extension}/**, schema/extension/manifest.schema.json
 #                              also test_doc_wire.py: the code side of those wire lists
 #   apple/**                   scripts/test/test_apple_l10n.py (String Catalogs, Chinese Swift literals); the iOS/macOS
@@ -332,12 +345,35 @@ job_sdk_ts() {
   in_dir sdk/ts step "$TIMEOUT_OTHER" "sdk/ts: bun test" bun test
 }
 
-job_go() {  # $1 = a package dir (internal/foo, cmd/bar) or ALL for ./...
+job_go() {  # $1 = a package dir (internal/foo, cmd/bar, plugins/baz) or ALL for ./...
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
   local _pattern _label _inner
   if [ "$1" = ALL ]; then _pattern=./...; _label="go test ./..."; else _pattern="./$1/..."; _label="go test ./$1/..."; fi
   _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
   in_dir server step "$TIMEOUT_GO_TEST" "$_label" go test -count=1 -timeout "${_inner}s" "$_pattern"
+}
+
+# The server's repo-wide guards: tests that read other packages' source, go list output, the migrations or sdk/go, so
+# a change anywhere under server/ or sdk/go/ can fail them while go test on the touched packages passes (#1936 broke
+# the lazyre guard on main that way). The list is curated, not every *guard*_test.go: internal/node's pathguard and
+# writeguard tests and internal/hub's ownership_guard_test.go test their own package's behaviour. GO_GUARD_PKGS run
+# whole; GO_GUARD_TESTS names the guard tests of GO_GUARD_TEST_PKGS, whose other tests are slow or need Postgres.
+GO_GUARD_PKGS=(./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins)
+GO_GUARD_TEST_PKGS=(./internal/hub ./internal/assistant)
+GO_GUARD_TESTS='^(TestHubAnswersOnlyItsOwnRoutes|TestHubDoesNotImportTheManager|TestHubCallsNoModel|TestHubStoreStaysSmall'\
+'|TestTheHubOpensNoneOfTheManagersFiles|TestStoresTouchTheirOwnTables|TestSettingsKeysAreOneSidesOwn'\
+'|TestTheLaunchersSealedFieldsAreReSealed|TestPlacesThatSealAreKnown)$'
+
+# job_go_guards runs both guard commands, the second one also when the first failed, so one run names every failure.
+job_go_guards() {
+  [ "$HAVE_GO" -eq 1 ] || skip "go not found"
+  local _inner=$((TIMEOUT_GO_TEST - 10)) _rc=0
+  [ "$_inner" -lt 5 ] && _inner=5
+  in_dir server step "$TIMEOUT_GO_TEST" "go test ${GO_GUARD_PKGS[*]}" \
+    go test -count=1 -timeout "${_inner}s" "${GO_GUARD_PKGS[@]}" || _rc=$?
+  in_dir server step "$TIMEOUT_GO_TEST" "go test -run <guard tests> ${GO_GUARD_TEST_PKGS[*]}" \
+    go test -count=1 -timeout "${_inner}s" -run "$GO_GUARD_TESTS" "${GO_GUARD_TEST_PKGS[@]}" || _rc=$?
+  return "$_rc"
 }
 
 job_go_build() {
@@ -358,7 +394,11 @@ job_i18n() {
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_i18n_check.py self-test" \
     python3 -B test_android_i18n_check.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_token_baseline.py self-test" \
-    python3 -B test_android_token_baseline.py
+    python3 -B test_android_token_baseline.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_slot_order.py self-test" \
+    python3 -B test_android_slot_order.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_slot_order.py" python3 -B android_slot_order.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_token_baseline.py" python3 -B android_token_baseline.py
 }
 
 job_external_refs() {
@@ -507,7 +547,7 @@ job_extension_schema() {
 
 CORE_FAIL=0
 CHANGED=""
-WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0
+WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0; GO_GUARDS=0
 SITE=0; SDKGO=0; EXTREFS=0; SDKBUNDLE=0
 INTEG=(); GO_GROUPS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=()
 CORE_MISSING=()
@@ -569,8 +609,9 @@ else
     # Repository files outside web/ that web/src and its vitest suite read: a change to one also runs the web check,
     # on top of its own mapping below. The same list is the web lane's filter in scripts/ci/paths.py.
     case "$f" in
-      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|scripts/mock/inbox_events.json) WEB=1 ;;
+      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|spec/fixtures/attention/*|scripts/mock/inbox_events.json) WEB=1 ;;
     esac
+    case "$f" in server/*|sdk/go/*) GO_GUARDS=1 ;; esac  # on top of the mapping below (job_go_guards)
     case "$f" in
       web/*) WEB=1 ;;
       site/*) SITE=1 ;;
@@ -579,10 +620,13 @@ else
         arr_has "$_p" "${INTEG[@]:-}" || INTEG+=("$_p") ;;
       sdk/ts/*) SDKTS=1 ;;
       spec/fixtures/*) ;;  # read by server tests: the reader packages are collected in a pass below
+      spec/tokens/*|spec/icons/*) ;;  # test_gen_tokens.py / test_gen_icon_meanings.py, added with the scripts/ unittests below
       server/*)
         _rest=${f#server/}
         case "$_rest" in
-          internal/*/*) ;;  # package groups are collected in a second pass below
+          # Package groups are collected in a second pass below; plugins/<file> is the plugins package, which the
+          # repo-wide guard job runs.
+          internal/*/*|plugins/*) ;;
           cmd/*)
             _after=${_rest#cmd/}
             case "$_after" in
@@ -619,13 +663,14 @@ else
   done <<< "$CHANGED"
 fi
 
-# Collect affected server packages: server/internal/foo/... -> ./internal/foo/...
+# Collect affected server packages: server/internal/foo/... -> ./internal/foo/..., plugins/bar/... likewise.
 if [ "$ALL" -eq 0 ]; then
   while IFS= read -r f; do
     case "$f" in
-      server/internal/*/*)
-        _rest=${f#server/internal/}
-        _g="internal/${_rest%%/*}"
+      server/internal/*/*|server/plugins/*/*)
+        _rest=${f#server/}
+        _top=${_rest%%/*}; _rest=${_rest#*/}
+        _g="$_top/${_rest%%/*}"
         arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g") ;;
     esac
   done <<< "$CHANGED"
@@ -662,14 +707,31 @@ if [ "$ALL" -eq 0 ]; then
   done
 fi
 
+# The trusted Deno adapter (server/internal/extension/denohost/adapter.mjs) is generated from adapter.ts, which bundles
+# sdk/ts/src: a change there also runs denohost's tests, whose TestTrustedAdapterMatchesOfficialSDK fails while the
+# committed adapter is stale (#4221; scripts/gen/deno_adapter.sh regenerates it). A few seconds; it needs bun.
+if [ "$ALL" -eq 0 ] && printf '%s\n' "$CHANGED" | grep -q '^sdk/ts/src/'; then
+  if [ "$HAVE_BUN" -eq 0 ]; then
+    INFO+=("SKIP  trusted Deno adapter (go test ./internal/extension/denohost/...): bun not found in PATH")
+  elif ! arr_has internal/extension "${GO_GROUPS[@]:-}"; then  # ./internal/extension/... already covers it
+    arr_has internal/extension/denohost "${GO_GROUPS[@]:-}" || GO_GROUPS+=(internal/extension/denohost)
+  fi
+fi
+
 # script_test_add adds a scripts/<dir>/test_*.py that exists (a deleted one is not run) and that no dedicated job above
-# already runs (refs, bundle, extension schema, the android checkers).
+# already runs (refs, bundle, extension schema, the android checkers). A file that never mentions unittest is a SKIP
+# line instead, the rule of is_suite in scripts/ci/python-tests.py: python -m unittest runs no tests in such a
+# verification script and exits 5 ("NO TESTS RAN") on Python 3.12 and later.
 script_test_add() {
   case "$1" in
     scripts/test/test_external_service_refs.py|scripts/test/test_sdk_bundle.py|scripts/test/test_extension_schema.py) return 0 ;;
     scripts/app/test_android_*) return 0 ;;
   esac
   [ -f "$1" ] || return 0
+  if ! grep -q unittest "$1"; then
+    arr_has "SKIP  $1 (not a unittest suite)" "${INFO[@]:-}" || INFO+=("SKIP  $1 (not a unittest suite)")
+    return 0
+  fi
   arr_has "$1" "${SCRIPT_TESTS[@]:-}" || SCRIPT_TESTS+=("$1")
 }
 
@@ -679,6 +741,7 @@ script_test_add() {
 # Changes to docs, markdown, apple/, deploy/docker/ and the root Dockerfile add the scripts/test suites that guard them.
 # --all runs every scripts/**/test_*.py suite, the same find as CI's Scripts tests job, minus the few script_test_add
 # skips because a dedicated check above runs them; renaming or dropping one of those checks must update that skip list.
+# test_check_fast.py compares this selection with python-tests.py's.
 if [ "$ALL" -eq 1 ]; then
   while IFS= read -r f; do
     script_test_add "$f"
@@ -697,12 +760,35 @@ else
     case "$f" in
       docs/*|*.md)
         script_test_add scripts/test/test_doc_paths.py; script_test_add scripts/test/test_doc_go_paths.py
-        script_test_add scripts/test/test_doc_wire.py ;;
+        script_test_add scripts/test/test_doc_sections.py; script_test_add scripts/test/test_doc_wire.py ;;
       # The code side of the wire lists test_doc_wire.py compares with the docs.
       server/internal/proto/*|server/internal/hub/*|server/internal/extension/*|schema/extension/manifest.schema.json)
         script_test_add scripts/test/test_doc_wire.py ;;
     esac
+    # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
+    case "$f" in
+      server/*|web/src/*|web/e2e/*|scripts/*|sdk/*|apple/*|android/*|integrations/*|spec/*|schema/*)
+        script_test_add scripts/test/test_doc_sections.py ;;
+    esac
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
+    # test_gen_tokens.py checks the token sources against the iOS values and the committed Android Tokens.kt (#4209).
+    case "$f" in
+      spec/tokens/*|apple/Shared/Design/*|android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt)
+        script_test_add scripts/assets/test_gen_tokens.py ;;
+    esac
+    # test_gen_icon_meanings.py checks spec/icons against Theme.Icon and the Phosphor glyphs, and PersonaIcons.kt.
+    case "$f" in
+      spec/icons/*|apple/Shared/Design/Icons.swift|android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/*)
+        script_test_add scripts/assets/test_gen_icon_meanings.py ;;
+    esac
+    # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp
+    # repositories and runs the hooks there; check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py
+    # copies privacy_check.py into its temp repositories, where merge-pr.sh runs it.
+    case "$f" in
+      scripts/hooks/*) script_test_add scripts/test/test_privacy_check.py ;;
+      scripts/privacy_check.py)
+        script_test_add scripts/release/test_check_bundle_privacy.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
+    esac
     case "$f" in deploy/docker/*|docs/operations/docker.md|Dockerfile) script_test_add scripts/test/test_docker_entrypoint.py ;; esac
   done <<< "$CHANGED"
 fi
@@ -787,6 +873,9 @@ else
   fi
   if [ "$SERVER_BUILD" -eq 1 ]; then
     if [ "$HAVE_GO" -eq 1 ]; then schedule "server go build ./..." job_go_build ""; else INFO+=("SKIP  server go build: go not found"); fi
+  fi
+  if [ "$GO_GUARDS" -eq 1 ]; then
+    if [ "$HAVE_GO" -eq 1 ]; then schedule "server repo-wide guards" job_go_guards ""; else INFO+=("SKIP  server repo-wide guards: go not found"); fi
   fi
 fi
 

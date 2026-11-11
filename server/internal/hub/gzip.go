@@ -3,23 +3,26 @@ package hub
 import (
 	"compress/gzip"
 	"io"
-	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/nwverse/persona/server/internal/webasset"
 )
 
 // Responses are gzipped for clients that take it (#2149). One Feishu chat's messages came to 2.9 MB of JSON that
 // gzip makes 70 KB, and the phone spent seconds receiving them; the web app's main bundle went out at full size too.
 // URLSession, OkHttp, browsers and Go's client all ask for gzip and undo it themselves.
 //
-// Only what compresses and is worth it: text, JSON, JavaScript, XML, SVG and wasm of gzipMinSize bytes or more.
+// Only what compresses and is worth it: text, JSON, JavaScript, XML, SVG and wasm of gzipMinSize bytes or more
+// (webasset.CompressibleType; a published personad keeps the web client's hashed assets gzipped already, web.go).
 // These pass as they are:
 //   - WebSocket upgrades, long-lived streams (longLived), HEAD, and requests for a range;
 //   - the admin pages and API: their cookie and CSRF token are secrets that a compressed size could give away (BREACH);
 //   - responses that set a cookie, carry their own encoding or a range, or are an event stream.
-const gzipMinSize = 1024
+const gzipMinSize = webasset.MinSize
 
 var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
 
@@ -49,6 +52,17 @@ func gzipResponses(logf func(format string, args ...any), next http.Handler) htt
 
 // gzipWanted: the client takes gzip, and the request is one whose answer may be compressed.
 func gzipWanted(r *http.Request) bool {
+	return encodable(r) && acceptsGzip(r.Header.Values("Accept-Encoding"))
+}
+
+// brotliWanted: the client takes br, and the request is one whose answer may be compressed. Only the web client's
+// stored brotli copies use it (web.go); the hub compresses nothing as brotli itself.
+func brotliWanted(r *http.Request) bool {
+	return encodable(r) && acceptsBrotli(r.Header.Values("Accept-Encoding"))
+}
+
+// encodable: a request whose answer may be sent compressed at all.
+func encodable(r *http.Request) bool {
 	p := r.URL.Path
 	switch {
 	case r.Method == http.MethodHead, r.Method == http.MethodConnect,
@@ -56,12 +70,24 @@ func gzipWanted(r *http.Request) bool {
 		p == "/admin", strings.HasPrefix(p, "/admin/"), strings.HasPrefix(p, "/api/v1/admin/"):
 		return false
 	}
-	return acceptsGzip(r.Header.Values("Accept-Encoding"))
+	return true
 }
 
 // acceptsGzip reads Accept-Encoding: gzip, or *, with a q above 0.
 func acceptsGzip(values []string) bool {
-	star := false
+	return acceptsCoding(values, true, "gzip", "x-gzip")
+}
+
+// acceptsBrotli reads Accept-Encoding: br with a q above 0. A bare * does not count: a client that names no br
+// (Go's, curl's) gets gzip as before, and browsers all name it.
+func acceptsBrotli(values []string) bool {
+	return acceptsCoding(values, false, "br")
+}
+
+// acceptsCoding: Accept-Encoding names one of codings (the first that it names decides) with a q above 0, or, when
+// star counts, has * with a q above 0.
+func acceptsCoding(values []string, star bool, codings ...string) bool {
+	starred := false
 	for _, v := range values {
 		for _, part := range strings.Split(v, ",") {
 			name, params, _ := strings.Cut(part, ";")
@@ -73,32 +99,16 @@ func acceptsGzip(values []string) bool {
 					}
 				}
 			}
-			switch strings.ToLower(strings.TrimSpace(name)) {
-			case "gzip", "x-gzip":
+			name = strings.ToLower(strings.TrimSpace(name))
+			switch {
+			case slices.Contains(codings, name):
 				return q > 0
-			case "*":
-				star = q > 0
+			case star && name == "*":
+				starred = q > 0
 			}
 		}
 	}
-	return star
-}
-
-// compressibleType: a media type that gzip makes much smaller, and that is not an event stream.
-func compressibleType(contentType string) bool {
-	mt, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return false
-	}
-	switch {
-	case mt == "text/event-stream":
-		return false
-	case strings.HasPrefix(mt, "text/"), mt == "application/json", strings.HasSuffix(mt, "+json"),
-		mt == "application/javascript", mt == "application/x-javascript", mt == "application/xml",
-		strings.HasSuffix(mt, "+xml"), mt == "application/wasm":
-		return true
-	}
-	return false
+	return starred
 }
 
 // gzipWriter holds the start of a response until it knows whether to compress it. That is when gzipMinSize bytes
@@ -184,7 +194,7 @@ func (g *gzipWriter) compressible() bool {
 		}
 		ct = http.DetectContentType(g.buf)
 	}
-	return compressibleType(ct)
+	return webasset.CompressibleType(ct)
 }
 
 // start sends the header, compressed or as it is, and then what was held.

@@ -68,10 +68,11 @@ type updateRecord struct {
 
 // updateSettings are kept in Postgres (settings hub_update).
 type updateSettings struct {
-	Auto           *bool          `json:"auto,omitempty"` // nil: on (the default)
-	AutoNoticeSeen bool           `json:"auto_notice_seen"`
-	Bad            []int64        `json:"bad,omitempty"` // builds that went back: not installed automatically again
-	History        []updateRecord `json:"history,omitempty"`
+	AutoUpdateNodes *bool          `json:"auto_update_nodes,omitempty"` // nil: use the startup configuration
+	Auto            *bool          `json:"auto,omitempty"`              // nil: on (the default)
+	AutoNoticeSeen  bool           `json:"auto_notice_seen"`
+	Bad             []int64        `json:"bad,omitempty"` // builds that went back: not installed automatically again
+	History         []updateRecord `json:"history,omitempty"`
 }
 
 func (s updateSettings) auto() bool { return s.Auto == nil || *s.Auto }
@@ -150,6 +151,8 @@ func newUpdater(h *Hub) *updater {
 				"alert": map[string]any{"title": title, "body": body}, "sound": "default", "thread-id": "hub_update",
 			}}, "hub_update", nil)
 		}}
+	// hub.json's update.proxy, for this client alone (selfupdate_source.go).
+	transport.Proxy = u.proxyFor
 	if h.slot != nil {
 		u.exec = u.slotExec
 		u.handover = func(ctx context.Context, target string, build int64) error {
@@ -242,7 +245,12 @@ func startWatchdog(prev, pendingPath string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	// Wait instead of releasing: when the exec into the new version fails the pending marker goes, the watchdog
+	// exits, and a child nobody waits for stays a zombie for as long as this hub runs. It stays this process's direct
+	// child (update-watch's hubIsParent relies on that); after a successful exec this goroutine is gone and the new
+	// image inherits it.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // boot runs once, first thing when the hub starts, before the config or the database: a new version that keeps
@@ -479,8 +487,17 @@ func (u *updater) rollback(p update.Pending, reason string) {
 // and has the manager redeploy each connected machine whose node is not this build, one at a time. With node updates
 // off, the hub moved on from version from alone: the builds of that version it leaves in bin/nodes go aside.
 func (u *updater) updateNodes(ctx context.Context, staged, from string) {
+	dir := identity.NodeBinaryDir()
+	info, err := os.Lstat(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		u.h.logf("update: inspect node binary directory: %v", err)
+		return
+	}
+	// A release publisher owns this pointer and both immutable release trees.
+	// Only it may activate packages after the hub is confirmed healthy.
+	managed := info != nil && info.Mode()&os.ModeSymlink != 0
 	if !u.nodesEnabled() {
-		if from != "" && from != u.h.version {
+		if !managed && from != "" && from != u.h.version {
 			if moved := setAsideOldNodes(identity.NodeBinaryDir()); len(moved) > 0 {
 				u.h.logf("update: node builds of %s set aside (node updates are off, Redeploy fetches %s): %s",
 					from, u.h.version, strings.Join(moved, ", "))
@@ -488,7 +505,7 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string) {
 		}
 		return
 	}
-	if staged != "" {
+	if staged != "" && !managed {
 		files, _ := filepath.Glob(filepath.Join(staged, "personad-*"))
 		legacy, _ := filepath.Glob(filepath.Join(staged, compat.DaemonBinary+"-*"))
 		files = append(files, legacy...)
@@ -537,6 +554,9 @@ func (u *updater) whyNotKey() (string, i18n.Args) {
 	case update.Docker:
 		return "docker", nil
 	case update.Release:
+		if err := u.h.updateSource().urlErr; err != nil {
+			return "bad_source", i18n.Args{"error": err.Error()}
+		}
 		return "no_source", nil
 	}
 	return "dev", i18n.Args{"version": u.h.version}
@@ -568,21 +588,28 @@ func (u *updater) set(state, progress, errText string) {
 
 // updateView is GET /api/v1/hub/update.
 type updateView struct {
-	Version    string      `json:"version"`
-	Build      int64       `json:"build"`
-	Channel    string      `json:"channel"`
-	CanUpdate  bool        `json:"can_update"`
-	Why        string      `json:"why_not,omitempty"`
-	Latest     *latestView `json:"latest,omitempty"`
-	State      string      `json:"state"`
-	Progress   string      `json:"progress,omitempty"`
-	Busy       []busyItem  `json:"busy"`
-	Error      string      `json:"error,omitempty"`
-	Auto       bool        `json:"auto"`
-	AutoNotice bool        `json:"auto_notice"`
-	LastCheck  *time.Time  `json:"last_check,omitempty"`
-	Confirmed  bool        `json:"confirmed"`
-	Image      *imageView  `json:"image,omitempty"` // a Docker hub's image
+	Version         string      `json:"version"`
+	Build           int64       `json:"build"`
+	Channel         string      `json:"channel"`
+	CanUpdate       bool        `json:"can_update"`
+	Why             string      `json:"why_not,omitempty"`
+	Latest          *latestView `json:"latest,omitempty"`
+	State           string      `json:"state"`
+	Progress        string      `json:"progress,omitempty"`
+	Busy            []busyItem  `json:"busy"`
+	Error           string      `json:"error,omitempty"`
+	Auto            bool        `json:"auto"`
+	AutoUpdateNodes bool        `json:"auto_update_nodes"`
+	AutoNotice      bool        `json:"auto_notice"`
+	LastCheck       *time.Time  `json:"last_check,omitempty"`
+	Confirmed       bool        `json:"confirmed"`
+	Image           *imageView  `json:"image,omitempty"` // a Docker hub's image
+	// UpdateURL is where the hub looks for releases now (selfupdate_source.go), UpdateFrom whether hub.json's
+	// update.url or the build said so; UpdateProxy the proxy its checks and downloads go through (update.proxy), with
+	// no user or password. All three are left out when there is none.
+	UpdateURL   string `json:"update_url,omitempty"`
+	UpdateFrom  string `json:"update_url_from,omitempty"`
+	UpdateProxy string `json:"update_proxy,omitempty"`
 }
 
 type latestView struct {
@@ -603,9 +630,11 @@ func (u *updater) view() updateView { return u.viewIn(u.h.userLang()) }
 func (u *updater) viewIn(l i18n.Lang) updateView {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	v := updateView{Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: u.h.build.SelfUpdates(),
-		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && u.h.build.SelfUpdates(),
-		AutoNotice: u.h.build.SelfUpdates() && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed}
+	selfUpdates, source := u.h.selfUpdates(), u.h.updateSource()
+	v := updateView{Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: selfUpdates,
+		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && selfUpdates,
+		AutoNotice: selfUpdates && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed,
+		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}
 	if v.Busy == nil {
 		v.Busy = []busyItem{}
 	}
@@ -620,7 +649,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		released := r.Manifest.Released
 		v.Latest = &latestView{Version: r.Manifest.Version, Build: r.Manifest.Build, Released: &released, Notes: r.Manifest.Notes,
 			Newer: u.h.build.Newer(r.Manifest.Build), Bad: slices.Contains(u.settings.Bad, r.Manifest.Build)}
-		if v.Latest.Newer && u.h.build.SelfUpdates() {
+		if v.Latest.Newer && selfUpdates {
 			v.Latest.Held = u.h.build.Hold(r.Manifest)
 			if v.Latest.Held == "" && u.blocked != nil {
 				v.Latest.Held = i18n.Localize(u.blocked, l)

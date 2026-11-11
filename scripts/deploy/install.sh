@@ -9,7 +9,7 @@
 # persona-manager beside it too (docs/server/server.md "Programs"). PERSONA_DL=<url> installs from somewhere else.
 #
 # One hub is enough for a home (docs/archive/operations/plan-hub-center.md section 0); every other computer gets the node service: the
-# resident node and the connector persona-link, paired with the hub (docs/operations/link.md "Installing the node service"):
+# resident node and the connector persona-link, paired with the hub (docs/operations/link.md "Install the node service"):
 #
 #   curl -fsSL <site>/install.sh | sh -s -- --node --pair '<link from personad hub pair --machine <id>>'   # this one connects to the hub
 #   curl -fsSL <site>/install.sh | sh -s -- --node --listen [:18663] [--addr <address the hub reaches this one at>]  # the hub connects here
@@ -187,7 +187,7 @@ prepare_state() {
 }
 
 compat_command() {
-    case "$1" in personad) old=jarvisd ;; persona-link) old=jarvis-link ;; personad-wechat) old=jarvisd-wechat ;; *) return ;; esac
+    case "$1" in personad) old=jarvisd ;; persona-link) old=jarvis-link ;; *) return ;; esac
     [ ! -d "$DEST/$old" ] || fail "legacy command is a directory: $DEST/$old"
     ln -sf "$1" "$DEST/$old"
 }
@@ -316,8 +316,9 @@ $(unit_forms "${DEST#"$HOME"}/$1" | sed 's/^/%h/')" ;; esac
 		/usr/lib/systemd/system/*.service.d/*.conf \
 		"$HOME"/Library/LaunchAgents/*.plist /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
 		[ -f "$f" ] || continue
-		# The paths go in through the environment: awk -v would read backslashes in them as escapes.
-		if SERVICE_FORMS="$forms" awk '
+		# The paths go in through the environment: awk -v would read backslashes in them as escapes. In bytes (LC_ALL=C):
+		# macOS awk stops on a binary property list in a UTF-8 locale and prints its bytes; a byte match is the same here.
+		if SERVICE_FORMS="$forms" LC_ALL=C awk '
 			function names(s, p,  i, c) {
 				i = index(s, p)
 				if (p == "" || !i) return 0
@@ -384,18 +385,6 @@ case ":$PATH:" in
 *":$DEST:"*) ;;
 *) echo "(not on PATH: run it as $DEST/$program, or add $DEST to PATH)" ;;
 esac
-
-# On the computer that runs the hub, PERSONA_WITH=wechat also installs personad-wechat, the WeChat bot's program, next
-# to personad (docs/extensions/wechat.md). Other computers do not need it; a hub that updates itself gets it with its next update
-# anyway. (Telegram's connector is an extension now, installed from the hub's extension market: #1704.)
-for p in wechat; do
-	case ",${PERSONA_WITH:-}," in
-	*,$p,*)
-		get "personad-$p-$os-$arch" "personad-$p"
-		echo "personad-$p installed at $DEST/personad-$p"
-		;;
-	esac
-done
 
 # The places the node looks besides PATH (server/internal/node/node.go: ssh sessions get a minimal PATH).
 has_herdr() {
@@ -583,5 +572,5 @@ if [ -f "$STATE/hub.json" ] && grep -Eq '"token"[[:space:]]*:[[:space:]]*"[^"]' 
 	exit 0
 fi
 echo "要让这台电脑跑 hub：运行 $DEST/personad hub setup（或重跑安装命令并加 --hub）。全家只要一台 hub。"
-echo "（跑 hub 的那台加 PERSONA_WITH=wechat 会一起装微信机器人。）"
+echo "Messaging connectors are installed from the hub extension marketplace."
 echo "其他电脑装 node 服务：安装命令加 --node --pair '<personad hub pair --machine <id> 打印的链接>'（或 --listen：让 hub 来连）。"

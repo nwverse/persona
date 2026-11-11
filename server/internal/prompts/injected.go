@@ -13,7 +13,7 @@ import (
 // usage limit reset (agents/limit_continue), the background tasks
 // a node restart stopped (assistant/lost_tasks), news of an inbox item for a conversation it was handed to
 // (inbox/handoff_note). The model reads them as they are; the apps show one line instead
-// (docs/protocol/protocol.md "Messages Persona injects"). ParseInjected reads them back off the transcript's text, so old lines are
+// (docs/protocol/protocol.md "Messages injected by Persona"). ParseInjected reads them back off the transcript's text, so old lines are
 // known too; its tests render every template and parse the result, which keeps the two in step.
 
 var (
@@ -50,6 +50,9 @@ var noticeLines = map[string]string{"done": "做完了", "needs": "在等你", "
 // ParseInjected says what text is when it is one of the messages Persona writes for the model; nil for anything
 // else (what the user wrote stays theirs: only the templates' exact shapes are taken).
 func ParseInjected(text string) *proto.Injected {
+	if UserAuthoredContext(text) {
+		return nil
+	}
 	for {
 		loc := leadContextRe.FindStringIndex(text)
 		if loc == nil {
