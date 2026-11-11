@@ -128,6 +128,13 @@ func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, 
 	return s.modelProviderCompatible(p, v, stored)
 }
 
+func effortLevelsForKind(kind string) []string {
+	if kind == "api" {
+		return append(slices.Clone(proto.EffortLevels), "off", "none")
+	}
+	return proto.EffortLevels
+}
+
 func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBinding, providers []ModelProvider) error {
 	var provider *ModelProvider
 	for i := range providers {
@@ -161,7 +168,7 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			return i18n.Err("assistant-models.err_provider_unsupported")
 		}
 	}
-	if b.Effort != "" && !slices.Contains([]string{"low", "medium", "high", "xhigh", "max"}, b.Effort) {
+	if b.Effort != "" && !slices.Contains(effortLevelsForKind(p.Kind), b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
 	}
 	if p.Kind == "api" {

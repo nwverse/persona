@@ -93,6 +93,7 @@ func TestPlacesThatSealAreKnown(t *testing.T) {
 		"internal/hub/devices_service.go":   1, // the hub's key: the computers' connector credentials
 		"internal/hub/push_transport.go":    1, // a phone's push key (pushcrypto)
 		"internal/pushcrypto/pushcrypto.go": 1, // HPKE to a phone
+		"internal/proto/secretenv.go":       1, // HPKE to a node's one-time stage key: a hand-off, never stored
 		"internal/relay/relay.go":           1, // the push relay's grants
 	}
 	lineComment := regexp.MustCompile(`(?m)^\s*//.*$`) // comments may name them freely

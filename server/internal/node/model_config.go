@@ -27,6 +27,9 @@ type modelExecution struct {
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
+	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
+	// part of a fingerprint, never kept for a resume.
+	SecretTicket string `json:"-"`
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
