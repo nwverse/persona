@@ -16398,6 +16398,10 @@ class H(BaseHTTPRequestHandler):
             del SCHEDULE_RAN[:]
             return self.send_json({"ok": True})
         if p == "/mock/renamed": return self.send_json({"renamed": RENAMED})
+        if p == "/mock/model-fallback/reset" and MODEL_FALLBACK:  # #2528: back to before "Back to configured model"
+            for _s in SESSIONS + ASSISTANT:
+                if _s.pop("model_restore", None): push_machine(_s["machine_id"])
+            return self.send_json({"ok": True})
         if p == "/mock/modes": return self.send_json({"modes": MODES_LOG})
         if p == "/mock/node_actions": return self.send_json({"actions": NODE_ACTIONS})
         if p == "/mock/served": return self.send_json({"served": SERVED})
@@ -18209,6 +18213,17 @@ class H(BaseHTTPRequestHandler):
             s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)]
             push_machine(s["machine_id"])
             return self.send_json({"queue": pulled})
+        if MODEL_FALLBACK and p.startswith("/api/v1/sessions/") and p.endswith("/restore-model"):  # #2528, as the node answers
+            s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None)
+            if not s:
+                return self.send_json({"error": "this session is gone", "code": "restore_gone"}, 409)
+            if not s.get("assistant"):
+                return self.send_json({"error": "use /model in the session's terminal", "code": "restore_unsupported"}, 409)
+            if not s.get("model_fallback") or s.get("model_restore"):
+                return self.send_json({"error": "no fallback to go back from", "code": "restore_nothing"}, 409)
+            s["model_restore"] = {"state": "next_start", "to": MODEL_FALLBACK_TO, "at": ago(minutes=0)}
+            push_machine(s["machine_id"])
+            return self.send_json({"restore": "next_start", "restore_to": MODEL_FALLBACK_TO, "closed": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/modes"):  # permission mode / effort chips
             body = json.loads(self.last_body or b"{}")
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
@@ -20366,6 +20381,30 @@ if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") in ("1", "summary"):
     TODOS = copy.deepcopy(TODOS_INIT)
     TASK_PLANS.clear()
     TASK_FEED[ASK1] = []
+
+# MOCK_MODEL_FALLBACK=1 (#2528, docs/protocol/protocol.md "Going back to the configured model"): after an upstream refusal
+# Claude Code moved two sessions to a fallback model that then wasn't there: the review agent (a terminal session: the card
+# only says to type /model) and the main conversation (headless: "Back to configured model" closes its idle process).
+# Each transcript has the refusal notice (Item.model_refusal, the public fields and the refusal's own words) and the 404
+# after it; POST …/restore-model answers as the node does and pushes Session.model_restore (web/e2e/model-fallback.mjs).
+MODEL_FALLBACK = os.environ.get("MOCK_MODEL_FALLBACK") == "1"
+MODEL_FALLBACK_TO = "claude-opus-5-5"  # the configured model the node would read when it closes the process
+if MODEL_FALLBACK:
+    _refusal = {"subtype": "model_refusal_fallback", "original_model": "claude-opus-5-5", "fallback_model": "claude-sonnet-5-5",
+                "category": "cyber", "scope": "session", "explanation": "The upstream provider declined this request.",
+                "text": "Claude Code is unable to respond to this request with claude-opus-5-5, so it will continue with "
+                        "claude-sonnet-5-5 for the rest of this session."}
+    _error = "API Error: 404 model: claude-sonnet-5-5 is not available for this account"
+    for _sid, _ask in ((REVIEW, "接着看 PR #42 里新加的鉴权中间件"), (ASK1, "帮我看看 PR #42 的鉴权改动有没有漏洞")):
+        ITEMS[_sid] = ITEMS.get(_sid, []) + [
+            it("user", "text", 2, text=_ask),
+            it("system", "notice", 1.9, text=_refusal["text"], model_refusal=dict(_refusal)),
+            it("assistant", "text", 1.8, text=_error)]
+        for _s in SESSIONS + ASSISTANT:
+            if _s["session_id"] == _sid:
+                _s.update(model_fallback=dict(_refusal), turn_error=_error, turn_error_code="model_fallback_unavailable",
+                          status="done", state="idle", last_text=_error, updated_at=ago(minutes=1.8))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")
