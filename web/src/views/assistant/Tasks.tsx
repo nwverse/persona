@@ -4,7 +4,7 @@
 // side panel.
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
-import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
+import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
   answeredItems,
@@ -43,7 +43,6 @@ import { askOptions, dockAgents, type DockAgent, interruption, isRemovable, most
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
-import { boardSections, type BoardSectionKey } from "../../lib/task-board";
 import { openPanel } from "../../lib/panel";
 import { navigate } from "../../lib/router";
 import { plainMarkdown } from "../../lib/plain-markdown";
@@ -52,7 +51,7 @@ import { LiveCard } from "../../ui/AssistantCard";
 import type { AssistantView } from "../../lib/extension-wire";
 import { getState, hubHas, taskSessionLookup, useStore, type State } from "../../lib/store";
 import type { AgentState, Interaction, Machine, Session } from "../../lib/types";
-import { Button, Collapse, cx, Dialog, IconButton, Menu, toast, useNow } from "../../ui/atoms";
+import { Button, Collapse, cx, IconButton, Loading, Menu, toast, useNow } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
@@ -73,8 +72,13 @@ import { sessionTitle, stateOf } from "../../lib/format";
 import { formatDate, t } from "../../i18n";
 import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
-import { Empty } from "./parts";
-import { PlanEditDialog } from "./PlanEdit";
+import { lazyPage } from "../../lib/lazy-page";
+const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEditDialog));
+// "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
+const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
+import { conversationTitle } from "./conversations";
+import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
+import type { TaskWorkspace } from "../../lib/feed";
 import { machineStartBlocked, todoUltracode, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltraMark, UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
@@ -82,7 +86,7 @@ import { stateName } from "../../lib/state-labels";
 
 // ── what a task is now ──
 
-function useTaskLookup() {
+export function useTaskLookup() {
   const sessions = useStore((s) => s.sessions);
   const sessionSummaries = useStore((s) => s.sessionSummaries);
   const taskRows = useStore((s) => s.taskRows);
@@ -159,7 +163,7 @@ export function useTodo(id: string | undefined): Todo | undefined {
 }
 
 /** A task's status, failed too when a hub from before #1077 left it open and only its plan says the start failed. */
-function statusOf(todo: Todo, lookup: SessionLookup, plans: Record<string, TaskPlan>): TodoStatus {
+export function statusOf(todo: Todo, lookup: SessionLookup, plans: Record<string, TaskPlan>): TodoStatus {
   const st = todoStatus(todo, lookup);
   return st === "not_started" && startFailure(todo, plans) ? "failed" : st;
 }
@@ -245,7 +249,7 @@ function since(iso?: string): string | undefined {
 }
 
 /** What a task's lead agent says or does now, in a line (lib/todos taskNow): its words, or the step it is on. */
-function progressOf(lead: Session | undefined) {
+export function progressOf(lead: Session | undefined) {
   const now = taskNow(lead, !!lead && stateOf(lead) === "working");
   return now && { text: now.kind === "words" ? plainMarkdown(now.text) : now.text, for: now.kind === "step" ? since(now.since) : undefined };
 }
@@ -331,6 +335,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   const [remember, setRemember] = useState(false);
   const [editing, setEditing] = useState(false);
   const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
+  const [workspaceChoice, setWorkspaceChoice] = useState<Record<number, TaskWorkspace>>({});
   const blocked = usePlanUltracodeBlocked(plan);
   if (plan.state !== "open") {
     const failed = plan.tasks.filter((t) => t.error);
@@ -343,6 +348,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         {failed.map((task) => (
           <PlanTaskFailed key={task.title} task={task} conversation={plan.conversation} />
         ))}
+        {plan.tasks.map((task, i) => <TaskWorkspaceLine key={i} task={task} />)}
       </div>
     );
   }
@@ -350,14 +356,23 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   // each task's choice, the card's own else the assistant's: the chip draws it (off where the computer can't), "Edit"
   // opens with it (so a task moved there to a computer that can has it again), and Start sends it, off where it can't
   const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
+  const editedPlan = { ...plan, tasks: plan.tasks.map((task, i) => workspaceChoice[i] === undefined ? task : { ...task, workspace: workspaceChoice[i], workspace_resolved: undefined }) };
+  const startEdits = () => {
+    const edits = planUltracodeToSend(plan, ultracode, ultracodeBlockedNow) ?? plan.tasks.map(() => ({}));
+    const all = edits.map((e, i) => workspaceChoice[i] === undefined ? e : { ...e, workspace: workspaceChoice[i] });
+    return all.some((e) => Object.keys(e).length) ? all : undefined;
+  };
   return (
     <div className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
         <Icon name="list" size={13} />
         {plan.tasks.length > 1 ? t("assistant-tasks.plan_split", { count: plan.tasks.length }) : t("assistant-tasks.plan_single")}
       </div>
-      {plan.tasks.map((t, i) => (
-        <PlanTaskRow key={i} n={i + 1} task={t} numbered={plan.tasks.length > 1} ultra={blocked && { on: ultracode[i], blocked: blocked[i] }} busy={busy} onUltra={(on) => setUltraChoice((c) => ({ ...c, [i]: on }))} />
+      {editedPlan.tasks.map((t, i) => (
+        <div key={i} className="flex min-w-0 flex-col gap-2">
+          <PlanTaskRow n={i + 1} task={t} numbered={plan.tasks.length > 1} ultra={blocked && { on: ultracode[i], blocked: blocked[i] }} busy={busy} onUltra={(on) => setUltraChoice((c) => ({ ...c, [i]: on }))} />
+          <TaskWorkspaceEditor plan={editedPlan} index={i} disabled={busy} onChange={(workspace) => setWorkspaceChoice((c) => ({ ...c, [i]: workspace }))} />
+        </div>
       ))}
       <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
@@ -366,7 +381,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
       {/* Start stays in reach (#3822): a card taller than the tray it scrolls in (several tasks, an opened brief) keeps
           its buttons at the tray's bottom edge; a card that fits looks as it did (the padding it takes it gives back) */}
       <div data-plan-actions className="sticky bottom-0 z-[1] -mx-4 -mt-2 -mb-4 flex gap-2 rounded-b-card bg-surface px-4 pt-2 pb-4">
-        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, planUltracodeToSend(plan, ultracode, ultracodeBlockedNow)))} className="flex-1">
+        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, startEdits()))} className="flex-1">
           {plan.tasks.length > 1 ? t("assistant-tasks.plan_start_n", { count: plan.tasks.length }) : t("assistant-tasks.plan_start")}
         </Button>
         <Button disabled={busy} onClick={() => setEditing(true)}>
@@ -376,9 +391,9 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
           {t("assistant-tasks.plan_dismiss")}
         </Button>
       </div>
-      {editing && (
+      {editing && <Suspense fallback={<Loading />}>
         <PlanEditDialog
-          plan={plan}
+          plan={editedPlan}
           ultracode={ultracode}
           onClose={() => setEditing(false)}
           onStart={(edits) => {
@@ -386,7 +401,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
             void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow)));
           }}
         />
-      )}
+      </Suspense>}
     </div>
   );
 }
@@ -1114,7 +1129,7 @@ function TodayCard({ body, conversation }: { body: TodayBody; conversation: stri
           {r.action && r.run && <Button onClick={r.run}>{r.action}</Button>}
         </div>
       ))}
-      {board && <TaskBoard open conversation={conversation} onClose={() => setBoard(false)} />}
+      {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>
   );
 }
@@ -1391,7 +1406,13 @@ function RunningAgentRow({ session, activity }: { session: Session; activity?: B
 /** The conversation's two upward trays (#3387): Needs you, everything waiting on the user, and In progress, everything
  *  running that does not; each thing in one of them only (lib/assistant-entries). Finished things are on the board. */
 export const AssistantActionBar = memo(function AssistantActionBar({ conversation, ownPending, ownCount = 0 }: { conversation: string; ownPending?: ReactNode; ownCount?: number }) {
-  const [tray, setTray] = useState<AssistantTray | null>(null);
+  const [tray, setTrayNow] = useState<AssistantTray | null>(null);
+  // the open tray filling the chat column (#4656), for going through many cards; closing or switching trays undoes it
+  const [expanded, setExpanded] = useState(false);
+  const setTray = (next: AssistantTray | null) => {
+    setTrayNow(next);
+    setExpanded(false);
+  };
   const [board, setBoard] = useState(false);
   const [showShelved, setShowShelved] = useState(false);
   const trayId = useId();
@@ -1417,8 +1438,19 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick: re-read the clock once a minute
     [conversation, main, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick],
   );
-  const asking = entries.needsYou.filter((item) => (item.kind === "task" || item.kind === "agent") && item.asks.length > 0);
-  const rest = entries.needsYou.filter((item) => !asking.includes(item));
+  const isAsking = (item: NeedsYouItem) => (item.kind === "task" || item.kind === "agent") && item.asks.length > 0;
+  // While background rounds fold, rows other conversations supervise are grouped under them (#4314); with the
+  // switch off, or every row this conversation's, the tray is as it was.
+  const foldBackground = useStore((s) => s.assistant?.main_background_folded) !== false;
+  const conversations = useStore((s) => s.assistant?.conversations);
+  const groups = foldBackground ? needsYouBySupervisor(entries.needsYou, conversation) : [{ supervisor: conversation, items: entries.needsYou }];
+  const own = groups[0].items;
+  const asking = own.filter(isAsking);
+  const rest = own.filter((item) => !asking.includes(item));
+  const supervisorTitle = (id: string) => {
+    const row = conversations?.find((c) => c.session_id === id);
+    return row ? conversationTitle(row) : t("assistant-tasks.needs_group_another");
+  };
   const counts: Record<AssistantTray, number> = { needs: ownCount + entries.needsYou.length, running: entries.running.length };
   useEffect(() => {
     const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
@@ -1436,8 +1468,11 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
     <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar>
       {tray && (
-        <section id={trayId} aria-label={labels[tray]} className="assistant-action-tray min-h-0 overflow-y-auto overscroll-contain rounded-card bg-surface shadow-card">
-          <div className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
+        // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
+        // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
+        <section id={trayId} aria-label={labels[tray]} data-expanded={expanded || undefined} className="assistant-action-tray flex min-h-0 flex-col overflow-hidden rounded-card bg-surface shadow-card">
+          <div className="flex shrink-0 items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon={expanded ? "collapse" : "expand"} label={t(expanded ? "assistant-tasks.tray_restore" : "assistant-tasks.tray_expand")} onClick={() => setExpanded((v) => !v)} /><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
+          <div data-tray-list className="min-h-0 grow overflow-y-auto overscroll-contain">
           {tray === "running" && <div className="divide-y divide-line">
             {entries.running.map((item) => item.kind === "task" ? <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} /> : <RunningAgentRow key={item.key} session={item.session} activity={item.activity} />)}
             {!entries.running.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_progress")}</p>}
@@ -1453,8 +1488,15 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {asking.map((item) => <NeedsYouRow key={item.key} item={item} />)}
             {ownPending}
             {rest.map((item) => <NeedsYouRow key={item.key} item={item} />)}
+            {groups.slice(1).map((group) => (
+              <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={supervisorTitle(group.supervisor)} className="flex flex-col gap-2">
+                <h3 className="truncate px-1 pt-1 text-xs text-ink-2">{supervisorTitle(group.supervisor)}</h3>
+                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} />)}
+              </section>
+            ))}
             {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}
           </div>}
+          </div>
         </section>
       )}
       {/* The entries are the dock's old "All" / task capsules (DOCK_CAPSULE), content-wide at the leading edge; the
@@ -1482,7 +1524,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
           );
         })}
       </div>
-      {board && <TaskBoard open conversation={conversation} onClose={() => setBoard(false)} />}
+      {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>
   );
 });
@@ -1563,7 +1605,7 @@ export const TaskDock = memo(function TaskDock({ conversation }: { conversation:
           items={[{ key: "remove", label: t("assistant-tasks.remove_ellipsis"), icon: "trash", danger: true, onSelect: () => removeTaskNow(menuFor.todo) }]}
         />
       )}
-      {board && <TaskBoard open conversation={conversation} onClose={() => setBoard(false)} />}
+      {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>
   );
 });
@@ -1596,139 +1638,6 @@ export function useTaskState(todo?: Todo): { status: TodoStatus; lead?: Session;
   const plans = useFeed((s) => s.plans);
   if (!todo || !now) return undefined;
   return { ...now, failure: now.status === "failed" ? startFailure(todo, plans) : undefined };
-}
-
-// ── "All": the task board ──
-
-const BOARD_TITLE: Record<BoardSectionKey, string> = {
-  waiting: stateName("needs_you"),
-  review: t("assistant-tasks.review_pending"),
-  working: stateName("working"),
-  unread: stateName("unread"),
-  stopped: stateName("follow_up"),
-  done: stateName("done"),
-  failed: stateName("failed"),
-};
-
-/** What a manual agent on the board is doing: machine · project · agent · its last words (iOS agentSubtitle). */
-function agentLine(s: Session): string {
-  const machine = getState().machines.find((m) => m.id === s.machine_id)?.name ?? s.machine_id;
-  const folder = s.cwd ? (s.cwd.split("/").filter(Boolean).at(-1) ?? s.cwd) : undefined;
-  const last = s.last_text?.trim() ? plainMarkdown(s.last_text.trim()) : undefined;
-  return [machine, folder, s.agent, last].filter(Boolean).join(" · ");
-}
-
-/**
- * "All" on the dock and on the "Today" card (iOS TaskBoardSheet): this conversation's tasks, and the agents its dock shows,
- * by where they are. A row opens the task (or the agent) beside the conversation; one nothing of runs can be removed.
- */
-// Mounted only while open (TodayCard / TaskDock render it conditionally), so the store subscriptions and the
-// session lookup below don't run for every "Today" card in the history on each session update.
-export function TaskBoard({ open, conversation, onClose }: { open: boolean; conversation: string; onClose: () => void }) {
-  const todos = useStore((s) => s.todos);
-  const sessions = useStore((s) => s.sessions);
-  const main = useStore((s) => s.assistant?.main);
-  const lookup = useTaskLookup();
-  const plans = useFeed((s) => s.plans);
-  const interactions = useStore((s) => s.interactions);
-  const answered = useStore((s) => s.answered);
-  const [menuFor, setMenuFor] = useState<{ todo: Todo; el: HTMLElement } | null>(null);
-  const sections = useMemo(() => {
-    if (!open) return [];
-    const rows = todos.filter((td) => td.origin === conversation).map((todo) => ({ todo, status: statusOf(todo, lookup, plans) }));
-    return boardSections(rows, dockAgents(answeredSessions(Object.values(sessions).flat(), interactions, answered), todos, conversation, main));
-  }, [open, todos, sessions, conversation, main, lookup, plans, interactions, answered]);
-  const subtitle = (todo: Todo, status: TodoStatus) => {
-    const lead = mostUrgentAgent(todo, lookup)?.session;
-    const where = place(todo, lead);
-    const failure = status === "failed" ? startFailure(todo, plans) : undefined;
-    const ask = status === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined;
-    const limit = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
-    // what its result waits on from the user (#2056), before its agent's last step
-    const verdict = openAsk(todo)?.verdict;
-    const now = failure ?? ask ?? limit ?? verdict ?? progressOf(lead)?.text;
-    return [where, now].filter(Boolean).join(" · ");
-  };
-  return (
-    <Dialog open={open} onClose={onClose} title={t("assistant-tasks.board_title")} width={480}>
-      {sections.length === 0 ? (
-        <Empty icon="todo" title={t("assistant-tasks.board_empty_title")}>
-          {t("assistant-tasks.board_empty_body")}
-        </Empty>
-      ) : (
-        <div className="flex flex-col gap-4" data-testid="task-board">
-          {sections.map((sec) => (
-            <section key={sec.key} aria-label={BOARD_TITLE[sec.key]}>
-              <h3 className="mb-1 px-1 text-[12px] font-medium text-ink-3">
-                {t("assistant-tasks.board_section", { title: BOARD_TITLE[sec.key], count: sec.rows.length + sec.agents.length })}
-              </h3>
-              <div className="divide-y divide-line overflow-hidden rounded-card bg-field">
-                {sec.rows.map(({ todo, status }) => (
-                  <div key={todo.id} className="flex items-center hover:bg-hover">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        openTask(todo.id);
-                      }}
-                      onContextMenu={(e) => {
-                        if (!isRemovable(status)) return;
-                        e.preventDefault();
-                        setMenuFor({ todo, el: e.currentTarget });
-                      }}
-                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
-                    >
-                      <span className="flex w-4 shrink-0 justify-center">
-                        <TaskMark status={status} />
-                      </span>
-                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <span className="truncate text-[13.5px] font-medium text-ink">{todo.title}</span>
-                        <span className="truncate text-[12px] text-ink-3">{subtitle(todo, status)}</span>
-                      </span>
-                      <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />
-                    </button>
-                    {isRemovable(status) && (
-                      <IconButton icon="trash" label={t("assistant-tasks.board_remove", { title: todo.title })} onClick={() => removeTaskNow(todo)} className="mr-1.5" />
-                    )}
-                  </div>
-                ))}
-                {sec.agents.map(({ session: s, state }) => (
-                  <button
-                    key={`${s.machine_id}/${s.session_id}`}
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      openPanel({ kind: "agent", mid: s.machine_id, sid: s.session_id });
-                    }}
-                    className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover"
-                  >
-                    <span className="flex w-4 shrink-0 justify-center">
-                      <StatusMark state={state} />
-                    </span>
-                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="truncate text-[13.5px] font-medium text-ink">{sessionTitle(s)}</span>
-                      <span className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
-                        <Icon name="agent" size={11} className="shrink-0" />
-                        <span className="truncate">{agentLine(s)}</span>
-                      </span>
-                    </span>
-                    <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />
-                  </button>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-      {menuFor && (
-        <Menu
-          anchor={menuFor.el}
-          onClose={() => setMenuFor(null)}
-          items={[{ key: "remove", label: t("assistant-tasks.remove_ellipsis"), icon: "trash", danger: true, onSelect: () => removeTaskNow(menuFor.todo) }]}
-        />
-      )}
-    </Dialog>
-  );
 }
 
 export { TaskMark, place };

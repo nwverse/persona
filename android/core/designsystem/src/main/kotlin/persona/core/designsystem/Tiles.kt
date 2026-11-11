@@ -100,8 +100,8 @@ fun JTile(
                             .background(if (active) colors?.dot ?: palette.accent else colors?.tint ?: palette.surfaceStrong),
                         contentAlignment = Alignment.Center,
                     ) {
-                        JIcon(icon, null, size = Tokens.Space.xl, decorative = true, selected = active,
-                            tint = if (active) colors?.onDot ?: ExtensionThemeColors.on(palette.accent) else colors?.dot ?: palette.ink2)
+                        JIcon(icon, null, size = Tokens.Size.iconXS, decorative = true, selected = active,
+                            tint = if (active) colors?.onDot ?: palette.onAccent else colors?.dot ?: palette.ink2)
                     }
                     Spacer(Modifier.weight(1f))
                     badge?.invoke()

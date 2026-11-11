@@ -20,5 +20,7 @@
   "copy_raw": "复制原文",
   "retry": "重试",
   "copy_field": "拷贝{label}",
-  "fix_it": "去修"
+  "fix_it": "去修",
+  "background_done": "后台轮次",
+  "background_running": "后台运行中"
 }

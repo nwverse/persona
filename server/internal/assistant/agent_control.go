@@ -61,6 +61,9 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Interrupt || then != "" && !c.Capabilities.Send) {
 		return "", fmt.Errorf("this agent can only be read: %s", c.ReadOnlyReason)
 	}
+	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil { // refused before the turn is stopped or the user asked
+		return "", err
+	}
 	summary := i18n.T(s.lang(ctx), "assistant-tasks.interrupt_summary", i18n.Args{"agent": agentLabel(c), "machine": am.Name})
 	if then != "" {
 		summary += "\n\n" + then
@@ -69,6 +72,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 		return "", err
 	} else if !ok {
 		return "The user declined on the phone: the agent goes on as it was.", nil
+	}
+	// Again after the phone: the agent may have become another conversation's task while the user was asked.
+	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {
+		return "", err
 	}
 	// Only a turn under way is stopped: an agent still starting has none yet (then is queued for it, as agent_send does).
 	working := c.Status == proto.StatusWorking
@@ -276,8 +283,8 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 	if !s.isMain(ctx, self) {
 		return fmt.Errorf("only the main conversation hands out tasks: send it without task")
 	}
-	if t := strings.TrimSpace(text); t == "/exit" || t == "/quit" {
-		return fmt.Errorf("%s closes the agent, it hands it no work: send it without task", t)
+	if exitText(text) {
+		return fmt.Errorf("%s closes the agent, it hands it no work: send it without task", strings.TrimSpace(text))
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
@@ -290,6 +297,51 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 		return fmt.Errorf("%w; nothing was sent (send it without task to only send it)", err)
 	}
 	return otherWork(c, t, task)
+}
+
+// exitText: text is only the agents' own command to quit, which the node runs by closing the agent (node exitCommand).
+func exitText(text string) bool {
+	t := strings.TrimSpace(text)
+	return t == "/exit" || t == "/quit"
+}
+
+// supervisedElsewhere is the task agent c works for when a conversation other than self supervises it: a reply to it
+// goes as a side conversation, and /exit to it is refused (exitAllowed). Ownership that cannot be read is an error, so
+// a reply never goes without its provenance.
+func (s *Service) supervisedElsewhere(ctx context.Context, self string, am Device, c proto.Session) (Todo, bool, error) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return Todo{}, false, err
+	}
+	t, ok := s.taskOf(ctx, am.ID, c.SessionID)
+	return t, ok && t.Supervision != nil && t.Supervision.Supervisor != self, nil
+}
+
+// exitAllowed refuses /exit or /quit to an agent on a task another conversation supervises (#3537): a plain
+// agent_send of it, or agent_interrupt's then, before anything is stopped, sent or confirmed on the phone. The node
+// closes an agent only for the bare command without attachments (node send.go), so wrapped as a side conversation it
+// would be typed in as a prompt while the tool said it went; and closing the agent that conversation's task runs on is
+// not this conversation's to do. With attachments the text is no command, and goes as any reply does.
+func (s *Service) exitAllowed(ctx context.Context, self string, am Device, c proto.Session, text string, attachments int) error {
+	if !exitText(text) || attachments > 0 {
+		return nil
+	}
+	t, theirs, err := s.supervisedElsewhere(ctx, self, am, c)
+	if err != nil || !theirs {
+		return err
+	}
+	return exitRefused(c, t, text, attachments)
+}
+
+// exitRefused is exitAllowed's answer once c is known to work for t, a task another conversation supervises: the
+// refusal for a bare /exit or /quit, nil for any other text. A tool that asked the phone first reads the task again
+// after the answer and checks with it, since the agent may have become that task's while the user was asked.
+func exitRefused(c proto.Session, t Todo, text string, attachments int) error {
+	if !exitText(text) || attachments > 0 {
+		return nil
+	}
+	return fmt.Errorf("%s works for task %q (%s) of another conversation: %s asks to close the agent that task runs on, which is "+
+		"not this conversation's to do; nothing was sent or stopped. The user can close it in the app, or with agent_archive "+
+		"and close once it is idle and they confirm on the phone", agentLabel(c), t.Title, t.ID, strings.TrimSpace(text))
 }
 
 // otherWork refuses task for agent c on self's own task t when its title is another (other work, not to be filed under

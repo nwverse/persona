@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -34,14 +35,15 @@ type quickMeta struct {
 	cwd string
 	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
 	// a first prompt bigger than the head read).
-	start    string
-	model    string
-	surface  string // the client it runs in (transcript.Meta.Surface)
-	lastText string
+	start     string
+	inventory *proto.SessionInventory // start from the opening record, if the head establishes it
+	model     string
+	surface   string // the client it runs in (transcript.Meta.Surface)
+	lastText  string
 	// answer is the latest turn's answer from its first words on (transcript.Meta.TurnAnswer); "" when the tail read
 	// held none of its words.
 	answer string
-	// asks is what lastText asks the user (transcript.AskOf), when no message came in after it (#5096).
+	// asks is what lastText asks the user (closeout.AskOf), when no message came in after it (#5096).
 	asks string
 	// lastTextAt is when the agent last wrote text (botmux's sentinel included: it said something, it is no probe).
 	lastTextAt time.Time
@@ -199,6 +201,9 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	nr, _ := f.Read(head)
 	for {
 		for _, line := range bytes.Split(head[:nr], []byte("\n")) {
+			if m.inventory == nil {
+				m.inventory = recordedSessionStart(line)
+			}
 			if bytes.Contains(line, []byte(`"cwd"`)) || bytes.Contains(line, []byte(`"type":"user"`)) ||
 				bytes.Contains(line, []byte(`"type":"UserMessage"`)) { // Codex rollouts: session_meta, then the first prompt
 				transcript.ParseLine(0, line, &tm)
@@ -301,7 +306,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		}
 	}
 	if !m.lastPromptAt.After(m.lastTextAt) { // a message after the question answered it (#5096)
-		m.asks = transcript.AskOf(m.lastText)
+		m.asks = closeout.AskOf(m.lastText)
 	}
 	if t := tm.LastTool; t != nil {
 		m.doing, m.doingAt = transcript.Activity(t.Name, t.Input), t.At
@@ -377,6 +382,24 @@ func (n *Node) codexTurnOver(id string, now time.Time) bool {
 		return false
 	}
 	return n.meta(p, st).turnClosed && now.Sub(st.ModTime()) > codexStaleWorking
+}
+
+// recordedSessionStart recognizes the opening session record rather than
+// inferring creation from file metadata, the most recent event, or a resume.
+func recordedSessionStart(line []byte) *proto.SessionInventory {
+	codex := bytes.Contains(line, []byte(`"type":"session_meta"`))
+	claude := bytes.Contains(line, []byte(`"parentUuid":null`)) &&
+		bytes.Contains(line, []byte(`"sessionId":`)) &&
+		(bytes.Contains(line, []byte(`"type":"user"`)) || bytes.Contains(line, []byte(`"type":"assistant"`))) &&
+		!bytes.Contains(line, []byte(`"isSidechain":true`)) && !notAPrompt(line)
+	if !codex && !claude {
+		return nil
+	}
+	t := lineTime(line).UTC()
+	if t.IsZero() {
+		return nil
+	}
+	return &proto.SessionInventory{CreatedAt: &t}
 }
 
 // lineTime reads a transcript line's own "timestamp" without decoding it (Claude Code writes it after the message, so

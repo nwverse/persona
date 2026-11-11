@@ -46,9 +46,9 @@ import persona.core.designsystem.icons.PhIcons
 // apart by indentation, type and hairlines, not by plates: the page background stays whole and only business cards
 // (requests, notices; the board's agent strips) sit on it. Lazy lists give every heading and row its own item.
 
-/** A small mark on a row or a space: pinned, muted, a draft, messages waiting to send. */
+/** A small mark on a row or a space: pinned, muted, a draft, messages waiting to send; [ai] in the AI color (ultracode on, #582). */
 @Immutable
-data class RowFlag(val label: String, val icon: PhIcon, val caution: Boolean = false)
+data class RowFlag(val label: String, val icon: PhIcon, val caution: Boolean = false, val ai: Boolean = false)
 
 /** A short fact under a session row: where it runs, a loop, background work, a draft, messages waiting to go out. */
 @Immutable
@@ -156,9 +156,9 @@ private fun StateCounts(counts: List<Pair<Status, Int>>) {
 @Composable
 fun HeadingAction(icon: PhIcon, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
-        modifier.size(Action).minimumInteractiveComponentSize().clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+        modifier.size(Action).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
-    ) { JIcon(icon, null, size = Tokens.Space.xl, tint = PersonaTheme.palette.ink2) }
+    ) { JIcon(icon, null, size = Tokens.Size.iconXS, tint = PersonaTheme.palette.ink2) }
 }
 
 /**
@@ -187,7 +187,7 @@ fun AgentTreeHeader(
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    Column(modifier.fillMaxWidth().padding(top = if (first) Tokens.Space.xs else Tokens.Space.xxl)) {
+    Column(modifier.fillMaxWidth().padding(top = if (first) Tokens.Space.xs else Tokens.Space.xl)) {
         if (!first) SectionRule()
         Row(
             Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onToggle).semantics { heading() }
@@ -196,7 +196,7 @@ fun AgentTreeHeader(
         ) {
             JIcon(if (folded) PhIcons.CaretRight else PhIcons.CaretDown, stringResource(if (folded) R.string.designsystem_group_expand else R.string.designsystem_group_collapse), size = Tokens.Space.l, tint = palette.ink3)
             Spacer(Modifier.width(Tokens.Space.s - Tokens.Space.xxs))
-            icon?.let { JIcon(it, null, size = Tokens.Space.xl, tint = palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
+            icon?.let { JIcon(it, null, size = Tokens.Size.iconXS, tint = palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, style = type.title.copy(fontWeight = FontWeight.Bold), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -353,7 +353,7 @@ fun AgentRow(
                 if (launcher) { Spacer(Modifier.width(Tokens.Space.s - Tokens.Space.xxs)); JTag(stringResource(R.string.designsystem_tab_launcher)) }
                 flags.forEach { flag ->
                     Spacer(Modifier.width(Tokens.Space.xs))
-                    JIcon(flag.icon, flag.label, size = Caret, tint = if (flag.caution) palette.cautionText else palette.ink3)
+                    JIcon(flag.icon, flag.label, size = Caret, tint = when { flag.caution -> palette.cautionText; flag.ai -> palette.ai; else -> palette.ink3 })
                 }
             }
             agent?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink2, maxLines = 1) }

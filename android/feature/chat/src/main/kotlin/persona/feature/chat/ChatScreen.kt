@@ -10,7 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -219,6 +222,24 @@ private fun ChatPage(
             catch (_: Exception) { /* A failed read retains the last confirmed schedule list. */ }
         }
     }
+    // #4314 "Fold background rounds": the hub's switch (until read, the value last read this run, else on; on for a hub without it) and the main
+    // conversation's id. Only the main conversation folds; read again each time the page opens.
+    var foldSetting by remember(chrome.assistantManagement, key) { mutableStateOf(BackgroundFoldSetting.lastKnown(key.sessionId)) }
+    LaunchedEffect(chrome.assistantManagement, connection) {
+        if (renderStyle != ChatRenderStyle.Assistant) return@LaunchedEffect
+        try {
+            chrome.assistantManagement?.config()?.let {
+                foldSetting = BackgroundFoldSetting(it.backgroundFolded, it.main)
+                BackgroundFoldSetting.store(key.sessionId, foldSetting)
+            }
+        }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Unread: the default (folded) stands, as on a hub without the setting. */ }
+    }
+    val mainConversation by (chrome.tasks?.mainConversation ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) })
+        .collectAsStateWithLifecycle()
+    val foldsBackground = renderStyle.compactToolSummary && foldSetting.on &&
+        key.sessionId == (mainConversation ?: foldSetting.main)
     LaunchedEffect(chrome.inboxTrays, chrome.inboxScope, assistantTrays.expanded) {
         if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.NeedsYou) {
             try { chrome.inboxScope?.let { chrome.inboxTrays?.refresh(it) } }
@@ -355,16 +376,17 @@ private fun ChatPage(
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<AssistantTaskCard>>())
     }).collectAsStateWithLifecycle()
     var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
-    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle) {
+    // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
+    var jumpItem by remember { mutableStateOf<String?>(null) }
+    val backgroundFolding = if (foldsBackground) persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem) else null
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding) {
         if (renderStyle.compactToolSummary) {
-            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items)
+            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
                 persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
-    var jumpItem by remember { mutableStateOf<String?>(null) }
     val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
@@ -583,7 +605,9 @@ private fun ChatPage(
     var viewer by remember { mutableStateOf<ViewerRequest?>(null) }
     val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
     // A "Continue" already on its way counts as working: the card offers no second one.
-    val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(), !readOnly && canSend)
+    // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
+    val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(),
+        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE)
     val currentOpenPath by rememberUpdatedState(chrome.onOpenPath)
     // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
     val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
@@ -716,7 +740,7 @@ private fun ChatPage(
     taskHost?.let { AssistantTaskSheets(it) }
     if (backgroundOpen) CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
         AssistantBackgroundRecords(assistantPresentation.background, key, loader,
-            onToggle = ::toggle, onFold = ::expand, folding = folding, foldErrors = foldErrors,
+            onToggle = ::toggle, onFold = ::expand, folding = folding, foldErrors = foldErrors, hideTaskPrompts = foldsBackground,
             onFullText = { item -> scope.launch {
                 try { fullText = repository.fullText(key, item.id) }
                 catch (e: CancellationException) { throw e }
@@ -838,7 +862,7 @@ private fun ChatPage(
                                 chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
                                 onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
                                 statusState = status, onDetails = { statusSheet = true },
-                                onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares,
+                                onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
                                 onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } }) {
                                 // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain.
                                 if (!readOnly && canTerminal && renderStyle != ChatRenderStyle.Assistant) JIconButton(PhIcons.TerminalWindow, stringResource(if (terminal != null) R.string.chat_screen_open_terminal else R.string.chat_screen_terminal_help),
@@ -920,6 +944,8 @@ private fun ChatPage(
                             }
                             if (!historyOnly && !readOnly) ChatStartingNote(session)
                             // The host's own word on it: why it waits for you, or what stopped it, with a retry.
+                            // ultracode went off when it resumed (#582, iOS UltracodeLostNote): one line to turn it back on or dismiss.
+                            if (!historyOnly && !readOnly && session != null) UltracodeLostNote(session, controls, canSend)
                             if (!historyOnly && !readOnly) ChatHostNote(session, hostRetried, canRetry = canSend,
                                 retryEnabled = !sending && submittedDraft == null,
                                 onRetry = { reason ->
@@ -928,6 +954,8 @@ private fun ChatPage(
                                     hostRetried = reason
                                     if (!send(continueText, onFailed = { if (hostRetried == reason) hostRetried = null })) hostRetried = before
                                 })
+                            // An upstream refusal moved it to a fallback model (#2528): both models and the ways back.
+                            if (!historyOnly && !readOnly && session != null) ModelFallbackCard(session, chrome.actions)
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                             else {
@@ -956,7 +984,8 @@ private fun ChatPage(
                                             trayReview = interaction.id
                                             requestCollapsed = false
                                         }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
-                                        backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground)
+                                        backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
+                                        groupByOrigin = foldsBackground)
                                 }
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
@@ -1046,7 +1075,7 @@ private fun ChatPage(
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
-                                        closeoutReply = closeoutReply)
+                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground)
                                         }
                                     }
                                 }

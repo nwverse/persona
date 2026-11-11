@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x25ff0486217fbbfe
+const sessionWireLayout = 0x46d3be7aaa64afda
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout
 
@@ -86,10 +86,15 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"started_by_persona":`, s.StartedByPersona, false)
 	w.boolean(`"assistant":`, s.Assistant, false)
 	w.boolean(`"archived":`, s.Archived, true)
+	w.boolean(`"bypass_available":`, s.BypassAvailable, true)
+	w.boolean(`"ultracode_pending":`, s.UltracodePending, true)
 	w.str(`"title":`, s.Title, false)
 	w.str(`"cwd":`, s.Cwd, false)
 	w.str(`"workspace_cwd":`, s.WorkspaceCwd, true)
 	w.str(`"repo_root":`, s.RepoRoot, true)
+	if s.Inventory != nil {
+		w.value(`"inventory":`, s.Inventory)
+	}
 	w.str(`"worktree":`, s.Worktree, true)
 	w.str(`"branch":`, s.Branch, true)
 	w.str(`"status":`, s.Status, false)
@@ -106,8 +111,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"model":`, s.Model, true)
 	w.str(`"permission_mode":`, s.PermissionMode, true)
 	w.str(`"effort":`, s.Effort, true)
-	w.boolean(`"bypass_available":`, s.BypassAvailable, true)
-	w.boolean(`"ultracode_pending":`, s.UltracodePending, true)
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
 	}
@@ -150,6 +153,10 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"state":`, s.State, false)
 	w.boolean(`"background_working":`, s.BackgroundWorking, true)
 	w.boolean(`"background_waiting":`, s.BackgroundWaiting, true)
+	w.boolean(`"woke_by_task":`, s.WokeByTask, true)
+	w.boolean(`"starting":`, s.Starting, true)
+	w.boolean(`"quiet":`, s.Quiet, true)
+	w.integer(`"queued_relayed":`, int64(s.QueuedRelayed), true)
 	w.time(`"seen_at":`, s.SeenAt) // time.Time is a struct, never empty, so omitempty keeps it
 	w.time(`"state_since":`, s.StateSince)
 	w.strs(`"queued":`, s.Queued)
@@ -200,6 +207,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	if s.ModelFallback != nil {
 		w.value(`"model_fallback":`, s.ModelFallback)
 	}
+	if s.ModelRestore != nil {
+		w.value(`"model_restore":`, s.ModelRestore)
+	}
 	if s.Work != nil {
 		w.value(`"work":`, s.Work)
 	}
@@ -208,9 +218,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		w.time(`"activity_at":`, *s.ActivityAt)
 	}
 	w.integer(`"rev":`, s.Rev, true)
-	w.boolean(`"woke_by_task":`, s.WokeByTask, true)
-	w.boolean(`"starting":`, s.Starting, true)
-	w.boolean(`"quiet":`, s.Quiet, true)
 	w.integer(`"pending_interactions":`, int64(s.PendingInteractions), false)
 	w.str(`"suggestion":`, s.Suggestion, true)
 	w.str(`"start_error":`, s.StartError, true)

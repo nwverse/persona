@@ -150,8 +150,20 @@ func TestAssistantCompactionSettingsAndSDK(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := s["env"].(map[string]any)
-	if env["KEEP"] != "yes" || env["LAUNCHER"] != "yes" || env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" || s["hooks"] == nil || s["permissions"] == nil {
+	if env["KEEP"] != "yes" || env["LAUNCHER"] != "yes" || env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" || env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] != "1" || s["hooks"] == nil || s["permissions"] == nil {
 		t.Fatalf("merged settings %v", s)
+	}
+	plugins, _ := s["enabledPlugins"].(map[string]any)
+	for _, name := range []string{"feature-dev@claude-plugins-official", "frontend-design@claude-plugins-official", "mattpocock-skills@claude-plugins-official", "gopls-lsp@claude-plugins-official", "context7@claude-plugins-official", "claude-hud@claude-hud"} {
+		if plugins[name] != false {
+			t.Errorf("development plugin %s is not disabled: %v", name, s["enabledPlugins"])
+		}
+	}
+	overrides, _ := s["skillOverrides"].(map[string]any)
+	for _, name := range []string{"design", "doctor", "plugin-authoring", "ui-ux-pro-max"} {
+		if overrides[name] != "off" {
+			t.Errorf("development skill %s is not hidden: %v", name, s["skillOverrides"])
+		}
 	}
 	start := sdkStart{settings: path, mcp: map[string]any{}, compaction: &c, env: map[string]string{"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"}}
 	opts, err := start.options("claude")

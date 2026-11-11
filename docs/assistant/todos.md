@@ -336,7 +336,7 @@ Normal receipts are written before judgment for both supervised and unsupervised
 - **Storage**: next to `delivery` in the `assistant.todo_stages` setting (`task_check.go`, `reports.go`), no migration. It is additive: no field changes meaning, `task_cards` is unchanged, and clients that don't know it show the to-do as before.
 - **Clients**: web `ProgressTaskRow` and Android `trayProgress` say "Stopped, not done yet · <reason>" for a task neither working nor done whose current check is not `done` / `unsure` (`docs/assistant/unified-entry.md` "Progress tray"). iOS doesn't draw it yet (#2879).
 
-**Visible and reversible**: auto-completion writes `done_at`, `done_by = "auto"`, `done_reason`. iOS / Mac / web list/detail show **Auto-completed** beside Done; detail shows reason. **Reopen**, like manual completion, returns to unfinished, clears `done_by`/`done_reason`, records `reopened_at`.
+**Visible and reversible**: auto-completion writes `done_at`, `done_by = "auto"`, `done_reason`. iOS / Mac / web list/detail show **Auto-completed** beside Done; detail shows reason. **Reopen**, like manual completion, returns to unfinished, clears `done_by`/`done_reason`, records `reopened_at`. Before it clears them, a reopen is recorded as a `todo_reopened` work event, so the work stats can count the judge's closes reopened within 24 hours (`docs/assistant/agent-work.md`, "Evaluation").
 
 **After reopening**: same stretch of work cannot auto-close again; only when an Agent begins a new turn after `reopened_at` (user sends again, Agent resumes) is completion judged again. After assistant restart the turn's start time is unknown; reopened to-dos are not judged then (prefer leaving open). Database write rechecks (`done_at IS NULL`, `reopened_at` before work start); user completion/reopen during judgment wins.
 
@@ -464,6 +464,13 @@ Not orphaned: a done to-do; one with no Agent yet (not started, or its start fai
 The assistant's snapshot says it on the task's line, and a supervised task's supervisor gets the `orphaned` signal once (`docs/assistant/unified-entry.md`, "Supervision": the supervisor loop's signals). Clients that do not know the field show the to-do as before; showing it on the task card and row is each client's own work: the web and Android (`docs/android/android.md`, "Closeout, decisions and tasks nobody works on") do.
 
 ## Decision records
+
+A standing authorization answer records an Agent decision naming the grant, original user words and source. It is
+committed in the same transaction as the hook's resolved question or plan, before the answer is delivered. It is not
+presented as a fresh user click. The grant itself is managed through the main conversation's `persona_settings` key
+and the list/delete API in [Unified entry](unified-entry.md#standing-authorizations); established task decisions keep
+their provenance even after that grant is revoked.
+
 
 The costliest long-task mistake is an Agent forgetting a decision already made: asking again or silently overturning it (#1618). Decisions scattered across Agent chats disappear when switching Agents or compacting, so collect them by to-do:
 
@@ -731,6 +738,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 - **Start a new one** or **Hand to an existing one**.
 - Context follows Inbox's hand-to-AI format: `<persona-context kind="context" title="待办 · <title>" url="">notes</persona-context>` (title means "To-do · <title>"), immediately followed by user's task instructions.
 - New session carries `todo_id`; message to existing session carries `todo_id` and `client_msg_id`.
+- **Launcher for a new one** (web, #4384): like New Agent, the choice starts on **Default: …** (Model settings › Agents as the hub's `default` names it; a start with no launcher, which the hub resolves) and lists every launcher the computer can start; a blocked one, or a default that runs one, says why. An older hub without `default` starts on the first launcher that can start, as before. **Manage launchers** under it (also under New Agent's launchers) closes the dialog and opens Settings › Model providers (`/settings?tab=models#settings-providers`), where launchers are added, hidden and restored. iOS hands over through New Agent itself.
 
 ### 4. Agents view integration
 - Agents grouping supports **By To-do** (#1836; iOS / Mac defaults by repository when no grouping chosen, #2108): each unfinished to-do with active Agents is a separate section; header shows title/state and opens details. Unlinked manually started herdr Agents (`started_by_persona` false) have a separate expanded **Manually started** section (web: **Started in terminal**, #3057), before **Unassigned** (web: **Not linked to a to-do**; web #2608, iOS / Mac #2917: without spawn relationships or linked space no automatic rule recognizes them; link through **Link to To-do…** in row menu; spawned herdr Agents whose parent is not linked cannot be distinguished on any client and count here). Remaining unlinked Agents go in final **Unassigned** section (collapsed by default when to-dos exist, expanded if any Needs you). Web remembers each browser's grouping, keeping whatever was chosen (default By To-do if never chosen, #2812; By Machine before, #1990). When list contains multiple host types, non-herdr rows label their host.

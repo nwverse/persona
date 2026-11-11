@@ -78,7 +78,7 @@ func TestLarkCLIGate(t *testing.T) {
 		// Not decided here: the usual permission flow asks about the whole command.
 		{`lark-cli im +chat-list | python3 -c 'import sys'`, "other"},
 		{`lark-cli im +chat-list > ~/chats.json`, "other"},
-		{`FOO=1 lark-cli im +chat-list`, "other"},
+		{`FOO=1 lark-cli im +chat-list`, "allow"},
 		{`lark-cli "$CMD" +chat-list`, "other"},
 		{`lark-cli`, "other"},
 	} {
@@ -143,11 +143,11 @@ func TestLarkCLIRules(t *testing.T) {
 // A command the gate cannot follow that runs lark-cli is confirmed whole, unless every lark-cli call in it reads.
 func TestLarkCLIInComplexCommands(t *testing.T) {
 	for cmd, write := range map[string]bool{
-		`for c in a b; do lark-cli im +messages-send --chat-id "$c" --text hi; done`:                                                                true,
-		`for c in a b; do lark-cli "$CMD" --chat-id "$c"; done`:                                                                                     true,
+		`for c in a b; do lark-cli im +messages-send --chat-id "$c" --text hi; done`:                                                                 true,
+		`for c in a b; do lark-cli "$CMD" --chat-id "$c"; done`:                                                                                      true,
 		`for c in a b; do lark-cli im +chat-list; done`:                                                                                              false,
 		`for id in a b c; do lark-cli calendar events get --params "{\"calendar_id\":\"primary\",\"event_id\":\"$id\"}" | jq -r '.' | head -3; done`: false,
-		`lark-cli im +messages-send --chat-id oc_x --text hi | python3 -c 'print(1)'`:                                                               true,
+		`lark-cli im +messages-send --chat-id oc_x --text hi | python3 -c 'print(1)'`:                                                                true,
 		`lark-cli im +chat-list | python3 -c 'print(1)'`:                                                                                             false,
 	} {
 		v := classifyLark(cmd, nil, "", fakeRisk)

@@ -70,6 +70,7 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.WorkflowIcon
+import persona.core.designsystem.rememberCopy
 import persona.core.domain.sort.WorkflowSummary
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
@@ -240,7 +241,7 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
         "report" -> ReportCard(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
         // Persona's own message to the task's agent is folded, never the user's bubble (#1542, #1623).
         "routed" -> if (item.sentByPersona) SentLine(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
-        else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxxl), horizontalAlignment = Alignment.End,
+        else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxl), horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(stringResource(R.string.chat_tasks_routed_to, title), style = PersonaTheme.type.caption, color = PersonaTheme.palette.accent, maxLines = 1)
             Text(item.field("text").orEmpty(), Modifier.clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
@@ -338,10 +339,10 @@ internal fun SentLine(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) 
 /** The whole text Persona sent, newlines kept and selectable, with Copy under it. */
 @Composable
 private fun SentText(text: String, modifier: Modifier = Modifier) {
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val copy = rememberCopy()
     Column(modifier.fillMaxWidth().testTag("sent-detail"), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         SelectionContainer { Text(text, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink) }
-        JButton(stringResource(R.string.chat_menu_copy), { clipboard.setText(androidx.compose.ui.text.AnnotatedString(text)) },
+        JButton(stringResource(R.string.chat_menu_copy), { copy(text, null) },
             kind = JButtonKind.Quiet, size = JButtonSize.Small, icon = PhIcons.Copy)
     }
 }
