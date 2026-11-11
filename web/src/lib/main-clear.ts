@@ -8,6 +8,7 @@ import { t } from "../i18n";
 import { toast } from "../ui/atoms";
 import { api, ApiError, errorText } from "./api";
 import type { ComposerCommand } from "./extension-prompts";
+import { chosenManager } from "./manager-choice";
 import { navigate } from "./router";
 import { getState, refreshAssistant, subscribe } from "./store";
 
@@ -25,23 +26,26 @@ export function isClearCommand(text: string, images: number): boolean {
 }
 
 // ── the conversation this tab cleared, while the main one is still to start ──
-// The page keeps the conversation's layout for it (an empty chat, the composer at the bottom). Any other main
-// conversation in the store forgets it, whether the page is open or not, so a later "New main chat" or another
-// device's change shows the ordinary start page.
+// The page keeps the conversation's layout for it (an empty chat, the composer at the bottom), for the manager it was
+// cleared under only. Another main conversation of that manager in the store forgets it, whether the page is open or
+// not, so a later "New main chat" or another device's change shows the ordinary start page.
 
-let cleared = "";
+const NONE = { manager: "", sid: "" };
+let cleared = NONE;
 const listeners = new Set<() => void>();
 let unwatch: (() => void) | null = null;
 
-function setCleared(sid: string) {
-  if (cleared === sid) return;
-  cleared = sid;
-  if (sid && !unwatch) {
+const currentManager = () => chosenManager() ?? "";
+
+function setCleared(next: { manager: string; sid: string }) {
+  if (cleared.manager === next.manager && cleared.sid === next.sid) return;
+  cleared = next;
+  if (next.sid && !unwatch) {
     unwatch = subscribe(() => {
       const main = getState().assistant?.main;
-      if (main && main !== cleared) forgetMainCleared();
+      if (main && main !== cleared.sid && currentManager() === cleared.manager) forgetMainCleared();
     });
-  } else if (!sid && unwatch) {
+  } else if (!next.sid && unwatch) {
     unwatch();
     unwatch = null;
   }
@@ -49,21 +53,22 @@ function setCleared(sid: string) {
 }
 
 export function forgetMainCleared() {
-  setCleared("");
+  setCleared(NONE);
 }
 
-export function mainCleared(): boolean {
-  return cleared !== "";
+/** Whether this tab cleared the main conversation of `manager` (the one chosen now by default) and none started since. */
+export function mainCleared(manager = currentManager()): boolean {
+  return cleared.sid !== "" && cleared.manager === manager;
 }
 
-export function useMainCleared(): boolean {
+export function useMainCleared(manager: string): boolean {
   return useSyncExternalStore(
     (l) => {
       listeners.add(l);
       return () => listeners.delete(l);
     },
-    mainCleared,
-    mainCleared,
+    () => mainCleared(manager),
+    () => mainCleared(manager),
   );
 }
 
@@ -94,7 +99,7 @@ export async function clearMainContext(sid: string, deps: ClearDeps = defaultDep
   inFlight.add(sid);
   // before the request: the hub's push of the change can come before its answer, and the page must not show the
   // centered start page in between
-  setCleared(sid);
+  setCleared({ manager: currentManager(), sid });
   try {
     await deps.post(sid);
     // (the refresh also drops the old conversation's cached first page: it is no longer the main one's)

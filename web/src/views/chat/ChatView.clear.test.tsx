@@ -103,6 +103,12 @@ describe("/clear in the main conversation", () => {
     expect(navigate).toHaveBeenCalledWith({ name: "persona" });
   });
 
+  it("an edit of the last message to /clear stays an edit: its rewind already ran, the words go", async () => {
+    const { send } = render();
+    expect(await send({ text: "/clear", images: [], edit: { clearDraft: "" } })).toBe(true);
+    expect(paths()).toEqual(["POST /api/v1/sessions/hub/c1/messages"]);
+  });
+
   it("anything more than the word is a message", async () => {
     const { send } = render();
     expect(await send({ text: "/clear the table in my notes", images: [] })).toBe(true);

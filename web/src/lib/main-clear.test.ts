@@ -1,6 +1,8 @@
 // Clearing the main conversation's context (#5095): /clear is the word alone; the action asks the hub, marks the page
 // as cleared before the answer, goes to the main page, and says why when it could not.
 import { afterEach, describe, expect, it, vi } from "vitest";
+const choice = vi.hoisted(() => ({ manager: null as string | null }));
+vi.mock("./manager-choice", async (orig) => ({ ...(await orig<typeof import("./manager-choice")>()), chosenManager: () => choice.manager }));
 import { ApiError } from "./api";
 import { clearMainContext, forgetMainCleared, isClearCommand, mainCleared, mainCommands, type ClearDeps } from "./main-clear";
 
@@ -18,7 +20,10 @@ function deps(post: ClearDeps["post"] = () => Promise.resolve({ ok: true, archiv
   return { d, seen };
 }
 
-afterEach(() => forgetMainCleared());
+afterEach(() => {
+  forgetMainCleared();
+  choice.manager = null;
+});
 
 describe("/clear", () => {
   it("is the word alone, any case, without pictures", () => {
@@ -62,6 +67,16 @@ describe("clearMainContext", () => {
     expect(mainCleared()).toBe(false);
     expect(d.home).not.toHaveBeenCalled();
     expect(d.toast).toHaveBeenCalledWith(expect.stringContaining("the assistant is offline"), "error");
+  });
+
+  it("marks only the manager it was cleared under: another assistant's empty main page is the ordinary one", async () => {
+    choice.manager = "m-home";
+    await clearMainContext("c1", deps().d);
+    expect(mainCleared()).toBe(true);
+    expect(mainCleared("m-work")).toBe(false);
+    choice.manager = "m-work";
+    expect(mainCleared()).toBe(false);
+    expect(mainCleared("m-home")).toBe(true);
   });
 
   it("a second clear while the first is on its way does nothing", async () => {

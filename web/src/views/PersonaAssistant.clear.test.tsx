@@ -139,6 +139,28 @@ describe("清理主对话上下文 (#5095)", () => {
     expect(host.querySelector("textarea")!.value).toBe(WORDS);
   });
 
+  it("清空后的页面上再发 /clear：列表里有它，什么都不发，页面不变", async () => {
+    await act(async () => root.render(<PersonaAssistant onToggleSidebar={() => {}} />));
+    await act(async () => { await clearMainContext("c1"); });
+    await flush();
+    const area = host.querySelector("textarea")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "/");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await flush();
+    expect(host.textContent).toContain("/clear");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, "/clear");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+    await flush();
+    expect(starts).toHaveLength(0);
+    expect(cleared()).not.toBeNull();
+    expect(host.querySelector("[data-start-pending]")).toBeNull();
+  });
+
   it("新的主对话出现后就忘掉：之后再没有主对话（别的设备换掉），是平常的欢迎页", async () => {
     await act(async () => root.render(<PersonaAssistant onToggleSidebar={() => {}} />));
     await act(async () => { await clearMainContext("c1"); });

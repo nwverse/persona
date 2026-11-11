@@ -12,10 +12,10 @@ import { ago, uuid } from "../lib/format";
 import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFailure } from "../lib/readiness";
 import { conversationPage } from "../lib/conversation-page";
 import { navigate } from "../lib/router";
-import { refreshAssistant, useStore } from "../lib/store";
+import { hubHas, refreshAssistant, useStore } from "../lib/store";
 import { effectiveLauncher, NEW_CONVERSATION, pickedLauncher, pickLauncher } from "../lib/assistant-chat";
 import { adoptedConversation, noteSent, outboxMessage } from "../lib/outbox";
-import { useMainCleared } from "../lib/main-clear";
+import { CLEAR_MAIN_FEATURE, isClearCommand, mainCommands, useMainCleared } from "../lib/main-clear";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { ChatView, Header } from "./chat/ChatView";
@@ -154,7 +154,7 @@ export function PersonaAssistant({ sid, fresh, routed, onToggleSidebar }: { sid?
   const main = assistant?.main ?? cached?.sessionID;
   // this tab cleared the main conversation's context (/clear, lib/main-clear.ts): until the next one starts, its page
   // keeps the conversation's layout
-  const cleared = useMainCleared();
+  const cleared = useMainCleared(manager);
   const machine = home ? homeMachine || read.machine : ((sid && sid !== main ? assistant?.machine_id : mainConversationMachine(assistant)) ?? cached?.machineID);
   if (fresh) return <Starter onToggleSidebar={onToggleSidebar} />;
   const id = sid ?? main;
@@ -245,6 +245,9 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
   // the conversation's layout (its header, the box docked at the bottom): while the first message's start is on its
   // way, and in place of the main conversation just cleared, so nothing moves when it empties or when it starts again
   const docked = Boolean(sending) || Boolean(main && cleared);
+  // /clear on the main conversation's page while there is none: nothing to clear, and never its first message
+  const clearable = useStore((s) => Boolean(main) && hubHas(s.features, CLEAR_MAIN_FEATURE));
+  const commands = useMemo(() => (clearable && docked ? mainCommands() : []), [clearable, docked]);
   // the box is the same element in both layouts (a refused start gets its words and pictures back in it): it moves
   const box = useRef<HTMLDivElement>(null);
   const boxFrom = useRef<number | null>(null);
@@ -262,6 +265,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
   }, [sending]);
 
   const start = async (out: Outgoing): Promise<boolean> => {
+    if (clearable && isClearCommand(out.text, out.images.length)) return true;
     setFailure(null);
     moveBox({ out, launcher: effectiveLauncher({ isNew: true, picked: pickedLauncher(NEW_CONVERSATION), config: assistant?.launcher }), at: Date.now() });
     const sent = await startOnce(out);
@@ -406,7 +410,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
           {gate.dialog}
           {/* the box: in the page's middle, or docked at the bottom as the conversation's (ChatView's dock) while the start is on its way */}
           <div ref={box} className={docked ? "mx-auto flex w-full max-w-[880px] flex-col justify-end gap-2 px-4 pb-4 sm:px-7 [@media(max-height:500px)]:pb-2" : undefined}>
-            <Composer key={seed} blocked={offline ? undefined : gate.blocked} disabled={Boolean(offline) || Boolean(sending)} draftKey="persona-new" placeholder={offline ? offline.composer : t("personaassistant.ask_placeholder", { name: persona.name })} machineId={assistant?.machine_id} mention={NEW_MENTION} onSend={start} autoFocus commands={[]} footer={assistant && !sending ? <StarterLauncherChip /> : undefined} />
+            <Composer key={seed} blocked={offline ? undefined : gate.blocked} disabled={Boolean(offline) || Boolean(sending)} draftKey="persona-new" placeholder={offline ? offline.composer : t("personaassistant.ask_placeholder", { name: persona.name })} machineId={assistant?.machine_id} mention={NEW_MENTION} onSend={start} autoFocus commands={commands} footer={assistant && !sending ? <StarterLauncherChip /> : undefined} />
           </div>
           {!docked && (
           <div className="mt-4 grid grid-cols-1 gap-1.5 sm:grid-cols-2">

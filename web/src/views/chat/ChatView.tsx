@@ -894,8 +894,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }
 
   const onSend = async (out: Outgoing): Promise<boolean> => {
-    // /clear in the main conversation clears its context in place, it is not words for Persona (#5095)
-    if (clears && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
+    // /clear in the main conversation clears its context in place, it is not words for Persona (#5095); an edit of the
+    // last message stays an edit (its rewind already ran)
+    if (clears && !out.edit && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
     // Routed to a task ("Tell "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
     if (assistant && out.images.length && getFeedState().routes[sid]) {
       toast(t("chat-chatview.route_no_images"), "error");
