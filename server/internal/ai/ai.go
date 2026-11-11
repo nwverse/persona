@@ -182,7 +182,16 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	for _, m := range r.Messages {
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
-	body, _ := json.Marshal(map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns})
+	bodyMap := map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns}
+	if c.cfg.ReasoningEffort != "" {
+		switch strings.ToLower(strings.TrimSpace(c.cfg.ReasoningEffort)) {
+		case "off", "none", "disabled":
+			bodyMap["thinking"] = map[string]any{"type": "disabled"}
+		case "low", "medium", "high", "xhigh", "max":
+			bodyMap["output_config"] = map[string]any{"effort": c.cfg.ReasoningEffort}
+		}
+	}
+	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err

@@ -68,6 +68,54 @@ func TestMessagesAPIWithBearer(t *testing.T) {
 	}
 }
 
+func TestMessagesAPIWithThinkingDisabled(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
+	}))
+	defer srv.Close()
+	keyFile := filepath.Join(t.TempDir(), "key")
+	_ = os.WriteFile(keyFile, []byte("k\n"), 0o600)
+	c := New(Config{BaseURL: srv.URL, APIKeyFile: keyFile, Model: "m", ReasoningEffort: "off"})
+	text, err := c.Complete(context.Background(), "sys", "user", 16)
+	if err != nil || text != "ok" {
+		t.Fatalf("Complete = %q, %v", text, err)
+	}
+	thinking, _ := gotBody["thinking"].(map[string]any)
+	if thinking == nil || thinking["type"] != "disabled" {
+		t.Fatalf("expected thinking disabled, got %+v", gotBody["thinking"])
+	}
+}
+
+func TestMessagesAPIWithThinkingEffort(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
+	}))
+	defer srv.Close()
+	keyFile := filepath.Join(t.TempDir(), "key")
+	_ = os.WriteFile(keyFile, []byte("k\n"), 0o600)
+	c := New(Config{BaseURL: srv.URL, APIKeyFile: keyFile, Model: "m", ReasoningEffort: "low"})
+	text, err := c.Complete(context.Background(), "sys", "user", 16)
+	if err != nil || text != "ok" {
+		t.Fatalf("Complete = %q, %v", text, err)
+	}
+	outputConfig, _ := gotBody["output_config"].(map[string]any)
+	if outputConfig == nil || outputConfig["effort"] != "low" {
+		t.Fatalf("expected output_config effort low, got %+v", gotBody["output_config"])
+	}
+}
+
 func TestJSONCallsResponsesAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client

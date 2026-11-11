@@ -35,15 +35,19 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 			provider = "legacy.kb"
 		}
 		c := s.legacyModelConfig(ctx, provider)
+		defaultEffort := c.ReasoningEffort
+		if p.ID == "inbox.triage" && defaultEffort == "" {
+			defaultEffort = "off"
+		}
 		if c.BaseURL == "" {
 			// No hub.json connection for this use: fall back to a provider the assistant can call itself, instead of
 			// failing while a keyed Claude connection sits unused (#388). Not stored, so a later explicit choice still
 			// wins.
 			if name := s.fallbackAPIProvider(ctx); name != "" {
-				return ModelBinding{Provider: "launcher." + name}, mc(l, modelAutoSource), nil
+				return ModelBinding{Provider: "launcher." + name, Effort: defaultEffort}, mc(l, modelAutoSource), nil
 			}
 		}
-		return ModelBinding{Provider: provider, Model: c.Model, Effort: c.ReasoningEffort}, mc(l, "source_hub_config"), nil
+		return ModelBinding{Provider: provider, Model: c.Model, Effort: defaultEffort}, mc(l, "source_hub_config"), nil
 	}
 	if p.ID == "assistant" { // the assistant's own launcher (its settings, else hub.json's)
 		return ModelBinding{Provider: "launcher." + s.settings(ctx).Launcher}, mc(l, "source_assistant_default"), nil
@@ -228,9 +232,9 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 	if c.API != "" && c.API != "messages" && c.API != "responses" && c.API != "chat" {
 		return c, i18n.Err("assistant-models.err_api_protocol")
 	}
-	if c.API != "responses" && b.Effort != "" {
+	if c.API != "responses" && c.API != "messages" && c.API != "" && b.Effort != "" {
 		c.ReasoningEffort = ""
-	} // Older Messages configurations carried an unused Responses-only field.
+	}
 	return c, nil
 }
 

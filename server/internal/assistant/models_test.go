@@ -1090,3 +1090,49 @@ func TestProviderModelsListedAndCountForTheSendCheck(t *testing.T) {
 		t.Fatal("a model in no list")
 	}
 }
+
+func TestTriageDefaultEffortIsOffAndHonoursMessagesAPI(t *testing.T) {
+	s, _, _ := modelService(t)
+	ctx := context.Background()
+
+	b, err := s.resolveModel(ctx, "inbox.triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Effort != "off" {
+		t.Fatalf("expected triage default effort off, got %q", b.Effort)
+	}
+
+	key, err := s.sealKey("test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s, storedLauncher{
+		ManagedLauncher: proto.ManagedLauncher{Name: "anthropic", Kind: "api", API: "messages", BaseURL: "https://api.anthropic.com", Model: "claude-haiku-5-5"},
+		KeySealed:       key,
+	})
+
+	p := purposeOf(t, s, "inbox.triage")
+	if !slices.Contains(p.Fields, "effort") {
+		t.Fatalf("expected Fields to include effort, got %v", p.Fields)
+	}
+
+	b.Provider = "launcher.anthropic"
+	b.Effort = "off"
+	cfg, err := s.apiConfig(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReasoningEffort != "off" {
+		t.Fatalf("expected apiConfig ReasoningEffort to be off, got %q", cfg.ReasoningEffort)
+	}
+
+	b.Effort = "low"
+	cfg, err = s.apiConfig(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReasoningEffort != "low" {
+		t.Fatalf("expected apiConfig ReasoningEffort to be low, got %q", cfg.ReasoningEffort)
+	}
+}

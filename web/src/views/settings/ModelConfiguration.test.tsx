@@ -166,6 +166,16 @@ describe("Lark /agent model configuration", () => {
     expect(writes[0].body).toEqual({ revision: 7, provider: "api.messages", model: "api-model", effort: "low" });
   });
 
+  it("allows setting effort on Messages provider", async () => {
+    current = lark({ provider: "api.messages", model: "api-model", effort: "off" }, 7);
+    await render();
+    await open();
+    expect(effort()).not.toBeNull();
+    type(effort(), "low");
+    await act(async () => button(t("common.save"), dialog()).click());
+    expect(writes[0].body).toEqual({ revision: 7, provider: "api.messages", model: "api-model", effort: "low" });
+  });
+
   it("restores following by clearing all three fields using the child's revision", async () => {
     current = lark({ provider: "launcher.custom", model: "custom-model", effort: "high" }, 12);
     await render();

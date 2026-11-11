@@ -50,7 +50,7 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 			if p.Effective.Model == "" {
 				p.Effective.Model = v.Model
 			}
-			if p.Kind == "api" && v.API == "responses" {
+			if p.Kind == "api" && (v.API == "responses" || v.API == "messages" || v.API == "") {
 				p.Fields = append(p.Fields, "effort")
 			}
 		}
