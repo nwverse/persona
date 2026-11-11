@@ -5,14 +5,13 @@
 // at once, and so does a needs_you the hub sent after the answer (a second card still on its way, a TUI dialog).
 // A deny shows "Working" too until the next push: the agent goes on either way. A card handed back to the computer is not
 // an answer (the agent waits there), and a needs_you pushed before the hub withdrew the card is the old one (#4877).
-import { foldedState, requestHome } from "../../lib/child-sessions";
+import { foldedState } from "../../lib/child-sessions";
+import { homeKey } from "../../lib/folded-rows";
 import { makeSessionLookup, type SessionLookup } from "../../lib/todos";
 import type { AnsweredCard } from "../../lib/store";
 import type { Interaction, Session } from "../../lib/types";
 
 const key = (mid: string, sid: string) => `${mid}/${sid}`;
-// a child session's card is its parent's to answer and to count (#5120): answered, the parent's row stops waiting
-const cardKey = (ix: Pick<Interaction, "machine_id" | "session_id" | "folded_under">) => key(ix.machine_id, requestHome(ix));
 
 // One answered copy per session object: store selectors compare what they return, so the same session gives back the
 // same copy until the hub sends a new one.
@@ -41,7 +40,8 @@ function answeredBy(answered: Record<string, AnsweredCard>): Map<string, Answere
   const out = new Map<string, AnsweredMark>();
   for (const a of Object.values(answered)) {
     if (a.handedBack) continue;
-    const k = cardKey(a.ix);
+    // a child session's card is its parent's to answer and to count (#5120): answered, the parent's row stops waiting
+    const k = homeKey(a.ix);
     const cur = out.get(k);
     out.set(k, { at: Math.max(cur?.at ?? 0, a.at ?? 0), pending: Boolean(cur?.pending) || !a.withdrawn });
   }
@@ -67,7 +67,7 @@ export function answeredLookup(sessions: Session[] | Record<string, Session[]> |
   const base = typeof sessions === "function" ? sessions : makeSessionLookup(sessions);
   const done = answeredBy(answered);
   if (!done.size) return base;
-  const waiting = new Set(interactions.map(cardKey));
+  const waiting = new Set(interactions.map(homeKey));
   return (mid, sid) => {
     const s = base(mid, sid);
     return s && answeredHere(s, waiting, done) ? answeredCopy(s) : s;
@@ -79,7 +79,7 @@ export function answeredLookup(sessions: Session[] | Record<string, Session[]> |
 export function answeredSessions(sessions: Session[], interactions: Interaction[], answered: Record<string, AnsweredCard>): Session[] {
   const done = answeredBy(answered);
   if (!done.size) return sessions;
-  const waiting = new Set(interactions.map(cardKey));
+  const waiting = new Set(interactions.map(homeKey));
   let changed = false;
   const out = sessions.map((s) => {
     if (!answeredHere(s, waiting, done)) return s;

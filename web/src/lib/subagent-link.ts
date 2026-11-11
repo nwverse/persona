@@ -4,6 +4,7 @@
 // A child session's (#5120: a Codex subagent, an Agent a Paseo Agent created; its row says which session it folds under)
 // the same way: its parent's chat, at the child's card.
 import { useSyncExternalStore } from "react";
+import { childCall } from "./child-cards";
 
 /** The parent session and the subagent of a "<parent>@<agent>" id; null for any other id. */
 export function splitSubagentLink(sid: string): { parent: string; agent: string } | null {
@@ -18,9 +19,10 @@ const listeners = new Set<() => void>();
 const key = (mid: string, sid: string) => `${mid}/${sid}`;
 const tell = () => listeners.forEach((l) => l());
 
-/** The id to open for `sid`: its parent's for a subagent's, which is then asked to show the subagent's card; `sid`
- *  itself otherwise. */
-export function followSubagentLink(mid: string, sid: string): string {
+/** The id to open for `sid`: its parent's for a subagent's, which is then asked to show the subagent's card; for a child
+ *  session's (`parent`, the session its row folds under), that parent's (`followChildSession`); `sid` itself otherwise. */
+export function followSubagentLink(mid: string, sid: string, parent?: string): string {
+  if (parent) return followChildSession(mid, sid, parent);
   const link = splitSubagentLink(sid);
   if (!link) return sid;
   pending.set(key(mid, link.parent), link.agent);
@@ -28,22 +30,15 @@ export function followSubagentLink(mid: string, sid: string): string {
   return link.parent;
 }
 
-/** What a chat is asked to show for a child session's link: `child:` and its id, beside the subagents' ids. */
-const CHILD = "child:";
-
-/** The child session a chat is asked to show (`useSubagentLink`'s value for a child's link); undefined for a subagent. */
-export function childLinkOf(asked: string): string | undefined {
-  return asked.startsWith(CHILD) ? asked.slice(CHILD.length) : undefined;
-}
-
-/** The id to open for a child session's link: its parent's, which is then asked to show the child's card. */
+/** The id to open for a child session's link: its parent's, which is then asked to show the child's card (the call the
+ *  card is known by, beside the subagents' ids; lib/child-cards.ts childOfCall reads it back). */
 export function followChildSession(mid: string, child: string, parent: string): string {
-  pending.set(key(mid, parent), `${CHILD}${child}`);
+  pending.set(key(mid, parent), childCall(child));
   tell();
   return parent;
 }
 
-/** The subagent (or, `childLinkOf`, the child session) this chat is asked to show, until it did (`doneSubagentLink`). */
+/** The subagent (or, `childOfCall`, the child session) this chat is asked to show, until it did (`doneSubagentLink`). */
 export function useSubagentLink(mid: string, sid: string): string | undefined {
   const read = () => pending.get(key(mid, sid));
   return useSyncExternalStore(subscribe, read, read);

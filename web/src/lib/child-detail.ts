@@ -51,23 +51,20 @@ export async function readChildDetail(mid: string, sid: string, signal?: AbortSi
   const path = `${sessionPath(mid, sid)}/items`;
   const page = await api<ItemsPage>(`${path}?turns=1&fold_work=1&lazy_images=1`, { signal });
   const items = page.items ?? [];
-  let prompt = firstAsk(items);
-  let lastTool = lastToolName(items);
   const quiet = <T>(read: Promise<T>) => read.catch((e: unknown) => {
     if (signal?.aborted) throw e;
     return undefined;
   });
+  const fold = foldAfterLastCall(items);
+  const to = fold?.fold?.through_seq;
   const [head, tail] = await Promise.all([
     // the page is the last of several exchanges: what it was first asked is further back
     page.has_more ? quiet(api<ItemsPage>(`${path}?from_seq=0&through_seq=${HEAD_LINES}&lazy_images=1`, { signal })) : undefined,
-    (() => {
-      const fold = foldAfterLastCall(items);
-      if (!fold?.fold) return undefined;
-      const to = fold.fold.through_seq;
-      return quiet(api<ItemsPage>(`${path}?from_seq=${Math.max(fold.seq, to - FOLD_TAIL_LINES)}&through_seq=${to}&lazy_images=1`, { signal }));
-    })(),
+    fold && to !== undefined ? quiet(api<ItemsPage>(`${path}?from_seq=${Math.max(fold.seq, to - FOLD_TAIL_LINES)}&through_seq=${to}&lazy_images=1`, { signal })) : undefined,
   ]);
-  prompt = (head && firstAsk(head.items ?? [])) || prompt;
-  lastTool = (tail && lastToolName(tail.items ?? [])) || lastTool;
-  return { prompt, result: latestWords(items), lastTool };
+  return {
+    prompt: (head && firstAsk(head.items ?? [])) || firstAsk(items),
+    result: latestWords(items),
+    lastTool: (tail && lastToolName(tail.items ?? [])) || lastToolName(items),
+  };
 }

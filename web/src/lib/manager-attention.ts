@@ -38,10 +38,11 @@ export function waitingAgents(list: ManagerList, sessions: readonly Session[], i
       continue;
     }
     // a child session's card counts for its parent (#5120): one agent waiting, however many of its children ask
-    const key = keyOf(ix.machine_id, requestHome(ix));
+    const home = requestHome(ix);
+    const key = keyOf(ix.machine_id, home);
     const s = byKey.get(key);
     // a session not in the list (not read yet): muted by its own switch only, as interactionMuted does
-    if (s ? !counted(s) : isMuted({ machine_id: ix.machine_id, session_id: requestHome(ix) }, mutes)) continue;
+    if (s ? !counted(s) : isMuted({ machine_id: ix.machine_id, session_id: home }, mutes)) continue;
     add(ix.manager, key);
   }
   return Object.fromEntries([...waiting].map(([id, keys]) => [id, keys.size]));

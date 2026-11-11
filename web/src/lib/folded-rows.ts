@@ -22,9 +22,15 @@ export function foldedRow(s: Session): Session {
   return copy;
 }
 
-/** foldSessions (lib/child-sessions.ts) with stable copies: without the children folded under a row the list holds, each
- *  parent in its folded state; `rows` itself when nothing changes. */
+// One folded list per list object: a store selector folding a machine's rows (`sessions[mid]`, replaced only when that
+// machine's rows change) gets the same array back on every other push.
+const folds = new WeakMap<Session[], Session[]>();
+
+/** A list as the web shows and counts it: without the children folded under a row the list holds, each parent in its
+ *  folded state (foldedRow); `rows` itself when nothing changes. */
 export function foldRows(rows: Session[]): Session[] {
+  const known = folds.get(rows);
+  if (known) return known;
   if (!rows.some((s) => s.folded_under || s.children)) return rows;
   const listed = listedKeys(rows);
   let changed = false;
@@ -38,7 +44,9 @@ export function foldRows(rows: Session[]): Session[] {
     if (shown !== s) changed = true;
     out.push(shown);
   }
-  return changed ? out : rows;
+  if (!changed) return rows;
+  folds.set(rows, out);
+  return out;
 }
 
 /** The agentKey (`<machine>/<session>`) of the session a card belongs to in lists and counts: the parent a child's

@@ -10,7 +10,7 @@ import { isSpacePinned, type AgentPins } from "./pins";
 import type { Route, SessionView } from "./router";
 import type { AgentState, Machine, Session } from "./types";
 import { byTime } from "./times";
-import { requestHome } from "./child-sessions";
+import { homeKey } from "./folded-rows";
 
 // docs/protocol/agent-states.md "Unified states": what a folded row shows for everything under it, and which pane a tab opens on.
 const URGENCY: AgentState[] = ["needs_you", "working", "unread", "idle", "unknown", "offline"];
@@ -86,7 +86,7 @@ export function tabSessions(all: Session[], s: Session): Session[] {
 
 type HomeBucket = "needs" | "working" | "unread";
 /** A pending card as the overview places it: on its session, or on the parent a child session folds under (#5120). */
-type CardOf = { machine_id: string; session_id: string; folded_under?: string };
+type CardOf = Parameters<typeof homeKey>[0];
 
 // How the overview orders a bucket's rows (and so which of a tab's equally urgent panes speaks for it): the longest
 // working first, by when it started; the others the latest first, by when they last changed. A negative `before`
@@ -105,7 +105,7 @@ const BUCKET_ORDER: Record<HomeBucket, (a: Session, b: Session) => number> = {
  *  ordered by it the way single agents are — working tabs the longest working first, the others the latest first. */
 export function homeTaskGroups(sessions: readonly Session[], interactions: readonly CardOf[]): Record<HomeBucket, TabGroup[]> {
   // a child session's card is its parent's (#5120): the parent waits in Needs you's cards, not in a row of its own too
-  const asked = new Set(interactions.map((i) => `${i.machine_id}/${requestHome(i)}`));
+  const asked = new Set(interactions.map(homeKey));
   const carded = (s: Session) => stateOf(s) === "needs_you" && asked.has(`${s.machine_id}/${s.session_id}`);
   const out: Record<HomeBucket, TabGroup[]> = { needs: [], working: [], unread: [] };
   for (const g of tabGroups(sessions.filter((s) => !s.assistant && stateOf(s) !== "offline"))) {

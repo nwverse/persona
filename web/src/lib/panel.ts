@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from "react";
 import type { DiffScope } from "./comments";
 import { getSession } from "./store";
-import { followChildSession, followSubagentLink } from "./subagent-link";
+import { followSubagentLink } from "./subagent-link";
 
 /** A diff opened straight at a line (a comment's card, lib/comments.ts): which diff, which file, which line. */
 export interface GitSpot {
@@ -50,10 +50,7 @@ const listeners = new Set<() => void>();
 
 export function openPanel(p: Panel | null) {
   // a subagent's conversation is not opened (#5030), nor a child session's (#5120): its parent's chat, at its card
-  if (p?.kind === "agent") {
-    const parent = getSession(p.mid, p.sid)?.folded_under;
-    p = { ...p, sid: parent ? followChildSession(p.mid, p.sid, parent) : followSubagentLink(p.mid, p.sid) };
-  }
+  if (p?.kind === "agent") p = { ...p, sid: followSubagentLink(p.mid, p.sid, getSession(p.mid, p.sid)?.folded_under) };
   // what had the focus when the panel opened (its header button): closing gives the focus back to it (#5155). Called
   // from the click, before the panel renders, so it is never something inside the panel; a panel replacing another keeps
   // the first one's.

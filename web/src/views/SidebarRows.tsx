@@ -241,11 +241,11 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const given = foldedRow(row);
   // what it asks you, or what it did, under its title (#3195): no hover or click needed to see why it is red or green;
   // its own card first, else what one of its child sessions asks (the card's home is this row's page)
-  const ix = useStore((st) => st.interactions.find((i) => i.machine_id === given.machine_id && i.session_id === given.session_id)
-    ?? st.interactions.find((i) => i.machine_id === given.machine_id && i.folded_under === given.session_id));
+  const own = useStore((st) => st.interactions.find((i) => i.machine_id === given.machine_id && i.session_id === given.session_id));
   // its child sessions' cards wait here too: the row's count holds them (one count per session, DESIGN_SYSTEM 4.8)
-  const childPending = useStore((st) => childCards(st.interactions, given.machine_id, given.session_id).length);
-  const pendingCount = (given.pending_interactions ?? 0) + childPending;
+  const kidCards = useStore((st) => childCards(st.interactions, given.machine_id, given.session_id));
+  const ix = own ?? kidCards[0];
+  const pendingCount = (given.pending_interactions ?? 0) + kidCards.length;
   // a card answered here takes its red dot and "Has a question" line away at once, not at the hub's next push (#4286)
   const justAnswered = useStore((st) => lastAnsweredAt(st.answered, given.machine_id, given.session_id));
   const pending = useStore((st) => answerPending(st.answered, given.machine_id, given.session_id));

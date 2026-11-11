@@ -25,6 +25,9 @@ export const childSessionOf = (s: Step & { kind: "tool" }): string => s.use.id.s
 /** The call a child's card is known by: what a link to the child brings into view. */
 export const childCall = (sid: string): string => `${CHILD}${sid}`;
 
+/** The child session a call is a child's card's (`childCall`); undefined for any other call. */
+export const childOfCall = (call: string): string | undefined => (call.startsWith(CHILD) ? call.slice(CHILD.length) : undefined);
+
 /** The key a child card's open / closed state is kept under (expanded.ts): a link to the child opens it. */
 export const childCardKey = (scope: string, sid: string): string => `${scope}${CHILD}${sid}`;
 
@@ -42,9 +45,15 @@ export function childPlaces(rows: readonly Session[], seen: Map<string, string>)
   });
 }
 
-/** The exchanges a chat draws, in order, with when each started (its message, else its first step). */
-export function exchangeStarts(lines: readonly ChatLine[]): { id: string; start?: string }[] {
-  const out: { id: string; start?: string }[] = [];
+/** An exchange a chat draws, and when it started (its message, else its first step). */
+export interface ExchangeStart {
+  id: string;
+  start?: string;
+}
+
+/** The exchanges a chat draws, in order. */
+export function exchangeStarts(lines: readonly ChatLine[]): ExchangeStart[] {
+  const out: ExchangeStart[] = [];
   const walk = (ls: readonly ChatLine[]) => {
     for (const l of ls) {
       if (l.kind === "segment") out.push({ id: l.seg.id, start: l.seg.user?.ts ?? l.seg.start });
@@ -63,7 +72,7 @@ const ms = (ts: string | undefined) => {
 /** Each child's exchange: the last one that started before it. One that started after the last exchange started is in
  *  that one; one that started before the first exchange loaded is drawn only once the history is `complete` (then in the
  *  first exchange), since its own is still to be loaded. A child without a time goes to the latest exchange. */
-export function placeChildren(exchanges: readonly { id: string; start?: string }[], children: readonly ChildPlace[], complete: boolean): Map<string, ChildPlace[]> {
+export function placeChildren(exchanges: readonly ExchangeStart[], children: readonly ChildPlace[], complete: boolean): Map<string, ChildPlace[]> {
   const by = new Map<string, ChildPlace[]>();
   if (!exchanges.length) return by;
   for (const c of children) {
@@ -80,18 +89,14 @@ export function placeChildren(exchanges: readonly { id: string; start?: string }
     if (home === undefined) continue;
     by.set(home, [...(by.get(home) ?? []), c]);
   }
-  // in the chat's order, each exchange's oldest first: the same children give the same map (and key) in any order
+  // in the chat's order, each exchange's oldest first: the same children give the same map in any order (the chat keeps
+  // the last one while it holds the same, stable-lines.ts stableValue)
   const out = new Map<string, ChildPlace[]>();
   for (const e of exchanges) {
     const list = by.get(e.id);
     if (list) out.set(e.id, list.sort((a, b) => (ms(a.at) ?? Infinity) - (ms(b.at) ?? Infinity) || (a.sid < b.sid ? -1 : a.sid > b.sid ? 1 : 0)));
   }
   return out;
-}
-
-/** What decides where the cards go: the same string while nothing moved, so the chat keeps the same map. */
-export function placementKey(places: Map<string, ChildPlace[]>): string {
-  return [...places].map(([seg, cs]) => `${seg}\u0000${cs.map((c) => `${c.sid}\u0002${c.at}`).join("\u0003")}`).join("\u0001");
 }
 
 const stepTs = (s: Step) => (s.kind === "tool" ? s.use.ts : s.item.ts);

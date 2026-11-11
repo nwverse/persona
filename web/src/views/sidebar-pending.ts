@@ -37,7 +37,7 @@ export function sidebarPending(sessions: Session[], interactions: Interaction[],
     .filter((s) => stateOf(s) === "needs_you")
     .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "") || sessionKey(a.machine_id, a.session_id).localeCompare(sessionKey(b.machine_id, b.session_id)));
   for (const s of waiting) {
-    const home = s.folded_under || s.session_id;
+    const home = requestHome(s);
     const key = sessionKey(s.machine_id, home);
     if (!rows.has(key)) rows.set(key, { key, machineId: s.machine_id, session: bySession.get(key) ?? s, cards: [], to: { name: "session", mid: s.machine_id, sid: home, view: "chat", work: true } });
   }

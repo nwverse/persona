@@ -13,7 +13,7 @@ import { acceptHubs, here, rememberHub, takeHubs } from "./lib/hubs";
 import { useSessionPanels } from "./lib/panel-memory";
 import { resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
 import { resolveSessionLink, sessionLinkRoute, type SessionLink } from "./lib/session-link";
-import { followChildSession, followSubagentLink, splitSubagentLink } from "./lib/subagent-link";
+import { followSubagentLink, splitSubagentLink } from "./lib/subagent-link";
 import { href, inWorkView, navigate, onLinkClick, type Route, routePath, useRoute, withWorkView } from "./lib/router";
 import { agentChatKey, noteChatShown, personaChatKey } from "./lib/recent-chats";
 import { ago, sessionTitle, shortPath } from "./lib/format";
@@ -236,10 +236,7 @@ function Shell() {
   const linkParent = target?.parent;
   useEffect(() => {
     if (!tabLinkPath) return;
-    if (linkSid) {
-      if (linkParent) followChildSession(linkMid, linkSid, linkParent);
-      else followSubagentLink(linkMid, linkSid);
-    }
+    if (linkSid) followSubagentLink(linkMid, linkSid, linkParent);
     navigate(tabLinkPath, true);
   }, [tabLinkPath, linkMid, linkSid, linkParent]);
   // a tab not among the page's rows (a paged hub lists only active and pinned ones): asked of the hub before it is gone

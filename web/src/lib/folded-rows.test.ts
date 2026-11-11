@@ -32,6 +32,21 @@ describe("folded rows (#5120)", () => {
     expect(folded[0]).toBe(parent);
   });
 
+  it("shows a listed parent folded, keeps the other rows, and gives the same list the same folded list", () => {
+    const parent = row("p", { children: { total: 2, working: 1 } });
+    const rows = [parent, row("c1", { folded_under: "p", state: "working" }), row("c2", { folded_under: "p" }), row("x")];
+    const out = foldRows(rows);
+    expect(out.map((s) => s.session_id)).toEqual(["p", "x"]);
+    expect(out[0].state).toBe("working");
+    expect(out[1]).toBe(rows[3]);
+    expect(foldRows(rows)).toBe(out);
+  });
+
+  it("a parent on another machine is not the parent", () => {
+    const rows = [row("c", { folded_under: "gone" }), row("p", { machine_id: "other" }), row("d", { folded_under: "p" })];
+    expect(foldRows(rows).map((s) => s.session_id)).toEqual(["c", "p", "d"]);
+  });
+
   it("puts a child's card on its parent", () => {
     const card = { id: "1", machine_id: "m", session_id: "c", folded_under: "p" } as Interaction;
     const own = { id: "2", machine_id: "m", session_id: "p" } as Interaction;

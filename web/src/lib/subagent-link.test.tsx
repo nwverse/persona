@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { directionAgentNodes } from "./direction-agent-tree";
 import { closePanel, getPanel, openPanel } from "./panel";
 import { reset, upsertSession } from "./store";
-import { childLinkOf, doneSubagentLink, followChildSession, followSubagentLink, splitSubagentLink, useSubagentLink } from "./subagent-link";
+import { childOfCall } from "./child-cards";
+import { doneSubagentLink, followChildSession, followSubagentLink, splitSubagentLink, useSubagentLink } from "./subagent-link";
 import type { Session } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -54,8 +55,8 @@ describe("subagent links", () => {
     act(() => root.render(<Probe />));
     act(() => void expect(followChildSession("m", "kid", "lead")).toBe("lead"));
     expect(seen).toBe("child:kid");
-    expect(childLinkOf(seen!)).toBe("kid");
-    expect(childLinkOf("a1")).toBeUndefined();
+    expect(childOfCall(seen!)).toBe("kid");
+    expect(childOfCall("a1")).toBeUndefined();
     act(() => doneSubagentLink("m", "lead"));
     expect(seen).toBeUndefined();
     act(() => root.unmount());

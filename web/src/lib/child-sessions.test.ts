@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldedChildren, foldedState, foldSessions, isFoldedIn, listedKeys, requestHome, runningChildren } from "./child-sessions";
+import { foldedChildren, foldedState, isFoldedIn, listedKeys, requestHome, runningChildren } from "./child-sessions";
 import type { Session } from "./types";
 
 const row = (sid: string, extra: Partial<Session> = {}): Session =>
@@ -18,30 +18,6 @@ describe("foldedState", () => {
     expect(foldedState(row("a", { state: "offline", children: { total: 1, working: 1 } }))).toBe("working");
     expect(foldedState(row("a", { state: "unread", children: { total: 1, working: 1 } }))).toBe("unread");
     expect(foldedState(row("a", { state: "idle", awaits_reply: true, children: { total: 1, working: 1 } }))).toBe("idle");
-  });
-});
-
-describe("foldSessions", () => {
-  it("returns the list itself when nothing folds", () => {
-    const rows = [row("a"), row("b")];
-    expect(foldSessions(rows)).toBe(rows);
-  });
-  it("leaves out children of a listed session and shows the parent folded", () => {
-    const parent = row("p", { state: "idle", children: { total: 2, working: 1 } });
-    const rows = [parent, row("c1", { folded_under: "p", state: "working" }), row("c2", { folded_under: "p" }), row("x")];
-    const out = foldSessions(rows);
-    expect(out.map((s) => s.session_id)).toEqual(["p", "x"]);
-    expect(out[0].state).toBe("working");
-    expect(out[1]).toBe(rows[3]);
-  });
-  it("keeps a child whose parent the list does not hold, and a parent on another machine is not its parent", () => {
-    const rows = [row("c", { folded_under: "gone" }), row("p", { machine_id: "other" }), row("d", { folded_under: "p" })];
-    expect(foldSessions(rows).map((s) => s.session_id)).toEqual(["c", "p", "d"]);
-  });
-  it("copies no parent whose state does not change", () => {
-    const parent = row("p", { state: "unread", children: { total: 1, working: 1 } });
-    const out = foldSessions([parent, row("c", { folded_under: "p" })]);
-    expect(out[0]).toBe(parent);
   });
 });
 

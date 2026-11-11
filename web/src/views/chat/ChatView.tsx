@@ -72,8 +72,8 @@ import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-con
 import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { waitingOnSubagents } from "../../lib/background-work";
-import { childLinkOf, doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
-import { childCall, childCardKey, childPlaces, exchangeStarts, placeChildren, placementKey } from "../../lib/child-cards";
+import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
+import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
 import { useChildSessions } from "../../lib/use-child-sessions";
 import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
@@ -135,6 +135,8 @@ const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.Termin
 const NO_FEED: FeedItem[] = [];
 /** How many earlier pages a link to a child loads looking for the exchange its card is in. */
 const CHILD_LINK_PAGES = 10;
+// no child sessions: no cards, and the exchanges are not walked for where they would go
+const NO_PLACES = new Map<string, ChildPlace[]>();
 const NO_PANES: Session[] = [];
 // the assistant has no subagents: one array, so the chat context does not change with every render
 const NO_SUBAGENTS: Subagent[] = [];
@@ -1149,7 +1151,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // workflow agent's, its run's card. Once the chat and its subagents are in; a subagent no longer listed: just the chat.
   const linkedAgent = useSubagentLink(mid, sid);
   useEffect(() => {
-    if (!linkedAgent || childLinkOf(linkedAgent) || !session || tr.loading || detail.loading) return;
+    if (!linkedAgent || childOfCall(linkedAgent) || !session || tr.loading || detail.loading) return;
     doneSubagentLink(mid, sid);
     const agent = subagents?.find((a) => a.id === linkedAgent);
     const call = agent ? subagentCall(agent) : workflowAgentFor(session, `${sid}@${linkedAgent}`)?.run.tool_use_id;
@@ -1182,14 +1184,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // for a child redraws only its card, and a streamed item none of the exchanges.
   const kids = useChildSessions(mid, sid, Boolean(session?.children?.total));
   const seenAt = useRef(new Map<string, string>());
-  const places = useMemo(() => placeChildren(exchangeStarts(lines), childPlaces(kids.rows, seenAt.current), !tr.hasMore), [lines, kids.rows, tr.hasMore]);
-  const placeKey = placementKey(places);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const childCards = useMemo(() => places, [placeKey]);
+  const lastPlaces = useRef<Map<string, ChildPlace[]> | undefined>(undefined);
+  const places = useMemo(
+    () => stableValue(lastPlaces.current, kids.rows.length ? placeChildren(exchangeStarts(lines), childPlaces(kids.rows, seenAt.current), !tr.hasMore) : NO_PLACES),
+    [lines, kids.rows, tr.hasMore],
+  );
+  lastPlaces.current = places;
   // A link to a child's own conversation (lib/subagent-link.ts): its card opened, in view, once its row is in. A child
   // that started before the loaded history: earlier pages until its exchange is in (at most CHILD_LINK_PAGES); a child
   // that is not this session's (any more): just the chat.
-  const linkedChild = linkedAgent ? childLinkOf(linkedAgent) : undefined;
+  const linkedChild = linkedAgent ? childOfCall(linkedAgent) : undefined;
   const childLinkPages = useRef({ child: "", pages: 0 });
   useEffect(() => {
     if (!linkedChild || !session || tr.loading || detail.loading || tr.loadingEarlier) return;
@@ -1197,7 +1201,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       if (kids.loaded) doneSubagentLink(mid, sid);
       return;
     }
-    if (![...childCards.values()].some((ps) => ps.some((p) => p.sid === linkedChild))) {
+    if (![...places.values()].some((ps) => ps.some((p) => p.sid === linkedChild))) {
       const pages = childLinkPages.current;
       if (pages.child !== linkedChild) Object.assign(pages, { child: linkedChild, pages: 0 });
       if (tr.hasMore && pages.pages++ < CHILD_LINK_PAGES) void tr.loadEarlier();
@@ -1208,10 +1212,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     openExpanded([childCardKey(`${mid}/${sid}:`, linkedChild)]);
     jump(childCall(linkedChild));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkedChild, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids, childCards, mid, sid, jump]);
+  }, [linkedChild, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids, places, mid, sid, jump]);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment, children: childCards }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, openingId, openingOrigin, closeoutSegment, childCards],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment, children: places }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, openingId, openingOrigin, closeoutSegment, places],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──

@@ -1,7 +1,8 @@
 // Child sessions as cards in their parent's chat (#5120): the exchange a card goes in and where among its steps, and that
 // the placement holds still while nothing moves it.
 import { describe, expect, it } from "vitest";
-import { childCall, childCardKey, childPlaces, childSessionOf, exchangeStarts, isChildSessionStep, placeChildren, placementKey, withChildSessions, type ChildPlace } from "./child-cards";
+import { childCall, childCardKey, childPlaces, childSessionOf, exchangeStarts, isChildSessionStep, placeChildren, withChildSessions, type ChildPlace } from "./child-cards";
+import { sameValue } from "./stable-lines";
 import { chatLines, exchangeSteps, segments, type ChatLine, type Step } from "./turns";
 import type { Item, Session } from "./types";
 import { workBlocks, type WorkGroupNode } from "./work-groups";
@@ -53,11 +54,11 @@ describe("placeChildren", () => {
     expect(placeChildren([{ id: "e1", start: ts(0) }, { id: "e2" }], [kid("a", 50)], false).get("e1")?.map((c) => c.sid)).toEqual(["a"]);
   });
 
-  it("its key holds while nothing moved", () => {
+  it("holds the same while nothing moved, in whatever order the children come", () => {
     const a = placeChildren(ex, [kid("a", 120), kid("b", 10)], false);
     const b = placeChildren(ex, [kid("b", 10), kid("a", 120)], false);
-    expect(placementKey(a)).toBe(placementKey(b));
-    expect(placementKey(placeChildren(ex, [kid("a", 220), kid("b", 10)], false))).not.toBe(placementKey(a));
+    expect(sameValue(a, b)).toBe(true);
+    expect(sameValue(placeChildren(ex, [kid("a", 220), kid("b", 10)], false), a)).toBe(false);
   });
 });
 

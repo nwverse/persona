@@ -39,7 +39,7 @@ const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max", "ul
 export const knownEffort = (effort: string | undefined): string | undefined => (effort && EFFORTS.has(effort) ? effort : undefined);
 
 /** How often an open card of a running child reads its transcript again, at most. */
-export const CHILD_REREAD_MS = 5000;
+const CHILD_REREAD_MS = 5000;
 
 /** The model chip's words: the model as a subagent card says it, and the effort it runs at ("GPT-5.5 · High"). */
 export function childModelChip(s: Pick<Session, "model" | "effort">): string {

@@ -5,7 +5,7 @@
 // chat holds are kept here too (`useChildRow`), where its cards and its children's request cards find them: a summary is
 // never put among the store's complete rows.
 import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { foldedChildren, SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
+import { foldedChildren, rowKey, SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { runtimeIdentity, runtimeOrder, runtimeRemoval, runtimeSessions } from "./runtime-list";
 import { SESSIONS_LIST_FEATURE, SessionList, type ListSnapshot } from "./session-list";
 import { onHubEvent, useStore } from "./store";
@@ -26,7 +26,6 @@ export interface ChildSessions {
 // ── the rows the open chats hold, by each chat (a page and a side panel may show the same one) ──
 const held = new Map<object, Map<string, Session>>();
 const heldListeners = new Set<() => void>();
-const heldKey = (mid: string, sid: string) => `${mid}\u0000${sid}`;
 const tellHeld = () => heldListeners.forEach((l) => l());
 const subscribeHeld = (l: () => void) => {
   heldListeners.add(l);
@@ -36,7 +35,7 @@ const subscribeHeld = (l: () => void) => {
 /** A child session's row as an open chat of its parent holds it; undefined when none does. */
 export function heldChild(mid: string, sid: string): Session | undefined {
   for (const rows of held.values()) {
-    const row = rows.get(heldKey(mid, sid));
+    const row = rows.get(rowKey(mid, sid));
     if (row) return row;
   }
   return undefined;
@@ -88,7 +87,7 @@ export function useChildSessions(mid: string, sid: string, hasChildren: boolean,
   // held while the chat is open, before it paints: its cards find their rows in the same frame
   const owner = useMemo(() => ({}), []);
   useLayoutEffect(() => {
-    held.set(owner, new Map(rows.map((s) => [heldKey(s.machine_id, s.session_id), s])));
+    held.set(owner, new Map(rows.map((s) => [rowKey(s.machine_id, s.session_id), s])));
     tellHeld();
   }, [owner, rows]);
   useLayoutEffect(

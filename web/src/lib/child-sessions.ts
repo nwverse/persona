@@ -21,7 +21,8 @@ export function foldedState(s: Session): AgentState {
   return own;
 }
 
-const rowKey = (mid: string, sid: string) => `${mid}\u0000${sid}`;
+/** A session's key in the sets and maps of child rows (`listedKeys`, the rows open chats hold). */
+export const rowKey = (mid: string, sid: string) => `${mid}\u0000${sid}`;
 
 /** The keys of the sessions a list holds, for `isFoldedIn`. */
 export function listedKeys(rows: readonly Session[]): Set<string> {
@@ -32,27 +33,6 @@ export function listedKeys(rows: readonly Session[]): Set<string> {
  *  whose parent the list does not hold (another filter, another page) stays a row. */
 export function isFoldedIn(s: Session, listed: ReadonlySet<string>): boolean {
   return Boolean(s.folded_under) && listed.has(rowKey(s.machine_id, s.folded_under!));
-}
-
-/** A list as the web shows and counts it: without the children folded under a session it holds, each parent in its
- *  folded state (a copy only of a row whose state that changes; `rows` itself when nothing does, so memos hold). */
-export function foldSessions(rows: Session[]): Session[] {
-  if (!rows.some((s) => s.folded_under || s.children)) return rows;
-  const listed = listedKeys(rows);
-  let changed = false;
-  const out: Session[] = [];
-  for (const s of rows) {
-    if (isFoldedIn(s, listed)) {
-      changed = true;
-      continue;
-    }
-    const state = s.children ? foldedState(s) : undefined;
-    if (state && state !== stateOf(s)) {
-      out.push({ ...s, state });
-      changed = true;
-    } else out.push(s);
-  }
-  return changed ? out : rows;
 }
 
 /** The sessions folded under mid/sid, oldest first (by when they started, else were last updated). */
