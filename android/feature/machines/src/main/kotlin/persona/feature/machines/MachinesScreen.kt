@@ -67,12 +67,16 @@ internal fun MachinesScreen(
     val listed = remember(machines) { machines.mapTo(HashSet()) { it.id } }
     val metrics = state.dashboard?.machines.orEmpty().filter { it.machineId in listed || it.machineId !in known }
         .associate { it.machineId to it.live(machines.firstOrNull { m -> m.id == it.machineId }) }
-    val ids = (machines.map { it.id } + metrics.keys).distinct()
-    val online = ids.count { metrics[it]?.online ?: machines.firstOrNull { m -> m.id == it }?.online ?: false }
-    val attention = metrics.values.count { alerts(it.current(state.now), it.system?.cores).isNotEmpty() }
+    val baseIds = machineListIds(machines, metrics)
+    val entries = remember(baseIds, machines, metrics, sessions, state.now) {
+        machineListEntries(baseIds, machines, metrics, sessions, state.now)
+    }
+    val ids = entries.map { it.id }
+    val listSummary = machineSummary(entries)
     val locale = currentLocale
     val healthState = health?.state?.collectAsStateWithLifecycle()?.value ?: MachineHealthState()
     var allChecks by rememberSaveable(machineId) { mutableStateOf(false) }
+    var allAgents by rememberSaveable(machineId) { mutableStateOf(false) }
     var confirmFix by remember { mutableStateOf(false) }
     if (health != null && machineId != null) {
         LaunchedEffect(health, machineId, machine?.online) { health.open(machineId, machine?.online == true) }
@@ -104,9 +108,10 @@ internal fun MachinesScreen(
         val current = r.ownerOf(machines.firstOrNull { it.id == machineId }?.manager)
         MoveToManagerSheet(r, current, onMove = { m -> actions.moveTo(machineId, m.id, m.shownName) }, onDismiss = { choosingManager = false })
     }
+    MachineGridWidth { contentWidth ->
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),
-        summary = if (machineId == null) stringResource(R.string.machines_summary, online, ids.size, attention) else null,
+        summary = if (machineId == null) stringResource(R.string.machines_summary_with_agents, listSummary.online, listSummary.total, listSummary.attention, listSummary.needsYou) else null,
         onBack = navigator::back, largeTitle = machineId == null,
         actions = {
             if (machineId == null && adds && canAdd) JIconButton(PhIcons.Plus, stringResource(ReadinessActionId.AddComputer.label), addComputer)
@@ -128,22 +133,22 @@ internal fun MachinesScreen(
                         JButton(stringResource(ReadinessActionId.AddComputer.label), addComputer, kind = JButtonKind.Secondary)
                     }) else null)
             }
-            val card: @Composable (String) -> Unit = { id ->
-                val info = machines.firstOrNull { it.id == id }
-                val metric = metrics[id] ?: MachineMetrics(id, info?.online ?: false, info?.system)
-                MachineCard(info, metric, machineSessions(sessions, id), state.now, state.dashboard?.step ?: 60, deploy = deployLine,
+            val entriesById = entries.associateBy { it.id }
+            machineGrid(ids, contentWidth) { id, cardModifier ->
+                val entry = entriesById.getValue(id)
+                MachineCard(entry.machine, entry.metrics, entry.tally, state.now, state.dashboard?.step ?: 60,
+                    modifier = cardModifier, fillsRow = true, deploy = deployLine,
                     onConfirm = if (adds) confirmComputer else null) {
                     navigator.navigate(MachineDetailRoute(id))
                 }
             }
-            items(ids, key = { it }, contentType = { "machine" }) { card(it) }
         } else {
             val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
             val current = metric.current(state.now)
             val agents = machineSessions(sessions, machineId)
             item("machine") {
-                MachineCard(machine, metric, agents, state.now, state.history?.step ?: state.range.step, deploy = deployLine,
+                MachineCard(machine, metric, AgentTally(agents), state.now, state.history?.step ?: state.range.step, deploy = deployLine,
                     onConfirm = if (adds) confirmComputer else null)
             }
             if (machine == null && machines.isNotEmpty()) item("gone") { JNotice(stringResource(R.string.machines_gone)) }
@@ -156,6 +161,26 @@ internal fun MachinesScreen(
                 botmux = acting.botmux, botmuxSaving = acting.botmuxSaving, onBotmux = { actions.setBotmux(machine.id, it) },
                 move = owner?.let { id -> MachineMoveRow(roster?.manager(id)?.shownName ?: id, acting.moving) { choosingManager = true } },
                 rename = MachineRenameRow(acting.renaming) { renaming = true }.takeIf { renames && machine.kind != "hub" })
+            item("sessions-title") { JSectionHeader(stringResource(R.string.machines_sessions_title), count = agents.size) }
+            if (agents.isEmpty()) item("no-sessions") { JNotice(stringResource(R.string.machines_no_sessions)) }
+            val shownAgents = visibleMachineAgents(agents, allAgents)
+            items(shownAgents, key = { "session-${it.sessionId}" }, contentType = { "session" }) { session ->
+                val status = when (session.agentState) {
+                    AgentState.NeedsYou -> Status.NeedsYou; AgentState.Working -> Status.Working
+                    AgentState.Unread -> Status.Unread; AgentState.Idle -> Status.Idle
+                    AgentState.Offline -> Status.Offline; AgentState.Unknown -> Status.Unknown
+                }
+                JCard(Modifier.padding(bottom = Tokens.Space.m), onClick = { navigator.navigate(ChatRoute(machineId, session.sessionId)) }, status = status) {
+                    JRow(session.displayTitle, leading = { JStatusDot(status) }, trailing = { JTag(status.localizedLabel, status = status) })
+                    Text(session.agentLabel, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                    Text(session.cwd, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (agents.size > MACHINE_AGENTS_PREVIEW) item("sessions-toggle") {
+                val toggleText = if (allAgents) stringResource(R.string.machines_agents_show_less)
+                else stringResource(R.string.machines_agents_show_all, agents.size)
+                JTextButton(toggleText, { allAgents = !allAgents }, Modifier.fillMaxWidth())
+            }
             // As iOS: what the computer can do and its browser come before the monitoring.
             if (machine != null && health != null) {
                 machineHealth(machine, healthState, allChecks, { allChecks = !allChecks }, { health.check(machine.id) }, { confirmFix = true },
@@ -211,20 +236,6 @@ internal fun MachinesScreen(
                     reference = system?.cores?.takeIf { kinds.first() == MetricKind.Load && it > 0 }?.toDouble())
             }
             if (system?.os == "linux" && !current?.cores.isNullOrEmpty()) item("cores") { CoreBars(current.cores!!) }
-            item("sessions-title") { JSectionHeader(stringResource(R.string.machines_sessions_title), count = agents.size) }
-            if (agents.isEmpty()) item("no-sessions") { JNotice(stringResource(R.string.machines_no_sessions)) }
-            items(agents, key = { "session-${it.sessionId}" }, contentType = { "session" }) { session ->
-                val status = when (session.agentState) {
-                    AgentState.NeedsYou -> Status.NeedsYou; AgentState.Working -> Status.Working
-                    AgentState.Unread -> Status.Unread; AgentState.Idle -> Status.Idle
-                    AgentState.Offline -> Status.Offline; AgentState.Unknown -> Status.Unknown
-                }
-                JCard(Modifier.padding(bottom = 12.dp), onClick = { navigator.navigate(ChatRoute(machineId, session.sessionId)) }, status = status) {
-                    JRow(session.displayTitle, leading = { JStatusDot(status) }, trailing = { JTag(status.localizedLabel, status = status) })
-                    Text(session.agentLabel, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                    Text(session.cwd, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-            }
             if (machine != null && actions != null) machineLaunchers(machine.online, acting,
                 onLauncher = if (launcherPages) ({ name -> navigator.navigate(LauncherRoute(machine.id, name)) }) else null)
             item("system") { JSectionHeader(stringResource(R.string.machines_system_title)) }
@@ -251,12 +262,15 @@ internal fun MachinesScreen(
             extensionSections?.invoke(this)
         }
     }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun MachineCard(
-    machine: Machine?, metrics: MachineMetrics, sessions: List<Session>, now: Long, step: Int,
+internal fun MachineCard(
+    machine: Machine?, metrics: MachineMetrics, tally: AgentTally, now: Long, step: Int,
+    modifier: Modifier = Modifier,
+    fillsRow: Boolean = false,
     deploy: (@Composable (Machine?) -> Unit)? = null,
     /** "Confirm computer" for a computer that waits to be confirmed; null where the phone cannot (demo mode). */
     onConfirm: ((String) -> Unit)? = null,
@@ -267,11 +281,14 @@ private fun MachineCard(
     val alerts = alerts(current, system?.cores)
     val locale = currentLocale
     val pending = machine?.pending == true
-    val status = when {
-        pending -> Status.NeedsYou
-        !metrics.online -> Status.Offline; alerts.isNotEmpty() || machine?.nodeMismatch == true -> Status.NeedsYou; else -> Status.Unread
+    val concern = machineConcern(machine, metrics.online, alerts, tally.needsYou)
+    val status = when (concern) {
+        MachineConcern.Pending, MachineConcern.Critical, MachineConcern.Warning,
+        MachineConcern.NeedsYou, MachineConcern.Mismatch -> Status.NeedsYou
+        MachineConcern.Offline -> Status.Offline
+        MachineConcern.None -> Status.Unread
     }
-    JCard(Modifier.padding(bottom = 12.dp), onClick = onClick, status = status) {
+    JCard(modifier.padding(bottom = Tokens.Space.m), onClick = onClick, status = status) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OsBadge(system)
             Column(Modifier.weight(1f)) {
@@ -310,8 +327,7 @@ private fun MachineCard(
                 }
             }
         } else {
-            Text(stringResource(R.string.machines_card_sessions, sessions.size, sessions.count { it.agentState == AgentState.Working },
-                sessions.count { it.agentState == AgentState.NeedsYou }),
+            Text(stringResource(R.string.machines_card_sessions, tally.total, tally.working, tally.needsYou),
                 style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -322,6 +338,7 @@ private fun MachineCard(
         if (deploy != null && showsDeploy(machine)) deploy(machine)
         else if (machine?.nodeMismatch == true) Warning(stringResource(R.string.machines_node_mismatch))
         alerts.forEach { Warning(stringResource(it.label)) }
+        if (fillsRow) Spacer(Modifier.weight(1f))
         val groups = listOf(listOf(MetricKind.Cpu), listOf(MetricKind.Memory), listOf(MetricKind.Rx, MetricKind.Tx))
         groups.forEach { kinds ->
             val value = when (kinds.first()) {

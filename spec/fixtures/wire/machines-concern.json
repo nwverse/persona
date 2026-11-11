@@ -1,0 +1,163 @@
+[
+  {
+    "name": "machines_concern_projection",
+    "description": "Anonymous machine wire data plus the metrics and sessions used by the concern-grid presentation tests.",
+    "source": [
+      "android/feature/machines/src/main/kotlin/persona/feature/machines/MachineConcern.kt",
+      "apple/Persona/Views/Machines/MachinesView.swift"
+    ],
+    "derived": true,
+    "decoder": "machines",
+    "input": {
+      "machines": [
+        {
+          "id": "pending",
+          "name": "Pending computer",
+          "online": true,
+          "trust": "pending"
+        },
+        {
+          "id": "offline",
+          "name": "Offline computer",
+          "online": false,
+          "last_seen": "2026-01-02T03:04:05Z"
+        },
+        {
+          "id": "critical",
+          "name": "Critical computer",
+          "online": true
+        },
+        {
+          "id": "warning",
+          "name": "Warning computer",
+          "online": true
+        },
+        {
+          "id": "needs-you",
+          "name": "Waiting agents computer",
+          "online": true
+        },
+        {
+          "id": "mismatch",
+          "name": "Deploying computer",
+          "online": true,
+          "deploying": true,
+          "deploy_phase": "transferring"
+        },
+        {
+          "id": "normal",
+          "name": "Normal computer",
+          "online": true,
+          "node_version": "fixture-version"
+        }
+      ]
+    },
+    "expected": {
+      "accepted": true,
+      "fields": {
+        "/machines/0/trust": "pending",
+        "/machines/1/online": false,
+        "/machines/5/deploying": true,
+        "/machines/5/deploy_phase": "transferring",
+        "/machines/6/online": true
+      }
+    },
+    "presentation": {
+      "now": 1000,
+      "metrics": [
+        {
+          "machine_id": "critical",
+          "online": true,
+          "latest": {
+            "t": 1000,
+            "cpu": 95,
+            "mem_used": 95,
+            "mem_total": 100,
+            "disk_used": 95,
+            "disk_total": 100
+          }
+        },
+        {
+          "machine_id": "warning",
+          "online": true,
+          "latest": {
+            "t": 1000,
+            "cpu": 80
+          }
+        }
+      ],
+      "sessions": [
+        {
+          "machine_id": "needs-you",
+          "session_id": "waiting-1",
+          "title": "Waiting agent 1",
+          "state": "needs_you",
+          "status": "blocked"
+        },
+        {
+          "machine_id": "needs-you",
+          "session_id": "waiting-2",
+          "title": "Waiting agent 2",
+          "state": "needs_you",
+          "status": "blocked"
+        },
+        {
+          "machine_id": "needs-you",
+          "session_id": "waiting-3",
+          "title": "Waiting agent 3",
+          "state": "needs_you",
+          "status": "blocked"
+        },
+        {
+          "machine_id": "needs-you",
+          "session_id": "waiting-4",
+          "title": "Waiting agent 4",
+          "state": "needs_you",
+          "status": "blocked"
+        },
+        {
+          "machine_id": "needs-you",
+          "session_id": "waiting-5",
+          "title": "Waiting agent 5",
+          "state": "needs_you",
+          "status": "blocked"
+        },
+        {
+          "machine_id": "needs-you",
+          "session_id": "waiting-6",
+          "title": "Waiting agent 6",
+          "state": "needs_you",
+          "status": "blocked"
+        },
+        {
+          "machine_id": "normal",
+          "session_id": "working",
+          "title": "Working agent",
+          "state": "working",
+          "status": "working"
+        },
+        {
+          "machine_id": "normal",
+          "session_id": "unread",
+          "title": "Unread agent",
+          "state": "unread",
+          "status": "done"
+        }
+      ],
+      "expectedOrder": [
+        "pending",
+        "offline",
+        "critical",
+        "warning",
+        "needs-you",
+        "mismatch",
+        "normal"
+      ],
+      "differentCardHeights": {
+        "criticalAlertRows": 3,
+        "warningAlertRows": 1
+      },
+      "agentsPreviewCount": 5
+    }
+  }
+]
