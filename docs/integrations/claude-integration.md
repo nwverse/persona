@@ -137,6 +137,7 @@ Tested 2026-11-04 with Claude Code 2.1.318: plugin hooks behave like settings ho
 | Event | matcher | Purpose |
 | --- | --- | --- |
 | PreToolUse | `AskUserQuestion` | Let Claude show its terminal dialog (duplicate question texts are still denied) |
+| PreToolUse, on a Mac | `mcp__.*cua.*__.*`; Agents also `Bash` with `--cua-only` | An Agent's own Cua Driver never operates System Settings or macOS's permission prompts: denied at once with the reason, no card (`server/internal/node/cua_gate.go`, #4349; `../extensions/computer-use.md` "c) Per-App approval"). The Agents' Bash entry goes to the node only for commands mentioning cua-driver; any other returns at once (`nodeclient.CuaOnlyFlag`). The assistant's Bash hook (the Feishu gate) takes them to the same check |
 | PermissionRequest | `*` | AskUserQuestion → phone card while the terminal can also answer; ExitPlanMode → plan approval; others → tool authorization |
 | PostToolUse | `AskUserQuestion` | A terminal answer withdraws the waiting phone card |
 | Notification / Stop / UserPromptSubmit / SessionStart | — | Report only, record pane; hub sends completion push from session state changes, not Stop |
@@ -363,7 +364,8 @@ Here **numbers move the cursor but do not select**; Enter is required. Number-on
 - Send: `agent prompt <pane> <text>` (atomic paste + Enter, respecting bracketed paste). While Claude works, input enters its queue.
 - Images: save under `~/.persona/uploads/<date>/`, append `<attached_images>` tags with one path per line; tags distinguish them from user text. App shows square thumbnails above text.
   Claude Code's paste turns a line that is only an image path, to a readable image file, into an `[Image #n]` (the model sees the picture) and drops the line,
-  so before Claude the node gives each path in the block that ends the message a second line `path: <path>`, which stays text: the agent knows where the file is (`keepImagePaths`).
+  so before Claude the node gives each path in the block that ends the message a second line `path:<path>`, which stays text: the agent knows where the file is (`keepImagePaths`).
+  No space after the colon: Claude Code before 2.1.316 cuts a pasted line at every space before `/` and attached the picture of `path: <path>` a second time (#4361); without the space it drops the line instead and names the picture's source path to the model itself.
   Blocks a client wrote (Android's composer uploads photos first) get it too. Apps take only lines starting with `/` or `~` as photos.
 - Interrupt: `pane send-keys <pane> esc`.
 - Any TUI dialog: phone Terminal / screen interaction → `pane send-keys` (`up`/`down`/`enter`/`esc`/`tab`/`shift+tab`/`ctrl+c`/numbers), pane send-text.
@@ -377,8 +379,9 @@ For subscribed working / blocked sessions, node runs `pane read --source visible
 
 ## Headless assistant (Chat tab)
 
-Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"' -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --session-id|--resume <id> --plugin-dir ~/.persona/assistant-hooks --mcp-config …` (`node/assistant_start.go`, tested 2026-10-25; hooks are plugins as above, plus a Lark Bash gate; older Claude gets `--settings ~/.persona/assistant-settings.json`):
+Assistant does not enter herdr: node directly launches `zsh -ic 'CLAUDE_CONFIG_DIR=<selected profile> <launcher> "$@"' -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --session-id|--resume <id> --plugin-dir ~/.persona/assistant-hooks --mcp-config …` (`node/assistant_start.go`; hooks are plugins as above, plus a Lark Bash gate; older Claude gets `--settings ~/.persona/assistant-settings.json`):
 
+- CLI and Agent SDK starts use the conversation's recorded config directory, including settings/model/compaction reads. Unrecorded old sessions use their actual transcript profile, then the old environment-based fallback. Only new sessions get the private profile default; the service-level environment remains a legacy default. Explicit selection, authentication implications and downgrade preparation: [assistant.md](../assistant/assistant.md), "Claude assistant profile compatibility (#3345)".
 - One process supports consecutive turns through stdin, one `{"type":"user","message":{…}}` per line, images as base64 image blocks.
 - `stream_event` `content_block_delta/text_delta` supplies word-by-word output → WS delta; result ends the turn. Structured messages still read from transcript.
 - **Bounded transient recovery** (#3204, `node/assistant_recovery.go`): a turn ending on an upstream safeguards refusal, 429 / throttling, or a 5xx stays working while node resumes the unchanged request once on the same model (`prompts/assistant/model_retry`, a `<persona-context>` block, not another user bubble). If that attempt also fails, node resumes on the next concrete entry in the launcher's own ordered `/model` list; each model gets one same-model retry. The `default` placeholder, models already tried, and a locked launcher's entries are not fallbacks. The named Agent presets in ModelProfile.Tiers are not this queue.

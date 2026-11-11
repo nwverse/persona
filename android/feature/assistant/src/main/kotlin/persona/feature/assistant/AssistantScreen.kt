@@ -1212,8 +1212,9 @@ private fun ConversationRow(
             leading = { JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                 selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
             trailing = { JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), { menu = true }) }, chevron = false)
-        Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Under the title, not the icon: a fixed 16dp put it under the icon in glass and board and past it in brief.
+        Row(Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             StatusLabel(session.conversationStatus())
             conversationTime(session.updated, currentLocale)?.let { time ->
                 Text(time, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
