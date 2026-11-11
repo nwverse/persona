@@ -62,6 +62,7 @@ done
 
 // fakeCLI is a claude -p that keeps its args and finishes each turn at once.
 const fakeCLI = `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+printf '%s\n' "$CLAUDE_CONFIG_DIR" > "$SDK_FAKE_DIR/cli-profile"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
   case "$line" in *'"type":"user"'*) echo '{"type":"result","subtype":"success"}' ;; esac

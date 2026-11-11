@@ -105,13 +105,20 @@ func TestLauncherProbesLeaveConversationDirectoriesUnchanged(t *testing.T) {
 			t.Setenv("CLAUDE_CONFIG_DIR", service)
 			f.n.claudeStartDir.Store(&machine)
 			n := f.n
+			id := "a5500000-0000-4000-8000-000000000003"
+			cwd := filepath.Join(n.dir, "assistant")
+			n.state.put(id, sessionState{Launcher: "claude", Cwd: cwd, Runtime: runtime})
+			n.cdirs = newClaudeDirs()
+			n.cdirs.scan = func() map[int]procEnv { return nil }
+			writeFile(t, filepath.Join(machine, "projects", "-assistant", id+".jsonl"),
+				`{"type":"user","cwd":`+jsonString(t, cwd)+`,"message":{"role":"user","content":"earlier"}}`+"\n")
 			before := n.launcherCommand("claude")
 			// Probe an unrelated wrapper without starting a model request.
 			_, _ = n.launcherProbe(context.Background(), "missing_probe_launcher")
 			if got := n.launcherCommand("claude"); got != before {
 				t.Fatalf("probe changed an Agent's command: %q -> %q", before, got)
 			}
-			id, err := n.assistantSend(context.Background(), "", filepath.Join(n.dir, "assistant"), "claude", "hello", nil, "", "", modelExecution{Runtime: runtime})
+			id, err := n.assistantSend(context.Background(), id, cwd, "claude", "hello", nil, "", "", modelExecution{Runtime: runtime, Fingerprint: "compat-probe"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -121,12 +128,12 @@ func TestLauncherProbesLeaveConversationDirectoriesUnchanged(t *testing.T) {
 					t.Fatalf("SDK lost the existing machine profile: %q", got)
 				}
 			} else {
-				if got := envValue(p.cmd.Env, "CLAUDE_CONFIG_DIR"); got != service {
-					t.Fatalf("CLI lost the existing inherited profile: %q", got)
+				if got := strings.TrimSuffix(f.file("cli-profile"), "\n"); got != machine {
+					t.Fatalf("CLI lost the existing machine profile: %q", got)
 				}
-				if !strings.Contains(strings.Join(p.cmd.Args, " "), machine) {
-					t.Fatal("CLI lost the existing per-command machine assignment")
-				}
+			}
+			if os.Getenv("CLAUDE_CONFIG_DIR") != service {
+				t.Fatal("probe or conversation launch changed the node's service environment")
 			}
 			f.n.stopAssistant(id)
 		})
