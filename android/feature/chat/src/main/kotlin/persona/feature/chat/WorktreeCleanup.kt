@@ -12,7 +12,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
@@ -22,7 +21,7 @@ import persona.core.contracts.api.WorktreeRemoved
 import persona.core.contracts.api.WorktreeStatus
 import persona.core.contracts.api.hubCodedFailure
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 
 // What to do with the worktree a closed agent or deleted chat worked in, when Persona made it (#4532, iOS
 // `AgentWorktree.Cleanup`, `WorktreeCleanupSection`, web lib/worktree.ts): keep it (the default), or remove it, its branch
@@ -110,8 +109,8 @@ fun WorktreeCleanupSection(status: WorktreeStatus, cleanup: WorktreeCleanup, onC
     Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).background(palette.sunken).padding(Tokens.Space.m)
         .testTag("worktree-cleanup"), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.Top) {
-            JIcon(PhIcons.GitBranch, null, size = 16.dp, tint = palette.ink2, modifier = Modifier.padding(top = 2.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            JIcon(PersonaIcons.gitBranch, null, size = Tokens.Size.iconXS, tint = palette.ink2, modifier = Modifier.padding(top = Tokens.Space.xxs))
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
                 Text(stringResource(R.string.chat_worktree_made), style = PersonaTheme.type.bodyStrong, color = palette.ink)
                 if (status.branch.isNotEmpty()) Text(status.branch, style = PersonaTheme.type.codeSmall, color = palette.ink2, maxLines = 1)
                 Text(home?.takeIf { it.isNotEmpty() && status.path.startsWith("$it/") }?.let { "~" + status.path.removePrefix(it) } ?: status.path,
