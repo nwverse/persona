@@ -35,11 +35,6 @@ type Item struct {
 	// BackgroundWaiting: a working row that only waits on background commands (#6045). It stays in State's count
 	// (older apps call it working) and is counted apart in Counts.BackgroundWaiting too.
 	BackgroundWaiting bool
-	Assistant         bool
-	WorkExcluded      bool
-	Dimensions        Dimensions
-	Title             string
-	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	SearchText        string
 	Summary           any
@@ -56,25 +51,20 @@ type Options struct {
 	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
 	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
 	// and who may ask for which.
-	Manager                              string
-	Summary                              bool
-	Facets, AgentsOnly, WorkOnly         bool
-	Sort, Direction, GroupBy             string
-	machines, projects, harnesses, scope string
+	Manager string
+	Summary bool
 }
 
 // Page contains transport values rather than adapter-specific session types.
 // Total is the filtered membership at Revision, not the number of delta events.
 // Sessions and Remove together consume Limit slots in an incremental page.
 type Page struct {
-	Sessions   []any         `json:"sessions"`
-	Remove     []string      `json:"remove"`
-	HasMore    bool          `json:"has_more"`
-	NextCursor string        `json:"next_cursor,omitempty"`
-	Revision   string        `json:"revision"`
-	Total      int           `json:"total"`
-	Facets     *Facets       `json:"facets,omitempty"`
-	Groups     *[]GroupCount `json:"groups,omitempty"`
+	Sessions   []any    `json:"sessions"`
+	Remove     []string `json:"remove"`
+	HasMore    bool     `json:"has_more"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+	Revision   string   `json:"revision"`
+	Total      int      `json:"total"`
 }
 
 // Counts describes the complete filtered membership, ignoring page size.
@@ -89,10 +79,8 @@ type Counts struct {
 	PaneSource map[string]int `json:"pane_source,omitempty"`
 	// BackgroundWaiting: how many of State["working"] only wait in the background (#6045): a client that shows them
 	// apart takes them out of its Working count.
-	BackgroundWaiting int           `json:"background_waiting,omitempty"`
-	Revision          string        `json:"revision"`
-	Facets            *Facets       `json:"facets,omitempty"`
-	Groups            *[]GroupCount `json:"groups,omitempty"`
+	BackgroundWaiting int    `json:"background_waiting,omitempty"`
+	Revision          string `json:"revision"`
 }
 
 // Error lets adapters map invalid_query to HTTP 400 and cursor_expired or
@@ -109,7 +97,6 @@ func failure(code, message string) error { return &Error{Code: code, message: me
 type record struct {
 	item   Item
 	search string
-	title  string
 	// owner is the manager its batch was replaced with (ReplaceOwned), "" for none: what filters.Manager selects by.
 	// It is the batch's, not an Item attribute, so the items an adapter builds for every update stay the size they were.
 	owner string
@@ -123,35 +110,29 @@ type journalEntry struct {
 
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager string
-	machines, projects, harnesses, scope                                         string
-	agentsOnly, workOnly                                                         bool
 }
 
 type binding struct {
 	filters
 	Summary bool
 	Since   string
-	viewOptions
 }
 
 type cacheKey struct {
 	filters
 	Since string
-	viewOptions
 }
 
 type event struct {
 	id      string
 	updated time.Time
-	value   *record // the last matching record for a removal
-	removed bool
+	value   *record // nil means a removal
 }
 
 type result struct {
-	events     []event
-	counts     Counts
-	dimensions *dimensionView
-	ordered    bool // counts-only views must not be mistaken for an empty ordered list
+	events  []event
+	counts  Counts
+	ordered bool // counts-only views must not be mistaken for an empty ordered list
 }
 
 type cacheEntry struct {
@@ -249,7 +230,6 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 		}
 		// Strip monotonic clock data and normalize zones before comparison.
 		item.UpdatedAt = item.UpdatedAt.Round(0).UTC()
-		item.CreatedAt = item.CreatedAt.Round(0).UTC()
 		previous := old[item.ID]
 		if previous != nil && previous.owner == owner && sameItem(&previous.item, &item) {
 			next[item.ID] = previous
@@ -257,7 +237,7 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 		}
 		item.Full = clone(item.Full)
 		item.Summary = clone(item.Summary)
-		r := &record{item: item, search: normalizeQ(item.SearchText), title: normalizeQ(item.Title), owner: owner}
+		r := &record{item: item, search: normalizeQ(item.SearchText), owner: owner}
 		next[item.ID] = r
 		changes[item.ID] = change{before: previous, after: r}
 	}
