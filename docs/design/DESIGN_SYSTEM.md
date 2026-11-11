@@ -915,6 +915,24 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
 - [ ] Performance (Apple clients): the review checklist in `docs/apple/performance.md` is pasted and marked; no new main-thread IO, expensive `@State` initial value or work in `body`, and a change to a hot path (chat list, composer, Agents list, pushes, launch, images) attaches before and after numbers.
 
+## Values a form fills in by itself (#4975)
+
+Where a form can work out a value from what the user already gave it (the web provider wizard's Claude Code tiers, read
+from the checked models), it fills the value in and marks it with a neutral **Auto** `Pill`, in the summary and on the
+field, with one line under them saying that automatic values follow what they were read from until the user changes
+one. A value the user picks is never filled in again, an empty one ("Same as default model") included. When what it was
+read from changes (a model unchecked, another default), only values still marked Auto follow, and one that no longer
+fits goes back to empty. Something already saved is never refilled when it is opened: when what it holds would read
+differently now, one line under the summary says what it suggests and **Apply** (the status line's action) takes it.
+The line warns (`--orange` with the warning mark) when the current value costs more for no reason, such as light
+requests running on the heaviest model while a lighter one is checked, and otherwise suggests (`--ink-2`). The summary
+is the inset well (`rounded-card`, `bg-inset`, `shadow-hairline`) with label / value rows; **Adjust** is an accent text
+button with `aria-expanded` that swaps the rows for their fields in place, and rarely changed fields stay under
+Advanced (principle 2). Reason: a default the product can work out should not wait behind a folded group (principle
+1), and an automatic value the user cannot tell from their own, or one that changes after they set it, would take
+control away from them (principle 3). This reuses the wizard's field, pill and status-line styles and adds no setting,
+style or motion.
+
 ## Codex speed controls (#3865)
 
 The web composer reuses its effort chip and radio menu. A Speed submenu reveals native model speed choices and their
