@@ -10179,7 +10179,7 @@ LAUNCHER_PRESETS = [
 # "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
 # too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
-PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "import": None}
+PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
@@ -10228,10 +10228,55 @@ def _provider_apply(l, b):
         else: l.pop("has_headers", None)
 
 
+# POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
+# hub embeds. Exact rows only (the hub also lets an unlisted newer generation inherit; the mock does not).
+MODEL_CATALOG_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "internal", "assistant",
+                                  "models_catalog.json")
+_MODEL_CATALOG = {}
+
+
+def _catalog_key(model_id, dated=True):
+    """normalizeCatalogID (lower case, nothing up to the last /, no trailing [1m]), and without dated a trailing
+    -YYYYMMDD too (catalogGenerationKey)."""
+    key = model_id.strip().lower().rsplit("/", 1)[-1].removesuffix("[1m]")
+    if dated: return key
+    while True:
+        prev, key = key, re.sub(r"-\d{8}$", "", key.removesuffix("[1m]")).removesuffix("[1m]")
+        if key == prev: return key
+
+
+def _catalog_route(h, body):
+    if not _MODEL_CATALOG:
+        with open(MODEL_CATALOG_JSON, encoding="utf-8") as f:
+            for m in json.load(f)["models"]:
+                _MODEL_CATALOG[m["id"].lower()] = m
+    try:
+        ids = json.loads(body or b"{}").get("ids")
+        ids = [] if ids is None else ids
+        if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids): raise ValueError
+    except (ValueError, AttributeError):
+        h.send_json({"error": "请求格式不对：ids 要是模型 ID 的列表"}, 400); return
+    if len(ids) > 100:
+        h.send_json({"error": "一次最多查 100 个模型 ID"}, 400); return
+    if any(len(x.strip().encode()) > 200 for x in ids):
+        h.send_json({"error": "模型 ID 最长 200 字节"}, 400); return
+    PROVIDER_LOG["catalog"].append(ids)
+    out, seen = [], set()
+    for model_id in (x.strip() for x in ids):
+        if not model_id or model_id in seen: continue
+        seen.add(model_id)
+        row = _MODEL_CATALOG.get(_catalog_key(model_id)) or _MODEL_CATALOG.get(_catalog_key(model_id, dated=False))
+        if row: out.append({"id": model_id, **{k: v for k, v in row.items() if k != "id"}})
+    h.send_json({"models": out})
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
     "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route)."""
+    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
+    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    if p == "/api/v1/launchers/catalog" and method == "POST":
+        _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
@@ -10806,9 +10851,32 @@ def subagent_step():
 
 
 # MOCK_MESSAGE_LIFT=1: chats for the lifted message of a long press (#603): short messages, the newest one just above the
-# composer, and a long answer with a heading, a list, a code block and a table, taller than any screen. Synthetic text.
+# composer, and a long answer with a heading, a list, a code block and a table, taller than any screen, in an Agents chat
+# and in a Persona conversation (#3188: the lifted copy scrolls to its first line); in another Persona conversation, an
+# answer a little shorter than a small phone's screen, which lifts whole, under where Persona's top bar floats. And a long
+# message of yours with paths that are there on the machine (underlined links), and an answer with inline code, a list,
+# a code block and a quote (#3188: the words stay where they are, lifted and selected). Synthetic text.
 LIFT_SHORT = "a1f3c2d4-0000-4000-8000-0000000c1e08"
 LIFT_LONG = "a1f3c2d4-0000-4000-8000-0000000c1e09"
+LIFT_ASK = "b2e4d6f8-0000-4000-8000-0000000c1e09"
+LIFT_ASK_MID = "b2e4d6f8-0000-4000-8000-0000000c1e0a"
+LIFT_MIX = "a1f3c2d4-0000-4000-8000-0000000c1e0b"
+# The case a tester reported (#3188): an answer with inline code in its sentences, a long path in inline code that
+# wraps, a list, a code block, a quote and a link, after a message of yours with a path; in an Agents chat and in a
+# Persona conversation. Every style's position test lifts and selects both.
+LIFT_KEY = "a1f3c2d4-0000-4000-8000-0000000c1e0c"
+# An answer with a quote long enough to fold (#2984), between two paragraphs, the second with a path there in code:
+# lifted and selected, the quote stays folded (or open, as it was in the chat) and its hidden lines are not selected.
+LIFT_FOLD = "a1f3c2d4-0000-4000-8000-0000000c1e0d"
+LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
+LIFT_KEY_MINE = "你先把管理密钥存到本机文件，我跑命令读一下。放在 ~/.config/example-gateway/management.key，权限设成 600，别打印到日志里。"
+LIFT_KEY_ANSWER = ("管理 Key 已经存到本机（hub）了：\n`/home/me/.config/example-gateway/management.key`\n\n"
+                   "- 文件权限 600，内容 64 位，没有换行，以 `cb3b` 开头、`047f` 结尾。\n"
+                   "- 我用这个文件里的 Key 请求了网关的 `/api/admin/accounts`，返回 200，Key 是对的。\n\n"
+                   "在 hub 上运行下面这条就能看到明文：\n\n```sh\ncat ~/.config/example-gateway/management.key; echo\n```\n\n"
+                   "> 这个文件只有你的账号能读，备份里也不会带上。\n\n"
+                   "复制后粘贴到 设置 › 扩展 › 网关 的 Key 框里，再点保存，步骤见[扩展设置说明](https://example.com/docs/extensions)。"
+                   "存好之后要删掉这个文件就跟我说一声。")
 
 
 def mock_message_lift():
@@ -10842,6 +10910,43 @@ def mock_message_lift():
                         it("assistant", "text", 5, text=long)]
     SESSIONS.append(sess("macbook", LIFT_SHORT, "登录页文案", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 1, 2, "收到，都提交了。"))
     SESSIONS.append(sess("macbook", LIFT_LONG, "改动整理", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 2, 5, "有问题的话告诉我具体哪一页。"))
+    ITEMS[LIFT_ASK] = [it("user", "text", 15, text="把这次登录和注册页的改动整理一下，带上测试结果"),
+                       it("assistant", "text", 5, text=long)]
+    ASSISTANT.append(assistant_sess(LIFT_ASK, "改动整理", 5, "有问题的话告诉我具体哪一页。"))
+    mid = ("## 接手前要知道的\n\n"
+           "这个仓库分成三块：服务端、网页端和手机端，各自有自己的测试脚本，改哪块就跑哪块的测试，跑完再提交。\n\n"
+           "服务端的配置都在一个文件里，本地开发用示例配置就能起来，不需要连真实的数据库，测试会自己起一个临时的。\n\n"
+           "网页端改样式之前先看设计规范，颜色、间距和字号都有现成的变量，不要在页面里直接写数字。\n\n"
+           "手机端的截图测试比较慢，一次大概要十分钟，可以先只跑你改到的那几页，合并之前再跑一遍完整的。\n\n"
+           "提交说明用英文写，一个改动一个提交，标题说清楚改了什么，正文写为什么这么改。\n\n"
+           "要我先带你看哪一块？")
+    ITEMS[LIFT_ASK_MID] = [it("user", "text", 12, text="我刚接手这个仓库，有什么要先知道的"),
+                           it("assistant", "text", 4, text=mid)]
+    ASSISTANT.append(assistant_sess(LIFT_ASK_MID, "接手须知", 4, "要我先带你看哪一块？"))
+    repo = "/Users/me/code/shop-app"
+    mine = ("定时检查：读取 docs/review-queue.md 中没处理的条目、notes/status.md 和最新的截图。按 docs/brief.md 做一轮核对，"
+            "更新日报和待办；发现新问题就在 30 分钟内给出影响、证据和建议。没有新问题就只更新 status 里的核对时间。"
+            "页面保持只读，不要另起新的循环。本批：[{\"at\": \"2026-11-10T16:54:04+00:00\", \"reason\": \"每小时核对；异常数=0\", "
+            "\"evidence\": \"notes/runs/20261110T165351Z/snapshot.json\"}]")
+    mix = ("### 这次核对的结果\n\n没有新问题，只更新了 `notes/status.md` 里的核对时间。\n\n"
+           "- **报错**：只有整点对账时的 6 条，都是已知的夜间噪音。\n- **页面**：首页和设置页的截图和上一批一致。\n\n"
+           "核对用的命令：\n\n```sh\nscripts/check.sh --since 1h --quiet\n```\n\n"
+           "> 日报的模板改过一次，标题里的日期现在按北京时间写。\n\n下一次核对在整点之后五分钟。")
+    ITEMS[LIFT_MIX] = [it("user", "text", 9, text=mine), it("assistant", "text", 7, text=mix)]
+    fold = ("评审意见原文如下，我按模块标了要改的地方：\n\n"
+            "> 登录页：按钮文字太长，小屏上换行；倒计时期间没有读屏提示。\n"
+            "> 注册页：日语下「获取验证码」被截短，手机号输错时只变红，没有说明原因。\n"
+            "> 设置页：深色模式下说明文字的对比度不够，大字号下开关和标题挤在一起。\n"
+            "> 共用组件：按钮标签要单行，放不下时先缩小字号，最小到 0.8 倍。\n"
+            "> 测试：截图基准图等确认后再更新，失败的两张和这次改动无关。\n\n"
+            "改动记在 `notes/status.md` 里，改完我跑一遍截图测试，再把结果发你。")
+    ITEMS[LIFT_FOLD] = [it("user", "text", 8, text="把上周评审的意见贴给我看看"), it("assistant", "text", 6, text=fold)]
+    SESSIONS.append(sess("macbook", LIFT_FOLD, "评审意见", repo, "done", "done", "shop-app", 17, "lift", 5, 6, "改完我跑一遍截图测试，再把结果发你。"))
+    ITEMS[LIFT_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
+    SESSIONS.append(sess("macbook", LIFT_KEY, "保存管理密钥", repo, "done", "done", "shop-app", 17, "lift", 4, 5, "存好之后要删掉这个文件就跟我说一声。"))
+    ITEMS[LIFT_ASK_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
+    ASSISTANT.append(assistant_sess(LIFT_ASK_KEY, "保存管理密钥", 5, "存好之后要删掉这个文件就跟我说一声。"))
+    SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
@@ -12118,6 +12223,10 @@ GAP = os.environ.get("MOCK_GAP") == "1"
 # one small file per language for screenshots, and a last message in the widget conversation that names some of them
 # and two that are not there (another machine's path, a deleted file).
 FILES = {}
+if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long message of yours are there (#3188)
+    for _f in ("docs/review-queue.md", "notes/status.md", "docs/brief.md", "notes/runs/20261110T165351Z/snapshot.json"):
+        FILES["/Users/me/code/shop-app/" + _f] = b"# placeholder\n"
+    FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20

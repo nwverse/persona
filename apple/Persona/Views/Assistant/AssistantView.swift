@@ -41,6 +41,8 @@ struct AssistantView: View {
     @Environment(\.shellRailEdge) private var railEdge
     /// A phone's tabs (iPhone Duo open): the column's own button folds it, at its top (#2623).
     @Environment(\.pageTabSwitch) private var pageTabSwitch
+    /// The conversation's lifted message, drawn over the top bar (`MessageLiftHost`, #3188).
+    @State private var liftHost = MessageLiftHost()
     #if DEBUG
     @State private var showAvatars = false
     #endif
@@ -182,6 +184,9 @@ struct AssistantView: View {
                     // Another assistant's conversation not listed yet: read through the manager it was opened for.
                     ChatView(key: key, style: .assistant, itemManager: model.assistantItemManagers[key])
                         .id(key)
+                        #if os(iOS)
+                        .environment(\.messageLiftHost, liftHost)
+                        #endif
                         // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
                         .environment(\.shellChat, shell != nil || ChatComposerKind.padCard)
                 } else if shell != nil || pageTabSwitch {
@@ -224,7 +229,14 @@ struct AssistantView: View {
                 // At the window's edge only with the history list folded away too (#830).
                 .transformEnvironment(\.macTitleRowLeading) { if columns != .detailOnly { $0 = 0 } }
                 #endif
+                #if os(iOS)
+                .liftBlur(liftHost.menu)
+                #endif
             }
+            #if os(iOS)
+            // A message pressed in the conversation, over the bar too: the whole page dims (#3188).
+            .overlay { if let menu = liftHost.menu { MessageLiftLayer(menu: menu) } }
+            #endif
             #if os(macOS)
             // The bar is the title bar's row, as the list beside it (#830); pushed pages keep their own.
             .ignoresSafeArea(.container, edges: .top)

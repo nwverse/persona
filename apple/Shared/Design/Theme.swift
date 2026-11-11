@@ -269,6 +269,10 @@ nonisolated enum Theme {
         static let scrim = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor.black.withAlphaComponent(0.3) : UIColor.black.withAlphaComponent(0.08) })
         /// The bar of actions next to it: light in light mode, the dark bar it always was in dark mode.
         static let bar = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.17, alpha: 1) : UIColor.white })
+        /// A selection handle dragged this close to a long lifted message's top or bottom edge, or past it, scrolls the
+        /// message on that way, faster the closer it gets: up to `edgeScrollSpeed` points a second (#3188).
+        static let edgeScroll: CGFloat = 44
+        static let edgeScrollSpeed: CGFloat = 900
     }
     #endif
 
