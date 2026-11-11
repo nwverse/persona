@@ -9426,6 +9426,78 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
     mock_edit_diff()
 
 
+# MOCK_TOOL_NAMES=1 (#2986): one finished turn that calls Claude Code's newer tools (ToolSearch, TaskCreate, TaskUpdate,
+# NotebookEdit, Monitor, SendMessage, ScheduleWakeup), another server's MCP tool (mcp__github__create_issue) and a tool
+# no table knows, with nested arguments (RenderChart), so each reads in words, the MCP one as "GitHub · Create issue",
+# and the last two list their arguments instead of JSON. The MCP call, the unknown one, a review's ReportFindings and the
+# Monitor also have a chat of their own (…2987, …2988, …2989, …298a), so its opened detail (or the Monitor's Background
+# badge, at the largest text size) ends its chat and a screenshot shows it without scrolling. Made-up content.
+TOOLNAMES = "a1f3c2d4-0000-4000-8000-0000000c2986"
+TOOLNAMES_ONE = {"mcp": "a1f3c2d4-0000-4000-8000-0000000c2987", "unknown": "a1f3c2d4-0000-4000-8000-0000000c2988",
+                 "findings": "a1f3c2d4-0000-4000-8000-0000000c2989", "monitor": "a1f3c2d4-0000-4000-8000-0000000c298a"}
+
+
+def mock_tool_names():
+    notebook = "/Users/me/code/weather/notebooks/export-times.ipynb"
+    calls = {
+        "mcp": lambda t: tool("mcp__github__create_issue", {
+            "owner": "example-org", "repo": "weather", "title": "CSV export times out on a year of hourly data",
+            "body": "Exporting 8,760 hourly rows takes 41 s and the request gives up at 30 s.\n\nSteps: Settings › Export › Last year.",
+            "labels": ["bug", "export"], "assignees": ["me"]},
+            '{"number": 128, "html_url": "https://github.com/example-org/weather/issues/128", "state": "open"}', t),
+        "unknown": lambda t: tool("RenderChart", {
+            "title": "Export time by row count", "kind": "line",
+            "series": [{"name": "before", "points": [[1000, 4.8], [4000, 19.6], [8760, 41.2]]},
+                       {"name": "after", "points": [[1000, 0.9], [4000, 2.7], [8760, 5.6]]}],
+            "axes": {"x": {"label": "rows"}, "y": {"label": "seconds", "min": 0}}, "width": 640, "dark": False},
+            "Rendered chart: charts/export-time.png (640 × 400)", t),
+        "findings": lambda t: tool("ReportFindings", {"findings": [
+            {"file": "/Users/me/code/weather/export/csv.py", "line": 88, "short_summary": "Last batch dropped",
+             "summary": "The final batch is skipped when the row count is a multiple of 500, so the last 500 rows go missing."},
+            {"file": "/Users/me/code/weather/export/csv.py", "line": 41, "short_summary": "Header written twice",
+             "summary": "A retried export writes the CSV header again in the middle of the file."}]},
+            "Findings reported", t),
+        "monitor": lambda t: tool("Monitor", {"command": "tail -f logs/export.log | grep --line-buffered 'rows/s'",
+                                              "description": "Watch the export's throughput"}, "Monitor started (task m7q2)", t),
+    }
+    asks = {"mcp": ("File the export timeout as an issue", "Filed example-org/weather#128."),
+            "unknown": ("Chart the export times before and after", "The chart is in charts/export-time.png."),
+            "findings": ("Review the batched export", "Two problems: the last batch can go missing and a retry repeats the header."),
+            "monitor": ("Watch the export while it runs", "Watching the export log.")}
+
+    _t = [it("user", "text", 40, text="The CSV export times out on a year of data: find out why, track it, and tell the reviewer")]
+    _t += tool("ToolSearch", {"query": "select:NotebookEdit,Monitor", "max_results": 2}, "Loaded 2 tools: NotebookEdit, Monitor", 39.9)
+    _t += tool("TaskCreate", {"subject": "Find why the CSV export times out", "description": "A year of hourly rows takes 41 s.",
+                              "activeForm": "Finding why the CSV export times out"}, "Task #1 created successfully", 39.8)
+    _t += tool("TaskUpdate", {"taskId": "1", "status": "in_progress"}, "Updated task #1 status", 39.7)
+    _t += tool("NotebookEdit", {"notebook_path": notebook, "cell_id": "cell-3", "cell_type": "code", "edit_mode": "replace",
+                                "new_source": "rows = load_hourly(year=2026)\n%time export_csv(rows, batch=500)\n%time export_csv(rows, batch=None)"},
+               "Updated cell cell-3", 39.6)
+    _t += calls["monitor"](39.5)
+    _t += calls["mcp"](39.4)
+    _t += tool("SendMessage", {"to": "reviewer", "summary": "Export timeout: cause found, fix in review",
+                               "message": "The export wrote one row per query. Batching 500 rows takes a year of data from 41 s to 5.6 s."},
+               "Message sent to reviewer", 39.3)
+    _t += calls["unknown"](39.2)
+    _t += tool("TaskUpdate", {"taskId": "1", "status": "completed"}, "Updated task #1 status", 39.1)
+    _t += tool("ScheduleWakeup", {"delaySeconds": 1200, "reason": "Check the nightly export after the fix lands",
+                                  "prompt": "Check that last night's export finished under 30 s"}, "Wake-up scheduled in 20 min", 39)
+    _t.append(it("assistant", "text", 38.9, text="The export wrote one row per query; batching 500 rows brings a year of data from "
+                                                 "41 s to 5.6 s. I filed #128, told the reviewer and will check the nightly export in 20 minutes."))
+    ITEMS[TOOLNAMES] = _t
+    SESSIONS.append(sess("macbook", TOOLNAMES, "Why the CSV export times out", "/Users/me/code/weather", "done", "read", "weather", 1,
+                         "tools", 13, 38.9, "The export wrote one row per query."))
+    for n, (name, sid) in enumerate(TOOLNAMES_ONE.items()):
+        ask, done = asks[name]
+        ITEMS[sid] = [it("user", "text", 37 - n, text=ask)] + calls[name](36.9 - n) + [it("assistant", "text", 36.8 - n, text=done)]
+        SESSIONS.append(sess("macbook", sid, ask, "/Users/me/code/weather", "done", "read", "weather", 1, "tools-" + name,
+                             14 + n, 36.8 - n, done))
+
+
+if os.environ.get("MOCK_TOOL_NAMES") == "1":
+    mock_tool_names()
+
+
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
