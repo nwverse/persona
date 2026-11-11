@@ -21,6 +21,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -191,9 +193,9 @@ internal fun AgentsScreen(
     fun newSession(space: AgentSpacePreset? = null) { creationModel?.startIn(space); newAgent = true }
     // Built with the page off the main thread (AgentsViewModel).
     val spaces = page.spaces
-    // The list rows and the space page share one session menu and one space menu.
+    // The list rows and the space page share one session menu and one space menu; [nested] rows sit under "Subtasks (N)".
     val resources = agentResources()
-    val rowMenu: @Composable (AgentSession) -> List<JAction> = { row ->
+    val rowMenu: @Composable (AgentSession, Boolean) -> List<JAction> = { row, nested ->
         val archiveAction = if (archives?.api?.supports(row.session.key) == true && row.session.canArchiveAgent &&
             everyRequest.none { it.sessionKey == row.session.key }) JAction(stringResource(R.string.agents_action_archive),
                 icon = PhIcons.Archive, enabled = archiveState.busy == null && !archiveState.loading && !operations.busy) { archiveTarget = row.session } else null
@@ -213,7 +215,7 @@ internal fun AgentsScreen(
             onAttach = if (row.session.canAttach) ({ model.attach(row.session) }) else null,
             onLinkTodo = { pickingTodoForSession = row.session },
             onUnlinkTodo = row.session.todo?.let { todo -> { model.unlinkTodo(todo.id, row.session) } },
-            onDelete = { operationDialog = AgentOperationDialog.Delete(row.session) }) + listOfNotNull(archiveAction)
+            onDelete = { operationDialog = AgentOperationDialog.Delete(row.session) }, nested = nested) + listOfNotNull(archiveAction)
     }
     // In the list the space menu also opens the space page; the space page itself puts it in its bar.
     val spaceMenu: @Composable (AgentSpace, Boolean) -> Unit = { space, inList ->
@@ -312,6 +314,18 @@ internal fun AgentsScreen(
                 HomeAgentFilters(shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else page.list.counts[filter] ?: 0, filter.state?.designStatus)
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
+            }
+            // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
+            // is chosen in a sheet and its chips don't show, so nothing else on the page says so. A tap shows every computer.
+            if (homeChrome && page.settings.machineFilter.isNotEmpty()) item("machine-filter") {
+                val name = names[page.settings.machineFilter] ?: page.settings.machineFilter
+                val hint = stringResource(R.string.agents_only_machine_hint)
+                Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
+                    JChip(stringResource(R.string.agents_only_machine, name), Modifier.testTag("agents-machine-filter")
+                        .semantics { onClick(label = hint) { model.machine(""); onMachineSelected(""); true } },
+                        selected = true, onClick = { model.machine(""); onMachineSelected("") },
+                        role = Role.Button, trailingIcon = persona.core.designsystem.icons.PersonaIcons.clear)
+                }
             }
             if (homeChrome) item("grouping") {
                 Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
@@ -473,7 +487,7 @@ internal fun AgentsScreen(
                         SlotRow(row, names[row.session.machineId], infoWithDelivery, now, page.preferences.compact,
                             row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row),
                             depth = entry.depth, position = GroupPosition(entry.first, entry.last), located = entry.located,
-                            onOpen = { openRow(row) }, menuItems = { rowMenu(row) },
+                            onOpen = { openRow(row) }, menuItems = { rowMenu(row, entry.nested) },
                             onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
                             launcher = entry.launcher, branch = entry.branch,
                             requestCount = cardCounts[row.session.key] ?: 0, card = cards[row.session.key])
@@ -826,7 +840,10 @@ internal fun AgentTabEntryRow(
 internal fun closeSwipe(row: AgentSession, busy: Boolean, close: () -> Unit): (() -> Unit)? =
     close.takeIf { row.session.isLive && row.session.canTerminal && !row.session.assistant && !busy }
 
-/** The session actions are shared by the home list and the space page. */
+/**
+ * The session actions are shared by the home list and the space page. A [nested] row, drawn under its parent's
+ * "Subtasks (N)", offers no Pin: Pinned lists rows of their own only, so it would not move (#4494); a pin it has can go.
+ */
 @Suppress("DEPRECATION")
 @Composable
 internal fun AgentSessionMenuItems(
@@ -837,11 +854,12 @@ internal fun AgentSessionMenuItems(
     onLinkTodo: (() -> Unit)? = null,
     onUnlinkTodo: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
+    nested: Boolean = false,
 ): List<JAction> {
     val copy = rememberCopy()
     val session = row.session
     return buildList {
-        add(JAction(stringResource(if (pinned) R.string.agents_action_unpin else R.string.agents_action_pin), PhIcons.PushPin, enabled = !busy, onClick = onPin))
+        if (pinned || !nested) add(JAction(stringResource(if (pinned) R.string.agents_action_unpin else R.string.agents_action_pin), PhIcons.PushPin, enabled = !busy, onClick = onPin))
         add(JAction(stringResource(if (muted) R.string.agents_action_unmute else R.string.agents_action_mute), PhIcons.Prohibit, enabled = !busy, onClick = onMute))
         if (session.todo != null && onUnlinkTodo != null) {
             // The same picker moves it to another todo: the hub releases the old link (#2348).

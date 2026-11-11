@@ -109,7 +109,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 
 - The grouping pill: `AgentHomeComponents.kt` takes the grouping's icon; the picker is a `JMenu` with the groupings only.
 - Computers, hub, range and sort move to a menu under the Agents switch, as `AgentsMenus.swift` does; display options into ⋯ › Display.
-- The "Only <computer>" chip clears `machineFilter`.
+- The "Only <computer>" chip clears `machineFilter`. Done (11-11): with the home chrome, a chosen computer shows as a selected "Only <computer>" chip above the grouping pill (`AgentsHomeAffordancesTest`); the computers and range menu (A4) is still to move.
 
 ### A5
 

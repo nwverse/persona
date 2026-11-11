@@ -309,7 +309,9 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
       {/* scroll-pt: a row reached by Tab doesn't stop under the pinned Persona row — about 62px with its 主对话 line
           (4 + 48 + 1 gap + 1 line + 8 margins), 58px on a coarse pointer (44px touch row): 64px covers both */}
-      <div ref={nav} data-sidebar-rows onMouseLeave={() => hover(null)} className="relative min-h-0 flex-1 scroll-pt-16 overflow-y-auto overscroll-contain px-2.5 pb-3">
+      {/* isolate: the rows' own layers (the sticky Persona row and group headers at z-30, chips, segments) stay inside this
+          column, so the usage popover that opens upward over it from the bottom is never drawn under them */}
+      <div ref={nav} data-sidebar-rows onMouseLeave={() => hover(null)} className="relative isolate min-h-0 flex-1 scroll-pt-16 overflow-y-auto overscroll-contain px-2.5 pb-3">
         {highlight}
         {/* the main conversation is the column's first row, Persona with the app's mark, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}

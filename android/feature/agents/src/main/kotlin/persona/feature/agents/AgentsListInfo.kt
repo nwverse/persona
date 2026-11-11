@@ -56,7 +56,7 @@ internal fun visibleAgentRequests(
             (settings.machineFilter.isEmpty() || request.machineId == settings.machineFilter) &&
             (settings.quick == AgentQuickFilter.All || (row?.let { settings.quick.matches(it) || it.id in settings.kept }
                 ?: (settings.quick == AgentQuickFilter.NeedsYou))) &&
-            (settings.query.isEmpty() || (session?.let { listOf(it.title, it.cwd, it.lastText, it.spaceName, it.slotName) }
+            (settings.query.isEmpty() || (session?.let { listOf(it.title, it.cwd, it.lastText, it.spaceName, it.slotName, it.branch) }
                 ?: listOf(request.sessionTitle, request.cwd, request.summary)).any { it?.contains(settings.query, ignoreCase = true) == true })
     }.sortedWith(compareBy<Interaction> { parseTime(it.expiresAt) ?: Instant.MAX }.thenBy { it.id })
 }

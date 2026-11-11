@@ -227,14 +227,14 @@ internal class AgentsViewModel(
         previousContext = context
         // Server row search uses complete index text; searching the truncated summary again would lose matches.
         val projectionSettings = if (pagination.paged) effective.copy(query = "") else effective
-        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos)
+        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos, openedRowsOfTheirOwn(previous, effective.kept))
         val result = retainOpenedRows(sorted, previous, effective.kept).also { previous = it }
         val all = scopedAgentList(rows, knownMachines, prefs,
             projectionSettings.copy(quick = AgentQuickFilter.All, kept = emptySet()), todos)
         // The chips count what each computer would show under the current range, search and quick filter.
         val everywhere = scopedAgentList(rows, knownMachines, prefs, projectionSettings.copy(machineFilter = "", kept = emptySet()), todos)
-            .groups.flatMap { it.rows }.filterNot { it.session.isCodexSubagent }
-        AgentsPageState(sessions, knownMachines, prefs, effective, result, all.groups.sumOf { group -> group.rows.count { !it.session.isCodexSubagent } },
+            .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }
+        AgentsPageState(sessions, knownMachines, prefs, effective, result, all.groups.sumOf { group -> group.rows.count { !it.isNestedSubtask } },
             machineCounts(knownMachines, everywhere), everywhere.size, groupCounts(everySession, everyMachine, prefs, effective, ops),
             // With botmux shown, "All"'s own "Lark groups" count is it; hidden, counted without a fourth list.
             botmuxCount = if (effective.hideBotmux) botmuxCount(rows, prefs, effective)
@@ -462,7 +462,7 @@ internal class AgentsViewModel(
         if (machines.none { GroupKeys.namespaceOf(it.id) != null } && all.none { GroupKeys.namespaceOf(it.machineId) != null }) return emptyMap()
         val rows = ops.project(all).map { it.listSession(prefs) }
         return scopedAgentList(rows, machines, prefs, settings.copy(machineFilter = "", kept = emptySet()))
-            .groups.flatMap { it.rows }.filterNot { it.session.isCodexSubagent }.distinctBy { it.id }
+            .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }.distinctBy { it.id }
             .groupingBy { GroupKeys.namespaceOf(it.session.machineId) }.eachCount()
     }
 
