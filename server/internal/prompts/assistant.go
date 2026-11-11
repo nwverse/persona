@@ -457,9 +457,15 @@ func RenderLostTasks(tasks []string) string {
 	return render("assistant/lost_tasks", struct{ Tasks []string }{tasks})
 }
 
-// RenderInterject goes with a message the user sent while the conversation was still answering, once its foreground
-// work was moved to the background (node/assistant_interject.go): answer it first. A <persona-context> block only.
-func RenderInterject() string { return render("assistant/interject", nil) }
+// Interject is the note on a message the user sent while the conversation was still answering
+// (node/assistant_interject.go). Background: its foreground work was moved to the background for it.
+type Interject struct {
+	Background bool
+}
+
+// RenderInterject goes with such a message: say in one sentence, before the next tool call, what is going on, then
+// answer it (#4883: six minutes of tool calls with no word to the owner). A <persona-context> block only.
+func RenderInterject(v Interject) string { return render("assistant/interject", v) }
 
 // RenderUsageRetry sends a conversation's message to the model again after a gateway's impossible usage made Claude
 // Code refuse it as too long and Persona repaired the transcript (assistant/usage_retry, node/assistant_usage.go). It
