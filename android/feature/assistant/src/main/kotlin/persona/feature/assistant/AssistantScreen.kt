@@ -197,7 +197,7 @@ fun AssistantScreen(
     var showAllRecent by rememberSaveable { mutableStateOf(false) }
     var autoOpen by rememberAutoOpen() // "Automatic chats", folded until opened (kept on this phone)
     var pinning by remember { mutableStateOf(false) }
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val copy = rememberCopy()
     val resources = androidx.compose.ui.platform.LocalResources.current
     val locale = currentLocale
     val words = conversationWords()
@@ -205,8 +205,7 @@ fun AssistantScreen(
         if (feedback?.notice(message) != true) scope.launch { snackbar.showSnackbar(message) }
     }
     fun copyId(key: SessionKey) {
-        clipboard.setText(androidx.compose.ui.text.AnnotatedString(key.sessionId))
-        say(resources.getString(R.string.assistant_copied_session_id))
+        copy(key.sessionId, resources.getString(R.string.assistant_copied_session_id))
     }
     // Pins live on the hub (the Agents list shares them); one change at a time, a failure goes to the usual place.
     fun togglePins(keys: List<SessionKey>) {
