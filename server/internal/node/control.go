@@ -216,6 +216,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			st.StartedAt = prev.StartedAt
 		}
 		st.Ultracode = prev.Ultracode
+		// A switch to another launcher still waits for the next message (launcher_switch.go): a Resume on the launcher
+		// the agent ran on keeps it; the switch's own start leaves it for the switch to clear.
+		st.PendingSwitch = prev.PendingSwitch
 	}
 	n.state.put(id, st)
 	n.noteModes(id, mode, effort) // shown before the first prompt writes them down

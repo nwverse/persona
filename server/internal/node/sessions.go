@@ -345,6 +345,10 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	if st, ok := n.decorateState(s); ok {
 		s.Compaction = st.Compaction
+		s.PendingSwitch = st.PendingSwitch // launcher_switch.go
+	}
+	if s.PendingSwitch == nil {
+		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
 	}
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)

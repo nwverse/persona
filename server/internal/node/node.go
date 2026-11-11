@@ -171,6 +171,10 @@ type Node struct {
 	sysOnce    sync.Once // system: read once (metrics.go)
 	sys        proto.System
 
+	// switches: the launcher switches waiting for a message, of sessions with no state record (launcher_switch.go); a
+	// recorded session keeps its own in the record. Under mu; nil until the first.
+	switches map[string]proto.PendingSwitch
+
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
@@ -654,6 +658,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(withStartHost(ctx, p.Host), p.ResumeSessionID) { // codex_resume.go
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
+	}
+	// session.modes with a launcher (launcher_switch.go): a switch to another launcher is checked and kept here, before
+	// a runtime or a Codex app-server could take the call and change the model where the session runs; the session's
+	// own launcher only drops a switch that waits, and the rest of the request goes on as without one.
+	if method == "session.modes" && strings.TrimSpace(p.Launcher) != "" {
+		if handled, err := n.launcherModes(ctx, p.SessionID, p.Launcher, p.Model, p.PermissionMode, p.Effort); handled {
+			return ok(err)
+		}
 	}
 	if n.externalCodex(p.SessionID) {
 		switch method {

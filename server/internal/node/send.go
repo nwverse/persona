@@ -86,6 +86,23 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if err := n.checkPaneFor(ctx, pane, kind, opts); err != nil { // sendsafe.go
 			return err
 		}
+		if kind == "claude" {
+			// A switch to another launcher the user picked goes first: the agent is quit and resumed there, in the same
+			// terminal, and the message goes to it; refused or failed, nothing is typed (launcher_switch.go). A switch
+			// kept with the record waits for the hub's copy of it after a node restart.
+			if n.state.isLoading() {
+				_ = n.state.loaded(ctx)
+			}
+			if ps := n.pendingSwitch(id); ps != nil {
+				if pane, err = n.applySwitch(ctx, id, pane, *ps); err != nil {
+					return err
+				}
+				// The new claude came up behind a dialog of its own (start returns early then): the text would answer it.
+				if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
+					return err
+				}
+			}
+		}
 	} else {
 		// A session of the desktop app's sidebar that nothing runs: the app opens it, and the message goes to its inbox,
 		// not to a claude --resume of ours (claudedesktop_open.go).

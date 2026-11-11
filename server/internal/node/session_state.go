@@ -57,6 +57,10 @@ type sessionState struct {
 	// Ultracode: what was last seen of ultracode in the process Persona runs this session in (ultracode.go). Written
 	// by setUltracode only, which never makes a record for a session that has none.
 	Ultracode *ultracodeRecord `json:"ultracode_process,omitempty"`
+	// PendingSwitch: a switch to another launcher waiting for the next message (launcher_switch.go), kept with the
+	// record so a node restart neither loses it nor carries it out without the message. Written by setPendingSwitch,
+	// which never makes a record; cleared by the start that carries it out (which writes a new record).
+	PendingSwitch *proto.PendingSwitch `json:"pending_switch,omitempty"`
 }
 
 func newState() *stateFile { return &stateFile{Sessions: map[string]sessionState{}} }
@@ -182,6 +186,60 @@ func (s *stateFile) setUltracode(id string, rec ultracodeRecord) bool {
 		persist(id, v)
 	}
 	return true
+}
+
+// setPendingSwitch changes the pending launcher switch of a session Persona started (nil: none) and nothing else of its
+// record, under the lock, as setUltracode does; false when the session has no record (not Persona's, or not loaded
+// yet): nothing is written for it.
+func (s *stateFile) setPendingSwitch(id string, ps *proto.PendingSwitch) bool {
+	s.mu.Lock()
+	v, ok := s.Sessions[id]
+	if !ok {
+		s.mu.Unlock()
+		return false
+	}
+	if v.PendingSwitch == nil && ps == nil {
+		s.mu.Unlock()
+		return true
+	}
+	if ps != nil {
+		c := *ps
+		ps = &c
+	}
+	v.PendingSwitch = ps
+	s.Sessions[id] = v
+	persist := s.persist
+	s.mu.Unlock()
+	if persist != nil {
+		persist(id, v)
+	}
+	return true
+}
+
+// restoreLaunch puts back what a start that failed to carry out a launcher switch wrote over (start writes a whole new
+// record before the agent is up): the launcher, model, directory, start time and pending switch of prev, the record as
+// it was, with the rest as it is now (an ultracode observation made since stays). launcher is the one to put back when
+// there was no record before (the start made one).
+func (s *stateFile) restoreLaunch(id string, prev sessionState, had bool, launcher string) {
+	s.mu.Lock()
+	v, ok := s.Sessions[id]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	if had {
+		v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort = prev.Launcher, prev.Model, prev.ModelFingerprint, prev.ModelEffort
+		v.Cwd, v.StartedAt, v.PlanThen = prev.Cwd, prev.StartedAt, prev.PlanThen
+	} else {
+		v.Launcher, v.Model, v.ModelFingerprint = launcher, "", ""
+	}
+	v.PendingSwitch = prev.PendingSwitch
+	s.Sessions[id] = v
+	persist := s.persist
+	s.mu.Unlock()
+	if persist != nil {
+		persist(id, v)
+	}
 }
 
 func (s *stateFile) get(id string) (sessionState, bool) {
