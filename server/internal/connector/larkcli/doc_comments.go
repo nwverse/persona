@@ -877,7 +877,7 @@ func wireTime(values ...json.RawMessage) time.Time {
 			}
 			// lark-cli prints message times as local wall-clock minutes; accept the same here in case comments follow.
 			for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04"} {
-				if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+				if t, err := time.ParseInLocation(layout, s, cliLocation()); err == nil {
 					return t
 				}
 			}
