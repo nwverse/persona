@@ -538,6 +538,80 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	if err := s.saveHandoff(ctx, handoff); err != nil {
 		return "", false, err
 	}
+	if err := s.putAwayMain(ctx, machine, old, now); err != nil {
+		return "", false, err
+	}
+	s.logf("assistant: main conversation %s put away (carried over: %v)", short(old), carried)
+	return old, carried, nil
+}
+
+// clearMain clears the main conversation's context in place (the apps' "Clear context" and /clear, as Cindy's /clear
+// does): it is put away as newMain puts it, with nothing carried over, then its process is closed whether it works or
+// not (a turn stops, and nothing it ran in the background starts another turn there) and a question it waits on is
+// taken back. What an earlier newMain left for the next conversation is dropped too, so the next message to the main
+// conversation starts a new one with a fresh context (startMain): no --resume, no handoff. Nothing is deleted, and the
+// work it handed out (tasks, their Agents) goes on. It answers the old conversation's id ("" when there was none).
+func (s *Service) clearMain(ctx context.Context, expect string) (string, error) {
+	// past the checks it goes through as one change, even when the app stops waiting for the answer
+	ctx = context.WithoutCancel(ctx)
+	old, machine, c, found, err := s.clearMainLocked(ctx, expect)
+	if err != nil || old == "" {
+		return old, err
+	}
+	// after the lock: the node may be slow, and every message to the main conversation waits on that lock
+	if found {
+		s.closeMain(ctx, machine, c)
+	}
+	s.logf("assistant: main conversation %s cleared", short(old))
+	return old, nil
+}
+
+// clearMainLocked is clearMain's change under s.main.mu: the check, the handoff dropped and the conversation put away.
+func (s *Service) clearMainLocked(ctx context.Context, expect string) (old, machine string, c proto.Session, found bool, err error) {
+	s.main.mu.Lock()
+	defer s.main.mu.Unlock()
+	cfg := s.settings(ctx)
+	old = cfg.Main
+	if expect != "" && expect != old {
+		return "", "", c, false, &rpc.Error{Code: "main_changed", Message: i18n.T(s.lang(ctx), "assistant-start.main_changed")}
+	}
+	if err := s.saveHandoff(ctx, mainHandoff{}); err != nil {
+		return "", "", c, false, err
+	}
+	if old == "" {
+		return "", "", c, false, nil
+	}
+	machine, c, found = s.findSession(ctx, old, cfg.mainRouteMachine())
+	if !found {
+		machine = cfg.mainRouteMachine()
+	}
+	if err := s.putAwayMain(ctx, machine, old, time.Now().UTC()); err != nil {
+		return "", "", c, false, err
+	}
+	return old, machine, c, found, nil
+}
+
+// closeMain ends the main conversation's process once clearMain has put it away: its turn stops as with the Stop
+// button, and a question it waits on is taken back. Only Persona's own headless process is closed: one the user resumed
+// in a terminal (a pane) is theirs, and the node's session.close would close that terminal. Unlike the Stop button it
+// does not stop a Feishu request the conversation reports on (UserStopped): that would interrupt the Agents working on
+// the tasks it handed out, which a clear leaves running. A failure is only logged: an offline machine runs no turn.
+func (s *Service) closeMain(ctx context.Context, machine string, c proto.Session) {
+	s.withdrawAskUser(c.SessionID)
+	if c.PaneID != "" {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := s.call(cctx, machine, "session.close", map[string]any{"session_id": c.SessionID}, nil); err != nil {
+		s.logf("assistant: close the main conversation %s: %v", short(c.SessionID), err)
+	}
+}
+
+// putAwayMain makes old no longer the main conversation: first among the former ones (its machine keeps listing it),
+// renamed "旧主对话 · 至 M月D日" by the user's hand (autonaming leaves it) and archived; sending to it again brings it back
+// (unarchiveOnSend). The caller holds s.main.mu.
+func (s *Service) putAwayMain(ctx context.Context, machine, old string, now time.Time) error {
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
 		v.Main, v.MainMachineID = "", ""
@@ -548,7 +622,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 		}
 		return nil
 	}); err != nil {
-		return "", false, err
+		return err
 	}
 	local := now.In(s.location(ctx))
 	s.titleSet(machine, old, fmt.Sprintf("旧主对话 · 至 %d月%d日", local.Month(), local.Day()), titleByUser)
@@ -556,8 +630,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 		s.logf("assistant: archive the old main conversation %s: %v", short(old), err)
 	}
 	s.settingsChanged(ctx)
-	s.logf("assistant: main conversation %s put away (carried over: %v)", short(old), carried)
-	return old, carried, nil
+	return nil
 }
 
 // findSession is the session id on the machine preferred, else on any machine (false when none lists it).
@@ -763,6 +836,21 @@ func (s *Service) startRoutes() {
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true, "archived": old, "carried": carried})
+	})
+	s.handle("POST /api/v1/assistant/main/clear", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Expect string `json:"expect"` // the main conversation the app shows: refused when it is another by now
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		old, err := s.clearMain(r.Context(), in.Expect)
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"ok": true, "archived": old})
 	})
 }
 
@@ -982,6 +1070,9 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 	title, _ := params["title"].(string)
 	if strings.TrimSpace(title) != "" && s.isMain(ctx, p.SessionID) {
 		return nil, badRequest(errRenameMain, s.lang(ctx)) // the apps show the persona there (#1313)
+	}
+	if c, found := s.session(ctx, p.MachineID, p.SessionID); found && !c.Assistant {
+		return s.renameAgent(ctx, p, c)
 	}
 	if c, _ := s.session(ctx, p.MachineID, p.SessionID); c.Agent == "codex" {
 		delete(params, "title") // only the assistant's title for Codex (its conversation_rename does the same)

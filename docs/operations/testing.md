@@ -598,7 +598,7 @@ Dev server preview on the iPhone (`PreviewUITests`, #150, `docs/web/preview.md` 
 Agent's Storybook port; web opens in the link card (the mock forwards a running preview port to its own page server), the bar goes back, attaches a
 screenshot, and picks the Save button into an Element comment card; api's Start… shows `env 'PORT=8080' go run ./cmd/api` and opens once its port answers:
 `MOCK_PREVIEW=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/PreviewUITests`,
-`TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps each screen, `TEST_RUNNER_PERSONA_LOOKS=light,dark` runs it in both appearances in one go. `-openPreviewServers YES` opens the list as the chat appears, `-showPreviewPicking YES` starts picking in a forwarded page (screenshots).
+`TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps each screen, `TEST_RUNNER_PERSONA_LOOKS=light,dark` runs it in both appearances in one go, and `ax` in that list adds a pass at the largest text size (the list, the page, picking and the comment panel, #5114). `-openPreviewServers YES` opens the list as the chat appears, `-showPreviewPicking YES` starts picking in a forwarded page (screenshots).
 
 Own-hub links open in App (`HubPageLinkUITests`, #2696): mock `/s/…?at=…` opens Agent chat with target message visible, `/todos?id=…` opens to-do details;
 external links remain web cards. `MOCK_HUB_LINKS=1 PORT=18796 python3 scripts/mock/mock_hub.py &`,
@@ -1059,10 +1059,14 @@ Independent of local config/private words, reports file/line/type only, never UR
 
 ## Expand / collapse (`UnfoldTests`, #1123)
 
-DEBUG `-unfoldTrace YES` measures each unfold/fold (`UnfoldTrace`, `toggleInPlace`, work `toggleWork` / `toggleRun`): for 1.6 s after tap,
+DEBUG `-unfoldTrace YES` measures each unfold/fold (`UnfoldTrace`, `toggleInPlace`, work `toggleWork` / `toggleRun`): for 3 s after tap (a folded work line's steps come from the hub in that time, #3757),
 per-frame tapped-row position (`ChatPin`), late frames, longest frame, and drawn views with `-perfCounts YES`, in `probe.unfold`.
 Cases toggle work at latest/middle, thinking/tools/BeautifulUI tool capsules inside work; logs `UNFOLD <scenario> <what>: moved … step …`.
 At 6 s after launch also measures untapped `idle` control. Mock `MOCK_LONG_HISTORY=1 MOCK_AGENTS=1`.
+Each measurement also has the list's content height per frame (`heights`): the frame what opened or closed went in or out.
+`ToolFoldTests` (#3005, mock `MOCK_TOOL_TURN=1`, `GET /mock/tool_turn?step=call|result|answer|next|reset` pushes one step of a running agent's turn
+at a time) opens the last turn's tool rows and checks they stay open and still as a step, the answer and the next turn arrive, and that a closed
+row's space goes within two frames of the tap.
 
 - Don't query App during measurement: each XCUITest accessibility snapshot occupies main thread; polling 0.1 s makes taps "drop" 15–20 frames, quiet 2.2 s then reading gives 0–3.
   Disable `probe.chat-rows` 10 Hz too (`-unfoldTrace` only draws `probe.unfold`).

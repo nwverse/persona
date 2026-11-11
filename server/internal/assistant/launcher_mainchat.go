@@ -111,10 +111,15 @@ func (s *Service) finishMainChatModel(ctx context.Context, machine, purpose stri
 		key = "assistant-start.launcher_swapped_model"
 	}
 	note = i18n.T(s.lang(ctx), key, args)
-	if slot, ok := ctx.Value(launcherNoteKey{}).(*string); ok {
+	leaveLauncherNote(ctx, note)
+	return note, nil
+}
+
+// leaveLauncherNote puts note where withLauncherNote's caller reads it, if it asked.
+func leaveLauncherNote(ctx context.Context, note string) {
+	if slot, ok := ctx.Value(launcherNoteKey{}).(*string); ok && note != "" {
 		*slot = note
 	}
-	return note, nil
 }
 
 type launcherNoteKey struct{}
