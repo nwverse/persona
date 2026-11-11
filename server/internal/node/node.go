@@ -931,6 +931,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if p.ResumeSessionID != "" && p.Host == "" {
+			p.Host = n.startKind(n.withResumeHost(ctx, p.ResumeSessionID))
+		}
 		var work workStartOptions
 		if method == devicewire.MethodStartWorkSession {
 			if p.ResumeSessionID != "" {

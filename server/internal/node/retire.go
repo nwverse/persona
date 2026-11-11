@@ -44,13 +44,14 @@ func (n *Node) retire(ctx context.Context, id string) (closed bool, err error) {
 	if !ok {
 		return false, nil
 	}
-	if _, runtime := engineRuntimes[n.defaultKind()]; runtime {
+	kind := host.ParsePane(a.PaneID).Kind
+	if _, runtime := engineRuntimes[kind]; runtime {
 		return no("this engine continues sessions itself")
 	}
-	if _, err := hostCap[host.Launcher](n); err != nil {
+	if _, err := hostCapFor[host.Launcher](n, kind); err != nil {
 		return no("this engine cannot open it again")
 	}
-	if h := n.defaultHost(); h != nil && h.Kind() == host.Orca && !n.orcaContinues(id) {
+	if kind == host.Orca && !n.orcaContinues(id) {
 		return no("Orca continues only Claude sessions") // send would refuse it as not running (notRunningRefusal)
 	}
 	if a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked {
@@ -147,8 +148,9 @@ func (n *Node) resumeTabName(id string) string {
 // engine, in the directory and with the launcher (and model) it was started with, the message going in as the
 // resume's prompt (nothing is typed). One Persona did not start (its launcher unknown) is refused as before.
 func (n *Node) resumeOther(ctx context.Context, id, text string, images []proto.Image) error {
+	ctx = n.withResumeHost(ctx, id)
 	st, mine := n.state.get(id)
-	if _, runtime := engineRuntimes[n.defaultKind()]; runtime || !mine || st.Launcher == "" || st.Cwd == "" {
+	if _, runtime := engineRuntimes[n.startKind(ctx)]; runtime || !mine || st.Launcher == "" || st.Cwd == "" {
 		return fmt.Errorf("这个 Agent 已经退出：Codex / TRAEX 的会话要在电脑上重新打开")
 	}
 	return n.resumeOtherWith(ctx, id, st, text, images)
@@ -157,10 +159,11 @@ func (n *Node) resumeOther(ctx context.Context, id, text string, images []proto.
 // resumeOtherWith is resumeOther with the launcher, directory and model to resume with (st): the session's own, or
 // what a Codex thread started outside Persona is resumed with (codex_resume.go).
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
+	ctx = n.withResumeHost(ctx, id)
 	if r := n.notRunningRefusal(ctx, id); r != nil {
 		return r
 	}
-	launch, err := hostCap[host.Launcher](n)
+	launch, err := n.launcherFor(n.startKind(ctx))
 	if err != nil {
 		return err
 	}

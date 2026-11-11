@@ -68,6 +68,9 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return n.exitAgent(ctx, id)
 	}
 	pane, err := n.paneFor(ctx, id)
+	if err != nil {
+		ctx = n.withResumeHost(ctx, id)
+	}
 	if err != nil && (n.codexPath(id) != "" || n.traexPath(id) != "") {
 		return n.resumeOther(ctx, id, text, images) // retire.go
 	}
@@ -89,8 +92,8 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if handled, err := n.sendThroughDesktopApp(ctx, id, text, images); handled {
 			return err
 		}
-		// On a machine whose default host is a runtime (Paseo) the session is continued there (runtimecontrol.go).
-		if _, ok := engineRuntimes[n.defaultKind()]; ok {
+		// A session continuing in a runtime is taken over there (runtimecontrol.go).
+		if _, ok := engineRuntimes[n.startKind(ctx)]; ok {
 			return n.continueInRuntime(ctx, id, text, images, opts.ClientMsgID)
 		}
 		if r := n.notRunningRefusal(ctx, id); r != nil {

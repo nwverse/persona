@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -82,59 +83,65 @@ func TestHerdrRetire(t *testing.T) {
 // workspace, named after its title: its launcher's words with the model it ran with, `resume <id>`, and the message
 // as the prompt (nothing typed). One whose launcher is not known stays refused.
 func TestHerdrSendResumesARetiredCodex(t *testing.T) {
-	withCodexLaunchers(t, map[string][]string{"cx": {"codex", "-m", "gpt-6"}})
-	n, f, home := herdrNode(t)
-	cwd := mkdir(t, filepath.Join(home, "proj"))
-	day := time.Now()
-	dir := mkdir(t, filepath.Join(home, ".codex", "sessions", day.Format("2006"), day.Format("01"), day.Format("02")))
-	now := day.UTC().Format(time.RFC3339Nano)
-	meta, _ := json.Marshal(map[string]any{"timestamp": now, "type": "session_meta", "payload": map[string]any{"id": startThread, "cwd": cwd}})
-	if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-02T10-00-00-"+startThread+".jsonl"), append(meta, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	for _, def := range []string{proto.EngineHerdr, proto.EnginePaseo} {
+		t.Run(def, func(t *testing.T) {
+			withCodexLaunchers(t, map[string][]string{"cx": {"codex", "-m", "gpt-6"}})
+			n, f, home := herdrNode(t)
+			choice := proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EnginePaseo}, Default: def}
+			n.eng.name, n.eng.set = proto.LegacyEngine(choice), &choice
+			cwd := mkdir(t, filepath.Join(home, "proj"))
+			day := time.Now()
+			dir := mkdir(t, filepath.Join(home, ".codex", "sessions", day.Format("2006"), day.Format("01"), day.Format("02")))
+			now := day.UTC().Format(time.RFC3339Nano)
+			meta, _ := json.Marshal(map[string]any{"timestamp": now, "type": "session_meta", "payload": map[string]any{"id": startThread, "cwd": cwd}})
+			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-02T10-00-00-"+startThread+".jsonl"), append(meta, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
 
-	if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"}); err == nil ||
-		!strings.Contains(err.Error(), "重新打开") {
-		t.Fatalf("resumed a Codex whose launcher is not known: %v", err)
-	}
+			if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"}); err == nil ||
+				!strings.Contains(err.Error(), "重新打开") {
+				t.Fatalf("resumed a Codex whose launcher is not known: %v", err)
+			}
 
-	n.state.put(startThread, sessionState{Launcher: "cx", Cwd: cwd, Model: "gpt-7"})
-	f.reset()
-	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
-	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
-	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
-	var mu sync.Mutex
-	var file codexStartFile
-	f.after(func(c herdrCall) {
-		if c.Method != "pane.send_input" {
-			return
-		}
-		if m := startFileRE.FindStringSubmatch(str(c.Params["text"])); m != nil {
-			b, _ := os.ReadFile(m[1])
+			n.state.put(startThread, sessionState{Pane: "w1:p1", Launcher: "cx", Cwd: cwd, Model: "gpt-7"})
+			f.reset()
+			f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
+			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+			var mu sync.Mutex
+			var file codexStartFile
+			f.after(func(c herdrCall) {
+				if c.Method != "pane.send_input" {
+					return
+				}
+				if m := startFileRE.FindStringSubmatch(str(c.Params["text"])); m != nil {
+					b, _ := os.ReadFile(m[1])
+					mu.Lock()
+					_ = json.Unmarshal(b, &file)
+					mu.Unlock()
+					f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", "", proto.StatusWorking, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
+				}
+			})
+			if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"}); err != nil {
+				t.Fatal(err)
+			}
 			mu.Lock()
-			_ = json.Unmarshal(b, &file)
-			mu.Unlock()
-			f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", "", proto.StatusWorking, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
-		}
-	})
-	if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on"}); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if want := []string{"codex", "--model", "gpt-7", "resume", startThread}; strings.Join(file.Argv, " ") != strings.Join(want, " ") ||
-		file.Prompt != "go on" || file.Agent != "codex" {
-		t.Errorf("ran %q with %q (HERDR_AGENT %q)", file.Argv, file.Prompt, file.Agent)
-	}
-	if st, _ := n.state.get(startThread); st.Pane != "w1:p2" || st.Launcher != "cx" || st.Model != "gpt-7" {
-		t.Errorf("state = %+v", st)
-	}
-	if a, ok := n.agent(startThread); !ok || a.PaneID != "w1:p2" {
-		t.Errorf("the resumed Codex is not its session: %+v %v", a, ok)
-	}
-	if got := f.trace("tab.create", "pane.send_keys", "agent.prompt", "pane.send_text"); len(got) != 1 ||
-		!strings.Contains(got[0], `"workspace_id":"w1"`) {
-		t.Errorf("herdr calls %q", got)
+			defer mu.Unlock()
+			if want := []string{"codex", "--model", "gpt-7", "resume", startThread}; strings.Join(file.Argv, " ") != strings.Join(want, " ") ||
+				file.Prompt != "go on" || file.Agent != "codex" {
+				t.Errorf("ran %q with %q (HERDR_AGENT %q)", file.Argv, file.Prompt, file.Agent)
+			}
+			if st, _ := n.state.get(startThread); st.Pane != "w1:p2" || st.Launcher != "cx" || st.Model != "gpt-7" {
+				t.Errorf("state = %+v", st)
+			}
+			if a, ok := n.agent(startThread); !ok || a.PaneID != "w1:p2" {
+				t.Errorf("the resumed Codex is not its session: %+v %v", a, ok)
+			}
+			if got := f.trace("tab.create", "pane.send_keys", "agent.prompt", "pane.send_text"); len(got) != 1 ||
+				!strings.Contains(got[0], `"workspace_id":"w1"`) {
+				t.Errorf("herdr calls %q", got)
+			}
+		})
 	}
 }
 
@@ -166,5 +173,38 @@ func TestOrcaRetiresOnlyWhatItCanContinue(t *testing.T) {
 	res, err := request(t, cn, "session.retire", map[string]any{"session_id": sidA})
 	if err != nil || res["closed"] != true {
 		t.Fatalf("claude on Orca: %v, %v (calls %v)", res, err, co.Trace())
+	}
+}
+
+func TestRetireUsesSessionHostWithRuntimeDefault(t *testing.T) {
+	for _, def := range []string{proto.EnginePaseo, proto.EngineHerdr} {
+		t.Run(def, func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			choice := proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EnginePaseo}, Default: def}
+			n.eng.name, n.eng.set = proto.LegacyEngine(choice), &choice
+			cwd := mkdir(t, filepath.Join(home, "proj"))
+			writeTranscript(t, home, cwd, sidA, time.Now(),
+				`{"type":"assistant","message":{"role":"assistant","content":"done"},"uuid":"a1"}`)
+			n.agents[sidA] = host.Agent{Agent: "claude", PaneID: "w1:p1", TabID: "w1:t1", WorkspaceID: "w1", AgentStatus: proto.StatusDone}
+			n.state.put(sidA, sessionState{Pane: "w1:p1", Launcher: "cc", Cwd: cwd})
+			n.runtimes = newRuntimeRegistry()
+			n.runtimes.known[sidB] = knownSession{runtime: proto.EnginePaseo, label: "Paseo", at: time.Now()}
+
+			res, err := request(t, n, "session.retire", map[string]any{"session_id": sidA})
+			if err != nil || res["closed"] != true {
+				t.Fatalf("herdr session: %v, %v", res, err)
+			}
+			if got := f.trace("tab.close"); len(got) != 1 || !strings.Contains(got[0], `"tab_id":"w1:t1"`) {
+				t.Fatalf("herdr close calls: %v", got)
+			}
+			f.reset()
+			_, err = request(t, n, "session.retire", map[string]any{"session_id": sidB})
+			if code, _ := refusalOf(t, err); code != notRetirable {
+				t.Fatalf("Paseo session: %v", err)
+			}
+			if got := f.trace("pane.send_keys", "tab.close"); len(got) != 0 {
+				t.Fatalf("Paseo retirement touched terminals: %v", got)
+			}
+		})
 	}
 }
