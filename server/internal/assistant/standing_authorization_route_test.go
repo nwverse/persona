@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,36 @@ import (
 func routeStandingGrant() StandingAuthorization {
 	return StandingAuthorization{ID: "sa_route", MachineID: "mac", Directory: "/code/app", Actions: []string{"merge"},
 		Conditions: []string{}, Quote: "Merge changes in this repository without asking again.", Source: "Main conversation", GrantedAt: time.Now().UTC(), Reversible: true}
+}
+
+func TestStandingCardPathsPunctuation(t *testing.T) {
+	for _, test := range []struct {
+		name, separator string
+		quotedAllowed   bool
+	}{
+		{"semicolon", ";", false}, {"comma", ",", true}, {"exclamation", "!", true}, {"question", "?", false},
+		{"ideographic_period", "。", true}, {"fullwidth_semicolon", "；", true}, {"fullwidth_comma", "，", true},
+		{"fullwidth_exclamation", "！", true}, {"fullwidth_question", "？", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const first, second = "/example/first.txt", "/example/second"
+			got, ok := standingCardPaths(proto.Interaction{Plan: first + test.separator + second})
+			if want := []string{first, second}; !ok || !slices.Equal(got, want) {
+				t.Fatalf("unquoted paths = %q, ok = %v; want %q", got, ok, want)
+			}
+			for _, quote := range []string{"\"", "'", "`"} {
+				path := first + test.separator + "part"
+				got, ok := standingCardPaths(proto.Interaction{Plan: quote + path + quote})
+				if test.quotedAllowed {
+					if want := []string{path}; !ok || !slices.Equal(got, want) {
+						t.Errorf("quoted with %q: paths = %q, ok = %v; want %q", quote, got, ok, want)
+					}
+				} else if ok || len(got) != 0 {
+					t.Errorf("quoted with %q: paths = %q, ok = %v; want rejection", quote, got, ok)
+				}
+			}
+		})
+	}
 }
 
 func TestStandingAuthorizationCards(t *testing.T) {
