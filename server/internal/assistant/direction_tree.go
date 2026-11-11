@@ -323,16 +323,22 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 			tb.workerAt[id] = at
 		}
 	}
-	// A worker whose chain of leaders comes back to it is listed on its own, so nothing is lost in a loop.
-	for id := range tb.workerAt {
-		seen := map[string]bool{id: true}
-		for at, ok := tb.workerAt[id]; ok; at, ok = tb.workerAt[at.task] {
-			if seen[at.task] {
-				delete(tb.workerAt, id)
+	// A worker whose chain of leaders comes back to it is listed on its own, so nothing is lost in a loop. Each chain
+	// is walked over the nesting as it was before any is undone, so which tasks come out does not depend on the order
+	// they are looked at: every task in a loop, and only those (one leading into a loop stays nested).
+	var loop []string
+	for _, id := range tb.open {
+		seen := map[string]bool{}
+		for at, ok := tb.workerAt[id]; ok && !seen[at.task]; at, ok = tb.workerAt[at.task] {
+			if at.task == id {
+				loop = append(loop, id)
 				break
 			}
 			seen[at.task] = true
 		}
+	}
+	for _, id := range loop {
+		delete(tb.workerAt, id)
 	}
 	for _, id := range tb.open {
 		if at, ok := tb.workerAt[id]; ok {

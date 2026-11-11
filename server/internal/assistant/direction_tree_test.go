@@ -440,7 +440,8 @@ func TestDirectionTreeCountsAddUpToTheOpenCount(t *testing.T) {
 	})
 	e.task("Quiet", func(t *Todo) { with(treeMain, "s-run")(t); t.Quiet = true })
 	e.task("Failed start", func(t *Todo) { t.Origin, t.StartError = treeMain, "no such launcher" })
-	e.task("Concern", func(t *Todo) { t.Kind = "concern" })
+	concern := e.task("Concern", func(t *Todo) { t.Kind = "concern" })
+	ask := e.askTask("A question that expired")
 	e.task("Hand-made", nil)
 	e.task("Closed", func(t *Todo) { with("conv_lead_a", "")(t); t.DoneAt = &now })
 	e.task("Shelved", func(t *Todo) { t.Origin, t.CreatedAt, t.UpdatedAt = treeMain, long, long })
@@ -467,7 +468,148 @@ func TestDirectionTreeCountsAddUpToTheOpenCount(t *testing.T) {
 			t.Fatalf("%s: counts %+v for %d tasks", d.ID, c, len(d.Tasks))
 		}
 	}
-	if sum != open || open != 8 {
+	if sum != open || open != 9 {
 		t.Fatalf("the tree counts %d, the To-dos page %d open", sum, open)
+	}
+	// The To-dos page lists ask to-dos and concerns as any other: so does the tree, in the secretary's group.
+	ds := e.tree().Directions
+	if sec := taskIDs(ds[len(ds)-1]); !slices.Contains(sec, ask) || !slices.Contains(sec, concern) {
+		t.Fatalf("the secretary's tasks: %v, want the ask to-do %s and the concern %s", sec, ask, concern)
+	}
+}
+
+// askTask is an open to-do as an expired question becomes one (ask_todo.go): its id starts with askTodoPrefix.
+func (e *todoEventEnv) askTask(title string) string {
+	e.t.Helper()
+	id := e.task(title, nil)
+	e.s.todos.mu.Lock()
+	t := e.s.todos.todos[id]
+	delete(e.s.todos.todos, id)
+	t.ID = askTodoPrefix + "q1"
+	e.s.todos.todos[t.ID] = t
+	e.s.todos.mu.Unlock()
+	return t.ID
+}
+
+// Inside a state the newest activity comes first; the same activity is ordered by id.
+func TestDirectionTreeOrdersTasksByActivityThenID(t *testing.T) {
+	e := treeEnv(t)
+	at := func(when time.Time) func(*Todo) {
+		return func(t *Todo) { supervisedBy("conv_lead_a")(t); t.CreatedAt, t.UpdatedAt = when, when }
+	}
+	base := time.Now().Add(-2 * time.Hour).UTC()
+	older := e.task("Older", at(base))
+	newer := e.task("Newer", at(base.Add(time.Hour)))
+	tie1 := e.task("Tie one", at(base.Add(30*time.Minute)))
+	tie2 := e.task("Tie two", at(base.Add(30*time.Minute)))
+	ties := sortedIDs(tie1, tie2)
+	want := []string{newer, ties[0], ties[1], older}
+	for range 5 { // the same every build
+		if got := taskIDs(e.tree().Directions[0]); !slices.Equal(got, want) {
+			t.Fatalf("order: %v, want %v", got, want)
+		}
+	}
+}
+
+// Workers whose leaders lead one another in a loop are listed on their own, the same on every build; a worker that
+// only leads into the loop stays under its leader's Agent.
+func TestDirectionTreeWorkerLoopIsTheSameEveryBuild(t *testing.T) {
+	e := treeEnv(t)
+	var a, b string
+	a = e.task("Loop A", nil)
+	b = e.task("Loop B", nil)
+	in := e.task("Into the loop", nil)
+	set := func(id, sup, sid, via string) {
+		e.s.todos.mu.Lock()
+		t := e.s.todos.todos[id]
+		t.Supervision = &Supervision{Supervisor: sup}
+		t.Agents = []TodoAgent{{MachineID: "mac", SessionID: sid, Source: sourceLeader},
+			{MachineID: "mac", SessionID: sid + "-w", Source: sourceWorker, Via: via}}
+		e.s.todos.mu.Unlock()
+	}
+	set(a, leaderRef("mac", "s-b"), "s-a", b)
+	set(b, leaderRef("mac", "s-a"), "s-b", a)
+	set(in, leaderRef("mac", "s-a"), "s-in", a)
+	var first []byte
+	for i := range 20 {
+		raw, _ := json.Marshal(e.tree())
+		if i == 0 {
+			first = raw
+			sec := e.tree().Directions[2]
+			if got, want := sortedIDs(taskIDs(sec)...), sortedIDs(a, b); !slices.Equal(got, want) {
+				t.Fatalf("the loop listed on its own, the one into it nested: %v, want %v", got, want)
+			}
+			continue
+		}
+		if string(raw) != string(first) {
+			t.Fatalf("build %d differs:\n%s\n%s", i, raw, first)
+		}
+	}
+}
+
+// Renaming a direction tells the apps the tree changed, also on a hub where the rename publishes nothing (no
+// extension takes leader.changed): directionsSoon builds the tree again.
+func TestDirectionTreeToldWhenADirectionIsRenamed(t *testing.T) {
+	ctx := context.Background()
+	te := newTodoEnv(t, &memStore{})
+	if err := te.s.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	clock := newFakeClock()
+	e := &todoEventEnv{todoEnv: te, clock: clock}
+	e.s.directions.after, e.s.dtree.after = clock.After, clock.After
+	setSettings(t, e.s, func(v *Settings) { v.Main = treeMain })
+	e.title("conv_lead_a", "1110 | 功能 | Android parity")
+	e.leaders("conv_lead_a")
+	e.s.directionsSync(ctx)
+	clock.advance(time.Minute) // whatever the setup scheduled
+	e.s.directionTreeSync(ctx)
+	first := e.directionsEvents()
+
+	if err := e.s.setDirectionName(ctx, "conv_lead_a", "基建", directionByUser); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(directionsSettle + directionTreeSettle)
+	if n := e.directionsEvents(); n != first+1 {
+		t.Fatalf("renamed: told %d times, want once", n-first)
+	}
+	if d := e.tree().Directions[0]; d.Name != "基建" {
+		t.Fatalf("name: %+v", d)
+	}
+}
+
+// The sessions of a machine an open task's Agent is on changing schedules a build; another machine's do not.
+func TestDirectionTreeSessionsChangedSchedulesABuild(t *testing.T) {
+	e := treeEnv(t)
+	e.s.dtree.after = e.clock.After
+	e.clock.advance(time.Minute)
+	ctx := context.Background()
+	id := e.task("A's task", supervisedBy("conv_lead_a"))
+	e.s.todos.mu.Lock()
+	e.s.todos.todos[id].Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-1"}}
+	e.s.todos.activeBySession[[2]string{"mac", "s-1"}] = id
+	e.s.todos.mu.Unlock()
+	e.f.setSessions("mac", proto.Session{MachineID: "mac", SessionID: "s-1", State: proto.StateWorking})
+	e.s.directionTreeSync(ctx)
+	first := e.directionsEvents()
+
+	armed := func() bool {
+		e.s.dtree.mu.Lock()
+		defer e.s.dtree.mu.Unlock()
+		return e.s.dtree.armed
+	}
+	e.s.SessionsChanged(ctx, DeviceSessions{MachineID: "other"})
+	if armed() {
+		t.Fatal("a machine with no task's Agent scheduled a build")
+	}
+	e.f.setSessions("mac", proto.Session{MachineID: "mac", SessionID: "s-1", State: proto.StateNeedsYou})
+	e.s.SessionsChanged(ctx, DeviceSessions{MachineID: "mac", Sessions: []proto.Session{{MachineID: "mac", SessionID: "s-1",
+		State: proto.StateNeedsYou}}})
+	if !armed() {
+		t.Fatal("no build scheduled")
+	}
+	e.clock.advance(directionTreeSettle)
+	if n := e.directionsEvents(); n != first+1 {
+		t.Fatalf("an agent's state through SessionsChanged: told %d times", n-first)
 	}
 }
