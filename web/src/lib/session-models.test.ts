@@ -36,8 +36,8 @@ describe("the providers of an Agent's chat", () => {
     const [plain, own, cx] = providers;
     expect(own.unavailable).toBeUndefined();
     expect(own.typable).toBe(true);
-    expect(plain.unavailable).toBe(t("chat-modelpill.other_provider"));
-    expect(cx.unavailable).toBe(t("chat-modelpill.other_engine", { from: "Claude Code", to: "Codex" }));
+    expect(plain.unavailable).toBe(t("chat-modelpanel.other_provider"));
+    expect(cx.unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
     expect(state.recommended).toEqual(["gateway"]);
     // the alias that stands for what runs, not the default entry that does too
     expect(state.current).toEqual({ provider: "gateway", model: "opus", effort: "high" });
@@ -93,14 +93,14 @@ describe("the providers of an Agent's chat", () => {
   it("a Codex thread keeps its model: its own rows say why, the model it runs has the thread's efforts and Fast", () => {
     const { providers, state } = sessionPanel(codex({ service_tier: "priority" }), launchers, lists({ cx: { list: codexList } }));
     const own = providers.find((p) => p.id === "cx")!;
-    expect(own.unavailable).toBe(t("chat-modelpill.model_fixed", { agent: "Codex" }));
+    expect(own.unavailable).toBe(t("chat-modelpanel.model_fixed", { agent: "Codex" }));
     expect(own.typable).toBeUndefined();
     expect(state.recommended).toEqual([]);
     expect(state.busy).toBeUndefined();
     expect(state.current).toEqual({ provider: "cx", model: "gpt-5.5", effort: "high", fast: true });
     expect(own.models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], fast: true });
     expect(own.models![1].fast).toBeUndefined();
-    expect(providers.find((p) => p.id === "gateway")!.unavailable).toBe(t("chat-modelpill.other_engine", { from: "Codex", to: "Claude Code" }));
+    expect(providers.find((p) => p.id === "gateway")!.unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" }));
   });
 });
 

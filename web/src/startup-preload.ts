@@ -117,10 +117,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * strings; the picker loads on the first Forward), and 1,152 B for task cards (#5030 added 1,105 B to ja: the shared
  * task card head, a workflow call's card with its progress line and agent strip, the chat's Background dialog opened
  * from it, the old subagent links' redirect and the background-subtasks line, their words; the subagent card itself
- * loads when a summary is opened).
+ * loads when a summary is opened), and 3,584 B for the composer's model pill (#5032 added 2,363 B to ja over its main,
+ * whose first screen was already 732 B over this budget: the pill, the session's model lists it reads for its name, the
+ * composer card's width modes and their words; the model panel, its data and its words load on the pill's first tap).
  * Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 598_208;
+export const FIRST_SCREEN_BUDGET = 601_792;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

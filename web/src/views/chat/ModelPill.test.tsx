@@ -210,7 +210,7 @@ describe("an Agent's pill", () => {
     expect(panel.props!.anchor).toBe(pill());
     expect(panel.props!.providers.map((p) => p.id)).toEqual(["claude", "gateway", "cx"]);
     expect(panel.props!.state).toMatchObject({ current: { provider: "gateway", model: "opus", effort: "high" }, recommended: ["gateway"] });
-    expect(provider("cx").unavailable).toBe(t("chat-modelpill.other_engine", { from: "Claude Code", to: "Codex" }));
+    expect(provider("cx").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
     // a second click closes it
     await act(async () => pill()!.click());
     expect(host.querySelector('[data-testid="panel"]')).toBeNull();
@@ -288,7 +288,7 @@ describe("an Agent's pill", () => {
     await show(codex);
     expect(requestModelPicker(`mac-${machine}/s1`)).toBe(false); // no model switch: `/model` goes as text
     await open();
-    expect(provider("cx").unavailable).toBe(t("chat-modelpill.model_fixed", { agent: "Codex" }));
+    expect(provider("cx").unavailable).toBe(t("chat-modelpanel.model_fixed", { agent: "Codex" }));
     expect(panel.props!.state.recommended).toEqual([]);
     expect(provider("cx").models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], fast: true });
     expect(await act(() => panel.props!.onApplyCurrent!({ fast: true }))).toBe(true);

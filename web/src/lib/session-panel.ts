@@ -70,9 +70,9 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
       p.models = models;
     }
     if (!mine) {
-      p.unavailable = kind === engine ? t("chat-modelpill.other_provider") : t("chat-modelpill.other_engine", { from: agentName(engine), to: agentName(kind) });
+      p.unavailable = kind === engine ? t("chat-modelpanel.other_provider") : t("chat-modelpanel.other_engine", { from: agentName(engine), to: agentName(kind) });
     } else if (!modelSwitch) {
-      p.unavailable = t("chat-modelpill.model_fixed", { agent: agentName(engine) });
+      p.unavailable = t("chat-modelpanel.model_fixed", { agent: agentName(engine) });
     } else {
       if (e.list?.locked) p.locked = t("composer.locked");
       if (typedModelOffered(engine, e.list)) p.typable = true;
