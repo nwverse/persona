@@ -24,6 +24,13 @@ final class ModelFallbackUITests: XCTestCase {
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
         guard let dir = env["PERSONA_SHOTS"] else { return }
+        // The app icon follows the color scheme, and the system says so in an alert over the page: closed first.
+        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if board.alerts.firstMatch.waitForExistence(timeout: 2) {
+            for label in ["OK", "好"] where board.alerts.buttons[label].exists { // i18n-ignore: the system's own button
+                board.alerts.buttons[label].tap(); sleep(1); break
+            }
+        }
         try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "fallback-\(name).png"))
     }
 
