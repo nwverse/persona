@@ -99,8 +99,21 @@ under its `logs/` subdirectory. Do not enable shell tracing or print credentials
 
 A missing baseline runs that target once. Later checks compare the last successful commit directly with the newest branch HEAD,
 including deleted paths. Failure does not advance that baseline; two failures at the same HEAD suspend that target until another
-HEAD appears. Lock contention exits 75 and is a deferral, not a failure. Successful actions only log; failures invoke the configured
-notification command, retaining failed notifications in a durable outbox for subsequent delivery attempts.
+HEAD appears. Lock contention exits 75 and is a deferral, not a failure. The deploy script's explicit checkout-behind-origin
+message with exit 2 also defers the target without notification or a failure-budget charge; the next round fetches the newest HEAD.
+Other exit-2 errors still count as failures, and the freshness guard is never bypassed.
+
+Failures invoke the configured notification command once per target and consecutive failure cause, even across new commits.
+The worker hashes the step/result and first diagnostic line (or first nonempty output line), normalizing revision identifiers and
+timestamps; raw summaries never enter notification payloads or state. Each target's successful action clears its remembered failure, so the
+same cause notifies again if it recurs after recovery. Successful actions only log, including recovery; there is no extra recovery
+push. Preflight failures have a separate worker identity, cleared when preflight completes. Lock contention and stale checkouts
+neither clear incidents nor create them. Failed notification deliveries remain in the durable at-least-once outbox, retried without
+queuing another copy of a continuing failure. There is no periodic reminder for an unchanged cause.
+
+For a worker upgrade, pause future timer runs and let any active service finish, copy the verified main worker to its installed
+path with mode 0600, and resume the same timer. Keep configuration, targets, retry state, checkpoints, adapters and unit files intact;
+record the source revision and installed file hash in the private STATE document.
 
 Use a dedicated detached clean worktree on the hub and another on the build computer. The worker refuses to discard dirty files.
 `scripts/operations/hub_action.py deploy` retains the deployment lock through a live API and serving-binary verification;
