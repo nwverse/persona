@@ -324,6 +324,7 @@ export class TodoWorkspace {
   @Trace titleDraft: string = '';
   @Trace notesDraft: string = '';
   @Trace draftReady: boolean = false;
+  @Trace targetGone: boolean = false;
   @Trace editorOpen: boolean = false;
   @Trace selectedAgentKey: string = '';
   @Trace selectedSpaceKey: string = '';
@@ -369,6 +370,7 @@ export class TodoWorkspace {
     this.titleDraft = '';
     this.notesDraft = '';
     this.draftReady = false;
+    this.targetGone = false;
     try {
       let owner = client;
       if (row && row.manager && row.manager !== client.profile.manager) owner = await client.viewFor(row);
@@ -418,6 +420,7 @@ export class TodoWorkspace {
     this.projects = [];
     this.selected = new TodoWorkspaceItem();
     this.draftReady = false;
+    this.targetGone = false;
   }
 
   update(client: ClientModel): void {
@@ -496,6 +499,13 @@ export class TodoWorkspace {
     this.loading = false;
   }
 
+  private rejectGoneTarget(todo: TodoWorkspaceItem): boolean {
+    if (!todo.id || !this.targetGone || this.selected.id !== todo.id ||
+      (this.selected.manager || this.managerId) !== (todo.manager || this.managerId)) return false;
+    this.error = 'todo_gone';
+    return true;
+  }
+
   private owns(owner: TodoOwnerSnapshot, requireTodo: boolean = true): boolean {
     if (!this.ownsScope(owner) || this.revision !== owner.revision) return false;
     return !requireTodo || !owner.todoId || (this.selected.id === owner.todoId &&
@@ -503,6 +513,7 @@ export class TodoWorkspace {
   }
 
   isSelected(todo: TodoWorkspaceItem): boolean {
+    if (this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     return !!owner && this.selected.id === todo.id && (this.selected.manager || owner.managerId) === owner.todoManagerId;
   }
@@ -575,9 +586,12 @@ export class TodoWorkspace {
       if (this.selected.id) {
         const selectedId = this.selected.id, selectedManager = this.selected.manager || owner.managerId;
         const selected = items.find((item: TodoWorkspaceItem) => item.id === selectedId && (item.manager || owner.managerId) === selectedManager);
-        if (selected) this.selected = selected;
+        if (selected) {
+          this.selected = selected;
+          this.targetGone = false;
+        } else this.targetGone = true;
       }
-      this.error = '';
+      this.error = this.targetGone ? 'todo_gone' : '';
       await this.resumeInitialDetail(owner, revision, items);
     } catch (failure) {
       const currentOwner = ownerSnapshot ? this.ownsScope(ownerSnapshot) :
@@ -595,9 +609,13 @@ export class TodoWorkspace {
     const manager = initial.manager || owner.managerId;
     const target = items.find((item: TodoWorkspaceItem) => item.id === initial.id && (item.manager || owner.managerId) === manager);
     if (!target) {
-      if (!this.selected.id || this.selected.id === initial.id) this.error = 'todo_gone';
+      if (!this.selected.id || this.selected.id === initial.id) {
+        this.targetGone = true;
+        this.error = 'todo_gone';
+      }
       return;
     }
+    this.targetGone = false;
     if (this.selected.id) {
       const selectedManager = this.selected.manager || owner.managerId;
       if (this.selected.id !== target.id || selectedManager !== manager || this.draftReady) return;
@@ -606,10 +624,12 @@ export class TodoWorkspace {
   }
 
   async openRow(todo: TodoWorkspaceItem): Promise<void> {
+    if (this.rejectGoneTarget(todo)) return;
     const owner = this.capture(undefined);
     if (!owner || !todo.id || todo.manager && todo.manager !== owner.managerId) { this.error = 'offline'; return; }
     this.revision++;
     this.selected = todo;
+    this.targetGone = false;
     this.titleDraft = todo.title;
     this.notesDraft = todo.notes;
     this.draftReady = false;
@@ -632,6 +652,7 @@ export class TodoWorkspace {
     const snapshot = this.capture(undefined);
     if (!snapshot) { this.error = 'offline'; return; }
     this.selected = new TodoWorkspaceItem(Wire.payload(['manager'], [snapshot.managerId]), snapshot.managerId);
+    this.targetGone = false;
     this.titleDraft = '';
     this.notesDraft = '';
     this.draftReady = true;
@@ -682,6 +703,7 @@ export class TodoWorkspace {
   }
 
   private async write(path: string, method: string, body: Record<string, Object>, todo: TodoWorkspaceItem | undefined): Promise<Record<string, Object> | undefined> {
+    if (todo && this.rejectGoneTarget(todo)) return undefined;
     const owner = this.capture(todo);
     if (!owner) { this.error = 'offline'; return undefined; }
     if (owner.client.operationBlocked(path)) { this.error = 'todo_write_pending'; return undefined; }
@@ -722,6 +744,7 @@ export class TodoWorkspace {
   }
 
   async save(): Promise<boolean> {
+    if (this.selected.id && this.rejectGoneTarget(this.selected)) return false;
     const title = this.titleDraft.trim();
     if (!title) { this.error = 'todo_title_required'; return false; }
     const todo = this.selected, manager = this.managerId;
@@ -745,6 +768,7 @@ export class TodoWorkspace {
   }
 
   async setDone(todo: TodoWorkspaceItem, done: boolean): Promise<boolean> {
+    if (this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     if (!owner) { this.error = 'offline'; return false; }
     const path = '/api/v1/todos/' + pathPart(todo.id) + managerQuery(todo.manager || this.managerId);
@@ -757,6 +781,7 @@ export class TodoWorkspace {
   }
 
   async remove(todo: TodoWorkspaceItem): Promise<boolean> {
+    if (this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     if (!owner) { this.error = 'offline'; return false; }
     const path = '/api/v1/todos/' + pathPart(todo.id) + managerQuery(todo.manager || this.managerId);
@@ -764,12 +789,14 @@ export class TodoWorkspace {
     if (!result || !this.owns(owner)) return false;
     this.items = this.items.filter((item: TodoWorkspaceItem) => item.id !== todo.id);
     if (this.selected.id === todo.id) this.selected = new TodoWorkspaceItem();
+    this.targetGone = false;
     if (this.initialRow?.id === todo.id && (!this.initialRow.manager || this.initialRow.manager === (todo.manager || this.managerId)))
       this.initialRow = undefined;
     return true;
   }
 
   async linkAgent(todo: TodoWorkspaceItem, session: ResourceRow): Promise<boolean> {
+    if (this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     if (!owner) { this.error = 'offline'; return false; }
     if (todo.isDone()) { this.error = 'request_updated'; return false; }
@@ -789,6 +816,7 @@ export class TodoWorkspace {
   }
 
   async unlinkAgent(todo: TodoWorkspaceItem, agent: TodoWorkspaceAgent): Promise<boolean> {
+    if (this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     if (!owner || !agent.isActive()) { this.error = 'request_updated'; return false; }
     const path = '/api/v1/todos/' + pathPart(todo.id) + '/agents/' + pathPart(agent.machineId) + '/' + pathPart(agent.sessionId) + managerQuery(todo.manager || this.managerId);
@@ -807,6 +835,7 @@ export class TodoWorkspace {
   }
 
   async linkSpace(todo: TodoWorkspaceItem, choice: TodoWorkspaceSpaceChoice): Promise<boolean> {
+    if (this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     if (!owner) { this.error = 'offline'; return false; }
     if (todo.isDone()) { this.error = 'request_updated'; return false; }
@@ -822,6 +851,7 @@ export class TodoWorkspace {
   }
 
   async unlinkSpace(todo: TodoWorkspaceItem, space: TodoWorkspaceSpace): Promise<boolean> {
+    if (this.rejectGoneTarget(todo)) return false;
     const owner = this.capture(todo);
     if (!owner || !todo.spaces.some((item: TodoWorkspaceSpace) => item.machineId === space.machineId && item.space === space.space)) {
       this.error = 'request_updated'; return false;

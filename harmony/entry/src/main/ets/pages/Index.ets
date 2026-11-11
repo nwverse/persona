@@ -50,6 +50,7 @@ struct Index {
   @Local adminRefreshRevision: number = 0;
   @Local inboxRefreshRevision: number = 0;
   @Local extensionTitle: string = '';
+  @Local todoTitle: string = '';
   @Local extensionRefreshRevision: number = 0;
   @Local shownName: string = '';
   @Local shownParam: string = '';
@@ -473,7 +474,7 @@ struct Index {
     } catch (error) { if (revision === this.routeRevision && this.activeChild === key && this.model.owns(generation, scope)) this.model.reportError(error as Error); }
   }
   private routeShown(name: string, param: Object): void {
-    this.activeChild = this.childKey(name, param); if (name === 'extension') this.extensionTitle = this.routeRow(param).title; this.shownName = name; this.shownParam = param as string;
+    this.activeChild = this.childKey(name, param); if (name === 'extension') this.extensionTitle = this.routeRow(param).title; if (name === 'todo') this.todoTitle = this.routeRow(param).title; this.shownName = name; this.shownParam = param as string;
     if (!['session', 'conversation'].includes(name)) this.detailModel.hideConversation(name !== 'tools');
     const descriptor = NavigationContext.from(name, param as string);
     if (descriptor.scoped) this.restoreTarget(name, param);
@@ -513,7 +514,7 @@ struct Index {
         else this.targetLoading(name, param)
       } else if (name === 'todo' || name === 'resources' && param === 'todo') {
         if (name === 'resources' || this.targetReady(name, param)) TodoWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'todo' ? this.routeRow(param) : undefined, list: name === 'resources', visible: this.activeChild === this.childKey(name, param),
-          onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), onCreateAgent: (todo: ResourceRow) => this.createAgentFrom(name, param, todo) })
+          onTitle: (title: string) => { if (name === 'todo' && this.activeChild === this.childKey(name, param)) this.todoTitle = title; }, onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), onCreateAgent: (todo: ResourceRow) => this.createAgentFrom(name, param, todo) })
         else this.targetLoading(name, param)
       } else if (name === 'knowledge' || name === 'resources' && param === 'knowledge') {
         if (name === 'resources' || this.targetReady(name, param)) KnowledgeWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'knowledge' ? this.routeRow(param) : undefined, visible: this.activeChild === this.childKey(name, param),
@@ -539,7 +540,7 @@ struct Index {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsModel(param), onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
         else this.targetLoading(name, param)
       }
-    }.title(name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'extension' ? this.extensionTitle : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id)
+    }.title(name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'extension' ? this.extensionTitle : name === 'todo' ? this.todoTitle || this.routeRow(param).title || this.routeRow(param).id : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id)
       .hideTitleBar(name === 'session' && this.hideAgentTitle()).hideBackButton(name === 'session' && this.wide() && this.model.section === 1)
       .menus(name === 'settings' && this.isAdminPage(this.settingsKind(param)) ? this.adminMenus(name, param) : name === 'extension' ? this.extensionMenus(name, param) : (name === 'session' || name === 'conversation') && this.targetReady(name, param) ? this.moreButton : [])
       .onShown(() => this.routeShown(name, param))

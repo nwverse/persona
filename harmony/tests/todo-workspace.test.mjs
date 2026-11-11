@@ -370,6 +370,45 @@ test('a parent list refresh shows independently completed, renamed, and deleted 
   detail.close();
 });
 
+for (const editorOpen of [false, true]) {
+  test(`a deleted Todo detail stays selected, keeps its draft, and blocks writes when editorOpen=${editorOpen}`, async () => {
+    const linked = todo('t1', {
+      agents: [{ machine_id: 'm1', session_id: 's1', title: 'Linked agent', linked_at: '2026-11-11T10:00:00Z' }],
+      spaces: [{ machine_id: 'm1', space: 'space-old', linked_at: '2026-11-11T10:00:00Z' }]
+    });
+    const harness = makeHarness({ todos: [linked], sessions: [session('s2', 'working')] });
+    const workspace = new TodoWorkspace(), row = new ResourceRow('t1', 'Todo t1', 'todo');
+    row.manager = 'work';
+    await workspace.open(harness.client, row, false);
+    workspace.setTitleDraft('Keep title draft');
+    workspace.setNotesDraft('Keep notes draft');
+    await workspace.draftWrites;
+    workspace.editorOpen = editorOpen;
+    harness.state.todos = [];
+
+    await workspace.refresh();
+    const selected = workspace.selected;
+    assert.equal(workspace.targetGone, true);
+    assert.equal(workspace.error, 'todo_gone');
+    assert.equal(selected.id, 't1');
+    assert.equal(workspace.titleDraft, 'Keep title draft');
+    assert.equal(workspace.notesDraft, 'Keep notes draft');
+    assert.equal(workspace.editorOpen, editorOpen);
+    assert.equal(await workspace.save(), false);
+    assert.equal(await workspace.setDone(selected, true), false);
+    assert.equal(await workspace.remove(selected), false);
+    assert.equal(await workspace.linkAgent(selected, session('s2', 'working')), false);
+    assert.equal(await workspace.unlinkAgent(selected, selected.agents[0]), false);
+    assert.equal(await workspace.linkSpace(selected, new TodoWorkspaceSpaceChoice('m1', 'space-new', 'Computer m1 · space-new')), false);
+    assert.equal(await workspace.unlinkSpace(selected, selected.spaces[0]), false);
+    assert.equal(harness.state.calls.filter((call) => call.method !== 'GET').length, 0);
+    assert.equal(workspace.selected.id, 't1');
+    assert.equal(workspace.titleDraft, 'Keep title draft');
+    assert.equal(workspace.notesDraft, 'Keep notes draft');
+    workspace.close();
+  });
+}
+
 test('only the latest Todo list request replaces rows or clears the loading state', async () => {
   const requests = [];
   const harness = makeHarness({ request: async (call) => {
@@ -557,11 +596,17 @@ test('native page exposes parent navigation, Markdown links, and Todo-aware Agen
   assert.match(page, /@Event onOpenResource: \(row: ResourceRow\) => void/);
   assert.match(page, /@Event onLink: \(address: string\) => void/);
   assert.match(page, /@Event onCreateAgent: \(todo: ResourceRow\) => void/);
+  assert.match(page, /@Event onTitle: \(title: string\) => void/);
+  assert.match(page, /@Monitor\('workspace\.selected'\) selectedChanged\(\): void/);
+  assert.match(page, /this\.onTitle\(selected\.title\)/);
   assert.match(page, /this\.onCreateAgent\(this\.workspace\.todoResource\(this\.workspace\.selected\)\)/);
+  assert.match(page, /row\.id !== selected\.id/);
   assert.match(page, /@Monitor\('visible'\) visibilityChanged\(\): void/);
-  assert.match(page, /if \(becameVisible && this\.pageAvailable\) this\.refreshWhenReady\(\)/);
+  assert.match(page, /if \(becameVisible && this\.pageAvailable\) \{\s*this\.publishTitle\(\);\s*this\.refreshWhenReady\(\);/);
   assert.match(page, /if \(this\.model\.connected\) this\.refreshWhenReady\(true\)/);
-  assert.match(page, /workspace\.selected', 'workspace\.items', 'workspace\.search', 'workspace\.statusFilter', 'workspace\.groupBy',[\s\S]*'workspace\.projects', 'workspace\.sessions', 'workspace\.machines'/);
+  assert.match(page, /@Monitor\('workspace\.selected'\) selectedChanged\(\): void/);
+  assert.match(page, /@Monitor\('workspace\.items', 'workspace\.search', 'workspace\.statusFilter', 'workspace\.groupBy',[\s\S]*'workspace\.projects', 'workspace\.sessions', 'workspace\.machines'/);
+  assert.match(page, /!this\.workspace\.targetGone/);
 });
 
 

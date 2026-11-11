@@ -32,6 +32,7 @@ export struct TodoWorkspacePage {
   @Event onOpenResource: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Event onCreateAgent: (todo: ResourceRow) => void = (_todo: ResourceRow) => {};
+  @Event onTitle: (title: string) => void = (_title: string) => {};
   @Local workspace: TodoWorkspace = new TodoWorkspace();
   @Local sectionBindings: BoundTodoSection[] = [];
   @Local lineageRowBindings: BoundRow<ResourceRow>[] = [];
@@ -81,12 +82,16 @@ export struct TodoWorkspacePage {
   @Monitor('visible') visibilityChanged(): void {
     const becameVisible = !this.lastVisible && this.visible;
     this.lastVisible = this.visible;
-    if (becameVisible && this.pageAvailable) this.refreshWhenReady();
+    if (becameVisible && this.pageAvailable) {
+      this.publishTitle();
+      this.refreshWhenReady();
+    }
   }
   @Monitor('model.sessions') sessionsChanged(): void { this.workspace.update(this.model); }
   @Monitor('model.machines') machinesChanged(): void { this.workspace.update(this.model); }
   @Monitor('model.knowledge') projectsChanged(): void { this.workspace.update(this.model); }
-  @Monitor('workspace.selected', 'workspace.items', 'workspace.search', 'workspace.statusFilter', 'workspace.groupBy',
+  @Monitor('workspace.selected') selectedChanged(): void { this.syncRowBindings(); this.publishTitle(); }
+  @Monitor('workspace.items', 'workspace.search', 'workspace.statusFilter', 'workspace.groupBy',
     'workspace.projects', 'workspace.sessions', 'workspace.machines') rowsChanged(): void { this.syncRowBindings(); }
 
   private openWorkspace(): void {
@@ -114,6 +119,14 @@ export struct TodoWorkspacePage {
       return;
     }
     if (this.workspaceInitialized) this.workspace.refresh().catch(() => undefined);
+  }
+
+  private publishTitle(): void {
+    const row = this.row, selected = this.workspace.selected;
+    if (this.list || !row || !selected.id || this.workspace.targetGone || row.id !== selected.id) return;
+    const manager = row.manager || this.model.profile.manager;
+    if (selected.manager && selected.manager !== manager) return;
+    this.onTitle(selected.title);
   }
 
   private syncRowBindings(): void {
@@ -332,7 +345,7 @@ export struct TodoWorkspacePage {
 
   @Builder todoMenu(todo: TodoWorkspaceItem) {
     Menu() {
-      MenuItem({ content: tr('delete') }).onClick(() => this.confirmDelete(todo))
+      MenuItem({ content: tr('delete') }).enabled(!this.workspace.targetGone).onClick(() => this.confirmDelete(todo))
     }
   }
 
@@ -400,7 +413,8 @@ export struct TodoWorkspacePage {
   }
 
   @Builder agentMenu(binding: BoundRow<TodoWorkspaceAgent>) {
-    Menu() { MenuItem({ content: tr('todo_unlink_agent') }).onClick(() => this.confirmUnlinkAgent(this.workspace.selected, binding.value)) }
+    Menu() { MenuItem({ content: tr('todo_unlink_agent') }).enabled(!this.workspace.targetGone)
+      .onClick(() => this.confirmUnlinkAgent(this.workspace.selected, binding.value)) }
   }
 
   @Builder spaceRow(binding: BoundRow<TodoWorkspaceSpace>) {
@@ -412,7 +426,8 @@ export struct TodoWorkspacePage {
   }
 
   @Builder spaceMenu(binding: BoundRow<TodoWorkspaceSpace>) {
-    Menu() { MenuItem({ content: tr('todo_remove_project') }).onClick(() => this.confirmUnlinkSpace(this.workspace.selected, binding.value)) }
+    Menu() { MenuItem({ content: tr('todo_remove_project') }).enabled(!this.workspace.targetGone)
+      .onClick(() => this.confirmUnlinkSpace(this.workspace.selected, binding.value)) }
   }
 
   @Builder detailContent() {
@@ -470,17 +485,18 @@ export struct TodoWorkspacePage {
                 .value(this.selectedSession()?.title || tr('todo_choose_agent'))
                 .onSelect((index: number) => this.selectSession(index))
                 .accessibilityText(tr('todo_choose_agent')).width('100%')
-              Button(tr('todo_link_agent')).enabled(!!this.selectedSession() && !this.workspace.saving)
+              Button(tr('todo_link_agent')).enabled(!!this.selectedSession() && !this.workspace.saving && !this.workspace.targetGone)
                 .onClick(() => this.confirmLinkAgent(this.workspace.selected)).height(Tokens.touch).width('100%')
             }
-            Button(tr('new_agent')).enabled(!this.workspace.saving).onClick(() => this.onCreateAgent(this.workspace.todoResource(this.workspace.selected)))
+            Button(tr('new_agent')).enabled(!this.workspace.saving && !this.workspace.targetGone)
+              .onClick(() => this.onCreateAgent(this.workspace.todoResource(this.workspace.selected)))
               .height(Tokens.touch).width('100%')
             if (this.workspace.spaceChoices().length) {
               Select(this.spaceOptions()).selected(Math.max(0, this.workspace.spaceChoices().findIndex((item: TodoWorkspaceSpaceChoice) => this.choiceKey(item) === this.workspace.selectedSpaceKey)))
                 .value(this.selectedSpace()?.label || tr('todo_choose_project'))
                 .onSelect((index: number) => this.selectSpace(index))
                 .accessibilityText(tr('todo_choose_project')).width('100%')
-              Button(tr('todo_link_project')).enabled(!!this.selectedSpace() && !this.workspace.saving)
+              Button(tr('todo_link_project')).enabled(!!this.selectedSpace() && !this.workspace.saving && !this.workspace.targetGone)
                 .onClick(() => this.confirmLinkSpace(this.workspace.selected)).height(Tokens.touch).width('100%')
             }
           }
@@ -490,9 +506,9 @@ export struct TodoWorkspacePage {
         else Text(tr(this.detailEmptyKey())).fontSize(Tokens.meta).padding(Tokens.page).width('100%')
       }.layoutWeight(1).width('100%')
       if (this.workspace.selected.id) Row({ space: Tokens.gap }) {
-        Button(this.completionLabel()).enabled(!this.workspace.saving)
+        Button(this.completionLabel()).enabled(!this.workspace.saving && !this.workspace.targetGone)
           .layoutWeight(1).height(Tokens.touch).onClick(() => this.changeCompletion())
-        Button(tr('edit')).enabled(!this.workspace.saving).layoutWeight(1).height(Tokens.touch)
+        Button(tr('edit')).enabled(!this.workspace.saving && !this.workspace.targetGone).layoutWeight(1).height(Tokens.touch)
           .onClick(() => this.workspace.beginEdit(this.workspace.selected))
       }.padding(Tokens.inset).width('100%')
     }.width('100%').height('100%')
@@ -507,7 +523,8 @@ export struct TodoWorkspacePage {
       if (this.workspace.error) Text(tr(this.workspace.error)).fontColor($r('app.color.persona_danger')).width('100%')
       Row({ space: Tokens.gap }) {
         Button(tr('cancel')).layoutWeight(1).height(Tokens.touch).onClick(() => this.workspace.closeEditor())
-        Button(tr('save')).layoutWeight(1).height(Tokens.touch).enabled(!this.workspace.saving && !!this.workspace.titleDraft.trim())
+        Button(tr('save')).layoutWeight(1).height(Tokens.touch)
+          .enabled(!this.workspace.saving && !this.workspace.targetGone && !!this.workspace.titleDraft.trim())
           .onClick(() => this.workspace.save().catch(() => undefined)).id('todos.save')
       }.width('100%')
     }.padding(Tokens.page).width('100%')
