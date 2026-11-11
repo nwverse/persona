@@ -1550,15 +1550,30 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
-# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
-# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
+# sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+MOCK_DIRECTION_NAMES = {}
 if os.environ.get("MOCK_LEADERS") == "1":
-    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+    for i, (title, name, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles and names
+        ("1110 | 探索 | 你是「Persona 产品」方向的主管", "Persona 产品", 60 * 30, "本周两个实验都在跑。"),
+        ("1110 | 探索 | 你是「基础设施」方向的主管", "基础设施", 60 * 45, "部署脚本的改动已派出。"),
+        ("1109 | 探索 | 你是「增长」方向的主管", "增长", 60 * 50, "注册转化的对比看完了。"),
+        ("1108 | 探索 | 你是「支付对账」方向的主管", "支付对账", 60 * 55, "对账任务已派出。"),
+    ]):
         c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
         c["origin"] = "user"
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
+        MOCK_DIRECTION_NAMES[c["session_id"]] = name
+
+
+def mock_leaders_list():
+    """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
+    titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
+    return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
+                         "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -4021,6 +4036,102 @@ if MOCK_TASKS:
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
             _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
+    # MOCK_BRIEFS=1 (#3822, docs/assistant/unified-entry.md "Briefs"): tasks carry the brief they are held to. The open
+    # plan's task has a real one (the owner's own words, long enough to be cut, the goal, criteria, time and what is out
+    # of bounds). The widget fix has a real one too, taken over twice (a lineage of three), with one scope change and an
+    # overdue mark. The blog move's was made later (reconstructed: no request, the hand-over prompt). The release notes
+    # ended against theirs: a criterion met, one not checked, one dropped by a scope change, and something done beyond
+    # it, on its page, its review line and its receipt.
+    if os.environ.get("MOCK_BRIEFS") == "1":
+        def _brief(bid, minutes, goal, done_when, expect, **more):
+            b = {"id": bid, "created_at": ago(minutes=minutes), "started_by": "owner", "goal": goal, "done_when": done_when,
+                 "criteria": done_when, "expect_minutes": expect, "expect_minutes_now": expect, "log": [],
+                 "clock_at": ago(minutes=minutes), "due_at": later(hours=24)}
+            b.update(more)
+            return b
+
+        def _asked(minutes, text):
+            return {"text": text, "at": ago(minutes=minutes), "conversation": ASK1, "message_id": "mock-brief-%d" % int(minutes)}
+
+        TASK_PLANS["plan_mock_3"]["tasks"][0]["brief"] = _brief(
+            "brief_mock_pr42", 2, "Every review comment on PR #42 is answered or fixed",
+            ["Each review comment has a reply or a commit", "The checks on PR #42 pass"], 45,
+            request=_asked(3, "The reviewers left a pile of comments on PR #42 yesterday. Go through all of them: fix what is "
+                              "clearly right, and for anything you disagree with write a short reply saying why instead of "
+                              "changing the code. Do not merge it, I want to read the replies first. If a comment needs a "
+                              "bigger refactor, leave it and list it for me at the end."),
+            out_of_bounds=["Do not merge the PR", "No refactors beyond what a comment asks for"])
+        _widget_done_when = ["The fix is merged", "A snapshot test covers landscape"]
+        _widget_brief = _brief(
+            "brief_mock_widget", 3 * 24 * 60, "The home screen widget no longer crashes in landscape",
+            ["The fix is merged", "Landscape screenshots are in the PR"], 60,
+            request=_asked(3 * 24 * 60 + 2, "The weather widget crashes when I rotate the phone. Fix it and add a test so it stays fixed."),
+            out_of_bounds=["Do not change the widget's layout"], criteria=_widget_done_when, expect_minutes_now=90,
+            clock_at=ago(days=2), due_at=ago(days=1), overdue_at=ago(hours=20),
+            log=[{"at": ago(days=2), "kind": "scope", "todo_id": "todo_brief_widget_2", "by": ASK1,
+                  "change": "A snapshot test replaces the screenshots", "why": "A test keeps it fixed; screenshots go stale",
+                  "done_when": _widget_done_when, "expect_minutes": 90, "added": ["A snapshot test covers landscape"],
+                  "dropped": ["Landscape screenshots are in the PR"]},
+                 {"at": ago(hours=20), "kind": "overdue", "todo_id": "todo_task_widget"}])
+        _widget_lineage = [
+            {"todo_id": "todo_brief_widget_1", "title": "Fix the widget's landscape crash", "agent": "claude", "machine": "studio",
+             "session_id": "mock-brief-a", "started": ago(days=3), "ended": ago(days=2, hours=12), "why": "Its computer went offline",
+             "superseded_by": "todo_brief_widget_2"},
+            {"todo_id": "todo_brief_widget_2", "title": "Take over the widget fix", "agent": "codex", "machine": "macbook",
+             "session_id": "mock-brief-b", "started": ago(days=2, hours=12), "ended": ago(minutes=45),
+             "why": "The model service kept failing", "continues": "todo_brief_widget_1", "superseded_by": "todo_task_widget"},
+            {"todo_id": "todo_task_widget", "title": "修小组件横屏崩溃", "agent": "claude", "machine": "macbook", "session_id": WIDGET,
+             "started": ago(minutes=44), "continues": "todo_brief_widget_2", "current": True},
+        ]
+        _release_done_when = ["Every change merged this week is listed", "Grouped as features, fixes and other"]
+        _release_result = {"at": ago(minutes=18), "todo_id": "todo_task_release", "verdict": "accepted", "criteria": [
+            {"criterion": "Every change merged this week is listed", "state": "met", "evidence": "7 listed, the same as the repository shows"},
+            {"criterion": "Grouped as features, fixes and other", "state": "unchecked"},
+            {"criterion": "Each entry links its issue", "state": "dropped", "change": "Links are added by the release script",
+             "changed_at": ago(minutes=25)}], "also_done": ["Fixed two typos in last week's notes"]}
+        _release_brief = _brief(
+            "brief_mock_release", 30, "This week's release notes are ready to send",
+            _release_done_when + ["Each entry links its issue"], 20, criteria=_release_done_when, result=_release_result,
+            request=_asked(31, "Write up this week's release notes from what was merged."),
+            log=[{"at": ago(minutes=25), "kind": "scope", "todo_id": "todo_task_release", "by": ASK1,
+                  "change": "Links are added by the release script", "why": "The script already adds them when it publishes",
+                  "done_when": _release_done_when, "dropped": ["Each entry links its issue"]}])
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_widget":
+                _t.update(brief=_widget_brief, lineage=_widget_lineage)
+                _t.setdefault("supervision", {"supervisor": ASK1, "state": "", "round": 0, "reviews": [], "updated_at": ago(minutes=40)})
+                _t["supervision"].update(done_when=_widget_done_when, expect_minutes=90, state="", reviews=[])
+            if _t["id"] == "todo_task_blog":
+                _t["brief"] = _brief("brief_mock_blog", 60 * 26, _t["title"], [], 0, started_by="unknown", reconstructed=True,
+                                     handover="You are taking over a session that stopped half way: the posts are converted, "
+                                              "the theme is not. Carry on from the branch it left, and keep the old URLs working.")
+                _t["lineage"] = [{"todo_id": _t["id"], "title": _t["title"], "agent": "claude", "machine": "studio", "session_id": BLOG,
+                                  "started": ago(minutes=60 * 26), "current": True}]
+            if _t["id"] == "todo_task_release":
+                _t.update(done_at=ago(minutes=18), done_by="review", done_reason="The notes are written and can be sent",
+                          brief=_release_brief,
+                          lineage=[{"todo_id": _t["id"], "title": _t["title"], "agent": "claude", "machine": "macbook", "session_id": RELEASE,
+                                    "started": ago(minutes=30), "ended": ago(minutes=18), "why": "The notes are written and can be sent",
+                                    "current": True}],
+                          supervision={"supervisor": ASK1, "done_when": _release_done_when, "expect_minutes": 20, "state": "accepted",
+                                       "round": 0, "updated_at": ago(minutes=18),
+                                       "reviews": [{"at": ago(minutes=18), "verdict": "accepted", "note": "Written to docs/release-notes.md",
+                                                    "checks": [{"criterion": _release_done_when[0], "met": True,
+                                                                "evidence": "7 listed, the same as the repository shows"}]}],
+                                       # the ledger's own per-criterion state (#3635): the page's one list of criteria
+                                       "criteria": [{"criterion": _release_done_when[0], "state": "met", "at": ago(minutes=18),
+                                                     "evidence": "7 listed, the same as the repository shows", "by": "supervisor:" + ASK1},
+                                                    {"criterion": _release_done_when[1], "state": "pending"}]})
+        # The release notes' review line carries the result (the line of MOCK_TASKS_REPORTS when it is there), and its
+        # receipt the criteria as they stood when the agent stopped.
+        _review = next((i for i in TASK_FEED[ASK1] if i["id"] == "feed_v1"), None)
+        if _review is None:
+            _review = _feed("feed_v1", 18, "review", "todo_task_release", {"title": "整理发布说明", "verdict": "accepted",
+                                                                          "note": "Written to docs/release-notes.md"})
+            TASK_FEED[ASK1].append(_review)
+        _review["body"]["result"] = _release_result
+        next(i for i in TASK_FEED[ASK1] if i["id"] == "feed_m7")["body"]["criteria"] = [
+            {"criterion": c, "state": "unchecked"} for c in _release_done_when]
     # MOCK_TASKS_PENDING_REVIEW=1: the Today card lists the stopped release-notes task waiting for review (#4889).
     if os.environ.get("MOCK_TASKS_PENDING_REVIEW") == "1":
         for _t in TODOS_INIT + TODOS:
@@ -16138,6 +16249,7 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))

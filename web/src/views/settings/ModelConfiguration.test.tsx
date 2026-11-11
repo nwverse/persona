@@ -35,6 +35,11 @@ const lark = (override: ModelBinding = {}, revision = 7): ModelPurpose => ({
   inherited_from: Object.keys(override).length ? undefined : "agent.new",
   fields: ["provider", "model", "effort"], provider_ids: providers.filter((p) => p.id !== "api.responses").map((p) => p.id),
 });
+const triage = (override: ModelBinding = {}, revision = 7): ModelPurpose => ({
+  id: "inbox.triage", category_id: "inbox.triage", name: "Information screening", group: "Default models", kind: "api", revision,
+  override, effective: { provider: "api.messages", model: "api-default", ...override },
+  fields: ["provider", "model", "effort"], provider_ids: ["api.messages", "api.responses"],
+});
 let current: ModelPurpose;
 let readonly: ModelPurpose;
 let conflict: boolean;
@@ -52,7 +57,8 @@ const hub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     for (const field of ["provider", "model", "effort"] as const) {
       if (typeof body[field] === "string") override[field] = body[field];
     }
-    current = lark(override, current.revision + 1);
+    if (current.id === "lark.agent") current = lark(override, current.revision + 1);
+    else current = { ...current, override, effective: { ...current.effective, ...override }, revision: current.revision + 1 };
     return json({ purpose: current, providers });
   }
   if (path.endsWith("/model-config")) return json({ purposes: [
@@ -62,6 +68,7 @@ const hub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     { ...agents, id: "extension.example", name: "Example extension", kind: "api", effective: { provider: "api.responses" } },
   ], providers });
   if (path.endsWith("/purposes/lark.agent")) return json({ purpose: current, providers });
+  if (path.endsWith("/purposes/inbox.triage")) return json({ purpose: current, providers });
   if (path.endsWith("/purposes/inbox.agent")) return json({ purpose: readonly, providers });
   if (path.endsWith("/models")) return listFails ? json({ error: "unavailable" }, 404) : json({
     agent: "claude", models: [
@@ -76,7 +83,7 @@ let root: Root;
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')!;
 const button = (label: string, scope: ParentNode = document) => [...scope.querySelectorAll("button")].find((b) => b.textContent === label)!;
-const row = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Lark /agent"))!;
+const row = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(current.name))!;
 const effort = () => dialog().querySelector<HTMLInputElement>('input[list="model-efforts"]')!;
 function type(input: HTMLInputElement, value: string) {
   act(() => {
@@ -222,6 +229,18 @@ describe("Lark /agent model configuration", () => {
     type(effort(), "low");
     await act(async () => button(t("common.save"), dialog()).click());
     expect(writes[0].body).toEqual({ revision: 7, provider: "api.messages", model: "api-model", effort: "low" });
+  });
+
+  it("allows setting effort on a Messages direct-API purpose", async () => {
+    current = triage({ provider: "api.messages", model: "api-model", effort: "off" });
+    await render();
+    await open();
+    expect(effort()).not.toBeNull();
+    expect([...dialog().querySelectorAll<HTMLOptionElement>("datalist#model-efforts option")].map((o) => o.value)).toContain("off");
+    type(effort(), "low");
+    await act(async () => button(t("common.save"), dialog()).click());
+    expect(writes[0]).toEqual({ path: "/api/v1/model-config/purposes/inbox.triage", method: "PATCH",
+      body: { revision: 7, provider: "api.messages", model: "api-model", effort: "low" } });
   });
 
   it("restores following by clearing all three fields using the child's revision", async () => {
