@@ -8792,7 +8792,7 @@
         }
       }
     },
-    "%lld queued · Claude will handle them in order": {
+    "%lld queued · %@ will handle them in order [Queue Strip]": {
       "localizations": {
         "en": {
           "variations": {
@@ -8800,13 +8800,13 @@
               "one": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%1$lld queued · Claude will handle it when free"
+                  "value": "%1$lld queued · %2$@ will handle it when free"
                 }
               },
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%1$lld queued · Claude will handle them in order"
+                  "value": "%1$lld queued · %2$@ will handle them in order"
                 }
               }
             }
@@ -8815,13 +8815,13 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "キュー%1$lld件・Claudeが手すき次第順に処理します"
+            "value": "キュー%1$lld件・%2$@が手すき次第順に処理します"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "排队中 %1$lld 条 · Claude 忙完会依次处理"
+            "value": "排队中 %1$lld 条 · %2$@ 忙完会依次处理"
           }
         }
       },
@@ -62718,6 +62718,29 @@
       },
       "extractionState": "manual"
     },
+    "Item %lld: %@, arrives when this turn ends [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Item %1$lld: %2$@, arrives when this turn ends"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld件目：%2$@（このターンが終わってから届きます）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "第 %1$lld 条：%2$@，本轮结束后送达"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Its CLI is too old": {
       "extractionState": "manual",
       "localizations": {
@@ -111688,6 +111711,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "把一件事发给某个个人 Agent 会话（飞书网关的 agent-bridge），由它去做。不选会话时发给最近活跃、能发送的那个。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Arrives when this turn ends [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arrives when this turn ends"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このターンが終わってから届きます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本轮结束后送达"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%@ gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ は次のステップを待たずにすぐ受け取ります。今の作業は止まるか、できるものはバックグラウンドで続き、あなたのメッセージを含めてやり直します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 会马上收到，不用等到下一步。它手头的这一步会停下，能转到后台的会在后台继续，然后带上你的消息重新开始。"
           }
         }
       },

@@ -18,11 +18,37 @@ struct QueueSteerTests {
         #expect(QueueOrder.moved(count: 3, index: 5, by: -1) == nil, "an index the queue no longer has")
     }
 
+    @Test func ownQueueCountLeavesRelayedMessagesOutAndClampsTheirCount() throws {
+        let queue = #","queued":["one","two","relay"]"#
+        #expect(try session(queue).ownQueuedCount == 3, "an older hub has only the user's own messages")
+        #expect(try session(queue + #","queued_relayed":1"#).ownQueuedCount == 2)
+        #expect(try session(queue + #","queued_relayed":99"#).ownQueuedCount == 0, "a stale count cannot make the own count negative")
+        #expect(try session(queue + #","queued_relayed":-2"#).ownQueuedCount == 3, "a malformed negative count is none")
+    }
+
     @Test func onlyAClaudeInATerminalSteersItsQueue() throws {
         #expect(try session(#","agent":"claude","pane_id":"w1:p1""#).steersQueue)
         #expect(try session(#","pane_id":"w1:p1""#).steersQueue, "an older hub that does not name the agent: Claude")
         #expect(try !session(#","agent":"codex","pane_id":"w1:p1""#).steersQueue)
         #expect(try !session(#","agent":"claude""#).steersQueue, "not in a terminal pane")
         #expect(try !session(#","agent":"claude","pane_id":"w1:p1","assistant":true"#).steersQueue)
+    }
+
+    @Test func relayedMessagesCannotBeEditedMovedOrSentNow() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/sessions/m/s/queue", json: #"{"queue":["one","two","relay"]}"#)
+        hub.on("POST", "/api/v1/sessions/m/s/queue/send-now", json: #"{"sent":true}"#)
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let ref = MachineRef(group: "", id: "m")
+        model.applySessions([ref: [try session(#","assistant":true,"queued":["one","two","relay"],"queued_relayed":1"#)]])
+        let key = SessionKey(machineID: "m", sessionID: "s")
+        await model.editQueued(key, index: 2, delete: true)
+        await model.moveQueued(key, index: 2, by: -1)
+
+        model.applySessions([ref: [try session(#","assistant":true,"queued":["relay"],"queued_relayed":1"#)]])
+        await model.sendQueuedNow(key)
+        #expect(hub.sent("POST", "/api/v1/sessions/m/s/queue").isEmpty, "relayed messages are not queue-edit indexes")
+        #expect(hub.sent("POST", "/api/v1/sessions/m/s/queue/send-now").isEmpty, "nothing of the user's own waits to send")
     }
 }

@@ -2256,14 +2256,23 @@ final class AppModel {
 
     /// Edit or delete one queued message: everything is pulled back out of claude and the others re-queued.
     func editQueued(_ key: SessionKey, index: Int, delete: Bool) async {
-        guard allowSend(key), let api = api(key.group), let queue = session(key)?.queued, queue.indices.contains(index) else { return }
+        guard allowSend(key), let api = api(key.group), let session = session(key), let queue = session.queued,
+              queue.indices.contains(index), index < session.ownQueuedCount else { return }
         do {
-            let pulled = try await api.editQueue(key, keep: queue.indices.filter { $0 != index })
+            let response = try await api.editQueue(key, keep: queue.indices.filter { $0 < session.ownQueuedCount && $0 != index })
+            let pulled = response.queue
             // The one taken out will not reach the transcript: its sent bubble goes now, not when the turn ends.
             if pulled.indices.contains(index), chat(key).pulledBack(pulled[index]) { saveOutbox() }
             if !delete, pulled.indices.contains(index) {
                 let current = drafts[key] ?? ""
                 drafts[key] = current.isEmpty ? pulled[index] : current + "\n" + pulled[index]
+                let held = composerAttachments(key)
+                if let images = response.images, images.indices.contains(index) {
+                    for payload in images[index] {
+                        let image = Data(base64Encoded: payload.data).flatMap(UIImage.init(data:)) ?? UIImage()
+                        held.images.append((image, payload))
+                    }
+                }
             }
             Haptics.success()
             toast = Toast(delete ? String(localized: "Removed from the queue") : String(localized: "Moved back to the input box. Edit it and send again."), style: .success)
@@ -2274,8 +2283,8 @@ final class AppModel {
 
     /// Moves a queued message one place up or down (#6088): the queue is pulled back and re-queued in the new order.
     func moveQueued(_ key: SessionKey, index: Int, by step: Int) async {
-        guard allowSend(key), let api = api(key.group), let queue = session(key)?.queued,
-              let keep = QueueOrder.moved(count: queue.count, index: index, by: step) else { return }
+        guard allowSend(key), let api = api(key.group), let session = session(key),
+              let keep = QueueOrder.moved(count: session.ownQueuedCount, index: index, by: step) else { return }
         do {
             _ = try await api.editQueue(key, keep: keep)
             Haptics.tap()
@@ -2286,7 +2295,7 @@ final class AppModel {
 
     /// Gives the agent its queued messages now instead of at its next tool boundary (#6088).
     func sendQueuedNow(_ key: SessionKey) async {
-        guard allowSend(key), let api = api(key.group) else { return }
+        guard allowSend(key), let api = api(key.group), (session(key)?.ownQueuedCount ?? 0) > 0 else { return }
         do {
             try await api.sendQueuedNow(key)
             Haptics.success()
