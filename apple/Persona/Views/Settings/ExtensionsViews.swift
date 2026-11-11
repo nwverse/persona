@@ -994,7 +994,8 @@ private struct ExtensionSecretSheet: View {
                 }
                 Section {
                     if byReference {
-                        TextField(String(localized: "op://vault/item/field"), text: $value)
+                        // The placeholder is a reference's shape, the same in every language.
+                        TextField(String(localized: "Use a Reference"), text: $value, prompt: Text(verbatim: "op://vault/item/field"))
                             .font(Theme.Font.code)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
