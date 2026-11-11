@@ -101,6 +101,10 @@ export interface Subagent {
   steps?: number;
   /** Its latest tool call: what it is doing now while it runs (newer nodes). */
   last_tool?: { id?: string; name: string; summary: string };
+  /** The model it ran on, from its own transcript (newer nodes, #5030); never the model its call asked for. */
+  model?: string;
+  /** Its latest reply's context plus output tokens, as a workflow agent's `tokens` (newer nodes, #5030). */
+  tokens?: number;
 }
 
 export interface SessionCapabilities {
