@@ -9,13 +9,13 @@ import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { contextSize, flyoutPlace, shownEffort, type PanelConfig, type PanelRow } from "../../lib/model-panel";
+import { effortTitle } from "../../lib/session-actions";
 import { AgentMark } from "../AgentMark";
 import { cx } from "../atoms";
 import { Icon } from "../icons";
 import { EffortSlider } from "./EffortSlider";
-import { effortLabel } from "./Row";
 
-export const FLYOUT_WIDTH = 264;
+const FLYOUT_WIDTH = 264;
 
 export type FlyoutMode = "recommended" | "customized" | "favorite";
 
@@ -126,7 +126,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
       </div>
       {(slider || model.fast) && (
         <div className="flex items-center gap-2 pt-3.5">
-          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.defaultEffort} labelOf={(e) => effortLabel(provider.engine, e)} onChange={onEffort} disabled={disabled} />}
+          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.defaultEffort} labelOf={effortTitle} onChange={onEffort} disabled={disabled} />}
           {model.fast && (
             <button
               type="button"

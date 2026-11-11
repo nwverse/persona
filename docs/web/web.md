@@ -1520,7 +1520,8 @@ and components (`docs/design/DESIGN_SYSTEM.md` 3.1). A Persona chat keeps its la
   prop; its data comes with #5035): a clock first, the target engine's name, and the tooltip "Current: …" / "Next
   message: …"; a switch on its way: dimmed, no clicks. An Agent that can switch neither its model nor its effort (offline,
   a read-only source) gets the same words as a label, not a button; with no model known either, nothing.
-- **Providers** (`lib/session-models.ts`): the computer's launchers (`GET /machines/{mid}/launchers?purpose=agent.new`),
+- **Providers** (`lib/session-models.ts` reads them, `lib/session-panel.ts` builds the panel's data and what a pick
+  sends, loaded with the panel): the computer's launchers (`GET /machines/{mid}/launchers?purpose=agent.new`),
   each with the models its agent lists in its own /model menu (`GET …/launchers/{name}/models`, the list **New agent**
   uses). The pill reads the session's own list once (for the model's name); the panel, on each opening, shows the lists
   read before at once and reads every list again behind them, the session's own first, at most three at a time.

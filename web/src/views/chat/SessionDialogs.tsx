@@ -339,6 +339,18 @@ export function useModeSet(session: Session) {
   return { set, latest };
 }
 
+/** POST …/modes {service_tier}: Codex's speed (the Speed submenu, the model pill). Nothing is drawn ahead of it: the
+ *  session's push after the agent took it owns what is shown (DESIGN_SYSTEM.md "Codex speed controls"). */
+export async function setServiceTier(s: Session, tier: string): Promise<boolean> {
+  try {
+    await api(`${sessionPath(s.machine_id, s.session_id)}/modes`, { method: "POST", json: { service_tier: tier } });
+    return true;
+  } catch (e) {
+    toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+    return false;
+  }
+}
+
 const MODE_LOOK: Record<ModeTone, string> = {
   asks: "bg-field text-ink-3",
   unknown: "bg-field text-ink-3",

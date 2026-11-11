@@ -9,7 +9,7 @@
 // about a third of its height. Keys: the search has the focus (with a precise pointer); Tab or ↓ goes to the rows, ↑↓
 // move between them, Enter or Space picks, ← opens a row's flyout, Esc closes the flyout and then the panel. A pick
 // waits for `onPick`: applied, the setup goes into Recent and the panel closes; refused, it stays as it was.
-import { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import {
@@ -106,6 +106,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
   const [applying, setApplying] = useState<{ key: string; patch: PanelOverride } | null>(null);
   const [fly, setFly] = useState<{ key: string; el: HTMLElement; keyboard: boolean } | null>(null);
   const [flash, setFlash] = useState("");
+  const closeFly = useCallback(() => setFly(null), []);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -373,7 +374,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
     } else if (e.key === "Enter" && searching) {
       // a search and Enter: the first row that can be picked (a typed ID's "Use …" too)
       e.preventDefault();
-      const first = rows.find((r) => !rowBlock(r.provider, state).blocked);
+      const first = rows.find((r) => !rowBlock(r.provider, state));
       if (first) void pick(first);
     }
   };
@@ -407,11 +408,12 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
   const empty = !sections.length;
   const notes = [state.busy && { icon: "info" as const, text: state.busy, tone: "text-ink-3" }, state.note && { icon: "warning" as const, text: state.note, tone: "text-orange" }].filter(Boolean) as { icon: "info" | "warning"; text: string; tone: string }[];
 
+  const room = phone ? "calc(100vw - 16px)" : "calc(100vw - 48px)";
   const style: CSSProperties & Record<string, string | number | undefined> = {
     left: geo?.left ?? 0,
     top: geo?.top ?? 0,
-    minWidth: width ? `max(300px, min(${width}px, ${phone ? "calc(100vw - 16px)" : "calc(100vw - 48px)"}))` : undefined,
-    maxWidth: phone ? "min(460px, calc(100vw - 16px))" : "min(460px, calc(100vw - 48px))",
+    minWidth: width ? `max(300px, min(${width}px, ${room}))` : undefined,
+    maxWidth: `min(460px, ${room})`,
     visibility: geo ? undefined : "hidden",
     "--model-panel-from": geo?.from,
     "--model-panel-shift": geo?.shift === undefined ? undefined : `${geo.shift}px`,
@@ -478,7 +480,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                 ))}
                 {empty ? (
                   <div className="w-0 min-w-full px-3 py-6 text-center text-[13px] text-ink-3">
-                    {!searching && view.kind === "favorites" ? t("ui-modelpanel.favorites_empty") : !searching && view.kind === "recent" ? t("ui-modelpanel.recent_empty") : t("ui-modelpanel.no_match")}
+                    {shown.kind === "favorites" ? t("ui-modelpanel.favorites_empty") : shown.kind === "recent" ? t("ui-modelpanel.recent_empty") : t("ui-modelpanel.no_match")}
                   </div>
                 ) : (
                   sections.map((s) => (
@@ -493,7 +495,6 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                         </div>
                       )}
                       {s.rows.map((row) => {
-                        const block = rowBlock(row.provider, state);
                         const customizable = rowCustomizable(row, state, live);
                         const removes = row.kind === "favorite" || (row.kind === "recent" && Boolean(row.starredUid));
                         const two = second(row);
@@ -503,7 +504,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                             row={row}
                             second={two.text}
                             describes={two.describes}
-                            blocked={block.blocked ? { reason: block.reason } : undefined}
+                            blocked={rowBlock(row.provider, state)}
                             customizable={customizable}
                             flyoutOpen={fly?.key === row.key}
                             starred={removes || flash === row.key}
@@ -554,7 +555,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
           onFast={(on) => void edit(flyRow, { fast: on })}
           onReset={() => void reset(flyRow)}
           onStar={() => star(flyRow)}
-          onClose={() => setFly(null)}
+          onClose={closeFly}
         />
       )}
     </>,

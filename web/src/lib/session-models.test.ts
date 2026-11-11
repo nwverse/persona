@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-// The model panel's data for an Agent's chat (#5032): the computer's launchers as providers, the session's own the only one
-// that switches (others wait for #5035, another engine needs a new conversation, a Codex thread keeps its model), the row
-// it runs, what a pick sends and in which order, what the pill says, and the lists kept and read again behind them.
+// The model panel's data for an Agent's chat (#5032, lib/session-models.ts and lib/session-panel.ts): the computer's
+// launchers as providers, the session's own the only one that switches (others wait for #5035, another engine needs a new
+// conversation, a Codex thread keeps its model), the row it runs, what a pick sends and in which order, what the pill
+// says, and the lists kept and read again behind them.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
 import type { LauncherModels } from "./launcher-models";
-import { currentModelRow, forgetModel, modelLabel, modelList, pickPlan, pillView, readModels, sessionPanel, type ModelList } from "./session-models";
+import { currentModelRow, forgetModel, modelLabel, modelList, pillView, readModels, type ModelList } from "./session-models";
+import { pickPlan, sessionPanel } from "./session-panel";
 import type { Launcher, Session } from "./types";
 
 const ALL = ["low", "medium", "high", "xhigh", "max"];
@@ -46,7 +48,7 @@ describe("the providers of an Agent's chat", () => {
     const { providers } = sessionPanel(session(), launchers, lists({ gateway: { list: claudeList } }));
     const own = providers.find((p) => p.id === "gateway")!;
     expect(own.models).toEqual([
-      { id: "default", name: "Default (recommended)", resolved: "claude-opus-5-5", efforts: ALL, defaultEffort: "high", isDefault: true },
+      { id: "default", name: "Default (recommended)", resolved: "claude-opus-5-5", efforts: ALL, defaultEffort: "high" },
       { id: "opus", name: "Opus 5.5", resolved: "claude-opus-5-5", efforts: ALL, defaultEffort: "high", description: "Most capable", context: 200000 },
       { id: "haiku", name: "Haiku 5.5", resolved: "claude-haiku-5-5", efforts: ["low", "high"] },
       // a typed ID's efforts aren't known: Claude Code takes any

@@ -26,7 +26,7 @@ export function EffortSlider({ stops, value, recommended, labelOf, onChange, dis
   const track = useRef<HTMLDivElement>(null);
   // the continuous position while dragging (0 … stops − 1); null: drawn at `value`
   const [drag, setDrag] = useState<number | null>(null);
-  const [dragging, setDragging] = useState(false);
+  const dragging = drag !== null;
   // the pointer moved since it went down: the thumb follows it 1:1, no transition
   const [live, setLive] = useState(false);
   const pointer = useRef<number | null>(null);
@@ -58,13 +58,11 @@ export function EffortSlider({ stops, value, recommended, labelOf, onChange, dis
     };
     const up = (e: PointerEvent) => {
       if (e.pointerId !== pointer.current) return;
-      setDragging(false);
       setLive(false);
       commit(Math.round(at(e.clientX)));
       setDrag(null);
     };
     const cancel = () => {
-      setDragging(false);
       setLive(false);
       setDrag(null);
     };
@@ -86,7 +84,6 @@ export function EffortSlider({ stops, value, recommended, labelOf, onChange, dis
     e.currentTarget.focus();
     e.preventDefault();
     setLive(false);
-    setDragging(true);
     // pressing previews the nearest level; letting go applies the last one (a drag is one change, not two)
     setDrag(Math.round(at(e.clientX)));
   };

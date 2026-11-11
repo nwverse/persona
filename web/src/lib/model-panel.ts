@@ -2,7 +2,9 @@
 // the providers a chat can run on and their models, the setup that runs now, and what the panel keeps in this browser
 // (favorites, recent setups, per-model customizations). The panel (ui/model-panel/ModelPanel.tsx) draws them; each chat
 // kind builds them from its own sources (an Agent: its computer's launchers; a Persona chat: the assistant's list).
+import { matches } from "./launcher-models";
 import { cleanModelId, validModelId } from "./model-id";
+import { isCurrentModel } from "./model-switch";
 
 /** One model of a provider, as the panel shows and picks it. */
 export interface PanelModel {
@@ -23,8 +25,6 @@ export interface PanelModel {
   context?: number;
   /** A model ID typed before for this provider (#1644): listed after the provider's own models, can be forgotten. */
   custom?: boolean;
-  /** The provider's default entry: picking it is the same as picking no model. */
-  isDefault?: boolean;
 }
 
 /** One provider: a launcher (rc-file alias, PATH wrapper, built-in claude, Persona-managed) or a hosted provider. */
@@ -153,16 +153,9 @@ export function resetOverride(all: PanelOverrides, provider: string, model: stri
 
 // ── rows ──────────────────────────────────────────────────────────────────────
 
-/** Whether `model` is the one named `id`: its id or the concrete model it stands for (Claude Code's `opus`), any case. */
-export function modelIs(model: Pick<PanelModel, "id" | "resolved">, id: string | undefined): boolean {
-  if (!id) return false;
-  const want = id.toLowerCase();
-  return model.id.toLowerCase() === want || Boolean(model.resolved && model.resolved.toLowerCase() === want);
-}
-
-/** Whether `model` of `provider` runs now. */
-export function isCurrentModel(provider: Pick<PanelProvider, "id">, model: Pick<PanelModel, "id" | "resolved">, current: PanelConfig | null | undefined): boolean {
-  return Boolean(current && current.provider === provider.id && modelIs(model, current.model));
+/** Whether `model` of `provider` runs now (its id or the concrete model it stands for, lib/model-switch.ts isCurrentModel). */
+function runsNow(provider: Pick<PanelProvider, "id">, model: Pick<PanelModel, "id" | "resolved">, current: PanelConfig | null | undefined): boolean {
+  return Boolean(current && current.provider === provider.id && isCurrentModel(model, current.model));
 }
 
 const takes = (model: Pick<PanelModel, "efforts">, effort: string | undefined) => (effort && model.efforts.includes(effort) ? effort : undefined);
@@ -174,7 +167,7 @@ const takes = (model: Pick<PanelModel, "efforts">, effort: string | undefined) =
  */
 export function rowSetup(provider: Pick<PanelProvider, "id">, model: PanelModel, state: Pick<PanelState, "current">, override?: PanelOverride): PanelConfig {
   const current = state.current;
-  const now = isCurrentModel(provider, model, current);
+  const now = runsNow(provider, model, current);
   const effort = now ? (takes(model, current?.effort) ?? takes(model, override?.effort)) : (takes(model, override?.effort) ?? takes(model, current?.effort));
   const fast = model.fast ? (now ? (current?.fast ?? override?.fast) : override?.fast) : undefined;
   return cleanSetup({ provider: provider.id, model: model.id, effort, fast });
@@ -190,20 +183,15 @@ export function copySetup(copy: PanelConfig, model: PanelModel, listed: boolean)
 /** The effort a setup runs at: its own, else the model's default (the triple and the slider show this). */
 export const shownEffort = (setup: PanelConfig, model: Pick<PanelModel, "defaultEffort">) => setup.effort || model.defaultEffort || "";
 
-/** A provider whose list has not been read: its rows wait (a list shown from before and read again behind it does not). */
-export const listPending = (p: Pick<PanelProvider, "models">) => p.models === null;
-
-/** Why a row of `provider` can't be picked now: the chat is busy, the provider can't take a pick here, the launcher fixes
- *  its own model, or its list is still being read (blocked with no reason to say). */
-export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy">): { blocked: boolean; reason: string } {
-  if (state.busy) return { blocked: true, reason: state.busy };
-  if (provider.unavailable) return { blocked: true, reason: provider.unavailable };
-  if (provider.locked) return { blocked: true, reason: provider.locked };
-  if (listPending(provider)) return { blocked: true, reason: "" };
-  return { blocked: false, reason: "" };
+/** Why a row of `provider` can't be picked now (undefined: it can): the chat is busy, the provider can't take a pick
+ *  here, the launcher fixes its own model, or its list is still being read (no reason to say; a list shown from before
+ *  and read again behind it does not wait). */
+export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy">): { reason: string } | undefined {
+  const reason = state.busy || provider.unavailable || provider.locked;
+  if (reason) return { reason };
+  if (provider.models === null) return { reason: "" };
+  return undefined;
 }
-
-export const rowPickable = (provider: PanelProvider, state: Pick<PanelState, "busy">) => !rowBlock(provider, state).blocked;
 
 /** Whether a row's setup flyout opens. Recent rows and "Use “…”" have none. The model that runs now has one whenever the
  *  chat applies flyout edits at once (`live`), even while picks are off (busy, or a Codex session that changes only its
@@ -211,15 +199,12 @@ export const rowPickable = (provider: PanelProvider, state: Pick<PanelState, "bu
 export function rowCustomizable(row: Pick<PanelRow, "kind" | "current" | "provider">, state: Pick<PanelState, "busy">, live: boolean): boolean {
   if (row.kind === "recent" || row.kind === "typed") return false;
   if (row.kind === "model" && row.current && live) return true;
-  return rowPickable(row.provider, state);
+  return !rowBlock(row.provider, state);
 }
 
 /** The search (every word, any case): the model's name, id, the model it stands for, its description, the provider's name. */
 export function matchesQuery(provider: Pick<PanelProvider, "name">, model: Pick<PanelModel, "id" | "name" | "resolved" | "description">, query: string): boolean {
-  const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return true;
-  const text = [model.name, model.id, model.resolved, model.description, provider.name].filter(Boolean).join("\n").toLocaleLowerCase();
-  return words.every((w) => text.includes(w));
+  return matches([model.name, model.id, model.resolved, model.description, provider.name], query);
 }
 
 /** What the list shows: one rail cell's view. A search shows "all" whatever cell is on. */
@@ -271,7 +256,7 @@ function resolveCopy(providers: PanelProvider[], copy: PanelConfig): { provider:
   const provider = providers.find((p) => p.id === copy.provider);
   if (!provider) return undefined;
   if (provider.models === null) return { provider, model: { id: copy.model, name: copy.model, efforts: [] }, listed: false };
-  const model = provider.models.find((m) => modelIs(m, copy.model));
+  const model = provider.models.find((m) => isCurrentModel(m, copy.model));
   if (model) return { provider, model, listed: true };
   if (provider.typable) return { provider, model: { id: copy.model, name: copy.model, efforts: [], custom: true }, listed: false };
   return undefined;
@@ -297,9 +282,9 @@ export function panelSections({ providers, state, view: chosen, query, favorites
       const r = resolveCopy(providers, c);
       if (!r) continue;
       const setup = copySetup(c, r.model, r.listed);
-      const starred = favorites.find((f) => f.provider === setup.provider && modelIs(r.model, f.model) && sameSetup(copySetup(f, r.model, r.listed), setup));
+      const starred = favorites.find((f) => f.provider === setup.provider && isCurrentModel(r.model, f.model) && sameSetup(copySetup(f, r.model, r.listed), setup));
       const now = state.current;
-      const current = Boolean(now) && isCurrentModel(r.provider, r.model, now) && (setup.effort || "") === (now?.effort || "") && Boolean(setup.fast) === Boolean(now?.fast);
+      const current = Boolean(now) && runsNow(r.provider, r.model, now) && (setup.effort || "") === (now?.effort || "") && Boolean(setup.fast) === Boolean(now?.fast);
       rows.push({ key: `recent:${i}`, kind: "recent", provider: r.provider, model: r.model, setup, starredUid: starred?.uid, current, customized: false });
     }
     return rows.length ? [{ key: "recent", kind: "recent", rows }] : [];
@@ -320,7 +305,7 @@ export function panelSections({ providers, state, view: chosen, query, favorites
     if (p.models === null) continue;
     groups.set(p.id, p.models.filter((m) => matchesQuery(p, m, q)).map((m) => {
       const override = overrides[overrideKey(p.id, m.id)];
-      return { key: `model:${p.id}\n${m.id}`, kind: "model" as const, provider: p, model: m, setup: rowSetup(p, m, state, override), current: isCurrentModel(p, m, state.current), customized: Boolean(override) };
+      return { key: `model:${p.id}\n${m.id}`, kind: "model" as const, provider: p, model: m, setup: rowSetup(p, m, state, override), current: runsNow(p, m, state.current), customized: Boolean(override) };
     }));
   }
 
@@ -368,7 +353,7 @@ export function alignedScrollTop(o: { clientHeight: number; scrollHeight: number
   return clamp((o.rowTop + o.rowBottom) / 2 - o.clientHeight * 0.35);
 }
 
-export interface Box {
+interface Box {
   left: number;
   right: number;
   top: number;
@@ -377,9 +362,9 @@ export interface Box {
 
 /** The flyout's place (Cindy's computeFlyoutPlacement): outside the panel's left edge with a 4 px gap, on the right when
  *  the left has no room, kept 8 px inside the window; its top 12 px above the row's, held within the panel's height. */
-export function flyoutPlace(o: { row: Box; panel: Box; width: number; height: number; screenW: number; screenH: number; gap?: number; margin?: number }): { left: number; top: number; side: "left" | "right" } {
-  const gap = o.gap ?? 4;
-  const margin = o.margin ?? 8;
+export function flyoutPlace(o: { row: Box; panel: Box; width: number; height: number; screenW: number; screenH: number }): { left: number; top: number; side: "left" | "right" } {
+  const gap = 4;
+  const margin = 8;
   const leftAt = o.panel.left - gap - o.width;
   const rightAt = o.panel.right + gap;
   let side: "left" | "right";

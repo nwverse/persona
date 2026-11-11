@@ -194,7 +194,8 @@ export function modelDetail(m: AgentModel): string {
   return m.id.toLowerCase() !== (m.name || m.id).toLowerCase() ? m.id : "";
 }
 
-function matches(fields: (string | undefined)[], query: string): boolean {
+/** Whether every word of `query` (any case) is in one of `fields`; an empty query matches. */
+export function matches(fields: (string | undefined)[], query: string): boolean {
   const text = fields.filter(Boolean).join("\n").toLocaleLowerCase();
   return query.toLocaleLowerCase().split(/\s+/).filter(Boolean).every((word) => text.includes(word));
 }
@@ -208,7 +209,8 @@ export function modelRows(models: AgentModel[], query: string, followed: ModelBi
   return { showDefault, rows };
 }
 
-const ALL_EFFORTS = EFFORTS.map((e) => e.id);
+/** Every thinking effort Claude Code takes, weakest first: what a model nobody lists the efforts of is offered. */
+export const ALL_EFFORTS = EFFORTS.map((e) => e.id);
 
 /** The efforts the control offers: the picked model's, with none picked the one that runs ("Model configuration"'s, else the
  *  default entry's). No list to go by (loading, failed, older hub), or "Model configuration"'s model not in it under that id: all

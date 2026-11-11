@@ -6,23 +6,12 @@
 import type { ButtonHTMLAttributes, KeyboardEvent, MouseEvent } from "react";
 import { t } from "../../i18n";
 import { shownEffort, type PanelRow } from "../../lib/model-panel";
-import { CODEX_EFFORTS, EFFORTS, effortTitle } from "../../lib/session-actions";
+import { effortTitle } from "../../lib/session-actions";
 import { agentName } from "../../lib/agent-kind";
 import { AgentMark } from "../AgentMark";
 import { cx } from "../atoms";
 import { Icon, type IconName } from "../icons";
 import { ProviderMark } from "./ProviderMark";
-
-/** An effort level's name as the Agent calls it (Codex has its own words for some levels). */
-export function effortLabel(engine: string, id: string): string {
-  return (engine === "codex" ? CODEX_EFFORTS : EFFORTS).find((e) => e.id === id)?.title ?? effortTitle(id);
-}
-
-/** What a row's right side says, in words: "Claude Code · High · Fast". */
-export function setupTitle(row: Pick<PanelRow, "provider" | "model" | "setup">): string {
-  const effort = row.model.efforts.length ? shownEffort(row.setup, row.model) : "";
-  return [agentName(row.provider.engine), effort && effortLabel(row.provider.engine, effort), row.setup.fast && t("ui-modelpanel.fast_short")].filter(Boolean).join(" · ");
-}
 
 // the row's small square buttons, shown under the pointer, on keyboard focus and always without hover
 const REVEAL = "opacity-0 group-hover/row:opacity-100 group-focus-visible/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
@@ -46,7 +35,7 @@ function RowButton({ icon, label, onClick, className, filled, disabled, ...rest 
   );
 }
 
-export interface RowProps {
+interface RowProps {
   row: PanelRow;
   /** The second line ("" for none) and whether it is the model's description (capped at about 30 characters). */
   second: string;
@@ -73,6 +62,8 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
   const { model, provider } = row;
   const name = row.kind === "typed" ? t("ui-modelpanel.use_typed", { id: model.id }) : model.name;
   const effort = model.efforts.length ? shownEffort(row.setup, model) : "";
+  // what the right side says, in words: "Claude Code · High · Fast"
+  const setupTitle = [agentName(provider.engine), effort && effortTitle(effort), row.setup.fast && t("ui-modelpanel.fast_short")].filter(Boolean).join(" · ");
   const off = Boolean(blocked) || Boolean(frozen);
   const starOff = Boolean(frozen) || (Boolean(blocked) && !starRemoves) || row.kind === "typed";
   const key = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -148,9 +139,9 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
           <RowButton icon="x" disabled={frozen} label={t("ui-modelpanel.forget", { id: model.id })} onClick={onForget} className={cx("text-ink-3 hover:text-ink-2", REVEAL)} />
         )}
         <span className="ml-auto flex shrink-0 items-center">
-          <span title={setupTitle(row)} data-row-setup className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-[12px] text-ink-3">
+          <span title={setupTitle} data-row-setup className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-[12px] text-ink-3">
             <AgentMark agent={provider.engine} size={12} decorative className="shrink-0" />
-            {effort && <span className="truncate">{effortLabel(provider.engine, effort)}</span>}
+            {effort && <span className="truncate">{effortTitle(effort)}</span>}
             {row.setup.fast && <Icon name="bolt" size={11} className="shrink-0 fill-current" />}
           </span>
         </span>

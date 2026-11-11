@@ -231,13 +231,13 @@ describe("what is kept", () => {
 
 describe("what can be picked and customized", () => {
   it("not while busy, on a provider that can't take a pick, a locked launcher or a list not read; each says why", () => {
-    expect(rowBlock(claude(), {})).toEqual({ blocked: false, reason: "" });
-    expect(rowBlock(claude(), { busy: "Working" })).toEqual({ blocked: true, reason: "Working" });
-    expect(rowBlock(codex({ unavailable: "Needs a new conversation" }), {})).toEqual({ blocked: true, reason: "Needs a new conversation" });
-    expect(rowBlock(claude({ locked: "Fixed by the launcher" }), {})).toEqual({ blocked: true, reason: "Fixed by the launcher" });
-    expect(rowBlock(claude({ models: null }), {})).toEqual({ blocked: true, reason: "" });
+    expect(rowBlock(claude(), {})).toBeUndefined();
+    expect(rowBlock(claude(), { busy: "Working" })).toEqual({ reason: "Working" });
+    expect(rowBlock(codex({ unavailable: "Needs a new conversation" }), {})).toEqual({ reason: "Needs a new conversation" });
+    expect(rowBlock(claude({ locked: "Fixed by the launcher" }), {})).toEqual({ reason: "Fixed by the launcher" });
+    expect(rowBlock(claude({ models: null }), {})).toEqual({ reason: "" });
     // a list shown from before and read again behind it can be picked
-    expect(rowBlock(claude({ loading: true }), {}).blocked).toBe(false);
+    expect(rowBlock(claude({ loading: true }), {})).toBeUndefined();
   });
 
   it("the model that runs now keeps its flyout when edits apply live, even when picks are off", () => {
