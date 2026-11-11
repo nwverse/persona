@@ -45,7 +45,8 @@ async function setup(t, o = {}) {
   const logs = []
   const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, log: (m) => logs.push(m) })
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
-    { socketPath: node.path, mcpConfig: o.mcpConfig, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500 })
+    { socketPath: node.path, mcpConfig: o.mcpConfig, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500,
+      listMax: o.listMax, pageSize: o.pageSize, closedChecks: o.closedChecks, sweepMs: o.sweepMs ?? 0 })
   bridge.start()
   t.after(() => bridge.stop())
   await node.ready
@@ -511,6 +512,148 @@ test("a project's worktrees are one space; a new session at a worktree goes into
   assert.deepEqual([inWt.space_id, inWt.space_name, inWt.slot_id, inWt.slot_name], [key, 'app', undefined, '修登录'])
   const inApp = await slow({ cwd: app, workspace_id: key })
   assert.deepEqual([inApp.space_id, inApp.space_name, inApp.slot_name], [key, 'app', undefined], 'a new workspace of the project: no name yet')
+})
+
+test("an agent that leaves Paseo's list has its Claude session named to the node, until it is listed again", async (t) => {
+  const day = 86_400_000
+  const past = (id, days, o = {}) => ({ agent: agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: id, status: 'closed',
+    archivedAt: new Date(Date.now() - days * day).toISOString(), updatedAt: new Date(Date.now() - days * day).toISOString(),
+    persistence: { provider: 'my-claude', sessionId: id, metadata: { provider: 'claude' } }, ...o }), project: PROJECT })
+  const RECENT = 'bbbbbbbb-0000-4000-8000-000000000001'
+  const OLD = 'bbbbbbbb-0000-4000-8000-000000000002'
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  // Archived while the bridge was not running: one lately, one long ago, one of Codex (no transcript of Claude's).
+  const { fake, node } = await setup(t, { agents: [...base, past(RECENT, 1), past(OLD, 30),
+    past('th-9', 1, { provider: 'my-codex', persistence: { provider: 'my-codex', sessionId: 'th-9', metadata: { provider: 'codex' } } })] })
+  const pushed = () => node.last('runtime.sessions')
+  await until('the ones archived before', () => pushed().unlisted_transcripts)
+  assert.deepEqual(pushed().unlisted_transcripts, [RECENT], 'archived lately: named; long ago or no Claude session: not')
+  assert.equal(pushed().sessions.some((r) => r.title === RECENT), false, 'an archived agent is no row')
+  assert.equal(fake.requestsOf('fetch_agents_request').filter((r) => r.filter?.includeArchived).length, 1, 'one page: all of them fit')
+
+  // Closed from the phone: archived in Paseo, gone from the rows, its session named.
+  await call(node, 'session.close', { session_id: SID })
+  await until('named', () => pushed().unlisted_transcripts?.includes(SID))
+  assert.equal(pushed().sessions.some((r) => r.session_id === SID), false)
+  const codex = pushed().sessions.find((r) => r.title === 'B').session_id
+  await call(node, 'session.close', { session_id: codex })
+  await until('the Codex agent gone', () => !pushed().sessions.some((r) => r.session_id === codex))
+  assert.deepEqual([...pushed().unlisted_transcripts].sort(), [SID, RECENT].sort(), 'an agent without a Claude session names nothing')
+
+  // Taken over again (a message to the session not running): Paseo lists it, under another agent; named no more.
+  await call(node, 'session.start', { cwd: '/tmp', resume: SID })
+  await until('listed again', () => pushed().sessions.some((r) => r.session_id === SID))
+  await until('named no more', () => !pushed().unlisted_transcripts?.includes(SID))
+  assert.deepEqual(pushed().unlisted_transcripts, [RECENT])
+})
+
+test("only an archived agent of the user's own is named: not a deleted one, nor an agent another agent created", async (t) => {
+  const { fake, node, a } = await setup(t)
+  const pushed = () => node.last('runtime.sessions')
+  const KID = 'cccccccc-0000-4000-8000-000000000001'
+  fake.upsert(agentSnapshot({ id: 'kid', provider: 'my-claude', cwd: '/tmp', title: 'KID', labels: { 'paseo.parent-agent-id': a.claude.id },
+    persistence: { provider: 'my-claude', sessionId: KID, metadata: { provider: 'claude' } } }), PROJECT)
+  await until('the delegated agent', () => pushed().sessions.some((r) => r.title === 'KID'))
+  // Deleted, and the list told of the removal, which says what an archive's does. Asked, Paseo has no such agent: it
+  // stays gone.
+  fake.delete(a.labeled.id, { told: true })
+  await until('asked what became of it', () => fake.requestsOf('fetch_agent_request').some((r) => r.agentId === a.labeled.id))
+  await until('off the list', () => !pushed().sessions.some((r) => r.title === 'E'))
+  // A removal of an agent that was never listed (Paseo sends one for each change of its internal agents) asks nothing.
+  for (let i = 0; i < 3; i++) fake.emit('agents', { type: 'agent_update', payload: { kind: 'remove', agentId: 'internal-1' } })
+  // The orchestrator archived in Paseo's own app: the agent it created is archived with it, and only its own session is named.
+  fake.archive(a.claude.id)
+  await until('named', () => pushed().unlisted_transcripts?.includes(SID))
+  await until('asked about both', () => ['kid', a.claude.id].every((id) => fake.requestsOf('fetch_agent_request').some((r) => r.agentId === id)))
+  await new Promise((r) => setTimeout(r, 50))
+  assert.deepEqual(pushed().unlisted_transcripts, [SID], 'not the deleted agent\'s (SID2), nor the delegated one\'s')
+  assert.equal(pushed().sessions.some((r) => r.title === 'KID' || r.title === 'A'), false)
+  assert.equal(fake.requestsOf('fetch_agent_request').some((r) => r.agentId === 'internal-1'), false)
+  assert.equal(fake.requestsOf('fetch_agent_request').filter((r) => r.agentId === a.claude.id).length, 1, 'asked once, however often the removal is told')
+})
+
+test('an agent deleted in another client leaves the list: one that ran once Paseo no longer has it, though Paseo only says it closed', async (t) => {
+  const { fake, a, rows } = await setup(t, { closedChecks: [30, 200] })
+  const asked = (id) => fake.requestsOf('fetch_agent_request').filter((r) => r.agentId === id).length
+  const has = (agent) => rows().some((r) => r.session_id === `paseo-${agent.id}`)
+  // Paseo closes the agent, and removes its record a moment later: asked before that, it still has it.
+  fake.delete(a.codex.id, { after: 100 })
+  await until('seen closed', () => rows().find((r) => r.session_id === `paseo-${a.codex.id}`)?.status === 'offline')
+  await until('asked, and Paseo still had it', () => asked(a.codex.id) === 1)
+  assert.equal(has(a.codex), true, 'an agent Paseo still has stays')
+  await until('asked again: gone', () => !has(a.codex))
+  assert.equal(asked(a.codex.id), 2)
+  // Its last state comes once more, late (Paseo sends an agent's updates one after another, each when it is ready).
+  fake.emit('agents', { type: 'agent_update', payload: { kind: 'upsert', agent: { ...a.codex, status: 'closed' }, project: PROJECT } })
+  fake.upsert(agentSnapshot({ provider: 'my-codex', cwd: '/tmp', title: 'LATER' }), PROJECT)
+  await until('a later change listed', () => rows().some((r) => r.title === 'LATER'))
+  assert.equal(has(a.codex), false, 'an update that comes after it was deleted does not list it again')
+  // An agent only stopped is asked for too, and stays.
+  fake.update(a.claude.id, { status: 'closed' })
+  await until('asked twice', () => asked(a.claude.id) === 2)
+  assert.equal(rows().find((r) => r.session_id === SID)?.status, 'offline')
+  // A new connection reads the directory afresh: an agent that is in it is listed, whatever was said of its id before.
+  fake.agents.set(a.codex.id, { agent: { ...a.codex, status: 'idle' }, project: PROJECT })
+  fake.drop()
+  await until('listed again', () => has(a.codex))
+})
+
+test('the directory is read again now and then: an agent deleted without a word leaves the list, and an archived one is named no more', async (t) => {
+  const { fake, node, a, rows } = await setup(t, { sweepMs: 40 })
+  const pushed = () => node.last('runtime.sessions')
+  const asked = (id) => fake.requestsOf('fetch_agent_request').filter((r) => r.agentId === id).length
+  // One that was not running (Paseo says nothing at all), and one archived before: its Claude session was named.
+  fake.archive(a.claude.id)
+  await until('named', () => pushed().unlisted_transcripts?.includes(SID))
+  fake.delete(a.grok.id)
+  fake.delete(a.claude.id)
+  await until('off the list', () => !rows().some((r) => r.session_id === `paseo-${a.grok.id}`))
+  await until('named no more', () => !pushed().unlisted_transcripts?.includes(SID))
+  // An archive the list was never told of: found out the same way, and its Claude session is named.
+  const LOST = 'eeeeeeee-0000-4000-8000-000000000001'
+  const lost = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'LOST', persistence: { provider: 'my-claude', sessionId: LOST, metadata: { provider: 'claude' } } })
+  fake.upsert(lost, PROJECT)
+  await until('listed', () => rows().some((r) => r.session_id === LOST))
+  const at = new Date().toISOString()
+  fake.agents.get(lost.id).agent = { ...lost, status: 'closed', archivedAt: at, updatedAt: at }
+  await until('off the list, and named', () => !rows().some((r) => r.session_id === LOST) && pushed().unlisted_transcripts?.includes(LOST))
+  // An agent a reading of the directory missed (it moved from one page to another between the two) is asked for: it stays.
+  fake.handlers.fetch_agents_request = (msg) => {
+    if (msg.subscribe || msg.filter?.includeArchived) return undefined
+    const entries = [...fake.agents.values()].filter((e) => !e.agent.archivedAt && e.agent.id !== a.labeled.id)
+    return { payload: { subscriptionId: null, entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } } }
+  }
+  await until('asked for it', () => asked(a.labeled.id) >= 2)
+  assert.equal(rows().some((r) => r.session_id === 'paseo-e1'), true)
+  assert.equal(asked(a.codex.id), 0, 'an agent the directory lists is not asked for')
+})
+
+test('agents archived while the bridge was away are read a page at a time, newest first, as far back as their sessions are named', async (t) => {
+  const day = 86_400_000
+  const id = (n) => `dddddddd-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const past = (n, days) => ({ agent: agentSnapshot({ id: `gone-${n}`, provider: 'my-claude', cwd: '/tmp', title: `GONE${n}`, status: 'closed',
+    archivedAt: new Date(Date.now() - days * day).toISOString(), updatedAt: new Date(Date.now() - days * day).toISOString(),
+    persistence: { provider: 'my-claude', sessionId: id(n), metadata: { provider: 'claude' } } }), project: PROJECT })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  // Paseo's directory with the archived ones included, newest first, four to a page: the five listed agents, three
+  // archived this week, then older and older ones.
+  const { fake, node } = await setup(t, { pageSize: 4, agents: [...base, past(1, 1), past(2, 2), past(3, 3), ...[4, 5, 6, 7, 8, 9, 10].map((n) => past(n, n * 10))] })
+  await until('the ones archived lately', () => node.last('runtime.sessions').unlisted_transcripts?.length === 3)
+  assert.deepEqual([...node.last('runtime.sessions').unlisted_transcripts].sort(), [id(1), id(2), id(3)])
+  const pages = fake.requestsOf('fetch_agents_request').filter((r) => r.filter?.includeArchived)
+  assert.deepEqual(pages.map((r) => r.page.cursor), [undefined, '4', '8'], 'the page that ends before the week began is the last one read')
+  assert.ok(pages.every((r) => r.sort?.[0]?.key === 'updated_at' && r.sort[0].direction === 'desc'))
+})
+
+test('an agent running Codex names its thread, an agent of Claude Code its transcript', async (t) => {
+  const THREAD = '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002'
+  const { fake, rows } = await setup(t)
+  fake.upsert(agentSnapshot({ provider: 'my-codex', cwd: '/tmp', title: 'CX',
+    persistence: { provider: 'my-codex', sessionId: THREAD, metadata: { provider: 'codex', threadId: THREAD } } }), PROJECT)
+  await until('the agent', () => rows().some((r) => r.title === 'CX'))
+  const by = Object.fromEntries(rows().map((r) => [r.title, r]))
+  assert.deepEqual([by.CX.codex_thread, by.CX.transcript, by.A.codex_thread, by.A.transcript], [THREAD, undefined, undefined, SID],
+    'the node lists a named thread once, as this session (#4495)')
 })
 
 test('a repository opened through a symbolic link is named by its physical directory', async (t) => {

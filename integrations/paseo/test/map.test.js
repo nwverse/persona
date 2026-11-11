@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  agentRoot, agentRow, backgroundOf, defaultProvider, interactionOf, launchersOf, linkedWorktree, parentAgentId, paseoMode, providerRoots,
-  responseOf, rowStatus, projectSpaces, sessionIdOf, slotNameOf, spaceIdOf, strayRecord, timelineItems, toolCall, transcriptOf,
+  agentRoot, agentRow, codexThreadOf, backgroundOf, defaultProvider, interactionOf, launchersOf, linkedWorktree, parentAgentId, paseoMode,
+  providerRoots, responseOf, rowStatus, projectSpaces, sessionIdOf, slotNameOf, spaceIdOf, strayRecord, timelineItems, toolCall,
+  transcriptOf,
 } from '../lib/map.js'
 import { agentSnapshot, entry } from './fake-paseo.js'
 
@@ -44,6 +45,15 @@ test("an agent's id: Persona's label, else Claude's session for Claude Code, els
   const codex = agentSnapshot({ id: 'c0ffee', provider: 'my-codex', persistence: { sessionId: '0199-thread' } })
   assert.equal(sessionIdOf(codex, roots), 'paseo-c0ffee')
   assert.equal(transcriptOf(codex, roots), undefined, 'only Claude Code has a transcript the node reads')
+  // A Codex agent names the thread its conversation is: the node lists it once, not again from its rollout (#4495).
+  const THREAD = '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001'
+  assert.equal(codexThreadOf(codex, roots), undefined, 'no thread id yet (Codex still starting): nothing named')
+  const threaded = agentSnapshot({ id: 'c0ffee', provider: 'my-codex', persistence: { sessionId: THREAD, metadata: { provider: 'codex', threadId: THREAD } } })
+  assert.equal(codexThreadOf(threaded, roots), THREAD)
+  assert.equal(codexThreadOf(agentSnapshot({ provider: 'my-codex', runtimeInfo: { sessionId: THREAD } }), roots), THREAD, 'not persisted yet: the one its runtime runs')
+  assert.equal(codexThreadOf(claude, roots), undefined, 'an agent of Claude Code has a transcript, no thread')
+  assert.deepEqual([agentRow(threaded, { roots }).codex_thread, agentRow(codex, { roots }).codex_thread, agentRow(claude, { roots }).codex_thread],
+    [THREAD, undefined, undefined])
   assert.equal(sessionIdOf(agentSnapshot({ provider: 'grok', labels: { 'persona.session': '../bad' } }), roots).startsWith('paseo-'), true, 'a bad label is not an id')
 })
 

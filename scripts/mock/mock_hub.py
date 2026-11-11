@@ -1052,7 +1052,7 @@ if os.environ.get("MOCK_ROW_EDGES"):
 # main checkout and two worktree workspaces in one space, each agent a row of its own that names its workspace
 # (slot_name without a slot_id). One agent created two others: the one that works names it as its parent (is_subagent,
 # parent_session_id), the one that waits for the user is listed without a parent while it waits, and both are its
-# background work.
+# background work. Its Codex agent's thread has a subagent of its own under it.
 PASEO_LEAD = "9a5e0000-0000-4000-8000-000000000002"
 PASEO_ASKS = "paseo-9a5e0000-0000-4000-8000-000000000003"
 PASEO_CODEX = "paseo-9a5e0000-0000-4000-8000-000000000004"
@@ -1078,6 +1078,11 @@ if os.environ.get("MOCK_PASEO"):
                "May I run the migration on the test database?", pending_interactions=1),
         _paseo(PASEO_CODEX, "Review the session handling", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
                "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD),
+        _paseo("019a5e00-0000-7000-8000-000000000005", "Trace the refresh failure", "Fix the login flow", "brave-fox", "fix/login",
+               "working", "working", 0, "Following the 401 through the retry.", agent="codex", agent_name="Codex CLI",
+               source_kind="codex_history", source_thread_id="019a5e00-0000-7000-8000-000000000005", source_instance_id=None, host=None,
+               slot_name=None, is_subagent=True, parent_session_id=PASEO_CODEX, root_session_id=PASEO_LEAD,
+               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True}),
         _paseo("9a5e0000-0000-4000-8000-000000000006", "Profile the CSV parser", "Speed up the importer", "calm-owl", "perf/importer",
                "done", "unread", 12, "The parser is three times faster on the sample files."),
     ]
@@ -16399,7 +16404,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
-    "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you)",
+    "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",

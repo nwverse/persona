@@ -40,6 +40,8 @@ export const LAUNCHER_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/
 export const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 /** A Claude Code session id (the node's idRe). */
 export const CLAUDE_ID = /^[0-9a-fA-F-]{8,64}$/
+/** A Codex thread id (the node's rolloutUUID). */
+export const CODEX_THREAD = /^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/
 
 // ---- providers ----
 
@@ -149,6 +151,20 @@ export function transcriptOf(agent, roots = {}) {
   if (agentRoot(agent, roots) !== 'claude') return undefined
   const id = agent?.persistence?.sessionId
   return typeof id === 'string' && CLAUDE_ID.test(id) ? id : undefined
+}
+
+/**
+ * The Codex thread an agent's conversation is (runtime.sessions' codex_thread): the thread its Codex persists, for an
+ * agent running Codex; none for any other. The node finds the thread's rollout on its own as well: named here, it
+ * lists the conversation once, as this session, with the thread's own subagents under it (#4495).
+ */
+export function codexThreadOf(agent, roots = {}) {
+  if (agentRoot(agent, roots) !== 'codex') return undefined
+  const p = agent?.persistence
+  for (const id of [p?.metadata?.threadId, p?.sessionId, agent?.runtimeInfo?.sessionId]) {
+    if (typeof id === 'string' && CODEX_THREAD.test(id)) return id
+  }
+  return undefined
 }
 
 /**
@@ -322,6 +338,8 @@ export function agentRow(agent, o = {}) {
   if (EFFORTS.includes(effort)) row.effort = effort
   const t = transcriptOf(agent, roots)
   if (t) row.transcript = t
+  const thread = codexThreadOf(agent, roots)
+  if (thread) row.codex_thread = thread
   const last = agent.status === 'error' && agent.lastError ? `出错了：${agent.lastError}` : o.lastText
   if (last) row.last_text = snippet(last)
   // A delegated agent is its creator's subtask, as a Codex subagent is its chat's (#4494): the apps fold it under

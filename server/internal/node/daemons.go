@@ -563,14 +563,15 @@ func (l *daemonLink) fromDaemon(ctx context.Context, method string, params json.
 			}
 			return nil, err
 		}
-		// resume_argv, handover and transcript are for runtimes on the socket: what a daemon lists offline is not
-		// resumed in a terminal here, a send it refuses is not handed to another runtime (the link turns that code
-		// away), and its sessions are not read from this machine's transcripts. launchers, modes and resume need what
-		// the link does not pass on (more launchers than the config's one, caps beyond daemonCaps).
+		// resume_argv, handover, transcript, codex_thread and unlisted_transcripts are for runtimes on the socket: what
+		// a daemon lists offline is not resumed in a terminal here, a send it refuses is not handed to another runtime
+		// (the link turns that code away), and its sessions are not read from this machine's transcripts, nor are its
+		// Codex threads or its past sessions' transcripts this machine's. launchers, modes and resume need what the link
+		// does not pass on (more launchers than the config's one, caps beyond daemonCaps).
 		if f, ok := res["features"].([]any); ok {
 			kept := []any{}
 			for _, x := range f {
-				if !slices.Contains([]any{"resume_argv", runtimeHandover, "transcript", "launchers", "modes", "resume"}, x) {
+				if !slices.Contains([]any{"resume_argv", runtimeHandover, "transcript", "launchers", "modes", "resume", "codex_thread", "unlisted_transcripts"}, x) {
 					kept = append(kept, x)
 				}
 			}
@@ -664,7 +665,7 @@ func (l *daemonLink) row(s map[string]json.RawMessage) (map[string]json.RawMessa
 	}
 	s["session_id"] = rawJSON(outer)
 	// No terminal of this machine's, and no name but the config's (the node labels its sessions).
-	for _, k := range []string{"pane_id", "resume_argv", "transcript", "tab_id", "workspace_id", "agent_label"} {
+	for _, k := range []string{"pane_id", "resume_argv", "transcript", "codex_thread", "tab_id", "workspace_id", "agent_label"} {
 		delete(s, k)
 	}
 	var space string
