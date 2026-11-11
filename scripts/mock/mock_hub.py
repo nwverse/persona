@@ -6300,6 +6300,20 @@ if os.environ.get("MOCK_IPHONE_ASK") == "1":  # an iphone_do step the node says 
          "summary": "在「我的 iPhone」上：在「钱包」里点「支付 ¥ 36.00」",
          "always_honored": False, "tool_title": "iPhone 操控"})  # the manager's own tool (#3590)
 
+# MOCK_AGENT_OWN_TOOL=before|after: the tests Agent's only card asks about one of Persona's own MCP tools
+# (report_to_supervisor, #4966). `before`: the raw name only, as a card was titled until then; `after`: the title the
+# manager gives a node's card for Persona's tools now (tool_title, in the user's language).
+if os.environ.get("MOCK_AGENT_OWN_TOOL") in ("before", "after"):
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["session_id"] != TESTS]
+    _own = {"id": "ix_own_tool", "machine_id": "macbook", "session_id": TESTS, "session_title": "补齐网络层的单元测试",
+            "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+            "tool_name": "mcp__persona__report_to_supervisor",
+            "tool_input": {"kind": "done", "text": "网络层的单元测试补齐了，swift test 全部通过"},
+            "summary": "kind: done"}  # the node's summary: the input's first text argument (toolSummary)
+    if os.environ.get("MOCK_AGENT_OWN_TOOL") == "after":
+        _own["tool_title"] = "向督办汇报 · 完成"
+    INTERACTIONS.append(_own)
+
 # MOCK_SECRET_RUN=pending|ran|withheld|long: the password card (secret_run, #1137) in Persona's main conversation.
 # `pending`: the assistant asked to run two commands on the Mac Studio, its call waits and the card asks for the
 # password; `ran`: the card was answered, the call's result (the tool's JSON) says every command exited 0, and no card is

@@ -13,6 +13,11 @@ describe("always permission scope", () => {
     expect(alwaysScope({ tool_name: "Read", always_keys: ["tool:Read"] })).toBe(t("chat-interactions.always_scope_tool", { tool: "Read" }));
     expect(alwaysScope({ tool_name: "Read" })).toBe(t("chat-interactions.always_scope_tool", { tool: "Read" }));
   });
+  it("names an MCP tool in words, never by its raw name (#4966)", () => {
+    const scope = alwaysScope({ tool_name: "mcp__persona__report_to_supervisor", always_keys: ["tool:mcp__persona__report_to_supervisor"] });
+    expect(scope).toBe(t("chat-interactions.always_scope_tool", { tool: "Persona · report to supervisor" }));
+    expect(scope).not.toContain("mcp__");
+  });
   it("preserves runtime scope and does not promise unsupported always grants", () => {
     expect(alwaysScope({ agent: "codex", tool_name: "Bash", always_label: "npm test" })).toBe(t("chat-interactions.always_scope_named", { scope: "npm test" }));
     expect(alwaysScope({ agent: "codex", tool_name: "Bash" })).toBe("");

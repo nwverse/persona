@@ -1,5 +1,6 @@
 // Keep the card's promise tied to the node's actual permission keys, including older cards without keys.
 import { t } from "../i18n";
+import { toolDisplayName } from "./turns";
 import type { Interaction } from "./types";
 
 type AlwaysCard = Pick<Interaction, "agent" | "tool_name" | "always_label" | "always_keys" | "always_honored">;
@@ -23,7 +24,7 @@ export function alwaysScope(ix: AlwaysCard): string {
   if (!keys.length || keys.every((key) => key === `tool:${ix.tool_name}`)) {
     return ix.tool_name === "Bash"
       ? t("chat-interactions.always_scope_commands")
-      : t("chat-interactions.always_scope_tool", { tool: ix.tool_name ?? "" });
+      : t("chat-interactions.always_scope_tool", { tool: toolDisplayName(ix.tool_name) }); // an MCP tool in words, never mcp__…
   }
   return t("chat-interactions.always_scope_saved");
 }
