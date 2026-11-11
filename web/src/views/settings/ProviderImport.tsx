@@ -8,6 +8,7 @@ import {
   importBrings,
   importCanSplit,
   importCount,
+  importCreates,
   importDiffers,
   importErrorText,
   importFrom,
@@ -230,7 +231,7 @@ function ImportItem({ p, on, split, onToggle, onSplit }: { p: ImportedProvider; 
               {importOutcome(p, true).map((v) => (
                 <li key={v.name} className="min-w-0">
                   <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                    <span className="max-w-full truncate font-mono text-ink-2">{v.name}</span>
+                    <span className="max-w-full truncate font-mono text-ink-2">{importCreates(v)}</span>
                     <Pill tone={v.existing ? undefined : "accent"}>{v.existing ? t("lib-providers.merge_into", { name: v.existing }) : t("lib-providers.create")}</Pill>
                     {v.model && <span className="max-w-full truncate font-mono">{v.model}</span>}
                   </span>

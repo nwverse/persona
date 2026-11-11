@@ -34,7 +34,7 @@
   "from_file": "来自 {file} 里的 {aliases}",
   "brings": "一并带上 {names}。",
   "left_out_credential": "不带上 {names}：看起来是密钥或密码。",
-  "left_out_shell": "不带上 {names}：它们的值要由 shell 运行时算出来。",
+  "left_out_shell": "不带上 {names}：值要在 shell 里才能算出来。",
   "left_out_computer": "不带上 {names}：只适用于那台电脑。",
   "left_out_limit": "不带上 {names}：一个供应商最多带 {max} 个。",
   "left_out_other": "不带上 {names}。",
@@ -50,6 +50,6 @@
   "differs_custom_model": "自定义模型",
   "stays": "{alias} 保留。",
   "stays_in_use": "{alias} 保留：{uses}在用它。",
-  "stays_elsewhere": "{alias} 保留：在 {computers} 上，新的供应商替代不了它。",
+  "stays_elsewhere": "{alias} 保留：新的供应商无法在{computers}上替代它。",
   "import_summary_hide": "新建 {created} 个，合并 {updated} 个；隐藏 alias {hidden} 个，保留 {kept} 个"
 }

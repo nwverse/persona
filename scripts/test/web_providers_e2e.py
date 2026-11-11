@@ -207,7 +207,7 @@ def zshrc_import(r):
     relay_detail = d.locator('[data-import-detail="cc_relay"]')
     expect(relay_detail).to_contain_text("一并带上 CLAUDE_CODE_MAX_OUTPUT_TOKENS、DISABLE_TELEMETRY。")
     expect(relay_detail).to_contain_text("不带上 RELAY_TOKEN：看起来是密钥或密码。")
-    expect(relay_detail).to_contain_text("不带上 WORKDIR：")
+    expect(relay_detail).to_contain_text("不带上 WORKDIR：值要在 shell 里才能算出来。")
     expect(relay_detail).to_contain_text("不带上 HOME：只适用于那台电脑。")
     ok("a ~/.bashrc alias says which variables it carries over and why the others are left out")
 
@@ -217,7 +217,10 @@ def zshrc_import(r):
     expect(each).to_have_attribute("aria-checked", "true")
     variants = d.get_by_role("list", name="cc_kimi 会变成的供应商")
     expect(variants.locator("li")).to_have_count(2)
-    expect(variants).to_contain_text("cc_kimi_fast")
+    # each alias is listed in Persona already, so the hub saves its provider as <alias>-2, and the preview says so
+    expect(variants.locator("li").nth(0)).to_contain_text("cc_kimi-2")
+    expect(variants.locator("li").nth(1)).to_contain_text("cc_kimi_fast-2")
+    expect(relay.locator(".font-mono").first).to_have_text("cc_relay-2")
     expect(d.get_by_role("button", name="导入 5 个")).to_be_visible()
     one.click()
     expect(one).to_have_attribute("aria-checked", "true")
@@ -236,7 +239,7 @@ def zshrc_import(r):
     expect(stays).to_contain_text("会隐藏 cc_full、cc_glm和cc_kimi。")
     expect(stays).to_contain_text("cc_full_haiku 保留：「性能」方案里的 Agent 预设「strong」在用它。")
     expect(stays).to_contain_text("cc_kimi_fast 保留：主对话在用它。")
-    expect(stays).to_contain_text("cc_relay 保留：在 服务器 上，新的供应商替代不了它。")
+    expect(stays).to_contain_text("cc_relay 保留：新的供应商无法在服务器上替代它。")
     r.shot("import-preview")
     ok("hiding the imported aliases is on, names what it hides and why the others stay")
 

@@ -8,6 +8,7 @@ import {
   formProblems,
   importCanSplit,
   importCount,
+  importCreates,
   importDiffers,
   importErrorText,
   importFrom,
@@ -236,6 +237,14 @@ describe("import preview", () => {
     expect(row).toEqual({ name: "cc_glm", host: "open.example.com", models: "2 个模型", aliases: "cc_glm、cc_glm_air", action: "合并到 glm", merge: true });
     expect(importRow({ name: "a", model: "m", aliases: ["a"] })).toMatchObject({ host: "官方地址", models: "1 个模型", action: "新建", merge: false });
   });
+  it("names a provider by what it will be saved under, a split group by its own name", () => {
+    // an alias Persona already lists: the hub saves it as <alias>-2
+    expect(importCreates({ name: "cc_glm", create_as: "cc_glm-2", aliases: ["cc_glm"] })).toBe("cc_glm-2");
+    expect(importCreates(single)).toBe("cc_glm");
+    expect(importRow({ ...single, create_as: "cc_glm-2" }).name).toBe("cc_glm-2");
+    expect(importRow({ ...group, create_as: "cc_kimi-2" }, false).name).toBe("cc_kimi-2");
+    expect(importRow({ ...group, create_as: "cc_kimi-2" }, true).name).toBe("cc_kimi");
+  });
   it("counts a split group's providers on its row and on the Import button", () => {
     expect(importCanSplit(group)).toBe(true);
     expect(importCanSplit({ ...group, differs: undefined })).toBe(false);
@@ -257,7 +266,7 @@ describe("import preview", () => {
     expect(importFrom({ name: "a", aliases: ["a", "b"] })).toEqual(["来自 a、b"]);
     expect(importBrings(single)).toBe("一并带上 DISABLE_TELEMETRY。");
     expect(importBrings(group)).toBe("");
-    expect(importLeftOut(single)).toEqual(["不带上 GLM_TOKEN：看起来是密钥或密码。", "不带上 WORK：它们的值要由 shell 运行时算出来。", "不带上 PATH：只适用于那台电脑。"]);
+    expect(importLeftOut(single)).toEqual(["不带上 GLM_TOKEN：看起来是密钥或密码。", "不带上 WORK：值要在 shell 里才能算出来。", "不带上 PATH：只适用于那台电脑。"]);
     expect(importLeftOut({ ...single, skipped_env: [{ name: "A", reason: "limit" }, { name: "B", reason: "new" }] })).toEqual(["不带上 A：一个供应商最多带 50 个。", "不带上 B。"]);
     expect(importDiffers(group)).toBe("这几个 alias 的各档模型和代理不一样。");
     expect(importDiffers({ ...group, differs: ["effort", "someday"] })).toBe("这几个 alias 的默认思考档位和someday不一样。");
@@ -268,7 +277,7 @@ describe("import preview", () => {
     expect(split.map((s) => [s.alias, s.hide])).toEqual([["cc_kimi", "ok"], ["cc_kimi_fast", "in_use"], ["cc_glm", "elsewhere"]]);
     expect(importSources([group, single], new Set(["cc_glm"]), new Set())).toEqual(single.sources);
     expect(importStays(group.sources![1]!)).toBe("cc_kimi_fast 保留：主对话在用它。");
-    expect(importStays(single.sources![0]!)).toBe("cc_glm 保留：在 Mac Studio 上，新的供应商替代不了它。");
+    expect(importStays(single.sources![0]!)).toBe("cc_glm 保留：新的供应商无法在Mac Studio上替代它。");
     expect(importStays({ alias: "x", hide: "in_use" })).toBe("x 保留。");
   });
   it("sums up and words the two errors the hub names", () => {

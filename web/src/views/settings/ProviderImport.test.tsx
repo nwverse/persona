@@ -30,13 +30,13 @@ const PREVIEW: ImportedProvider[] = [
     models: [{ id: "team-large" }, { id: "team-small" }], aliases: ["cc_team", "cc_team_small"], differs: ["tiers", "effort"],
     sources: [src("cc_team", "ok"), src("cc_team_small", "in_use", { uses: ["Main chat"] })],
     variants: [
-      { name: "cc_team", base_url: "https://gw.example.com", model: "team-large", models: [{ id: "team-large" }], aliases: ["cc_team"], env_names: ["DISABLE_TELEMETRY"], sources: [src("cc_team", "ok")] },
+      { name: "cc_team", create_as: "cc_team-2", base_url: "https://gw.example.com", model: "team-large", models: [{ id: "team-large" }], aliases: ["cc_team"], env_names: ["DISABLE_TELEMETRY"], sources: [src("cc_team", "ok")] },
       { name: "cc_team_small", base_url: "https://gw.example.com", model: "team-small", models: [{ id: "team-small" }], aliases: ["cc_team_small"], existing: "team_gw",
         sources: [src("cc_team_small", "in_use", { uses: ["Main chat"] })] },
     ],
   },
   {
-    name: "cc_relay", base_url: "https://relay.example.com", auth: "bearer", has_key: true, model: "relay-pro", models: [{ id: "relay-pro" }],
+    name: "cc_relay", create_as: "cc_relay-2", base_url: "https://relay.example.com", auth: "bearer", has_key: true, model: "relay-pro", models: [{ id: "relay-pro" }],
     aliases: ["cc_relay"], env_names: ["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "DISABLE_TELEMETRY"],
     skipped_env: [{ name: "RELAY_TOKEN", reason: "credential" }, { name: "WORKDIR", reason: "shell" }],
     sources: [{ alias: "cc_relay", file: "~/.bashrc", hide: "elsewhere", elsewhere: ["Desk"] }],
@@ -117,6 +117,19 @@ describe("provider import", () => {
     expect(variants.textContent).toContain(t("lib-providers.merge_into", { name: "team_gw" }));
     expect(variants.textContent).toContain(t("lib-providers.brings", { names: "DISABLE_TELEMETRY" }));
     expect(q('[data-import="cc_team"]').textContent).toContain(t("lib-providers.split_count", { count: 2 }));
+  });
+
+  it("names what gets created by the name it will be saved under, and posts the names it was given", async () => {
+    await draw();
+    // an alias Persona already lists is saved as <alias>-2: the row of a provider made from it, and a split's variant
+    const relay = q('[data-import="cc_relay"]');
+    expect(relay.querySelector(".font-mono")!.textContent).toBe("cc_relay-2");
+    const variants = [...q(`[aria-label="${t("settings-providerimport.variants_label", { name: "cc_team" })}"]`).querySelectorAll("li")];
+    expect(variants.map((li) => li.querySelector(".font-mono")!.textContent)).toEqual(["cc_team-2", "cc_team_small"]);
+    // a split group's row keeps the group's name
+    expect(q('[data-import="cc_team"]').querySelector(".font-mono")!.textContent).toBe("cc_team");
+    await click(importButton());
+    expect(posted()).toMatchObject({ providers: ["cc_team", "cc_relay"], split: ["cc_team"] });
   });
 
   it("names the file, what a provider carries over and leaves out, and what differs", async () => {

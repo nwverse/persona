@@ -481,6 +481,9 @@ export interface ImportSource {
 export interface ImportedProvider extends Omit<ProviderView, "origin"> {
   aliases: string[];
   existing?: string;
+  /** One that will be created (no `existing`) under another name than `name`: an alias Persona already lists makes the hub
+   *  save "<alias>-2". `name` stays what POST takes. */
+  create_as?: string;
   source?: string;
   /** Names of the variables that go into the provider's environment, sorted. */
   env_names?: string[];
@@ -503,6 +506,7 @@ export interface ImportResult {
 }
 
 export interface ImportRow {
+  /** What the row is called: the name a group made one provider is saved under, else the group's own. */
   name: string;
   host: string;
   models: string;
@@ -524,11 +528,14 @@ export const importCanSplit = (p: ImportedProvider) => !!p.differs?.length && (p
 /** The providers a group becomes: its variants when split, else the group itself. */
 export const importOutcome = (p: ImportedProvider, split: boolean) => (split && importCanSplit(p) ? p.variants! : [p]);
 
+/** The name a provider of the import is saved under. */
+export const importCreates = (p: ImportedProvider) => p.create_as || p.name;
+
 export function importRow(p: ImportedProvider, split = false): ImportRow {
   const n = new Set([...(p.models ?? []).map((m) => m.id), ...(p.model ? [p.model] : [])]).size;
   const parts = split && importCanSplit(p);
   return {
-    name: p.name,
+    name: parts ? p.name : importCreates(p),
     host: hostOf(p.base_url) || t("lib-providers.official_host"),
     models: t("lib-providers.model_count", { count: n }),
     aliases: names(p.aliases ?? []),

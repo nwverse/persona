@@ -10223,7 +10223,7 @@ PROVIDER_IMPORT = [
      "sources": [{"alias": "cc_relay", "file": "~/.bashrc", "hide": "elsewhere", "elsewhere": ["服务器"]}]},
 ]
 # what a preview group carries that a stored provider does not
-IMPORT_ONLY = ("aliases", "existing", "sources", "differs", "variants", "env_names", "skipped_env")
+IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "variants", "env_names", "skipped_env")
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
@@ -10264,13 +10264,31 @@ def _import_existing(base_url, alias=None):
     return None
 
 
+def _import_name(name, taken):
+    """The name an imported provider is saved under: its own, or with -2, -3… when a launcher already has it (an alias
+    Persona lists does), as the hub's importLaunchers names it."""
+    out, n = name, 2
+    while out in taken: out, n = "%s-%d" % (name, n), n + 1
+    return out
+
+
 def import_preview():
-    out = []
+    """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
+    created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
+    same launchers; the names a group may take are taken for the groups after it."""
+    out, taken = [], {l["name"] for l in LAUNCHERS}
     for g in copy.deepcopy(PROVIDER_IMPORT):
+        names = set()
         for x in [g] + g.get("variants", []):
             x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
             existing = _import_existing(x["base_url"], x["aliases"][0] if x is not g else None)
-            if existing: x["existing"] = existing
+            if existing:
+                x["existing"] = existing
+                continue
+            name = _import_name(x["name"], taken)
+            if name != x["name"]: x["create_as"] = name
+            names.add(name)
+        taken |= names
         out.append(g)
     return out
 
@@ -10296,8 +10314,9 @@ def _provider_apply(l, b):
 
 def import_route(h, method, q, body):
     """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
-    a split group comes in as its variants, a provider that is there takes the new models, a name taken gets -2; with
-    hide_aliases the aliases whose check is still ok once saved are hidden, the others kept with why."""
+    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
+    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
+    hidden, the others kept with why."""
     b = json.loads(body or b"{}") if method == "POST" else {}
     machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
     if machine == "studio":
@@ -10323,8 +10342,8 @@ def import_route(h, method, q, body):
                 l["models"] = l.get("models", []) + [m for m in x.get("models", []) if m["id"] not in have]
                 updated.append(x["existing"])
                 continue
-            name, n = x["name"], 2
-            while name in taken: name, n = "%s-%d" % (x["name"], n), n + 1
+            name = x.get("create_as") or x["name"]  # as previewed, unless something took it since
+            if name in taken: name = _import_name(x["name"], taken)
             l = {k: v for k, v in x.items() if k not in IMPORT_ONLY}
             l.update(name=name, source="persona", origin="zshrc:%s@%s" % (x["aliases"][0], machine))
             LAUNCHERS.insert(0, l)
