@@ -51,17 +51,19 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 		}
 		if selected == "" {
 			if path := n.transcriptPath(id); path != "" {
-				project := filepath.Dir(path)
-				projects := filepath.Dir(project)
+				projects := filepath.Dir(filepath.Dir(path))
 				if filepath.Base(projects) == "projects" {
 					selected = filepath.Dir(projects)
-					if sameScopePath(selected, filepath.Join(n.home, ".claude")) {
-						// Preserve the old unset-profile global config, unless
-						// the old parser explicitly selected this same directory.
-						legacy := n.legacyAssistantProfile(ctx, launcher, runtime)
-						if legacy == "default" || !sameScopePath(legacy, selected) {
-							selected = "default"
-						}
+					// The pre-change resolution keeps the conversation when its
+					// projects/ holds the transcript by real path. The path found
+					// need not name it: ~/.claude/projects (or ~/.claude) may be
+					// a symlink to a wrapper's profile, which is the one in use.
+					legacy := n.legacyAssistantProfile(ctx, launcher, runtime)
+					if sameScopePath(projects, filepath.Join(n.assistantConfigPath(legacy), "projects")) {
+						selected = legacy
+					} else if sameScopePath(selected, filepath.Join(n.home, ".claude")) {
+						// Preserve the old unset-profile global config.
+						selected = "default"
 					}
 				}
 			}
