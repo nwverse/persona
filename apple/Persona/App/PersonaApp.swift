@@ -112,6 +112,13 @@ struct PersonaApp: App {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    #if os(iOS)
+    /// Upright on an iPhone, but for the live screen's page (`AppOrientation`, #3075).
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        AppOrientation.mask
+    }
+    #endif
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
@@ -181,6 +188,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         #if os(iOS) || os(visionOS)
         PagePerf.runIfAsked()
+        PagePerf.offsetIfAsked()
         FrameProbe.listenIfAsked()
         #endif
         // Every tab a UI test can ask for. One it asks for and this does not know leaves the tab the last run saved

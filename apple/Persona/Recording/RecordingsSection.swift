@@ -566,7 +566,9 @@ struct RecordingDetailView: View {
             if entry.isRolling {
                 rollingSections(entry)
             } else {
-                RecordingMinutesSections(entry: entry, model: minutes) { jump(to: $0, in: entry, proxy: proxy) }
+                RecordingMinutesSections(entry: entry, model: minutes, synced: sync.status(entry) == .synced) {
+                    jump(to: $0, in: entry, proxy: proxy)
+                }
                 Section("Transcript") {
                     if entry.sentences.isEmpty {
                         Text("No transcript yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
@@ -747,7 +749,7 @@ struct RecordingMeetingFacts: View {
         // When and where on one line.
         let when: String? = {
             guard let start = meeting.start, let end = meeting.end else { return nil }
-            return (start..<max(end, start)).formatted(.interval.month().day().hour().minute())
+            return RecordingFormat.span(start, end)
         }()
         let line = [when, meeting.location].compactMap { $0 }.joined(separator: " · ")
         if !line.isEmpty {
