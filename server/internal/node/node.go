@@ -70,6 +70,8 @@ type Node struct {
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
+	// fileReadDeps replaces file.read's filesystem operations in tests.
+	fileReadDeps *fileReadDependencies
 
 	home         string
 	sessionScope *nodeSessionScope

@@ -1,5 +1,14 @@
 # Lessons: hub / node and networking
 
+## Virtual-file sizes and EOF (#4425)
+
+Some Linux sysfs attributes report a stable page-sized length even when their readable contents are shorter. A short
+read must end pagination only after a real EOF, filesystem identification on the opened descriptor, and checks that
+the opened object and guarded path still have the same identity and metadata. An ordinary file truncated during a read
+and a non-EOF I/O failure must remain errors; a zero-byte device must not be read as an open-ended virtual file. The
+size and modification-time revision cannot detect virtual values that change without metadata changing, or a writer
+that restores metadata, so these checks do not make pages from separate requests an atomic snapshot.
+
 ## Sharing peer budgets need an authenticated local ingress (#4391)
 
 Keeping X-Forwarded-For untrusted is necessary, but a loopback reverse proxy then
