@@ -6,8 +6,8 @@
 a shared package, even for a small pure function, puts that package in the hub's program and
 `TestPersonaHubDoesNotLinkTheManager` fails. `transcript.AskOf` called `closeout.WaitsOnNobody` that way. A rule that
 only the node and the manager apply goes in their package, which imports the shared one (`closeout.AskOf` over
-`transcript.AskOf`), not the other way round; listing the manager's package as shared only hides it. After adding an
-import to a shared package, run `go test ./cmd/persona-hub` (the guard takes a few seconds).
+`transcript.AskOf`), not the other way round. Listing the manager's package in `depguard.Shared` (as #4395 did for a
+while) only hides it. After adding an import to a shared package, run `go test ./cmd/persona-hub` (a few seconds).
 
 ## Public sharing ingress needs a fixed authority (#4358)
 
