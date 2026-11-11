@@ -96,6 +96,8 @@ fun PairingScreen(
     var progress by remember { mutableStateOf(listOf<PairingProgress>()) }
     var confirm by remember { mutableStateOf<PairingRequest?>(null) }
     var manual by remember { mutableStateOf(false) }
+    var passwordEntry by remember { mutableStateOf(true) }
+    var loginJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var info by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<Int?>(null) } // a string resource
     var attempt by remember { mutableStateOf<PairingAttempt?>(null) }
@@ -113,6 +115,7 @@ fun PairingScreen(
         attempts?.record(attempt)
     }
     fun accept(link: String) {
+        passwordEntry = false
         welcome = false; readiness = false; credentialsSaved = false; lastRequest = null; tries = 0; addressError = null; typed = false
         // A token typed for another hub must never go to this one.
         accessId = ""; accessSecret = ""; accessOpen = false
@@ -148,11 +151,11 @@ fun PairingScreen(
             nextStep()
         } finally { running = false }
     }
-    fun connect(request: PairingRequest) {
+    fun connect(request: PairingRequest?, passwordAddress: String? = null) {
         if (running) return
         lastRequest = request
         running = true
-        scope.launch {
+        loginJob = scope.launch {
             failure = null; progress = emptyList()
             fun record(item: PairingProgress) {
                 val stamped = item.copy(timestamp = item.timestamp ?: pairingStepTime(java.time.Instant.now(), LocalizedFormats.locale(context)))
@@ -160,7 +163,7 @@ fun PairingScreen(
             }
             try {
                 record(PairingProgress(PairingStage.Parse))
-                if (PairingLocalNetwork.needsPermission(context, request)) {
+                if (request != null && PairingLocalNetwork.needsPermission(context, request)) {
                     failure = PairingFailure.LocalPermission
                     recordAttempt(request, PairingException(PairingFailure.LocalPermission))
                     return@launch
@@ -168,7 +171,8 @@ fun PairingScreen(
                 if (!credentialsSaved) {
                     // Saving replaces the pairing, and the shell this page may sit in goes with it.
                     records.finishing(true)
-                    pairing.pair(request) { record(it) }
+                    if (passwordAddress != null) pairing.passwordLogin(passwordAddress) { record(it) }
+                    else pairing.pair(requireNotNull(request)) { record(it) }
                     credentialsSaved = true
                     recordAttempt(request, null)
                     records.pending(true)
@@ -186,16 +190,21 @@ fun PairingScreen(
                 record(PairingProgress(PairingStage.Complete))
                 token = ""; metadata = null; lastRequest = null; manual = false
                 nextStep()
-            } catch (error: CancellationException) { throw error }
+            } catch (error: CancellationException) {
+                if (!credentialsSaved) records.finishing(false)
+                progress = emptyList()
+                throw error
+            }
             catch (error: Exception) {
                 if (!credentialsSaved) records.finishing(false)
+                if (passwordAddress != null) notice = R.string.settings_password_login_failed
                 // Exception messages may contain pairing links or credentials: log only types and frames.
                 android.util.Log.w("PersonaPairing", generateSequence(error as Throwable) { it.cause }.take(4)
                     .joinToString(" <- ") { e -> e.javaClass.name + " @ " + e.stackTrace.take(3).joinToString(", ") })
                 failure = pairingFailure(error)
                 failureAddress = pairingFailureAddress(error)
                 tries++
-                if (failure == PairingFailure.Timeout && PairingLocalNetwork.needsPermission(context, request)) {
+                if (failure == PairingFailure.Timeout && request != null && PairingLocalNetwork.needsPermission(context, request)) {
                     failure = PairingFailure.LocalPermission
                 }
                 // A saved pairing that only missed the machine list is not a failed pairing.
@@ -205,11 +214,11 @@ fun PairingScreen(
         }
     }
     val localPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) lastRequest?.let(::connect)
+        if (granted) lastRequest?.let { connect(it) }
         else { permissionDenied = true; failure = PairingFailure.LocalPermission; notice = R.string.settings_pairing_notice_local_denied }
     }
     fun authorize() {
-        if (!PairingLocalNetwork.missing(context)) lastRequest?.let(::connect)
+        if (!PairingLocalNetwork.missing(context)) lastRequest?.let { connect(it) }
         else if (permissionDenied) {
             awaitingSettings = PhoneReadiness.open(context, listOf(appDetails))
         } else localPermission.launch(PairingLocalNetwork.Permission)
@@ -217,7 +226,7 @@ fun PairingScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (awaitingSettings) {
             awaitingSettings = false
-            if (!PairingLocalNetwork.missing(context)) { notice = null; lastRequest?.let(::connect) }
+            if (!PairingLocalNetwork.missing(context)) { notice = null; lastRequest?.let { connect(it) } }
         }
     }
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -312,7 +321,7 @@ fun PairingScreen(
                             when (recovery) {
                                 PairingRecovery.Permission -> authorize()
                                 PairingRecovery.Scan -> requestScan()
-                                PairingRecovery.Retry, PairingRecovery.Update -> lastRequest?.let(::connect) ?: edit()
+                                PairingRecovery.Retry, PairingRecovery.Update -> lastRequest?.let { connect(it) } ?: edit()
                                 PairingRecovery.Access -> lastRequest?.let { confirm = it; failure = null; progress = emptyList(); accessOpen = true } ?: edit()
                             }
                         }, Modifier.fillMaxWidth())
@@ -326,6 +335,7 @@ fun PairingScreen(
             running || progress.isNotEmpty() -> {
                 item { PairingHeading(stringResource(R.string.settings_pairing_connecting_title), stringResource(R.string.settings_pairing_connecting_body)) }
                 pairingProgress(progress, running, failed = false, resources)
+                if (running && passwordEntry) item { JTextButton(stringResource(R.string.settings_password_login_cancel), { loginJob?.cancel() }) }
             }
             confirm != null -> {
                 val request = requireNotNull(confirm)
@@ -381,10 +391,23 @@ fun PairingScreen(
                     }
                 }
             }
+            passwordEntry -> {
+                item { PairingHeading(stringResource(R.string.settings_password_login_title), stringResource(R.string.settings_password_login_body)) }
+                item { JCard {
+                    JTextField(address, { address = it }, label = stringResource(R.string.settings_password_login_address), modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true)
+                } }
+                item { PairingActions {
+                    JButton(stringResource(R.string.settings_password_login_connect), { connect(null, address) }, Modifier.fillMaxWidth(), enabled = address.isNotBlank())
+                    JButton(stringResource(R.string.settings_password_login_pairing), { passwordEntry = false }, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
+                    SettingsCaption(stringResource(R.string.settings_password_login_note))
+                } }
+            }
             else -> {
                 item { PairingHeading(stringResource(R.string.settings_pairing_connect_title), stringResource(R.string.settings_pairing_connect_body)) }
                 item {
                     PairingActions {
+                        JButton(stringResource(R.string.settings_password_login_title), { passwordEntry = true }, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
                         JButton(stringResource(R.string.settings_pairing_scan), ::requestScan, Modifier.fillMaxWidth(), icon = PhIcons.Scan)
                         Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                             JButton(stringResource(R.string.settings_pairing_paste), ::paste, Modifier.weight(1f), kind = JButtonKind.Secondary)

@@ -63,6 +63,8 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
     var selectAgent: (SessionKey) -> Void = { _ in }
     var appeared: (Session) -> Void = { _ in }
     var agentIdentifier = "agents.row"
+    /// A Codex chat's subagents (`CodexTasks`): listed under it, a level in. The list's rows are the chats'.
+    var subtasks: (Session) -> [Session] = { _ in [] }
     var ordered: ([Session]) -> [Session]
     @ViewBuilder var agent: (Session) -> AgentContent
     @ViewBuilder var actions: (RepoTree.Worktree, Session?) -> Actions
@@ -110,9 +112,9 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
                     if workspace.sessions.count > 1 {
                         agentDisclosure
-                        if agentOpen { ForEach(ordered(workspace.sessions)) { agentRow($0) } }
+                        if agentOpen { ForEach(ordered(workspace.sessions)) { withSubtasks($0) } }
                     } else {
-                        ForEach(workspace.sessions) { agentRow($0) }
+                        ForEach(workspace.sessions) { withSubtasks($0) }
                     }
                     if !workspace.children.isEmpty {
                         Button { toggle(workspace.childrenFoldID) } label: {
@@ -130,7 +132,7 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                                              parentWorkspace: workspace.workspace ?? parentWorkspace, selectedSession: selectedSession,
                                              selectedWorkspace: selectedWorkspace, folded: folded, toggle: toggle,
                                              open: open, selectAgent: selectAgent, appeared: appeared, agentIdentifier: agentIdentifier,
-                                             ordered: ordered, agent: agent, actions: actions)
+                                             subtasks: subtasks, ordered: ordered, agent: agent, actions: actions)
                     }
                 }.padding(.leading, Theme.WorkspaceSidebar.childInset)
             }
@@ -150,6 +152,12 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
     private func openWorktree() {
         if let first = ordered(workspace.sessions).first { selectAgent(first.key) }
         else if let target = workspace.workspace { open(target) }
+    }
+
+    /// An agent's row, and a Codex chat's subagents under it, a level in.
+    @ViewBuilder private func withSubtasks(_ session: Session) -> some View {
+        agentRow(session)
+        ForEach(subtasks(session)) { task in agentRow(task).padding(.leading, Theme.WorkspaceSidebar.childInset) }
     }
 
     /// The Agent row and the title/branch control receive their worktree actions from the same factory.

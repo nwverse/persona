@@ -20,6 +20,7 @@ import (
 )
 
 type Hub struct {
+	passwordLogin passwordLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
 	errs hubErrors
 

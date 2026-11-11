@@ -667,6 +667,9 @@ private struct AgentsList: View {
     @State private var kept = Set<SessionKey>()
     @State private var expandedQuiet = Set<String>()
     @State private var expandedIdle = Set<String>()
+    /// The Codex chats whose Subtasks are open (`CodexTasks`), and, searching, those whose found subagents were folded.
+    @State private var expandedTasks = Set<SessionKey>()
+    @State private var foldedFound = Set<SessionKey>()
     #if os(macOS)
     /// The rows in order for ↑ / ↓ (`AgentListRows`), kept current without drawing the list again.
     @State private var macRows = MacRowOrder()
@@ -864,7 +867,7 @@ private struct AgentsList: View {
         let waiting = AgentsNeedsYou.rows(
             cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.pendingInteractions, session: session,
                                         machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil),
-            waiting: AgentsNeedsYou.waiting(base))
+            waiting: AgentsNeedsYou.waiting(base + projection.admittedTasks)) // a subagent waiting for you too (`CodexTasks`)
         let _ = (lookup.needsYou = waiting.count)
         let needsYou = quick == .all || quick == .needsYou ? waiting : []
         let interactions = needsYou.flatMap(\.cards)
@@ -1989,7 +1992,9 @@ private struct AgentsList: View {
                                              open: { openWorktree($0) },
                                              selectAgent: { openFromList($0) },
                                              appeared: { s in if paginationArmed { Task { await model.sessionLists.appeared(s) } } },
-                                             agentIdentifier: compact ? "agents.compactRow" : "agents.row", ordered: { ordered($0) }) { s in
+                                             agentIdentifier: compact ? "agents.compactRow" : "agents.row",
+                                             subtasks: { lookup.projection?.tasks[$0.key]?.map(\.session) ?? [] },
+                                             ordered: { ordered($0) }) { s in
                             slotRowContent(s, context: false, inStateSection: false)
                         } actions: { worktree, agent in worktreeMenu(worktree, agent: agent) }
                         .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.xs, bottom: Theme.Space.xs, trailing: Theme.Space.xs))
@@ -2639,8 +2644,55 @@ private struct AgentsList: View {
     /// `cardLast`: a row of a quiet space's card (`quietSpaceCard`), and whether it ends the card.
     /// `depth`: levels in, under a working tree's row (By Repository).
     /// `pane`, `branch`: an agent of a tab with several, and one hanging off its starter (a level further in).
-    private func slotRow(_ s: Session, context: Bool = false, inStateSection: Bool = false, cardLast: Bool? = nil,
-                         showHost: Bool = false, depth: Int = 0, pane: TabPanes.Role? = nil, branch: Bool = false) -> some View {
+    /// An agent's row, and a Codex chat's Subtasks under it (`CodexTasks`), as the Codex App and Android show them: the
+    /// list's rows and counts are the chats' (`AgentListProjection.tasks`). In a quiet space's card the chat's subagents
+    /// end the card, not the chat.
+    @ViewBuilder private func slotRow(_ s: Session, context: Bool = false, inStateSection: Bool = false, cardLast: Bool? = nil,
+                                      showHost: Bool = false, depth: Int = 0, pane: TabPanes.Role? = nil, branch: Bool = false) -> some View {
+        let tasks = lookup.projection?.tasks[s.key] ?? []
+        agentRow(s, context: context, inStateSection: inStateSection, cardLast: tasks.isEmpty ? cardLast : cardLast.map { _ in false },
+                 showHost: showHost, depth: depth, pane: pane, branch: branch)
+        if !tasks.isEmpty {
+            subtaskRows(s, tasks, depth: depth + (branch ? 1 : 0) + 1, cardLast: cardLast)
+        }
+    }
+
+    /// The Subtasks row, then, opened, each subagent's row a level in, a subagent's own a level further. Searching, it
+    /// opens on the subagents the search finds (and the ones they hang off) and lists only those; it still folds.
+    @ViewBuilder private func subtaskRows(_ parent: Session, _ all: [CodexTasks.Task], depth: Int, cardLast: Bool?) -> some View {
+        let found = query.isEmpty ? [] : lookup.projection?.taskMatches[parent.key] ?? []
+        let open = found.isEmpty ? expandedTasks.contains(parent.key) : !foldedFound.contains(parent.key)
+        let rows = found.isEmpty ? all : found
+        let foldLast = cardLast.map { $0 && !open }
+        Button {
+            Haptics.tap()
+            withAnimation(Theme.Motion.standard) {
+                if found.isEmpty {
+                    if expandedTasks.remove(parent.key) == nil { expandedTasks.insert(parent.key) }
+                } else if foldedFound.remove(parent.key) == nil {
+                    foldedFound.insert(parent.key)
+                }
+            }
+        } label: {
+            CodexSubtasksRow(count: all.count, open: open,
+                             style: foldLast.map { .card(last: $0) } ?? (repoTree ? .tree(level: depth) : compact ? .compact : .regular))
+                .padding(.leading, nested(depth))
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(floating ? foldLast.map { EdgeInsets(top: 0, leading: Theme.Space.page, bottom: $0 ? Theme.Space.xs : 0, trailing: Theme.Space.page) }
+                       ?? rowInsets(level: depth) : rowInsets(level: depth))
+        .listRowBackground(repoTree ? treeBackground(false) : floating ? AnyView(Color.clear) : nil)
+        .listRowSeparator(floating || repoTree ? .hidden : .automatic)
+        .accessibilityIdentifier("agents.subtasks")
+        if open {
+            ForEach(rows) { task in
+                agentRow(task.session, cardLast: cardLast.map { $0 && task.id == rows.last?.id }, depth: depth + task.depth)
+            }
+        }
+    }
+
+    private func agentRow(_ s: Session, context: Bool = false, inStateSection: Bool = false, cardLast: Bool? = nil,
+                          showHost: Bool = false, depth: Int = 0, pane: TabPanes.Role? = nil, branch: Bool = false) -> some View {
         // Following the feed, the row's own `FeedRow` draws its last line and time: only the rest is the row's key.
         let shown = feed.following ? AgentsFeed.shape([s], searching: false).sessions[0] : s
         #if os(macOS)
