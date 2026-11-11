@@ -193,9 +193,19 @@ holds every answer to it before it reaches the manager:
   `INTERACTION_INPUT` (a tap opens the card), its Live Activity row has no Allow / Deny, and a notification's choice
   (`…/choose`) never answers one.
 
+## In the apps
+
+- **Web** (`web/src/views/chat/Interactions.tsx` `SecretHandoffCard`, `web/src/views/settings/Extensions.tsx`): the hand-off card
+  names each variable with its provider and item, the Agent and its computer, the directory and the start of the prompt, with
+  Deny, Always allow (when the card offers it, with what it covers) and Allow; only its own buttons approve it, their request
+  carrying `X-Persona-Features: secret_handoff`, while Overview's rows and the browser's notifications open the chat
+  (`needsFieldValues`). An extension's secret offers **Use a reference** where the hub has `extension_secret_references`; a
+  secret that holds one says **From <provider>** with the item under its title. A provider's page lists **Used by** (the
+  settings that hold its references) and **Always for Agents** (its rules, each removed after a confirm).
+
 ## What comes next (#3962)
 
-1. The web and iPhone clients: "Use a reference" in secret fields, the hand-off card, and the provider's page listing who uses
-   its references and its Always rules. Android's part is #3986, which lists the interfaces it needs; until then an Android phone
+1. The iPhone app: "Use a reference" in secret fields, the hand-off card, and the provider's page listing who uses its
+   references and its Always rules; then launcher keys as references in both apps. Android's part is #3986, which lists the interfaces it needs; until then an Android phone
    shows the card as the hub sends it and cannot approve it.
 2. The 1Password extension's side (`secrets.used` on its own page).
