@@ -31,10 +31,17 @@ import persona.core.designsystem.LocalHomeChrome
 import persona.core.designsystem.PersonaTheme
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
+import androidx.compose.ui.test.onAllNodesWithText
+import org.junit.Assert.assertEquals
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.asAndroidBitmap
+import java.io.File
 
 /** Home grouping opens a menu, while the request-history row keeps its navigation action. */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp")
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class AgentsHomeAffordancesTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
@@ -52,6 +59,30 @@ class AgentsHomeAffordancesTest {
         rule.onNodeWithText("By status").assertIsDisplayed()
     }
 
+    // #4338 A3, iOS's "Only <computer>": a chosen computer shows on the page, and a tap shows every computer again.
+    @Test fun aChosenComputerShowsAsAChipThatClearsIt() {
+        val model = showScreen()
+        rule.onAllNodesWithText("Only Example computer").assertCountEquals(0)
+        rule.runOnIdle { model.machine("box") }
+        val chip = rule.onNodeWithText("Only Example computer")
+        chip.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button)).performClick()
+        rule.waitForIdle()
+        rule.runOnIdle { assertEquals("", model.page.value.settings.machineFilter) }
+        rule.onAllNodesWithText("Only Example computer").assertCountEquals(0)
+    }
+
+    @Test fun computerChipLight() = shootChip(dark = false)
+    @Test fun computerChipDark() = shootChip(dark = true)
+
+    private fun shootChip(dark: Boolean) {
+        val model = showScreen(dark)
+        rule.runOnIdle { model.machine("box") }
+        rule.waitForIdle()
+        val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
+        File("build/machine-filter-shots").also { it.mkdirs() }.resolve("only-machine-${if (dark) "dark" else "light"}.png")
+            .outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
     @Test fun requestHistoryKeepsItsNavigationAction() {
         showScreen()
         val history = rule.onNodeWithText("Requests and history")
@@ -59,7 +90,7 @@ class AgentsHomeAffordancesTest {
         rule.onNodeWithText("Requests waiting for you").assertIsDisplayed()
     }
 
-    private fun showScreen() {
+    private fun showScreen(dark: Boolean = false): AgentsViewModel {
         val model = AgentsViewModel(object : SessionsRepository {
             override val sessions = MutableStateFlow(listOf(Session("box", "s1", title = "Example task", state = "working")))
             override val machines = MutableStateFlow(listOf(Machine("box", "Example computer", online = true)))
@@ -88,13 +119,14 @@ class AgentsHomeAffordancesTest {
             override suspend fun markSeen(session: SessionKey, version: String) = Unit
         }))
         rule.setContent {
-            PersonaTheme(darkTheme = false, reduceMotion = true) {
+            PersonaTheme(darkTheme = dark, reduceMotion = true) {
                 CompositionLocalProvider(LocalHomeChrome provides HomeChrome(emptyList(), "Agents", onSelect = {}, leading = {})) {
                     AgentsScreen(model, Nowhere, AgentsMetadata())
                 }
             }
         }
         rule.waitUntil(5_000) { model.page.value.loaded }
+        return model
     }
 
     private object Nowhere : Navigator {

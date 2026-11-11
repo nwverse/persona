@@ -21,6 +21,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -312,6 +314,18 @@ internal fun AgentsScreen(
                 HomeAgentFilters(shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else page.list.counts[filter] ?: 0, filter.state?.designStatus)
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
+            }
+            // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
+            // is chosen in a sheet and its chips don't show, so nothing else on the page says so. A tap shows every computer.
+            if (homeChrome && page.settings.machineFilter.isNotEmpty()) item("machine-filter") {
+                val name = names[page.settings.machineFilter] ?: page.settings.machineFilter
+                val hint = stringResource(R.string.agents_only_machine_hint)
+                Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
+                    JChip(stringResource(R.string.agents_only_machine, name), Modifier.testTag("agents-machine-filter")
+                        .semantics { onClick(label = hint) { model.machine(""); onMachineSelected(""); true } },
+                        selected = true, onClick = { model.machine(""); onMachineSelected("") },
+                        role = Role.Button, trailingIcon = persona.core.designsystem.icons.PersonaIcons.clear)
+                }
             }
             if (homeChrome) item("grouping") {
                 Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
