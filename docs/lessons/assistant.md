@@ -279,6 +279,9 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 
 Keep force archive separate from ordinary busy checks. A cancellation path must close the provider or terminal,
 reject or withdraw pending cards, and keep other work protected. A cached blocked inventory after close can undo
-a newly saved archive unless the closed timestamp fences that old snapshot. Paseo's CLI `archive --force` skips
+a newly saved archive unless the closed timestamp fences that old snapshot. Persist the archive and a future
+close timestamp in one write before closing, then replace it with the real close time. A failed close removes
+the provisional record with an independent bounded context, including when the request was cancelled.
+Paseo's CLI `archive --force` skips
 a client-side busy check; its archive request has no force field and closes the provider runtime. Check the actual
 archive receipt before removing the Agent from a bridge's local list.

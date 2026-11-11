@@ -843,3 +843,10 @@ supervised task spends most of its life stopped between rounds (`follow_up`: the
 is not done), so the owner saw one task out of four and asked what the others were doing. The #2920 Progress tray went the
 other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
 `start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.
+
+## Archive refusals must roll back optimistic removal (#4277)
+
+A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
+optimistically removed. Keep the pre-request session snapshot and restore it immediately on archive failure,
+before refreshing. Preserve a newer pushed row if one arrived meanwhile. Exercise mounted rows and the real
+store refresh with both delta and bounded list negotiation.

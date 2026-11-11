@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"time"
 
@@ -38,13 +39,19 @@ func (s *Service) forceArchiveConfirmation(ctx context.Context, mid, sid string)
 			return archiveRefusal(http.StatusConflict, "agent_busy", i18n.Err("hub-agent_archives.close_busy"))
 		}
 	}
+	// Persist the archive and close fence together before the node can cancel its runtime.
+	if err := s.confirmationArchiveFence(ctx, row, true); err != nil {
+		return err
+	}
 	closeCtx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
 	defer cancel()
 	// Closing kills the terminal or closes the provider runtime. Never press Enter or approve the pending request.
 	// The node checks blocked again; a failed close leaves the Agent visible and its cards intact.
 	if err := s.nodeCall(closeCtx, row.MachineID, "session.close", map[string]any{"session_id": sid, "force": true}, nil); err != nil {
-		return err
+		// The request may already be cancelled. Roll back with a separate bounded context.
+		return errors.Join(err, s.confirmationArchiveFence(context.WithoutCancel(ctx), row, false))
 	}
+	closedAt := time.Now().UTC()
 	no := false
 	for _, ix := range s.pendingInteractions() {
 		if ix.MachineID != row.MachineID || ix.SessionID != sid {
@@ -61,12 +68,39 @@ func (s *Service) forceArchiveConfirmation(ctx context.Context, mid, sid string)
 			s.logf("force archive %s: cancel confirmation %s after close: %v", short(sid), ix.ID, err)
 		}
 	}
-	if err := s.noteAgentArchive(ctx, row, true); err != nil {
+	if err := s.noteAgentArchiveClosed(ctx, row, closedAt); err != nil {
 		return err
 	}
-	if err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC()); err != nil {
-		return err
-	}
+	s.nativeArchiveWanted(row, true)
 	s.publishList(row.MachineID)
+	return nil
+}
+
+// confirmationArchiveFence never publishes an archived confirmation with an empty ClosedAt.
+// Failed closes remove only this provisional record and leave the cards untouched.
+func (s *Service) confirmationArchiveFence(ctx context.Context, row proto.Session, closing bool) error {
+	ctx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
+	defer cancel()
+	b := &s.agentArchives
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
+	defer b.unlock()
+	if err := s.loadAgentArchivesLocked(ctx); err != nil {
+		return err
+	}
+	key := runtimeListID(row.MachineID, row.SessionID)
+	next := maps.Clone(b.records)
+	if closing {
+		now := time.Now().UTC()
+		next[key] = agentArchive{Session: archiveSnapshot(row), Archived: true, ChangedAt: now,
+			ClosedAt: now.Add(agentArchiveCloseTimeout + agentArchiveTimeout)}
+	} else {
+		delete(next, key)
+	}
+	if err := s.saveAgentArchivesLocked(ctx, next); err != nil {
+		return err
+	}
+	delete(b.pending, key)
 	return nil
 }

@@ -7,7 +7,9 @@ const calls = vi.hoisted(() => [] as string[]);
 vi.mock("../../lib/api", async (original) => ({ ...await original<typeof import("../../lib/api")>(), api: vi.fn(async (path: string) => { calls.push(path); return { ok: true, close: { closed: true, outcome: "closed" } }; }) }));
 import { InteractionCard } from "./Interactions";
 import { appArchiveDeps } from "../../lib/agent-archives";
-import { getState } from "../../lib/store";
+import { getState, useStore } from "../../lib/store";
+import { api } from "../../lib/api";
+import { sessionRefreshed } from "../../lib/sessions-delta";
 import { t } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -48,4 +50,48 @@ it("a read-only source cannot close from its terminal card", () => {
  render();const close=button(t("chat-interactions.close_agent"));
  expect(!close || close.disabled || close.closest("fieldset[disabled]")).toBeTruthy();
  expect(calls).toEqual([]);
+});
+
+function SessionRows() {
+ const rows = useStore(st => st.sessions.m ?? []);
+ return <ul data-session-rows>{rows.map(s => <li key={s.session_id}>{s.title}</li>)}</ul>;
+}
+it("restores the optimistically removed row immediately when forced close fails on a delta hub", async () => {
+ vi.mocked(appArchiveDeps.drop).mockRestore();
+ const snapshot = { ...getState().sessions.m[0], title:"Waiting for confirmation" };
+ getState().sessions.m = [snapshot];
+ let reject!: (error: Error) => void;
+ vi.mocked(api).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+ let finishRefresh!: () => void;
+ vi.mocked(appArchiveDeps.refresh).mockImplementationOnce(() => {
+  // A connected delta hub retains pushed rows. REST cannot put this deleted row back.
+  getState().sessions.m = sessionRefreshed([snapshot], getState().sessions.m, true);
+  return new Promise<void>(resolve => { finishRefresh = resolve; });
+ });
+ act(() => root.render(<><SessionRows /><InteractionCard ix={ix} /></>));
+ expect(host.querySelector("[data-session-rows]")?.textContent).toBe("Waiting for confirmation");
+ await click(button(t("chat-interactions.close_agent")));
+ await click(button(t("chat-interactions.close_agent_confirm")));
+ expect(getState().sessions.m).toEqual([]);
+ expect(host.querySelector("[data-session-rows]")?.textContent).toBe("");
+ await act(async () => reject(new Error("close failed")));
+ expect(getState().sessions.m).toEqual([snapshot]);
+ expect(host.querySelector("[data-session-rows]")?.textContent).toBe("Waiting for confirmation");
+ expect(getState().interactions).toEqual([ix]);
+ await act(async () => finishRefresh());
+ expect(getState().sessions.m).toEqual([snapshot]);
+ expect(calls.some(p => p.includes("/answer"))).toBe(false);
+});
+
+it("keeps the row removed after a successful confirmed close", async () => {
+ vi.mocked(appArchiveDeps.drop).mockRestore();
+ getState().sessions.m[0].title="Waiting for confirmation";
+ act(() => root.render(<><SessionRows /><InteractionCard ix={ix} /></>));
+ expect(host.querySelector("[data-session-rows]")?.textContent).toBe("Waiting for confirmation");
+ await click(button(t("chat-interactions.close_agent")));
+ await click(button(t("chat-interactions.close_agent_confirm")));
+ expect(getState().sessions.m).toEqual([]);
+ expect(host.querySelector("[data-session-rows]")?.textContent).toBe("");
+ expect(calls).toContain("/sessions/m/s/archive?force=1");
+ expect(calls.some(p => p.includes("/answer"))).toBe(false);
 });
