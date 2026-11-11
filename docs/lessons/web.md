@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## Lazy features can add shared startup bookkeeping (#4597)
+
+The file-mutation UI loads lazily, while its credential-owner generation is shared with authentication at startup.
+After the localization savings in #4595, main still exceeded the Japanese first-screen budget by 63 B. The 64 B
+allocation is documented beside `FIRST_SCREEN_BUDGET`; the production build continues to measure every locale.
+
 ## A Go toolchain's files are not always under GOROOT (#4559)
 
 Homebrew's Go sets `GOROOT` to the formula's `libexec` directory and keeps `LICENSE` one level up, so a build step that

@@ -81,7 +81,6 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     fun open(p: FilesPane, path: String? = null, line: Int? = null) {
         insertionFocused = composer.focused; focus.clearFocus(); openedPath = path; openedLine = line; pane = p
     }
-    if (editor != null && storedComposer == null) return
     Box(Modifier.fillMaxSize()) {
         // Keep the composer and conversation mounted while browsing the session directory.
         ChatScreen(key, session.chats, session.sender, session.interactions, session.sessions, { if (!closed) navigator.back() },

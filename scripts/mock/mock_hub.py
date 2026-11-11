@@ -10486,6 +10486,83 @@ if os.environ.get("MOCK_TOOL_NAMES") == "1":
     mock_tool_names()
 
 
+# MOCK_TOOL_OUTCOMES=1 (#4303): tool results carry the node's `outcome` (docs/protocol/protocol.md "Tool outcomes"). One
+# finished turn has a test run that failed with exit code 1 and an output the page cut (its last lines in `tail`), an
+# edit the user denied, a write refused before it ran, a command the user interrupted and one that outran its timeout and
+# went on in the background. Only the test run is drawn in red; the others say what stopped them in gray. The failed run
+# and the denied edit also have a chat of their own (…4304, …4305), so the opened detail ends its chat and a screenshot
+# shows it without scrolling. Made-up content.
+OUTCOMES = "a1f3c2d4-0000-4000-8000-0000000c4303"
+OUTCOMES_ONE = {"failed": "a1f3c2d4-0000-4000-8000-0000000c4304", "denied": "a1f3c2d4-0000-4000-8000-0000000c4305"}
+
+
+def outcome_tool(name, inp, result, ts_min, outcome, err=False):
+    items = tool(name, inp, result, ts_min, err=err)
+    items[1]["outcome"] = outcome
+    return items
+
+
+def mock_tool_outcomes():
+    rows = [1000, 2000, 4000, 8000, 8500, 8760]
+    lines = ["Exit code 1", "=== RUN   TestExportBatch"]
+    for n in range(1, 61):
+        lines += ["=== RUN   TestExportBatch/rows_%d" % (n * 150), "    csv_test.go:41: wrote %d rows in %d batches" % (n * 150, (n * 150 + 499) // 500),
+                  "--- PASS: TestExportBatch/rows_%d (0.0%ds)" % (n * 150, n % 9)]
+    lines += ["--- PASS: TestExportBatch (0.38s)", "=== RUN   TestExportLastBatch"]
+    for r in rows:
+        lines.append("    csv_test.go:88: rows=%d: got %d rows, want %d" % (r, r - 500 if r % 500 == 0 else r, r) if r % 500 == 0
+                     else "    csv_test.go:84: rows=%d: ok" % r)
+    lines += ["--- FAIL: TestExportLastBatch (0.02s)", "FAIL", "FAIL\tweather/export\t0.412s", "FAIL"]
+    whole = "\n".join(lines)
+    data = whole.encode()
+    end = data.rfind(b"\n", 0, 4096)
+    tail = "\n".join(lines[-30:])
+    while len(tail.encode()) > 2048:
+        tail = tail.split("\n", 1)[1]
+
+    def failed(t):
+        items = outcome_tool("Bash", {"command": "go test ./export/...", "description": "Run the export tests"},
+                             data[:end].decode() + "\n…（已截断，点开看全文，共 %d 字节）" % len(data), t,
+                             {"status": "failed", "exit_code": 1, "tail": tail}, err=True)
+        items[1]["full_size"] = len(data)
+        FULL[items[1]["id"]] = {k: v for k, v in items[1].items() if k != "full_size"} | {"text": whole}
+        return items
+
+    def denied(t):
+        return outcome_tool("Edit", {"file_path": "/Users/me/code/weather/export/csv.py", "old_string": "    if len(batch) == BATCH:\n        flush(batch)",
+                                     "new_string": "    if len(batch) == BATCH:\n        flush(batch)\n        batch = []"},
+                            "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, "
+                            "the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+                            t, {"status": "denied"}, err=True)
+
+    _t = [it("user", "text", 30, text="The export test fails on the last batch: find out why")]
+    _t += failed(29.9)
+    _t += denied(29.8)
+    _t += outcome_tool("Write", {"file_path": "/Users/me/code/weather/export/csv_test.py", "content": "def test_last_batch():\n    assert export(8760) == 8760\n"},
+                       "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>", 29.7,
+                       {"status": "blocked"}, err=True)
+    _t += outcome_tool("Bash", {"command": "python3 scripts/export_year.py --year 2026", "description": "Export a year of hourly data"},
+                       "[Request interrupted by user for tool use]", 29.6, {"status": "interrupted"}, err=True)
+    _t += outcome_tool("Bash", {"command": "make bench-export", "description": "Benchmark the export", "timeout": 120000},
+                       "Command timed out after 2m 0s and was moved to the background (ID: b7k2m9). Output is being written to: "
+                       "/tmp/weather/tasks/b7k2m9.output. You will be notified when it completes.", 29.5, {"status": "timed_out"})
+    _t.append(it("assistant", "text", 29.4, text="The last batch is dropped when the row count is a multiple of 500. "
+                                                 "Tell me when I may change export/csv.py."))
+    ITEMS[OUTCOMES] = _t
+    SESSIONS.append(sess("macbook", OUTCOMES, "Why the last export batch goes missing", "/Users/me/code/weather", "done", "read", "weather", 1,
+                         "outcomes", 21, 29.4, "The last batch is dropped when the row count is a multiple of 500."))
+    asks = {"failed": ("Run the export tests", failed, "TestExportLastBatch fails: the last 500 rows go missing."),
+            "denied": ("Fix the dropped batch", denied, "I'll wait until you say I may change export/csv.py.")}
+    for n, (name, (ask, call, done)) in enumerate(asks.items()):
+        ITEMS[OUTCOMES_ONE[name]] = [it("user", "text", 28 - n, text=ask)] + call(27.9 - n) + [it("assistant", "text", 27.8 - n, text=done)]
+        SESSIONS.append(sess("macbook", OUTCOMES_ONE[name], ask, "/Users/me/code/weather", "done", "read", "weather", 1, "outcomes-" + name,
+                             22 + n, 27.8 - n, done))
+
+
+if os.environ.get("MOCK_TOOL_OUTCOMES") == "1":
+    mock_tool_outcomes()
+
+
 # MOCK_REPLY_MARKDOWN=1 (#3863): a reply with a table whose delimiter row aligns its columns (leading, trailing, centered;
 # decimals that line up), headings at levels 4 to 6 and bold labels next to full-width punctuation (`**注意：**后文`,
 # `**「必须」**`), which CommonMark alone leaves as literal asterisks; in an Agents chat of its own and at the end of
@@ -16255,6 +16332,7 @@ MOCK_HELP = [
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
+    "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
