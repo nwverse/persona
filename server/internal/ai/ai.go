@@ -186,7 +186,12 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	if c.cfg.ReasoningEffort != "" {
 		switch strings.ToLower(strings.TrimSpace(c.cfg.ReasoningEffort)) {
 		case "off", "none", "disabled":
-			bodyMap["thinking"] = map[string]any{"type": "disabled"}
+			if messagesThinkingDisabledUnsupported(c.cfg.Model) {
+				// These models reject thinking.disabled; the issue's off-or-lowest contract uses low effort instead.
+				bodyMap["output_config"] = map[string]any{"effort": "low"}
+			} else {
+				bodyMap["thinking"] = map[string]any{"type": "disabled"}
+			}
 		case "low", "medium", "high", "xhigh", "max":
 			bodyMap["output_config"] = map[string]any{"effort": c.cfg.ReasoningEffort}
 		}
@@ -239,6 +244,18 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	return Reply{Text: b.String(), Truncated: out.StopReason == "max_tokens", Model: out.Model, Usage: out.Usage}, true, nil
 }
 
+// messagesThinkingDisabledUnsupported reports models whose Messages API rejects thinking.disabled. Match the ID
+// anywhere so provider-prefixed and dated variants follow the same rule; Fable/Mythos 5.x always require thinking.
+func messagesThinkingDisabledUnsupported(model string) bool {
+	model = strings.ToLower(model)
+	for _, id := range []string{"opus-5-5", "sonnet-5-5", "fable-5", "mythos-5"} {
+		if strings.Contains(model, id) {
+			return true
+		}
+	}
+	return false
+}
+
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
 // stream=false, and the text is just the concatenated output_text deltas. The system prompt goes in as a developer
 // message rather than `instructions`, which those relays replace with their own. Events are framed as SSE
@@ -251,7 +268,12 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	}
 	req := map[string]any{"model": c.cfg.Model, "store": false, "stream": true, "input": input}
 	if c.cfg.ReasoningEffort != "" {
-		req["reasoning"] = map[string]any{"effort": c.cfg.ReasoningEffort}
+		effort := c.cfg.ReasoningEffort
+		switch strings.ToLower(strings.TrimSpace(effort)) {
+		case "off", "none", "disabled":
+			effort = "none"
+		}
+		req["reasoning"] = map[string]any{"effort": effort}
 	}
 	body, _ := json.Marshal(req)
 	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
