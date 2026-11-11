@@ -1018,3 +1018,20 @@ pressing one counts as the check. Once the check found what the next step needs,
 action (section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path
 already answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and
 status-line styles and adds no setting.
+
+## Provider display names (#5029)
+
+Wherever the web names a model provider or launcher (New Agent's choices and presets, the model settings, the
+profile's Agent presets, the work-session and to-do launcher menus, task and schedule cards, a computer's launcher
+list, toasts and dialog titles), it leads with the provider's display name in the element's normal text style and shows
+the startup ID as secondary text: small monospace in `--ink-3` where a row has room, the `title` tooltip on chips and
+buttons, "Title (id)" in a native `<option>`. A launcher with no display name (an rc alias, plain `claude`, a provider
+from an older hub) shows its ID in monospace as before. One module decides it, `web/src/lib/provider-names.ts`; a page
+that holds only an ID looks the title up there. The provider wizard asks for the display name first (any language, at
+most 64 characters; left empty, the hub takes the address's host) and keeps the startup ID under More options, where
+the hub makes one up when it is left empty and its format is checked only once something is typed. A saved provider can
+be renamed; its ID can't change, and the edit page says why (launches, Agent presets and the model settings refer to
+it). Reason: the ID is an engineering detail that a person should not have to invent or read (principle 2), and one
+rule for every place keeps a provider recognizable wherever it is picked (principle 4). This reuses the wizard's
+fields and More options disclosure and the existing row and chip styles; it adds no setting, style or motion. The chat
+page's composer chip and model panel adopt the same module in their own change; iOS and Android have not caught up yet.
