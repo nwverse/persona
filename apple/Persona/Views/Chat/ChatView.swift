@@ -5339,7 +5339,7 @@ struct QueueStrip: View {
                             tray
                             title
                         }
-                        sendNow
+                        sendNowButton
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -5347,7 +5347,7 @@ struct QueueStrip: View {
                         tray
                         title.lineLimit(1)
                         Spacer(minLength: 0)
-                        sendNow
+                        sendNowButton
                     }
                 }
             }
@@ -5371,7 +5371,7 @@ struct QueueStrip: View {
     private var title: Text { Text("\(queued.count) queued · Claude will handle them in order") }
 
     /// Send Now for a Claude in a terminal, or the spinner while the queue is being handed over.
-    @ViewBuilder private var sendNow: some View {
+    @ViewBuilder private var sendNowButton: some View {
         if busy {
             ProgressView().controlSize(.mini)
         } else if steers {
