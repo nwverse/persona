@@ -270,6 +270,7 @@ The main API's shared error handling keeps the `error` text and adds a stable `c
 | `invalid_token` | 401 | Credential invalid, expired, revoked, or a temporary token exchanged twice; `retryable: false`, `delivered: none` |
 | `forbidden` | 403 | Permission or pairing-code source requirements not met; `retryable: false`, `delivered: none` |
 | `rate_limited` | 429 | The source is banned after authentication failures; wait per `Retry-After` |
+| `token_store_unavailable` | 503 | The hub could not look the credential up (its database did not answer), so this says nothing about the credential: never treat it as revoked; retry per `Retry-After`. Not counted as an authentication failure |
 | `bad_request` | 400 | Bad parameter / JSON; `retryable: false` |
 | `not_found` / `method_not_allowed` | 404 / 405 | Resource doesn't exist / method not supported; `retryable: false` |
 | `gone` | 410 | The interaction is no longer pending, etc.; `retryable: false` |
