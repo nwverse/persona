@@ -186,8 +186,8 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		var prep proto.WorktreePrepare
 		if err := s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd}, &prep); err != nil {
 			if t.WorkspaceInferred && sourceCwd != "" && engineCannotPrepare(err) {
-				// An engine without checkouts (Paseo, Cindy, herdr-core) runs the task in its cwd, as tasks did before
-				// workspaces: a busy cwd is shared rather than claimed, a free one is reused.
+				// An engine without checkouts (Paseo, Cindy, or a host without checkout support) runs the task in its cwd,
+				// as tasks did before workspaces: a busy cwd is shared rather than claimed, a free one is reused.
 				res.Branch = ""
 				if busy {
 					t.Workspace, res.Shared = &TaskWorkspace{Mode: workspaceNone}, true
@@ -209,8 +209,8 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	return nil
 }
 
-// engineCannotPrepare: the machine's engine has no checkouts to prepare (a runtime such as Paseo, or herdr-core), as
-// the node's error code says; any other failure, a missing host included, stays an error.
+// engineCannotPrepare: the machine's engine has no checkouts to prepare (a runtime such as Paseo or Cindy, or a host
+// without checkout support), as the node's error code says; any other failure, a missing host included, stays an error.
 func engineCannotPrepare(err error) bool {
 	var re *rpc.Error
 	return errors.As(err, &re) && re.Code == proto.CodeWorktreeUnsupported

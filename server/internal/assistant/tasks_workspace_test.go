@@ -383,7 +383,7 @@ func TestTaskWorkspaceSettingsHTTPAndApproval(t *testing.T) {
 }
 
 // cannotPrepare is the node's answer to worktree.prepare on an engine without checkouts, as it crosses the wire:
-// the default engine is the Paseo runtime (no terminal host on the node) or a host such as herdr-core.
+// the default engine is a runtime such as Paseo (no terminal host on the node) or a host without checkout support.
 func cannotPrepare(kind string) error {
 	return &rpc.Error{Code: "worktree_unsupported", Message: "unsupported: " + kind + " cannot do this"}
 }
