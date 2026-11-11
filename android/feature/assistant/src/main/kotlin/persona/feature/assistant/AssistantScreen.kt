@@ -74,8 +74,9 @@ private class AssistantSendState {
 }
 
 /** New chat's blank page (#2804): [from] is the conversation it was opened on, where Back returns; [started] is the
- *  conversation its first message started, kept so a retry after that message failed does not start another. */
-private data class NewChatStart(val from: SessionKey?, val started: SessionKey? = null)
+ *  conversation its first message started, kept so a retry after that message failed does not start another;
+ *  [space] is the assistant space the chat starts in (`health`, docs/assistant/health.md), null for the assistant's own. */
+internal data class NewChatStart(val from: SessionKey?, val started: SessionKey? = null, val space: String? = null)
 
 /** Supply the shared chat content when available, or use the shell's ChatRoute entry. */
 @Composable
@@ -221,6 +222,13 @@ fun AssistantScreen(
         }
     }
     val active = activeSession?.let { SessionKey(activeMachine.orEmpty(), it) }
+    // The health space (docs/assistant/health.md, #4329): its chats as last read, and every chat known to be one, so New
+    // on a health chat opens the health space's new-chat page.
+    var healthChats by remember(managerChoice.hubId) { mutableStateOf<List<Session>?>(null) }
+    var healthKeys by remember(managerChoice.hubId) { mutableStateOf(emptySet<SessionKey>()) }
+    var healthBusy by remember { mutableStateOf(false) }
+    val healthPage = active == null && newChat?.space == persona.core.contracts.api.AssistantSpace.HEALTH
+    val onHealthChat = active != null && active in healthKeys
     // "Compact context" and "New main chat" (#1727): the main conversation's menu, on hubs that offer them.
     val mainActions = if (pageManagement != null && !demo) MainActions.of(LocalHubFeatures.current) else MainActions(false, false)
     // What the main conversation still needs (docs/assistant/onboarding.md 4.4), on hubs that work it out: asked when the tab
@@ -373,7 +381,39 @@ fun AssistantScreen(
         // leaves no empty chat on the hub. Back returns to the conversation it was tapped on.
         val from = newChat?.from ?: active
         newConversation()
-        newChat = NewChatStart(from)
+        newChat = HealthEntry.newChat(from, health = false)
+    }
+    // The health space's new-chat page: its first message starts a health chat, never the main one.
+    fun startHealthConversation() {
+        if (sending) return
+        val from = newChat?.from ?: active
+        newConversation()
+        newChat = HealthEntry.newChat(from, health = true)
+    }
+    suspend fun loadHealth(): List<Session> {
+        val chats = requireNotNull(conversationsOf).spaceConversations(persona.core.contracts.api.AssistantSpace.HEALTH)
+        healthChats = chats
+        healthKeys = healthKeys + chats.map { it.key }
+        return chats
+    }
+    // The sidebar's Health: the newest health chat, else the health space's new-chat page.
+    fun openHealth() {
+        if (sending || healthBusy || conversationsOf == null) return
+        healthBusy = true
+        scope.launch {
+            try {
+                when (val target = HealthEntry.resolve(loadHealth())) {
+                    is HealthEntry.Target.Open -> openConversation(target.key)
+                    HealthEntry.Target.New -> startHealthConversation()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (feedback?.failure(error) != true) snackbar.showSnackbar(resources.getString(R.string.assistant_health_load_failed))
+            } finally {
+                healthBusy = false
+            }
+        }
     }
     suspend fun newChatRefused(error: Exception) {
         // A coded refusal (no computer, Claude Code missing…) says what is missing instead of "Can't start a chat right now".
@@ -390,7 +430,7 @@ fun AssistantScreen(
         val sentDraft = composer.draft
         val text = composer.message()
         // A launcher picked on the new-conversation page: a conversation of its own on it, then the message to it.
-        val launcher = starterLauncher.takeIf { active == null }
+        val launcher = starterLauncher.takeIf { active == null && newChat?.space == null }
         val startWith = startConversationWith
         // New chat's page: the message starts that chat and never goes to the main one.
         val fresh = newChat.takeIf { active == null }
@@ -415,7 +455,11 @@ fun AssistantScreen(
                     launcher != null && startWith != null ->
                         starterTarget(launcher, starterStarted, startWith).also { starterStarted = it }.session
                     fresh != null -> fresh.started ?: try {
-                        startConversation().also { newChat = fresh.copy(started = it) }
+                        val space = fresh.space
+                        if (space != null) requireNotNull(conversationsOf).startConversationIn(space).also {
+                            newChat = fresh.copy(started = it)
+                            healthKeys = healthKeys + it
+                        } else startConversation().also { newChat = fresh.copy(started = it) }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
@@ -492,6 +536,16 @@ fun AssistantScreen(
             .onFailure { if (machine == assistantMachine) launchersFailed = true }
     }
     LaunchedEffect(pageManagement, assistantMachine, startConversationWith) { loadStarterLaunchers() }
+    // The health space's new-chat page lists its past chats: read each time it opens.
+    LaunchedEffect(healthPage) { if (healthPage && conversationsOf != null) assistantAttempt { loadHealth() } }
+    // A chat opened from elsewhere (a notification, a link) that is not on the assistant's own list may be a health one:
+    // asked once, so its New opens the health space's page.
+    LaunchedEffect(active) {
+        val shown = active ?: return@LaunchedEffect
+        if (demo || conversationsOf == null || shown in healthKeys || shown == snapshot.mainSession ||
+            snapshot.conversations.any { it.key == shown }) return@LaunchedEffect
+        assistantAttempt { loadHealth() }
+    }
     LaunchedEffect(requestedSession) {
         requestedSession?.let { openedMain = true; proactiveOpen = false; settingsOpen = false; openConversation(it) }
     }
@@ -500,6 +554,7 @@ fun AssistantScreen(
         when (action) {
             AssistantSidebarAction.Home -> newConversation()
             AssistantSidebarAction.NewConversation -> startNewConversation()
+            AssistantSidebarAction.Health -> openHealth()
             AssistantSidebarAction.MainConversation -> {
                 openedMain = true
                 snapshot.mainSession?.let(::openConversation) ?: run { newConversation(); viewingMainQueue = true }
@@ -566,6 +621,7 @@ fun AssistantScreen(
             },
             onNew = ::startNewConversation,
             onHome = { newConversation() },
+            onHealth = if (conversationsOf != null && !demo) ({ scope.launch { drawerOpen = false }; openHealth() }) else null,
             onSettings = { drawerOpen = false; navigator.navigate(SettingsRoute) },
             onInbox = { drawerOpen = false; onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute) },
             onPin = if (onTogglePin != null) ({ session -> togglePins(listOf(session.key)) }) else null,
@@ -598,7 +654,11 @@ fun AssistantScreen(
                         title = LocalPersonaName.current, subtitle = connectionLabel,
                         titleBusy = !connectionLabel.isNullOrBlank(), onTitleClick = { menu = true },
                         actions = {
-                            JIconButton(PhIcons.NotePencil, stringResource(R.string.assistant_new_conversation), ::startNewConversation,
+                            // On a health chat (or the health space's new-chat page) New starts another health chat.
+                            val health = onHealthChat || healthPage
+                            JIconButton(PhIcons.NotePencil,
+                                stringResource(if (health) R.string.assistant_health_new else R.string.assistant_new_conversation),
+                                { if (health) startHealthConversation() else startNewConversation() },
                                 enabled = !sending && managers.offline == null)
                             if (LocalHomeChrome.current == null) JIconButton(PhIcons.UserCircle, stringResource(R.string.assistant_profile), {
                                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
@@ -631,16 +691,18 @@ fun AssistantScreen(
                         val uploadTarget = active ?: snapshot.mainSession
                             ?: SessionKey(assistantMachine, PendingMainConversation.sessionId)
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
-                            canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() },
+                            // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
+                            canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
                             onSend = ::submit, onCommand = { composer.insert(it, composer.focused) },
                             onNotice = { message ->
                                 if (feedback?.notice(message) != true) scope.launch { snackbar.showSnackbar(message) }
                             }, enabled = draftReady && !sending && managers.offline == null,
-                            placeholder = managers.offline ?: stringResource(R.string.assistant_composer_placeholder, LocalPersonaName.current),
+                            placeholder = managers.offline ?: if (healthPage) stringResource(R.string.assistant_health_placeholder)
+                                else stringResource(R.string.assistant_composer_placeholder, LocalPersonaName.current),
                             blockedLabel = blocking?.takeIf { active == null }?.let { stringResource(blockedSendLabel(it)) },
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip).
-                            accessory = if (active == null && pageManagement != null && startConversationWith != null && !demo) ({
+                            accessory = if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) ({
                                 StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
                                     onOpen = { scope.launch { loadStarterLaunchers() } }) { picked ->
                                     // Another launcher (or the default) does not reuse what the last one started.
@@ -686,6 +748,8 @@ fun AssistantScreen(
                         if (missing != null) missing.primaryAction()?.let { runReadinessAction(it) }
                         else assistantAttempt { (mainConversationSender as? MessageSender ?: messageSender).retry(message.clientMessageId) }
                     } })
+            } else if (healthPage) {
+                HealthHome(healthChats, contentPadding = padding, onOpen = ::openConversation, onCopy = ::copyId)
             } else {
                 AssistantHome(enabled = !sending && draftReady && composer.ready, machines = machines,
                     phoneToolsAvailable = phoneToolsAvailable, contentPadding = padding, demo = demo,
@@ -892,6 +956,33 @@ private fun AssistantHome(
     }
 }
 
+/**
+ * The health space's new-chat page (docs/assistant/health.md): what it is for, then its past chats, newest first (the
+ * history: tap one to open it). The composer under it starts a health chat.
+ */
+@Composable
+private fun HealthHome(
+    chats: List<Session>?, contentPadding: PaddingValues, onOpen: (SessionKey) -> Unit, onCopy: (SessionKey) -> Unit,
+) {
+    val history = remember(chats) { HealthEntry.history(chats.orEmpty()) }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
+        top = contentPadding.calculateTopPadding() + Tokens.Space.l, bottom = contentPadding.calculateBottomPadding() + Tokens.Space.xl)) {
+        item(key = "health-lead") {
+            Column(Modifier.padding(vertical = ContentTokens.legacyXl), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                Text(stringResource(R.string.assistant_health_title), style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink)
+                Text(stringResource(R.string.assistant_health_lead), style = PersonaTheme.type.voice, color = PersonaTheme.palette.ink2)
+            }
+        }
+        if (history.isNotEmpty()) item(key = "health-history") {
+            JSectionHeader(stringResource(R.string.assistant_health_history), count = history.size)
+        }
+        itemsIndexed(history, key = { _, session -> "health/" + session.key.path }) { index, session ->
+            ConversationRow(session, selected = false, position = GroupPosition.of(index, history.size),
+                onOpen = { onOpen(session.key) }, onEnd = null, onCopy = { onCopy(session.key) })
+        }
+    }
+}
+
 /** One of the hub's example questions: a local one opens help here, never sent to the model. */
 @Composable
 private fun HubSuggestionCard(suggestion: ReadinessSuggestion, enabled: Boolean, onOpen: () -> Unit) {
@@ -924,6 +1015,8 @@ internal fun AssistantDrawer(
     onEnd: ((Session) -> Unit)?,
     onMain: () -> Unit, onOpen: (SessionKey) -> Unit, onInfo: (AssistantInfo) -> Unit,
     onNew: () -> Unit, onHome: () -> Unit, onSettings: () -> Unit,
+    /** The health space (docs/assistant/health.md): its newest chat, else its new-chat page; null: no Health row. */
+    onHealth: (() -> Unit)? = null,
     onPin: ((Session) -> Unit)? = null, onUnpinAll: (() -> Unit)? = null, onCopy: (Session) -> Unit = {},
     onArchive: ((Session) -> Unit)? = null,
     showAllRecent: Boolean = false, onShowAllRecent: () -> Unit = {},
@@ -965,7 +1058,7 @@ internal fun AssistantDrawer(
             if (!drawer) item { JSectionHeader(stringResource(R.string.assistant_more)) }
             // The compact drawer keeps only iPhone destinations; extra actions remain in the selected Assistant menu.
             val totalMore = (if (drawer) 2 else 5) + (if (showTodos && onTodos != null) 1 else 0) +
-                (if (onInbox != null) 1 else 0) + pages.size
+                (if (onInbox != null) 1 else 0) + (if (onHealth != null) 1 else 0) + pages.size
             // Each row's place in the group is taken while the list is built: counted inside an item's own content, it
             // was counted again whenever only some rows recomposed, and the group's corners landed on the wrong rows.
             var moreIndex = 0
@@ -978,6 +1071,7 @@ internal fun AssistantDrawer(
             if (showTodos && onTodos != null) more { DrawerItem(stringResource(R.string.assistant_todos), PhIcons.ListChecks, badge = todoCount, onClick = onTodos) }
             more { DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock) { onInfo(AssistantInfo.Schedule) } }
             more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen) { onInfo(AssistantInfo.Knowledge) } }
+            if (onHealth != null) more { DrawerItem(stringResource(R.string.assistant_health), PhIcons.Heart, onHealth) }
             if (!drawer) {
                 more { DrawerItem(stringResource(AssistantInfo.Session.title), PhIcons.Info) { onInfo(AssistantInfo.Session) } }
                 more { DrawerItem(stringResource(AssistantInfo.Launcher.title), PhIcons.RocketLaunch) { onInfo(AssistantInfo.Launcher) } }
@@ -1118,8 +1212,9 @@ private fun ConversationRow(
             leading = { JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                 selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
             trailing = { JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), { menu = true }) }, chevron = false)
-        Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Under the title, not the icon: a fixed 16dp put it under the icon in glass and board and past it in brief.
+        Row(Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             StatusLabel(session.conversationStatus())
             conversationTime(session.updated, currentLocale)?.let { time ->
                 Text(time, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
@@ -1216,7 +1311,7 @@ private fun PersonaRow(main: Session?, selected: Boolean, hasMain: Boolean, onMa
     JRow(name, onClick = onMain, onLongClick = main?.let { { menu = true } }, selected = selected,
         // "Main chat" under the name keeps the row readable as a conversation, not a brand heading (#6327, as the web, #6293).
         subtitle = stringResource(if (main == null && !hasMain) R.string.assistant_start_main else R.string.assistant_main_chat),
-        leading = { JAppMark(Tokens.Space.xxl) }, chevron = false,
+        leading = { JAppMark(Tokens.Space.xl) }, chevron = false,
         trailing = if (main == null) null else ({
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
                 if (pending > 0) JBadge(pending)

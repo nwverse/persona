@@ -22,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/hubcli"
 	"github.com/nwverse/persona/server/internal/managercli"
 	"github.com/nwverse/persona/server/internal/relay"
+	"github.com/nwverse/persona/server/internal/shareproxy"
 	"github.com/nwverse/persona/server/internal/supervise"
 	"github.com/nwverse/persona/server/internal/update"
 	"github.com/nwverse/persona/server/internal/voice"
@@ -59,6 +60,8 @@ const usage = `usage:
                            (docs/assistant/managers.md; personad manager for the details)
 ` + nodecmd.NodeUsage + `
 ` + nodecmd.Usage + `
+  personad share-http --listen <address> --upstream <loopback HTTP origin> --public-origin <HTTP sharing origin> --hub-config <private configuration>
+                           isolated anonymous sharing ingress on a separate unprivileged port (docs/server/agent-sharing.md)
   personad relay [config]   run the push relay (config ~/.persona/relay.json): pushes for hubs without the app's APNs
                            key, payloads sealed to the phone (docs/operations/push-relay.md)
   personad supervise [--manager-only [--hub <hub address>]]
@@ -122,6 +125,8 @@ func main() {
 		err = managercli.Assistant(ctx, buildInfo(), os.Args[2:], os.Stdin)
 	case "manager": // a manager made in the app: join, run, install as a service (docs/assistant/managers.md)
 		err = managercli.Manager(ctx, buildInfo(), os.Args[2:])
+	case "share-http":
+		err = shareproxy.Run(ctx, os.Args[2:], os.Stderr)
 	case "relay":
 		if len(os.Args) > 3 { // only the config path: anything after it would be ignored
 			err = usageError("usage: " + commandName() + " relay [config]")

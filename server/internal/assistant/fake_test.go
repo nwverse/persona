@@ -403,6 +403,10 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		f.guestPrepared = append(f.guestPrepared, a)
 		return json.Marshal(map[string]any{"cwd": "/home/me/.persona/guest"})
+	case "worktree.status":
+		return json.Marshal(proto.WorktreeStatus{})
+	case "workspace.resolve":
+		return json.Marshal(proto.Workspace{Cwd: a["path"].(string), Available: true})
 	case DeviceWorktreePrepare, DeviceWorktreeCreate: // the machine's engine: checkouts under /wt/<repo>
 		a["method"] = p.Method
 		f.worktrees = append(f.worktrees, a)
@@ -511,7 +515,9 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	case AppConnectors + " " + ConnectorsSignedIn:
 		return json.Marshal(map[string]any{"connectors": []string{}, "clis": map[string]string{}, "lark_cli": f.larkCLI})
 	case AppPlugins + " " + PluginsAssistant:
-		return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})

@@ -318,7 +318,8 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 		p.MyRole = oneLine(myRole)
 	}
 	p.Chats = addUnique(p.Chats, c.ID)
-	p.People = addUnique(p.People, c.People...)
+	people := e.externalPeople(c.People)
+	p.People = addUnique(p.People, people...)
 	if strings.TrimSpace(update) != "" {
 		_ = e.Store.AppendLog(p.Slug, now, c.Name, update)
 		p.Dirty = true
@@ -327,8 +328,11 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 		}
 	}
 	_ = e.Store.PutProject(p)
-	for _, pid := range c.People {
+	for _, pid := range people {
 		_, _, _ = e.Store.updatePerson(pid, false, nil, func(per *Person) bool {
+			if per.Status == "ignored" || per.Status == "self" {
+				return false
+			}
 			n := len(per.Projects)
 			per.Projects = addUnique(per.Projects, p.Slug)
 			return len(per.Projects) != n

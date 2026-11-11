@@ -64,7 +64,8 @@ type Settings struct {
 	MainTasksQuiet *bool `json:"main_tasks_quiet,omitempty"`
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
-	StartRequestedTasks *bool `json:"start_requested_tasks,omitempty"`
+	StartRequestedTasks     *bool  `json:"start_requested_tasks,omitempty"`
+	TaskWorkspacePreference string `json:"task_workspace_preference,omitempty"`
 	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
 	RecordingDays *int `json:"recording_days,omitempty"`
 	// MinutesDays: how many days a meeting's minutes stay once its transcript went with RecordingDays (#3780,
@@ -85,6 +86,9 @@ type Settings struct {
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
 	AgentTasks *bool `json:"agent_tasks,omitempty"`
+	// InboxSignals: new Inbox messages the judge links to a supervised task reach its supervisor as the signal inbox
+	// (#4293, supervise_inbox.go). nil is off (the default): each one is a supervisor turn.
+	InboxSignals *bool `json:"inbox_signals,omitempty"`
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
@@ -433,7 +437,8 @@ type assistantView struct {
 	NotesEffective     string             `json:"notes_effective"`  // what the assistant is told about the user
 	MainTasksQuiet     bool               `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
-	StartRequestedTasks bool `json:"start_requested_tasks"`
+	StartRequestedTasks     bool   `json:"start_requested_tasks"`
+	TaskWorkspacePreference string `json:"task_workspace_preference"`
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
@@ -455,6 +460,8 @@ type assistantView struct {
 	InterjectBackground bool `json:"interject_background"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
 	AgentTasks bool `json:"agent_tasks"`
+	// InboxSignals is in effect, like DoneNeedsDelivery.
+	InboxSignals bool `json:"inbox_signals"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -470,12 +477,14 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
-		MainBackgroundFolded: quietOn(v.MainBackgroundFolded),
-		DoneNeedsDelivery:    v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
+		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
+		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
 		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground,
-		AgentTasks:          v.AgentTasks != nil && *v.AgentTasks}
+		AgentTasks:          v.AgentTasks != nil && *v.AgentTasks,
+		InboxSignals:        v.InboxSignals != nil && *v.InboxSignals}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session

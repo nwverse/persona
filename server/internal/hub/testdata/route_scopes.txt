@@ -63,6 +63,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/imessage/data
 inbox.write          DELETE /api/v1/inbox/mutes/{id}
 inbox.write          DELETE /api/v1/inbox/policies/{id}
+-                    DELETE /api/v1/kb/projects/{id}
 -                    DELETE /api/v1/launchers/{name}
 -                    DELETE /api/v1/looks/uploads/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
@@ -129,6 +130,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
 -                    GET /api/v1/assistant/tasks
+-                    GET /api/v1/assistant/tasks/cron
 -                    GET /api/v1/auth/tokens
 -                    GET /api/v1/bots/feishu
 -                    GET /api/v1/channels
@@ -179,6 +181,7 @@ agents.read          GET /api/v1/interactions
 agents.read          GET /api/v1/interactions/history
 -                    GET /api/v1/iphone
 kb.read              GET /api/v1/kb-search
+-                    GET /api/v1/kb-trash
 kb.read              GET /api/v1/kb/chats/{id}/context
 kb.read              GET /api/v1/kb/chats/{id}/days/{day}
 kb.read              GET /api/v1/kb/moments/{id}
@@ -398,6 +401,7 @@ inbox.write          POST /api/v1/inbox/{id}/suggestion
 agents.control       POST /api/v1/interactions/{id}/choose
 agents.control       POST /api/v1/interactions/{id}/reanswer
 agents.control       POST /api/v1/interactions/{id}/resolve
+-                    POST /api/v1/kb-trash/{id}/restore
 -                    POST /api/v1/later/{id}/handled
 -                    POST /api/v1/launchers
 -                    POST /api/v1/launchers/discover
@@ -444,9 +448,12 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/tabs/rename
 -                    POST /api/v1/machines/{mid}/worktree/add
 -                    POST /api/v1/machines/{mid}/worktree/create
+-                    POST /api/v1/machines/{mid}/worktree/delete
 -                    POST /api/v1/machines/{mid}/worktree/prepare
+-                    POST /api/v1/machines/{mid}/worktree/preset
 -                    POST /api/v1/machines/{mid}/worktree/remove
 -                    POST /api/v1/machines/{mid}/worktree/rename
+-                    POST /api/v1/machines/{mid}/worktree/source
 -                    POST /api/v1/machines/{mid}/worktree/status
 -                    POST /api/v1/managers
 -                    POST /api/v1/managers/{id}/code
@@ -486,6 +493,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/tabs/autoname
 -                    POST /api/v1/task-plans/{id}/dismiss
 -                    POST /api/v1/task-plans/{id}/start
+-                    POST /api/v1/task-plans/{id}/workspace-preview
 todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept

@@ -19,6 +19,11 @@ data class AssistantSnapshot(
     val directionNames: Map<String, String> = emptyMap(),
 )
 
+/** The assistant's spaces besides its own (docs/assistant/health.md): their names on the wire (`space`). */
+object AssistantSpace {
+    const val HEALTH = "health"
+}
+
 interface AssistantRepository {
     val assistant: StateFlow<AssistantSnapshot>
     suspend fun refresh()

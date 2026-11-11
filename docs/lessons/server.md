@@ -1,5 +1,58 @@
 # Lessons: hub / node and networking
 
+## A shared package that imports a manager's drags it into the hub (2026-11-11, #4371, #4446)
+
+`persona-hub` links every package a shared one (`depguard.Shared`) imports, so one import of a manager-side package in
+a shared package, even for a small pure function, puts that package in the hub's program and
+`TestPersonaHubDoesNotLinkTheManager` fails. `transcript.AskOf` called `closeout.WaitsOnNobody` that way. A rule that
+only the node and the manager apply goes in their package, which imports the shared one (`closeout.AskOf` over
+`transcript.AskOf`), not the other way round. Listing the manager's package in `depguard.Shared` (as #4395 did for a
+while) only hides it. A new package the hub links and the manager does not, such as what the hub and a helper of its
+own say to each other (`relayproto` with the push relay, `shareproof` with the sharing ingress, #4446), goes in
+`depguard.HubOwn`, which also keeps it out of the manager; `Shared` is for what both programs link. After adding an
+import to a shared package or a new package the hub links, run `go test ./cmd/persona-hub` (a few seconds).
+
+## Receipt integration fixtures need independent identities (#4433)
+
+A registered manager bus connection is not the same as its normal device-state
+readiness report. Run that report through the fixture's actual RPC path before
+starting a session; do not relax the production readiness check. A state.load RPC
+on the same stream fences the preceding durable state.put without a fixed sleep.
+
+Creation IDs are immutable once stored. Reusing one machine/session across wrong
+and matching receipt cases can make the matching load retain the earlier identity,
+creating a false production-defect report. Give every case its own credential,
+machine and persistent record; keep exact creation/incarnation equality assertions.
+A local authenticated HTTP/manager/node-state round trip proves those boundaries,
+not a real runtime reply or production ownership: retain the separate live evidence.
+
+## A list read before a locked write must not undo it (2026-11-11, #4372)
+
+The manager's agent archive restores a session when its node's list shows new activity (busy, or a newer update time). Readers decorated the node's list first and only then took the archive's lock, so a reader that read the list while an agent still waited on the user, and got the lock after a cancelled task's agent was closed and archived, took that old busy row for new activity and restored the archive for good. The log still said "closed and archived". It showed up as `TestCancelStopsAndArchivesAgents` failing about 1 run in 100, and only with `-cpu` above 1, once the fake answered `session.close` with the session already offline (#3184): the archive then followed the close at once while the test kept reading the list. Weigh a snapshot only against the state that was already there when it was read: `archivedSessions` takes the archive's write count from before its list was read (`archiveMark`), and a record written after that ignores what the list shows (`agentArchive.active`). A counter, not a time: two reads in one clock tick, or a clock stepped back, must not decide it. The web's card snapshots had the same shape (`refresh()` restoring just-resolved cards, `docs/lessons/web.md`).
+
+## Sharing peer budgets need an authenticated local ingress (#4391)
+
+Keeping X-Forwarded-For untrusted is necessary, but a loopback reverse proxy then
+collapses every anonymous reader into one upstream IP budget. One reader can crowd
+out unrelated readers even with different capability tokens. Bind the actual TCP
+peer and exact anonymous GET to a short-lived sharing-only MAC; accept it only on
+literal loopback and keep the original capability/ownership checks. Verify the
+upstream's acknowledgement before opening, strip the proof/acknowledgement from
+public responses, and fail closed when authentication is lost. Never use this key
+or header as general proxy trust, a login credential or a management authorization.
+
+## Public sharing ingress needs a fixed authority (#4358)
+
+An independent browser port does not constrain an HTTP client's Host header. A
+plain TCP forward or unrestricted reverse proxy can turn the sharing listener
+into an application entry point when a client sends the application's Host.
+Reject nonpublic paths before proxying and pin the upstream sharing authority;
+strip credentials in both directions and protect local gateway errors too.
+Changing `sharing.public_origin` on disk does not hot-reload the running hub.
+Use its normal release/configuration lifecycle, not an unrelated reload endpoint.
+A loopback proxy also shares the upstream's aggregate IP budget unless a separately
+reviewed trusted-address protocol is in place; do not silently trust X-Forwarded-For.
+
 ## Shared web fixtures belong in the Docker build context (2026-11-11, #4260)
 
 The web production build typechecks test files. A JSON fixture imported from `spec/fixtures/` needs both a
@@ -1742,3 +1795,17 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
 - When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
+
+## A child in its own process group outlives a node killed by `exec.CommandContext` (2026-11-11, #4259)
+
+- The manager ran the hub machine's node (`node --stdio`) with `exec.CommandContext` and the default `Cancel`, a SIGKILL. The node puts each assistant process in its own group (`Setpgid`, so `stop()` can end its background tasks), and nothing ties that group to the node: a SIGKILLed node leaves its conversations running. Before blue-green switching, the systemd restart's cgroup kill hid this; a switch keeps the unit, so the old Claude processes went on beside the ones the next node resumed for the same conversations, and the next node rightly refused them the assistant's tools.
+- A child that must not outlive its parent needs the parent to stop it, and the parent needs time to: end such a process the way its peer going away ends it (EOF on stdin) with a bounded grace before the kill (`cmd.Cancel`, `cmd.WaitDelay`), and have it stop its own children and wait for them before it exits. Stopping them in a goroutine is not enough: `Serve` returned and the process exited before the goroutine's SIGKILL fallback ran (`stopAndWait`).
+- A test that kills the parent and looks for the child catches both halves; one that only checks the parent's exit status does not.
+
+## A field in `proto.Session` is paid on every copy (#4342)
+
+The hub copies sessions by value (decorated lists, readers that keep rows), and its allocation budgets
+(`internal/assistant` `TestSessionReadersCopyNoList`, `TestAssistantViewCopiesOnlyItsConversations`) measure bytes per call.
+One `int` took a 1,528-byte `Session` to 1,536, and those readers went 5 to 12% over. Small fields fit in the padding instead
+(between the bools and the next 8-byte field): check the layout with `reflect` field offsets and keep the size unchanged.
+A new field type also needs wire samples in `session_wire_test.go`.

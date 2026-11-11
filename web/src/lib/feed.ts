@@ -18,11 +18,16 @@ import type { ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
+export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
+export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
+
 export interface PlanTask {
   title: string;
   prompt: string;
   machine: string;
   cwd: string;
+  workspace?: TaskWorkspace;
+  workspace_resolved?: TaskWorkspaceResolved;
   launcher?: string;
   model?: string;
   /** An Agent preset (#2225): a tier of the model profile in use, resolved when the task starts. */
@@ -521,7 +526,7 @@ onHubEvent("task_plan", (m) => {
 // ── actions ──
 
 /** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
-export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
+export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt" | "workspace"> & { ultracode: boolean };
 
 export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] as const;
 
@@ -536,12 +541,13 @@ export function planEditsOf(plan: TaskPlan, ultracode?: readonly boolean[]): Pla
     permission: t.permission || "default",
     prompt: t.prompt,
     ultracode: ultracode?.[i] ?? t.ultracode === true,
+    ...(t.workspace !== undefined ? { workspace: t.workspace } : {}),
   }));
 }
 
 /** Whether "Edit" changed anything since it opened with `before` (closing it then asks before throwing the changes away). */
 export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]): boolean {
-  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
+  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => JSON.stringify(e[k] ?? "") !== JSON.stringify(before[i]?.[k] ?? "")));
 }
 
 /** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it
@@ -855,11 +861,23 @@ export function quickResult(use: Item, result?: Item): QuickResult | undefined {
   }
 }
 
+/** When the oldest loaded transcript item happened (displayLines `from`); undefined when none says. */
+export function loadedFrom(items: Item[]): number | undefined {
+  for (const it of items) {
+    const at = Date.parse(it.ts ?? "");
+    if (!Number.isNaN(at)) return at;
+  }
+  return undefined;
+}
+
 /** The chat's lines with the feed among them (each item at the end of the exchange it happened in), each exchange's
- *  quick results after it, and a day line over the first line of each day. */
-export function displayLines(lines: ChatLine[], all: FeedItem[]): DisplayLine[] {
+ *  quick results after it, and a day line over the first line of each day. `from`: while older transcript pages are
+ *  not loaded yet, the time of the oldest loaded item. The feed always holds the whole history, so its older items would
+ *  stack on top of the newest page, with their day lines, and read as the conversation's start with its messages gone;
+ *  they wait for the page that covers them. */
+export function displayLines(lines: ChatLine[], all: FeedItem[], from?: number): DisplayLine[] {
   // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
-  const feed = shownFeed(all);
+  const feed = shownFeed(all).filter((it) => from === undefined || !(Date.parse(it.at) < from));
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {

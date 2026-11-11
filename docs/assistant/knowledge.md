@@ -692,6 +692,19 @@ The model may mistake product names in notification emails (each App Store app, 
 and prompts (`server/internal/prompts/kb/`, `docs/assistant/prompts.md`) explicitly exclude notifications, marketing and billing. At startup the manager marks projects sourced only from these chats and never manually tagged as `ignored`:
 no more updates, snapshots or prompts; the app groups them under **Not projects**. Changing their status in tags restores them.
 
+## Deleting a project
+
+A project can be deleted from the web knowledge list (#4412). The delete is soft (`kb/project_trash.go`):
+
+- The project's directory moves to `.trash/<id>/project` in the data dir, so it drops out of lists, search, prompts and the pipeline, which only read `projects/`. Its index rows go.
+- The chats, people and items that named it stop naming it. `.trash/<id>/trash.json` records which ones (`unlinked`, as `<kind>/<id>`), with the slug, the name and `deleted_at`.
+- Restoring moves the directory back, re-adds the project to the recorded entities that still exist, reindexes it and removes the trash entry. A project created with the same slug since then blocks the restore (`409`); nothing is overwritten.
+- Projects merged into it go with it (`.trash/<id>/merged/<slug>`, listed in `merged`) and come back with it, so their unmerge record still points at a project that exists.
+- The trash is never searched, and compression running while a project is deleted doesn't link it again. Documents linked only from a project in the trash are kept by document retention, so a restore finds them.
+- Forgetting a source (`ForgetSource`) removes for good every trash entry that holds something the source brought in (its chats, people, items or posts, or timeline lines it wrote), so a restore can't bring forgotten data back.
+- Merged projects can't be deleted (`404`), and a read-only knowledge base refuses both (`403 kb_read_only`). Nothing else empties the trash yet; entries stay until restored or removed by hand. Entry ids are a timestamp; the slug and name are in `trash.json`.
+- The routes are for full credentials only: an extension's token opens none of them (`extwire.RouteScopes`).
+
 ## Topics (#3783)
 
 Projects and chats are filed by where knowledge came from, and their summaries follow fixed status sections (what this is, progress, next steps, risks). They say where a piece of work
@@ -703,9 +716,11 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
   the entries it came from (`sources`: `projects/<slug>` or `chats/<id>` and the day) and the day it was last confirmed (`when`). `points.json` is the record; `summary.md` is
   written from it after every change, grouped by subtopic, and is what search and the assistant read.
 - **Distill** (`kb/topic_distill.go`, prompt `kb/topic_distill`): a project is due once its timeline has 8 new lines, or fewer and it has been quiet 30 minutes; a chat (not P3, with
-  real people, `HasPeople`) once its summary changed and it was last distilled more than 12 hours ago. One call takes up to 12 KB of a project's timeline lines from where the last one
-  stopped (each clipped to 600 characters, oldest first), or a chat's summary, plus the names, aliases and one lines of the 80 biggest topics, and returns at most 25 candidates, each
-  with a topic name and a path. A name matching a topic's name or alias (`normName`, as projects match) files it there; a new name opens a topic, at most 4 a call and 150 in all (the
+  real people, `HasPeople`) once its summary changed and it was last distilled more than 12 hours ago. One call takes up to 6 KB of a project's timeline lines from where the last one
+  stopped (each clipped to 600 characters, oldest first), or a chat's summary (clipped to 6 KB, not split), plus the names, aliases and one lines of the 80 biggest topics, and
+  returns at most 12 candidates, each with a topic name and a path. The sizes keep a call's answer well inside its 3-minute deadline also on a model that writes 30–40 tokens a
+  second (#4350: with 12 KB and 25 points a third of the calls ran out of time). A project call that ran out of time, or whose answer did not fit even in twice the room, is tried
+  again (after the usual wait) with half the lines it carried, at least 2, halving again while it keeps failing; a success lifts the cap. A name matching a topic's name or alias (`normName`, as projects match) files it there; a new name opens a topic, at most 4 a call and 150 in all (the
   rest of that call's points for new topics are dropped and logged). How far a source was read is its mark, `.topics.json` in its directory: a project's line count and the size of
   `log.md` when it read to the end (an unchanged size means nothing new, and the timeline is not read again), a chat's summary hash. The first pass over existing timelines is the
   same step from line one, so a knowledge base with long timelines fills in over some rounds.
@@ -778,7 +793,9 @@ Metadata of all six entity types can include `pinned` (user-confirmed facts) and
 
 - Omitted or `null` `tags` keeps the current value; explicit `[]` clears; a nonempty array replaces. After explicit clearing, metadata retains `tags: []`, allowing clients to replace cached tags with the latest empty value.
 - Only explicit updates change `pinned`; an empty string clears it. Compression and project rewrites receive it as read-only input; the model cannot overwrite stored facts. Person corrections also feed related chat compression.
-- Manual writes lock fields touched by default, including person `note`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.
+- People accept `status: active`, `ignored` (an account excluded from automatic person notes, summaries and new chat/project associations), or `self` (the owner, excluded from external participant rosters). Missing or empty metadata status retains normal active-contact behavior. In updates, omitted or empty status keeps the current value; use `active` to restore a contact. Other nonempty person statuses are rejected before changing fields or links.
+- Historical associations and summaries remain on disk; linked-entity rosters and project deduplication member counts omit ignored/self accounts without deleting those records. `kb.list` for people omits ignored accounts before ranking and pagination, so totals and offsets count only listed people; self accounts remain listed. Ignored accounts can still be explicitly read by ID with `kb.get` and corrected with `kb.update`. This does not synchronize `self` into the separate encrypted `kb.owner` record.
+- Manual writes lock fields touched by default, including person `note` and `status`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.
 - `lock: false` adds no locks in this update, letting extensions choose continued background maintenance; it does not remove existing locks. Legacy `locked` tag protection remains effective.
 - `remove_people`, `remove_chats`, `remove_projects`, `remove_aliases` remove associations or project aliases, not entities. A batch adds first then removes, so removal wins; existing reverse associations are removed too. `remove_aliases` applies to projects.
 - Automatic deduplication skips manually protected projects and associations. Explicit merging retains existing merge precedence, updates locked reverse associations and concatenates both pinned values; the source remains a merged record with its original protected metadata readable.
@@ -846,6 +863,9 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 | `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count) |
 | `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`); projects also include `agents` |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
+| `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |
+| `GET /api/v1/kb-trash` | Deleted projects, newest first (`items`: trash entries) |
+| `POST /api/v1/kb-trash/{id}/restore` | Put a deleted project and its links back; returns the entry; 404 if there is no such entry, 409 if a project with its slug exists again |
 | `GET /api/v1/kb-search?q=&messages=0` | Full-text search (by line, for older apps; assistant `kb_search` does the same search through bus `kb.search`) |
 | `GET /api/v1/kb-search?q=&results=1` | App search: grouped and sorted by entry (`results`: `entry`, `count`, first 3 `hits` lines, `in_name`), see "Search" below |
 | `GET /api/v1/kb/{kind}/{id}?q=` | Open from search: adds `matches` (every hit in this entry; messages include `day` and two neighboring messages each in `before` / `after`), up to 40 |

@@ -199,6 +199,9 @@ final class AppModel {
     var latestAnswerFor: SessionKey?
     /// A hub link's message to land on once its chat shows (HubPageRouting, #2696); taken by that chat.
     var messageJump: MessageJump?
+    /// A refused send's Open Terminal (a dialog holds that session's terminal, #3752): its chat opens the terminal
+    /// and takes it.
+    var terminalAsk: SessionKey?
     /// The phone writes waiting for Allow / Deny, one shown at a time (#4456).
     @ObservationIgnored let phoneConfirmations = PhoneConfirmations()
     /// The one on screen (RootView / MacRootView's alert).
@@ -729,6 +732,7 @@ final class AppModel {
         if isDemo { leaveDemo() }
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
+        PortForwarder.shared.closeAll() // no hub left for a forwarded port to reach
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
         // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
@@ -1806,8 +1810,8 @@ final class AppModel {
                     socket(group)?.send(subscribeMessage(key))
                 }
             }
-        case .sessionsList:
-            sessionLists.invalidate(group)
+        case .sessionsList(let revision):
+            sessionLists.invalidate(group, revision: revision)
             for key in subscribers.keys where key.group == group { Task { await refreshSessionDetail(key) } }
         case .sessions(let machineID, let list):
             // A busy hub sends each machine's list on its own, one after another: they are applied together a moment
@@ -2905,6 +2909,7 @@ final class AppModel {
         guard !gone.isEmpty else { return }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
+        PortForwarder.shared.close(groups: gone)
         machines = machines.filter { !gone.contains($0.group) }
         sessionsByMachine = sessionsByMachine.filter { !gone.contains($0.key.group) }
         interactions = interactions.filter { !gone.contains($0.value.group) }
