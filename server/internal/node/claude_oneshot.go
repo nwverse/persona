@@ -16,20 +16,23 @@ import (
 
 // A program running Claude Code's command line once (`claude -p`: entrypoint "sdk-cli") writes a transcript like any
 // session's; a script doing it all day filled the offline list with them and pushed the user's own sessions out of its 80
-// (#3828). The offline list leaves out a transcript that is such a run from its first entrypoint to its last (each read
-// within oneShotTail of the file's start and end): a session the user had in a terminal and then went on with through
-// `claude -p -c`, or the other way round, is listed. So is everything Persona has a hand in: whatever was started under
-// its state directory (the assistant's, any manager's, a health space's, a guest's; its path and its resolved one), a
-// session the node keeps state for (none is left out while that state still loads), a fork, a kept session. The Agent
-// SDKs' runs ("sdk-ts", "sdk-py") are listed: interactive hosts such as Paseo run the user's sessions through them.
-// Codex's one-shot runs are left out the same way (codex_hierarchy.go programRun).
+// (#3828). The offline list leaves out a transcript that is such a run from its first entrypoint to its last (the first
+// read within oneShotHead of the start, the last within oneShotReach of the end): a session the user had in a terminal
+// and then went on with through `claude -p -c`, or the other way round, is listed. So is everything Persona has a hand
+// in: whatever was started under its state directory (the assistant's, any manager's, a health space's, a guest's; its
+// path and its resolved one), a session the node keeps state for (none is left out while that state still loads), a
+// fork, a kept session. The Agent SDKs' runs ("sdk-ts", "sdk-py") are listed: interactive hosts such as Paseo run the
+// user's sessions through them. Codex's one-shot runs are left out the same way (codex_hierarchy.go programRun).
 
-// oneShotTail is how much of a transcript's end is read for its last entrypoint: Claude Code writes one on every line,
-// near its end. The first is looked for from the start, a tail's worth at a time up to oneShotHead: a program's first
-// line is its prompt, often longer than a tail (up to 19 KB on one Mac).
+// oneShotTail is how much of a transcript's end is read first for its last entrypoint: Claude Code writes one near the
+// end of every message's line. After the last message it writes lines that carry none (api-request-blob, api-request,
+// last-prompt, mode, atis-latch: 14 KB after a `claude -p` run's last message on one Mac, Claude Code 2.1.32x), so the
+// window doubles until one shows up, as far as oneShotReach. The first is looked for from the start, a tail's worth at
+// a time up to oneShotHead: a program's first line is its prompt, often longer than a tail (up to 19 KB on one Mac).
 const (
-	oneShotTail = 8 << 10
-	oneShotHead = 64 << 10
+	oneShotTail  = 8 << 10
+	oneShotReach = 4 << 20
+	oneShotHead  = 64 << 10
 )
 
 type entrypointMark struct {
@@ -84,8 +87,16 @@ func readEntrypoints(p string, size int64) (first, last string) {
 		}
 		return ""
 	}
-	tail := read(max(size-oneShotTail, 0), size-max(size-oneShotTail, 0))
-	last = value(tail, bytes.LastIndex(tail, key))
+	for w := min(size, oneShotTail); ; w = min(2*w, size, oneShotReach) {
+		tail := read(size-w, w)
+		if i := bytes.LastIndex(tail, key); i >= 0 {
+			last = value(tail, i)
+			break
+		}
+		if w == size || w == oneShotReach {
+			break
+		}
+	}
 	if !transcript.ClaudeOneShot(last) {
 		return "", last // only a one-shot run's start matters
 	}
