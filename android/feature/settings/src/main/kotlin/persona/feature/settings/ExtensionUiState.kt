@@ -21,6 +21,7 @@ import persona.core.designsystem.JChartData
 import persona.core.designsystem.JChartKind
 import persona.core.designsystem.JChartSeries
 import persona.core.designsystem.JStat
+import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.Tone
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
@@ -147,15 +148,17 @@ internal object ExtensionViewText {
 
     /**
      * A date, time or datetime field's value as it reads in the page's language ([locale]: `currentLocale`, not the
-     * system's, #4105); the value itself when it cannot be read.
+     * system's, #4105), the time in the language's 12 / 24 hour habit like the app's other times (#4128); the value
+     * itself when it cannot be read.
      */
     fun whenText(kind: String?, value: String, locale: java.util.Locale): String {
         if (value.isBlank()) return ""
         val dateFormat = java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM).withLocale(locale)
+        val timeFormat = LocalizedFormats.formatter(LocalizedFormats.TIME, locale)
         return when (kind) {
             "date" -> date(value)?.format(dateFormat)
-            "time" -> time(value)?.toString()
-            "datetime" -> date(value)?.let { d -> time(value)?.let { t -> "${d.format(dateFormat)} $t" } }
+            "time" -> time(value)?.format(timeFormat)
+            "datetime" -> date(value)?.let { d -> time(value)?.let { t -> "${d.format(dateFormat)} ${t.format(timeFormat)}" } }
             else -> null
         } ?: value
     }

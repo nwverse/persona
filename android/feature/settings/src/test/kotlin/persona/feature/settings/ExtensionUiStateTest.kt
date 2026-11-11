@@ -72,6 +72,27 @@ class ExtensionUiStateTest {
         }
     }
 
+    @Test fun timeFieldsFollowTheAppLanguagesClock() {
+        // #4128: 24-hour in Japanese and Chinese, 12-hour in English, whatever the system language; the date part as #4105 left it.
+        val saved = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.JAPAN)
+        try {
+            assertEquals("14:30", ExtensionViewText.whenText("time", "14:30", java.util.Locale.JAPANESE))
+            assertEquals("2026/11/11 14:30", ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.JAPANESE))
+            assertEquals("14:30", ExtensionViewText.whenText("time", "14:30", java.util.Locale.SIMPLIFIED_CHINESE))
+            assertEquals("2026年11月11日 14:30", ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.SIMPLIFIED_CHINESE))
+            // English puts a narrow no-break space before AM / PM on newer ICU, a plain space on older ones.
+            val time = ExtensionViewText.whenText("time", "14:30", java.util.Locale.ENGLISH)
+            assertTrue(time, time.startsWith("2:30") && time.endsWith("PM"))
+            val morning = ExtensionViewText.whenText("time", "09:05", java.util.Locale.ENGLISH)
+            assertTrue(morning, morning.startsWith("9:05") && morning.endsWith("AM"))
+            val datetime = ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.ENGLISH)
+            assertTrue(datetime, datetime.startsWith("Nov 11, 2026 2:30") && datetime.endsWith("PM"))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
     @Test fun tonesLinksAndItemsTheAppDraws() {
         assertEquals(Tone.Positive, ExtensionViewText.tone("positive"))
         assertEquals(Tone.Danger, ExtensionViewText.tone("danger"))
