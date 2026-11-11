@@ -12414,6 +12414,10 @@ for attempt in 0..<3 {{
         _seq[0] += 1
         _x.update(seq=_seq[0], id=f"{uuid.UUID(int=_seq[0])}#0")
 
+# MOCK_FOLD_DELAY=<seconds>: opening a fold (its steps fetched by from_seq / through_seq) answers that late, as the hub
+# does over a phone's network: what the steps push in comes a moment after the tap, not in the same frame (#3757).
+FOLD_DELAY = float(os.environ.get("MOCK_FOLD_DELAY", "0"))
+
 # MOCK_RICH=1: a reply with a link in Chinese prose (full-width brackets right after it), a three-column table whose
 # last column is long Chinese text, and a seven-column table that cannot fit (RichReplyTests).
 RICH = "a1f3c2d4-0000-4000-8000-00000000000a"
@@ -19355,6 +19359,7 @@ class H(BaseHTTPRequestHandler):
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
                 return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
+                if FOLD_DELAY: time.sleep(FOLD_DELAY)
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
                 out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}

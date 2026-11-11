@@ -229,7 +229,10 @@ struct QuoteBlock: View {
     var ref: ContextRef
     @Environment(\.openQuote) private var openQuote
     @Environment(\.openLink) private var openLink
+    @Environment(\.chatPin) private var pin
     @State private var open = false
+    /// What the chat's pin knows it by (a quote has no id of its own; this view's is kept while it is drawn).
+    @State private var pinKey = "quote-" + UUID().uuidString
 
     /// A forward shows this many lines of the original until it is opened.
     static let forwardLines = 4
@@ -241,10 +244,12 @@ struct QuoteBlock: View {
                       tint: Theme.Quote.tint, ink: Theme.Quote.summary, action: tap)
                 .accessibilityHint(String(localized: "Opens the original message"))
                 .accessibilityIdentifier("bubble.forward")
+                .chatPinned(pinKey)
         } else {
             QuoteCard(heading: ref.quoteHeading, summary: open ? ref.text : ref.quoteSummary, lines: open ? .max : 2,
                       tint: Theme.Quote.tint, ink: Theme.Quote.summary, action: tap)
                 .accessibilityHint(ref.msg.isEmpty ? "" : String(localized: "Jumps to the original message"))
+                .chatPinned(pinKey)
         }
     }
 
@@ -255,7 +260,8 @@ struct QuoteBlock: View {
             openLink(u)
             return
         }
-        withAnimation(Theme.Motion.state) { open.toggle() }
+        // In the chat its top stays where it is and the text opens under it (#3757).
+        toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: open) { open.toggle() }
     }
 }
 
