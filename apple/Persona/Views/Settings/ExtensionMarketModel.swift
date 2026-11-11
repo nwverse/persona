@@ -87,13 +87,35 @@ nonisolated struct ExtensionCatalogItem: Codable, Hashable, Sendable, Identifiab
     var replaces: String?
     /// The installed extension this one upgrades under a new ID, once the hub checked it came from this market.
     var renameFrom: String?
+    /// Optional public catalog artwork; older hubs omit it.
+    var iconURL: String?
+    /// Cumulative package downloads reported by the catalog, not active installations.
+    var downloads: Int?
 
     var id: String { market + "/" + pluginID }
 
+    /// Unknown counts rank with zero; names and stable IDs break ties on every client.
+    static func popularityOrder(_ lhs: Self, _ rhs: Self) -> Bool {
+        ExtensionPopularity.precedes(downloads: lhs.downloads, name: lhs.name, identity: lhs.id,
+                                      downloads: rhs.downloads, name: rhs.name, identity: rhs.id)
+    }
+
     enum CodingKeys: String, CodingKey {
-        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable, replaces
+        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable, replaces, downloads
         case pluginID = "id", marketName = "market_name", installedSource = "installed_source", fromThisMarket = "from_this_market"
-        case renameFrom = "rename_from"
+        case renameFrom = "rename_from", iconURL = "icon_url"
+    }
+}
+
+/// One definition of popularity for market and installed lists. Missing totals are not installations or zero labels.
+nonisolated enum ExtensionPopularity {
+    static func precedes(downloads lhsDownloads: Int?, name lhsName: String, identity lhsID: String,
+                         downloads rhsDownloads: Int?, name rhsName: String, identity rhsID: String) -> Bool {
+        let left = max(0, lhsDownloads ?? 0), right = max(0, rhsDownloads ?? 0)
+        if left != right { return left > right }
+        let leftName = lhsName.lowercased(), rightName = rhsName.lowercased()
+        if leftName != rightName { return leftName < rightName }
+        return lhsID < rhsID
     }
 }
 
@@ -102,8 +124,12 @@ nonisolated struct ExtensionCatalog: Decodable, Sendable {
     var markets: [ExtensionMarket]
     var plugins: [ExtensionCatalogItem]
     var platform: String?
+    var downloadsUpdatedAt: Date?
 
-    private enum CodingKeys: String, CodingKey { case markets, plugins, extensions, platform }
+    private enum CodingKeys: String, CodingKey {
+        case markets, plugins, extensions, platform
+        case downloadsUpdatedAt = "downloads_updated_at"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -112,6 +138,9 @@ nonisolated struct ExtensionCatalog: Decodable, Sendable {
         plugins = try c.decodeIfPresent([ExtensionCatalogItem].self, forKey: .extensions)
             ?? c.decodeIfPresent([ExtensionCatalogItem].self, forKey: .plugins) ?? []
         platform = try c.decodeIfPresent(String.self, forKey: .platform)
+        downloadsUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .downloadsUpdatedAt)
+        // Derive the order once when the response changes, never while a row renders (P4).
+        plugins.sort(by: ExtensionCatalogItem.popularityOrder)
         // The official market's plugins carry its name as the market does (#5017).
         let official = Set(markets.filter { $0.official == true }.map(\.id))
         for i in plugins.indices where official.contains(plugins[i].market) {

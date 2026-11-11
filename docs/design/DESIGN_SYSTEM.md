@@ -279,6 +279,15 @@ Reduce Motion:
 - Some states stay filled in every style (`keepsFill`, `apple/Shared/Design/IconSpec.swift`).
 - Beside text, size an icon with a font level. In a box, use `Size.mark*`, `icon*`, `well*` or `avatar*` with `scaledFrame`. Details in `docs/apple/icons.md`.
 - Raw symbol names still appear in about 87 baselined places (settings rows, Lark, notification actions, controls).
+- Extension catalog artwork uses `ExtensionLogo` with the existing `ExtensionRemoteImage` loader on market rows,
+  market details and installed-extension settings. HTTPS artwork is fitted rather than cropped, sized with existing
+  `Theme.Size` tokens, decorative beside the extension name, and falls back to `Theme.Icon.plugins` while loading or
+  unavailable. `ExtensionImageCache` coalesces URL/pixel-size requests and downscales with ImageIO off the main thread;
+  decoded thumbnails have an 8 MiB / 128-entry bound and public requests send no hub credentials or cookies.
+  Market and installed lists rank cumulative GHCR package downloads across all versions (not active installations)
+  descending, then lowercase name and stable market/item identity; an absent count ranks with zero and is not displayed.
+  No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
+  version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
 
 `Theme.Icon.phoneControl` (`iphone.radiowaves.left.and.right`) is the assistant operating an iPhone through a computer:
