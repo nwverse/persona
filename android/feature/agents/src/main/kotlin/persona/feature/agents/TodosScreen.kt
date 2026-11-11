@@ -19,6 +19,7 @@ import persona.core.domain.tasks.Triage
 import persona.core.domain.tasks.TriageRule
 import persona.core.domain.tasks.TriageSection
 import persona.core.domain.tasks.acceptedAtRest
+import persona.core.domain.tasks.checksAsOpen
 import persona.core.domain.tasks.triageTodos
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -29,6 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
@@ -378,6 +384,7 @@ fun TodosScreen(
                             countTone = section.status ?: Status.Idle,
                             onClick = { toggled = if (section.name in toggled) toggled - section.name else toggled + section.name },
                             sub = false,
+                            open = !folded,
                             action = { JIcon(if (folded) PhIcons.CaretDown else PhIcons.CaretUp, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) },
                         )
                     }
@@ -473,7 +480,8 @@ private fun TodoTriageRow(
     onRestore: () -> Unit,
 ) {
     val res = agentResources()
-    val finished = todo.isDone && triage.rule != TriageRule.FailedStart
+    // a failed start waiting on the owner reads open, says why in red, and its checkbox closes it (#3713)
+    val finished = !todo.checksAsOpen(triage)
     val state = todo.state(sessionLookup)
     val accepted = triage.rule == TriageRule.Accepted || todo.acceptedAtRest(sessionLookup)
     val urgent = mostUrgentAgent(todo, sessionLookup)
@@ -486,8 +494,17 @@ private fun TodoTriageRow(
         JCard(modifier = Modifier.fillMaxWidth(), onClick = onOpen) {
             Column(Modifier.padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    // TalkBack reads the tick as a "Done" checkbox whose checked state says whether it is done, and the
+                    // double-tap hint says what a tap does: Done or Reopen (#4077)
+                    val tickName = stringResource(R.string.agents_todo_done_action)
+                    val tickLabel = stringResource(if (finished) R.string.agents_todo_reopen else R.string.agents_todo_done_action)
                     Box(
-                        Modifier.size(Tokens.Space.xxl).clip(CircleShape).clickable { onDone(todo, !finished) },
+                        Modifier.size(Tokens.Space.xxl).clip(CircleShape)
+                            .clickable(onClickLabel = tickLabel, role = Role.Checkbox) { onDone(todo, !finished) }
+                            .semantics {
+                                contentDescription = tickName
+                                toggleableState = ToggleableState(finished)
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         if (finished) {
@@ -510,6 +527,8 @@ private fun TodoTriageRow(
                             JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
                         finished && todo.doneBy == "auto" -> JTag(stringResource(R.string.agents_todo_auto_done))
                         finished -> {}
+                        // the hub closed it, yet it waits on the owner: not Done (#3713)
+                        !todo.startError.isNullOrEmpty() -> JTag(stringResource(R.string.agents_todo_state_didnt_start), Tone.Danger)
                         else -> JTag(state.label)
                     }
                 }
@@ -521,7 +540,7 @@ private fun TodoTriageRow(
                 } else {
                     // One line of what is going on (iOS TodoRow): why it finished on its own, the most urgent
                     // agent's latest (red while it waits for you), the notes, or that no agent has it yet.
-                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] })
+                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] }, startFailed = todo.startError?.takeIf { it.isNotEmpty() })
                     // Done as asked but not live yet (#3306): where it is held, while its agents are not at it again.
                     todo.hold?.takeIf { state != TodoState.Working && state != TodoState.NeedsYou }?.let {
                         TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxxl))
@@ -672,10 +691,11 @@ internal fun mostUrgentSummary(urgent: TodoMostUrgent?, card: Interaction? = nul
 
 /** The open row's line under the title: the auto-done reason, the most urgent agent, the notes, or "Not handed to an agent yet". */
 @Composable
-private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interaction?) {
+private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interaction?, startFailed: String? = null) {
     val palette = PersonaTheme.palette
     val reason = todo.autoDoneReason
-    val summary = when (val line = mostUrgentSummary(urgent, card)) {
+    // a failed start waiting on the owner: why it did not start, in red (DESIGN_SYSTEM 5.6)
+    val summary = if (startFailed != null) stringResource(R.string.agents_todo_start_failed, startFailed) else when (val line = mostUrgentSummary(urgent, card)) {
         is TodoUrgentSummary.StartFailed -> stringResource(R.string.agents_todo_start_failed, line.error)
         is TodoUrgentSummary.Words -> line.text
         is TodoUrgentSummary.Asks -> line.text.text()
@@ -700,7 +720,11 @@ private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interact
         Text(
             text,
             style = PersonaTheme.type.caption,
-            color = if (waiting) palette.needsYou.text else palette.ink2,
+            color = when {
+                startFailed != null && reason == null -> palette.danger.text
+                waiting -> palette.needsYou.text
+                else -> palette.ink2
+            },
             maxLines = if (notes != null && text == notes) 1 else 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
