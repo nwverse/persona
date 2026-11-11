@@ -706,6 +706,8 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
             {item.body?.interrupted === true ? t("assistant-tasks.said_to_interrupting", { title }) : t("assistant-tasks.say_to", { title })}
           </span>
           <div className="rounded-[18px] bg-field px-3.5 py-2 text-[14.5px]">{field(item, "text")}</div>
+          {/* every Agent of the task had stopped, so the message started a new one for it (#4754) */}
+          {field(item, "new_agent") && <NewAgentLine sid={field(item, "new_agent")!} mid={field(item, "new_agent_machine")} />}
         </div>
       );
     case "today":
@@ -730,6 +732,18 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
       return null;
   }
 });
+
+/** Under a message to a task whose Agents had all stopped: it went to a new Agent (#4754), which the line opens. */
+function NewAgentLine({ mid, sid }: { mid?: string; sid: string }) {
+  const text = t("assistant-tasks.new_agent_started");
+  if (!mid) return <span className="text-[12px] text-ink-3">{text}</span>;
+  return (
+    <button type="button" onClick={() => navigate({ name: "session", mid, sid })} className="touch-hit inline-flex items-center gap-1 text-[12px] text-ink-3 hover:text-ink hover:underline">
+      <Icon name="agent" size={11} />
+      {text}
+    </button>
+  );
+}
 
 /** A card of a task's agent the user dealt with, kept as a line "✓ task · answer". Click it for every question with its
  *  answer in full (#1231), selectable, and again to fold it; the task's name opens the task. */

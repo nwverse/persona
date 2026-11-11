@@ -133,6 +133,27 @@ Chat page:
   - **Sending**: after the `<persona-context>` tags and before what was typed, numbered from 1; comments alone send without words.
   - **Sent bubble**: the blocks, from any client, are quote cards at the top of the bubble (kind, number, place; the note); a tap opens the whole note and the code. A plain `> ` quote before them is a quote card too; a message with no comment block is drawn as before.
   - **Edit**: the comments go back over the box as cards, the words into it.
+- Forwarding a message (#3807; `Views/Chat/Forward.swift`, `ForwardSheet.swift`; iPhone and iPad, not the frozen Mac app): the
+  `<persona-context kind="forward">` block and its metadata are in docs/protocol/protocol.md, "Forwarded messages".
+  - **Entry**: the lifted message's bar has Forward where Share was (`MessageActionBar.forwards`: a sent message, in a chat that
+    forwards), so the bar keeps its width; Share as Image is the first row of the picker. Messages not sent yet, the Mac and
+    Apple Vision Pro keep Share.
+  - **Forward To** (`ForwardSheet`): Share as Image, the message being forwarded, Persona (Main Chat, unless that is this
+    chat) and New Agent…, then Recent (`ForwardMemory`: the last 8 targets per hub group, ids only, never synced, gone with
+    the group) and each computer's live Agents in the Machines order, latest first (`ForwardTargets`: same hub, takes
+    messages, computer online, never this chat or Health). Search matches titles, Agents, projects and computers, and also
+    finds ended Agents (the send resumes them) and Persona's other conversations. The lists are the sessions the app holds,
+    read once as the sheet opens.
+  - **Picking a target** reads the whole message when the chat holds it cut (`/items/{iid}/full`) and the photos of your own
+    message, then opens the target's chat (`AppModel.forward`) with the forward over its box (`composerContexts`, like a
+    quote, × takes it off) and a line saying where it comes from and goes ("From MacBook Pro · to Codex on Mac Studio"), the
+    photos in the box's tray (`composerInbox`). The note is typed and sent there, through the usual send. New Agent opens
+    New Chat with the card over First Message, the block as its `contextBlock`. Persona with no main conversation yet: the
+    new conversation's box.
+  - **Sent**: the block is a card at the top of the bubble, as a quote's, with the arrow, "Forwarded from Claude · chat",
+    the computer and time, and four lines; a tap opens the original chat at the message (`AppModel.openLinked`), or the
+    whole text when this app does not have that chat. Nothing is written to the original chat.
+  - Tests: `ForwardTests` (`spec/fixtures/forward`), `ForwardMessageTests` (the whole way on the mock hub, screenshots).
   - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web; end-to-end `CommentBubbleTests`.
 - Files: message paths and Read / Edit / Write tool paths become tappable file tags, read from the session's computer
   (`GET /api/v1/machines/{mid}/file`, at most 2 MB, iCloud directories denied), rendered Markdown / numbered code / images / PDF / directories.
@@ -322,12 +343,13 @@ Chat page:
     Width follows the content (#2216, `ShareCardWidth`): plain text stays 390 pt; a table or fenced code block (`ShareCardBlocks`) widens the card to its own width, up to 520 pt, past which a table wraps its cells; a card taller than 2.6 times its width also widens, up to the same cap. The gradient covers the whole image (`ShareCardWidthTests`).
 - Agents chat top bar: ① Back / title + subtitle / ⋯; subtitle "● State (working duration in minutes) · Machine · Space › Tab" (since 2026-10-31 calm Seen/Not running states show only dot; tap title opens bottom Session info sheet with Run / Usage / Location, copy id/resume command, swipe down or tap above closes, former under-title pullout removed; Usage below context tokens has "Context remaining · N% left" and thin bar (#3289, web #2430, `ContextUsage.swift`: `context_tokens` / `context_window`, live session pushes, warning at ≥80% used, hidden for unknown window)); state text state-colored,
   omit machine first then location if crowded; the title is one line cut at its end and uses the full width between the buttons (at most `Theme.Size.headerTitle` on wide screens);
-  ② second row only for other same-space Agents or loop/background: the tabs take the remaining width on the left, one activity pill sits at the trailing end (`ActivityChips`, trailing also without tabs): neutral fill, as tall as the tabs,
-  tinted icons (loop `Theme.loop`, background `Theme.busy`, the folded bar's marks), "⟳ 13:24 │ ⚙ 1" with the next time and count only (VoiceOver reads it in full); at the largest text sizes with both present the loop is only its icon; tap for details.
+  ② second row for other same-space Agents, loop/background or the permission mode: the tabs take the remaining width on the left; at the trailing end the activity pill (`ActivityChips`, trailing also without tabs): neutral fill, as tall as the tabs,
+  "⟳ 13:24 │ ⚙ 1" with the next time and count only (VoiceOver reads it in full; the loop's arrows in `Theme.loop`, the background count by a neutral gear: the state is the subtitle's, #3719); at the largest text sizes with both present the loop is only its icon; tap for details;
+  then, last, the agent's permission mode (`HeaderModeButton`, #3719; see "Effort and permission modes"), which stays put as the work comes and goes.
   Goal, workflow and port rows are unchanged (phase 1, `docs/archive/apple/plan-chat-topbar.md` Q1); ③ at most one status line (`HeaderStatusLine`, `chat.status-line`): while reading a sub-Agent "👁 Viewing sub-Agent · title (read-only)",
   the way back stays the footer's Return to main Agent (`SubagentFooter`); otherwise one running "spinner Sub-Agent title ›" opens it, several "spinner N sub-Agents running · newest title ›" open All sub-Agents;
   no line when none runs (ended / nested ones from the work row's View sub-Agent and ⋯ › All sub-Agents (N)). The Main Agent / sub-Agent strip remains only on the Mac and in hosted headers (#3255).
-  Formerly title, companion bar, tabs and activity each had a row. Files/Terminal/Git in top-right ⋯; Files ⋯ › Return to chat; collapsed slim bar has Back, the session's title (the open header's, as the web and Android show it, #3631), small loop/background marks.
+  Formerly title, companion bar, tabs and activity each had a row. Files/Terminal/Git in top-right ⋯; Files ⋯ › Return to chat; collapsed slim bar has Back and the session's title (the open header's, as the web and Android show it, #3631), centered: nothing on its right (#3719, the user's call; its loop/background and goal marks went, they are a tap away in the open header).
   Former left-swipe Files became left-swipe Quote 2026-11-04 (#1058); that day Files first had a standalone folder left of ⋯, then moved into menu at user request (#1205).
 - Header auto-collapse (Agents, like Safari toolbar): custom
   `ChromeHeader` (system navigation hidden), floating above list; **finger tracking**: drag toward newer messages slides bar upward by same distance and fades,
@@ -528,7 +550,7 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
 - **Sidebar** below the main page, 82% of screen width (at most 380pt). The main page covers it, remaining a same-size rounded card when slid right (thin dark-mode border separates it from the sidebar), dimming with progress (`Theme.Fill.scrim`, black 20% light / 45% dark, #334); sidebar stays horizontally fixed and rises only 8pt as revealed (`Theme.Motion.drawerLift`), with no scaling or fading. Tap the card or drag left to close.
   Content (2026-10-31, changed to match Doubao's sidebar from user screenshots): large avatar name (Persona) and a circular Search button on the right (becomes search field + Cancel);
   Main chat is the first row (avatar App icon + Persona, identical to the new-shell drawer, #2004 / #5110), then a separator; actions below: New chat, Scheduled tasks, Knowledge, Health (icon + text, no cards; Health in `docs/assistant/health.md` ("iOS and Mac entry points")); separator; Directions (the leader conversations in the hub's order, each with its "N working · N need you", as in the new shell) and one **All Chats** row opening the full list; no inline Pinned or Recent group (#4331). Each row has one circular marker (pale chat bubble color chosen by session id, adjacent rows different) + one-line title,
-  with a right-side status dot only for Needs you / Unread / Working; the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
+  with a right-side state mark only for Needs you / Unread / Working (`RowStateMark`: a blue dot, a green dot, the amber spinner; the same mark on the main chat's row, the Directions rows and in All Chats, #4538); the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
   (tap for profile), Settings on the right (drawer only; split mode has the tab bar beside it). Search lists only results (N chats). Long-press also copies session ID or ends the chat.
   **All Chats** (#3264, `AutoConversationsView`): every conversation, filtered along the top by All, Mine and each origin the hub reports (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Origin of assistant chats")): Inbox AI twin, scheduled tasks, Lark /agent, derived chats and extension-created chats. Same view in iPhone drawer, iPad split and Mac sidebar. Search still searches all. Old hubs without origins omit the source filters.
 - **Gestures** (2026-10-31, rebuilt to match ChatGPT after build 49 feedback "not smooth, not following the finger, small area, swipes do nothing"): right-drag anywhere on the page opens the sidebar,
@@ -748,7 +770,14 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
 - Effort changes wait until the turn ends and the terminal input is empty (otherwise `/effort` appends to someone else's unsent draft); herdr Agents can choose Allow everything only at creation, not in the cycle,
   unless their claude was started with `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`, which puts it in the cycle:
   the node reads the arguments of the claude its hooks run under, once per process (`claudeCanBypass`, kern.procargs2 / `/proc/<pid>/cmdline`, no exec), and lists the session with
-  `bypass_available` (#1379). The web then offers it, red and asked again; the app still lists it only while it is the current mode (`SessionModes.options`), to follow.
+  `bypass_available` (#1379). The web and the app then offer it, red and asked again (`SessionModes.switchableModes`, `confirmation`); without it the app's header menu lists it disabled, with why.
+- Agents header (#3719): the agent's mode at the end of the open header's second row, icon and color only (`HeaderModeButton`,
+  `SessionModes.headerLook`, `Theme.ModeTone`): Ask First a quiet gray hand, Plan Only a teal clipboard, Auto-Edit a purple pencil, Auto a purple
+  wand, Allow Everything a red shield; not reported yet the plain permissions shield (never a guessed Ask First). A tap opens the mode menu; going into
+  Allow Everything asks first, and so does leaving it when `bypass_available` is false (no way back from the phone); the composer's model menu
+  goes through the same `ChatView.requestMode`. Shown where the agent has a mode to see or change (`SessionModes.showsInHeader`): not Codex,
+  TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. Client-only: `permission_mode` is already in every
+  session row (read off the transcript tail the node reads anyway), so no request, push or poll was added (measured in the PR).
 - Assistant chats (Persona page, including the main chat) can choose Allow everything both at creation and while running (#2416); a red warning at the menu top explains consequences (`BypassWarning`). Persona does not start
   claude with `--dangerously-skip-permissions`, so a control request cannot switch to bypassPermissions: stop an idle process, then resume the next message with `--permission-mode bypassPermissions`;
   if answering or holding background tasks, replace the process on the first message after this turn.
@@ -1131,8 +1160,10 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   - Call icons `voiceMute` / `voiceUnmute` (same crossed mic, filled unmute, Phone-like toggle), `voiceEnd` (`Theme.danger`), `voiceCaptions` full captions, `voiceTimbre` voice; entry `voiceChannel`.
   - Mac continuous clocks relayout whole window each frame (`docs/lessons/macos.md`); no Mac voice yet, future animation Core Animation.
 - One badge/count recipe (`Components.swift`): noninteractive `Chip` neutral (gray/pale: model/version/tab/direct chat),
-  tinted (meaning + pale fill: `.tone` state, @me red, Recommended AI purple), outlined (Claude/Codex kind); `CountBadge` white on
-  gray `Theme.countBadge` or accent, or state text on tint, 99+ over 99. Interactive filters/tabs/modes/sub-Agents are controls, not these.
+  tinted (meaning + pale fill: `.tone` state, @me red, Recommended AI purple), outlined (Claude/Codex kind); `CountBadge` in the web's three looks (#4538):
+  `.needs` (Needs you's text on its tint) for what waits for the user, `.neutral` (white on gray `Theme.countBadge`, the default) for a passive total,
+  `.accent` (white on accent) for a mention or the selected item. Nothing at 0, 99+ over 99 (`CountBadge.text`, also for the tab and pane badges that are
+  strings), VoiceOver reads the exact number or the host's `label`. Interactive filters/tabs/modes/sub-Agents are controls, not these.
 - BeautifulUI (`apple/Packages/BeautifulUI`, vendored copy, source/update in `VENDORED.md`, no local library edits):
   **BeautifulUI style only** (`AppStyle.usesBeautifulUI`, Liquid Glass surfaces/theme colors), other styles retain Persona thinking/tool/work/input UI.
   Direct replacement 2026-10-30 (#93/#94) judged ugly by user, reverted and made this theme. In it:
