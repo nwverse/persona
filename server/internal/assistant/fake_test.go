@@ -153,7 +153,8 @@ type fakeHub struct {
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
 	// doctor is each machine's node.doctor claude-version detail (none: the report has no such check).
-	doctor map[string]string
+	doctor      map[string]string
+	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
 	// questions it got.
 	auth      map[string]proto.ClaudeAuthStatus
@@ -398,7 +399,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case deviceNodeDoctor:
 		checks := []map[string]string{}
 		if detail, ok := f.doctor[p.Device]; ok {
-			checks = append(checks, map[string]string{"name": "claude-version", "status": "ok", "detail": detail})
+			checks = append(checks, map[string]string{"name": "claude-version", "status": "ok", "state": f.doctorState[p.Device], "detail": detail})
 		}
 		return json.Marshal(map[string]any{"ok": true, "checks": checks})
 	case DeviceAssistantPrepare:

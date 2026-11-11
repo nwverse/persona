@@ -1,6 +1,12 @@
 # Persona design principles
 
-**Persona is a personal Agent that everyday people can use naturally. Defaults are simple and reliable, complex capabilities open up gradually through settings, and with the user's permission an Agent can help manage that complexity.**
+**Persona is a personal Agent product for everyone, not only software developers.** Defaults are simple and reliable, complex capabilities open up gradually through settings, and with the user's permission an Agent can help manage that complexity.
+
+- **Assistant** is for everyday people, with no programming or Agent-tool knowledge required.
+- **Agents** is for people who want to collaborate directly with Claude Code and other Agents.
+- Every design decision starts with **who it serves**. Assistant and other everyday-facing interfaces stay simple and understandable; developer terminology, engineering details and accumulating options must not make them harder to use. Specialist workflows belong in Agents or advanced settings, with details disclosed only when needed.
+
+**How to check the audience**: the issue and PR name the intended audience. For an everyday-facing flow, verify that someone with no programming or Agent-tool knowledge can understand the task and next action without choosing a runtime or repository. For specialist work, name its home in Agents or advanced settings and explain why the detail is needed there.
 
 These six principles decide product questions before any visual rule applies. They cover UI, settings and defaults, and how numbers and states are counted, on every client and in the hub. Each one has a few rules and a "How to check" that a reviewer can verify on a PR. Visual and interaction detail lives in `docs/design/DESIGN_SYSTEM.md`; known gaps against Apple's Human Interface Guidelines are in `docs/design/HIG_AUDIT.md`. Ideas taken from the HIG are rewritten here as Persona rules, not quoted.
 
