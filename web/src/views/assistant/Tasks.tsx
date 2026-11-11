@@ -64,7 +64,7 @@ const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.Pla
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
 const TaskDecision = lazy(() => import("./TaskDecision").then((m) => ({ default: m.TaskDecision })));
 import { SentLine, TaskSentList } from "./Sent";
-import { HandoffCard, HandoffCards, taskHandoffs, type HandoffWake } from "./Handoff";
+import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from "./Handoff";
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
@@ -672,6 +672,9 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
   const title = useStore((s) => s.todos.find((todo) => todo.id === item.ref)?.title) ?? t("assistant-tasks.task_fallback");
   const known = useStore((s) => s.todos.some((t) => t.id === item.ref));
   const planned = useFeed((s) => item.kind === "task" && Object.values(s.plans).some((p) => p.conversation === item.conversation && p.tasks.some((task) => task.todo_id === item.ref)));
+  // the computer of the Agent a message started for its task (#4754): from the hub's line, else (a hub before it said) the to-do's
+  const newAgent = item.kind === "routed" ? field(item, "new_agent") : undefined;
+  const newAgentMachine = useStore((s) => (newAgent ? s.todos.find((x) => x.id === item.ref)?.agents?.find((a) => a.session_id === newAgent)?.machine_id : undefined));
   if (simplified) {
     // the Agents a dispatch handed work to, a card each that opens its page (#5096, cindy's hand-off card); never the
     // whole In progress tray (#3700)
@@ -709,7 +712,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
             <div className="rounded-[18px] bg-field px-3.5 py-2 text-[14.5px]">{field(item, "text")}</div>
           </div>
           {/* every Agent of the task had stopped, so the message started a new one for it (#4754): its hand-off card */}
-          {field(item, "new_agent") && <HandoffCard handoff={{ key: field(item, "new_agent")!, title, wake: "created", mid: field(item, "new_agent_machine"), sid: field(item, "new_agent_machine") ? field(item, "new_agent") : undefined, todo: known ? item.ref : undefined }} />}
+          {newAgent && <NewAgentHandoff sid={newAgent} mid={field(item, "new_agent_machine") || newAgentMachine} title={title} todo={known ? item.ref : undefined} />}
         </div>
       );
     case "today":
@@ -734,6 +737,12 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
       return null;
   }
 });
+
+/** Under a message to a task whose Agents had all stopped: the hand-off card of the new Agent it started (#4754, #5096).
+ *  Without its computer (an older hub, a to-do not refreshed yet) the card opens the task, which leads to the same Agent. */
+function NewAgentHandoff({ sid, mid, title, todo }: { sid: string; mid?: string; title: string; todo?: string }) {
+  return <HandoffCard handoff={{ key: sid, title, wake: "created", mid, sid: mid ? sid : undefined, todo }} />;
+}
 
 /** A card of a task's agent the user dealt with, kept as a line "✓ task · answer". Click it for every question with its
  *  answer in full (#1231), selectable, and again to fold it; the task's name opens the task. */
@@ -1252,7 +1261,7 @@ function PlanHandoffs({ plan }: { plan: TaskPlan }) {
  *  (`body.wake` "active": agent_supervise, agent_send with a task): its Agents' hand-off cards. */
 function TaskHandoffs({ item }: { item: FeedItem }) {
   const plans = useFeed((s) => s.plans);
-  const wake: HandoffWake = field(item, "wake") === "active" ? "active" : "created";
+  const wake = feedWake(field(item, "wake"));
   const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded) : []));
   return <HandoffCards handoffs={handoffs} />;
 }
@@ -1373,7 +1382,7 @@ function NeedsYouRow({ item }: { item: NeedsYouItem }) {
  *  the title opens the to-do's page). */
 function FailedTaskRow({ rowKey, todo }: { rowKey: string; todo: Todo }) {
   const retrying = useRetrying(todo.id);
-  const why = useFeed((s) => startFailure(todo, s.plans)) ?? todo.agents?.find((a) => a.start_error)?.start_error;
+  const why = useFeed((s) => whyNotStarted(todo, s.plans));
   return (
     <div data-needs-row={rowKey} data-failed-task={todo.id} className="flex flex-col gap-1.5 rounded-control bg-field px-3 py-2 text-sm">
       <div className="flex min-w-0 items-center gap-2">

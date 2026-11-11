@@ -385,7 +385,7 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 **Hand-off cards** (web, #5096; the owner asked that this part of the main chat follow cindy's `SessionHandoffCard` exactly, which replaces the "Dispatched: <title> · Open" line and the task side panel). Each Agent a dispatch started or a task took over is one full-width card in the chat (`views/assistant/Handoff.tsx`):
 - **Frame:** a bordered `rounded-xl` surface, 16 px padding and 14 px gaps (12 / 12 at phone width), whose border turns `--ink` on hover.
 - **Mark:** a 36 px round `--field` well with the ↳ mark (`cornerDownRight`), which inverts on hover.
-- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New is filled `--ink`, Already active is outlined.
+- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New and Resumed are filled `--ink`, Already active is outlined.
 - **Second line** (12 px): the history mark, "last active …" (the time alone at phone width), then ` · ` and the Agent's state from `StatusMark` and `lib/state-labels.ts`, in the attention color when it needs the user.
 - **End:** ↗ (`arrowUpRight`).
 - **Open:** the card opens the Agent's page. Before an Agent is up, the card has no ↗ unless the to-do can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone.

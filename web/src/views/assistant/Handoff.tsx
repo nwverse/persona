@@ -2,7 +2,7 @@
 // One card per Agent a dispatch started or a task took over, in the chat where it happened; a click opens that Agent's
 // own page (lib/handoff.ts), never a panel. Before its Agent is up the card stands for the task: starting, or why it
 // did not start (the task's Needs you row has Retry and Remove).
-import { leaveChat, taskRoute } from "../../lib/handoff";
+import { openAgent, openTask } from "../../lib/handoff";
 import { startFailure, type TaskPlan } from "../../lib/feed";
 import type { Todo } from "../../lib/todos";
 import { ago, stateOf } from "../../lib/format";
@@ -15,9 +15,23 @@ import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { t } from "../../i18n";
 
-/** How the Agent came to the task: started for it (New), or already running when the task took it over (Already
- *  active; a `task` feed item's `wake`). cindy's third, Resumed, has no case here: Persona never wakes a stopped Agent. */
-export type HandoffWake = "created" | "active";
+/** How the Agent came to the task (a `task` feed item's `wake`): started for it (New), running already when the task
+ *  took it over (Already active), or closed and resumed by the hand-off's message (Resumed). */
+export type HandoffWake = "created" | "active" | "resumed";
+
+/** A `task` feed item's wake; anything else (none, an older hub) is New. */
+export function feedWake(wake: string | undefined): HandoffWake {
+  return wake === "active" || wake === "resumed" ? wake : "created";
+}
+
+/** Why a task's Agent did not start, from the hub's words on the to-do, its plan or the Agent's row. */
+export function whyNotStarted(todo: Todo, plans: Record<string, TaskPlan>): string | undefined {
+  return startFailure(todo, plans) ?? todo.agents?.find((a) => a.start_error)?.start_error;
+}
+
+/** How long after a task's first Agent another counts as handed off with it (the plan's several Agents, a retry): one
+ *  linked later (a new Agent after every one stopped, #4754) has its own card where that happened. */
+const SAME_HANDOFF_MS = 120_000;
 
 /** What one card stands for; flat, so a list of them built by a store selector compares field by field. */
 export interface Handoff {
@@ -39,18 +53,19 @@ export interface Handoff {
   ended?: boolean;
 }
 
-/** A task's cards: one per Agent that worked on it (those still on it, else every one that started), or one for the
- *  task while it has none: starting, why it did not start, or gone (removed since). `planned`: the plan's task, for its
+/** A task's cards: one per Agent the hand-off went to (its first Agents, released since or not), or one for the task
+ *  while it has none: starting, why it did not start, or gone (removed since). `planned`: the plan's task, for its
  *  title and error before the to-do arrives (or after it was removed); `loaded`: the to-do list is in, so a to-do it
  *  lacks is gone rather than on its way. */
 export function taskHandoffs(todo: Todo | undefined, planned: { key: string; title: string; error?: string; todoId?: string } | undefined, wake: HandoffWake, plans: Record<string, TaskPlan>, loaded = true): Handoff[] {
   const started = (todo?.agents ?? []).filter((a) => !a.start_error);
-  const on = started.filter((a) => !a.released_at);
-  const shown = on.length > 0 ? on : started;
+  const at = (a: { linked_at: string }) => Date.parse(a.linked_at) || 0;
+  const first = Math.min(...started.map(at));
+  const shown = started.filter((a) => at(a) - first <= SAME_HANDOFF_MS);
   if (todo && shown.length > 0) {
     return shown.map((a) => ({ key: `${a.machine_id}/${a.session_id}`, title: todo.title, wake, mid: a.machine_id, sid: a.session_id, agentTitle: a.title, todo: todo.id }));
   }
-  const failure = ((todo ? startFailure(todo, plans) ?? todo.agents?.find((a) => a.start_error)?.start_error : undefined) ?? planned?.error)?.trim();
+  const failure = ((todo ? whyNotStarted(todo, plans) : undefined) ?? planned?.error)?.trim();
   const ended = !failure && (todo ? Boolean(todo.done_at) : Boolean(planned?.todoId) && loaded);
   return [{ key: todo ? `todo:${todo.id}` : (planned?.key ?? "task"), title: todo?.title ?? planned?.title ?? "", wake, todo: todo?.id, failure: failure || undefined, ended: ended || undefined }];
 }
@@ -84,11 +99,11 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
   const session = useStore((s) => (agent ? sessionIn(s, agent.mid, agent.sid) : undefined));
   useNow(60_000, Boolean(agent)); // "last active" moves on by the minute
   const title = session?.title?.trim() || handoff.agentTitle?.trim() || handoff.title || t("assistant-tasks.task_fallback");
-  const badge = wake === "active" ? t("assistant-tasks.handoff_wake_active") : t("assistant-tasks.handoff_wake_created");
+  const badge = wake === "active" ? t("assistant-tasks.handoff_wake_active") : wake === "resumed" ? t("assistant-tasks.handoff_wake_resumed") : t("assistant-tasks.handoff_wake_created");
   const interactive = Boolean(agent || todo);
   const open = () => {
-    if (agent) leaveChat({ name: "session", mid: agent.mid, sid: agent.sid });
-    else if (todo) leaveChat(taskRoute(todo));
+    if (agent) openAgent(agent.mid, agent.sid);
+    else if (todo) openTask(todo);
   };
   const state = session ? stateOf(session) : undefined;
   const phone = useMedia(PHONE);
@@ -132,7 +147,8 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
             data-handoff-wake={wake}
             className={cx(
               "shrink-0 rounded-full px-2 py-[2px] text-[10px] leading-4 font-medium tracking-[0.4px] whitespace-nowrap uppercase",
-              wake === "created" ? "bg-ink text-surface" : "border border-ink bg-surface text-ink",
+              // cindy: New and Resumed filled (just started or woken), Already active outlined
+              wake === "active" ? "border border-ink bg-surface text-ink" : "bg-ink text-surface",
             )}
           >
             {badge}

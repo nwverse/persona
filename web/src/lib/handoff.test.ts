@@ -62,6 +62,20 @@ describe("leaving a conversation", () => {
     history.back();
   });
 
+  it("keeps the place for Back when it leaves from an overlay's entry, which the new page takes over", () => {
+    history.replaceState({ personaOverlay: "o1" }, "", "/persona/c1");
+    chat({ top: 300, height: 1500, client: 600 });
+    leaveChat({ name: "session", mid: "m1", sid: "s1" });
+    expect(location.pathname).toBe("/s/m1/s1");
+    expect(chatPlaceIn()).toBeUndefined();
+    // Back lands on the conversation's own entry, under the overlay's
+    history.replaceState(null, "", "/persona/c1");
+    dispatchEvent(new PopStateEvent("popstate"));
+    expect(chatPlaceIn()).toEqual({ end: false, line: "b", offset: -40 });
+    dropChatPlace();
+    expect(chatPlaceIn()).toBeUndefined();
+  });
+
   it("opens a link's page with no way-back strip, and anything but a conversation as a plain page", () => {
     history.replaceState(null, "", "/persona");
     leaveChat({ name: "session", mid: "m1", sid: "s1" }, false);

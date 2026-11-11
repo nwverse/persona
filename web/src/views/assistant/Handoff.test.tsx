@@ -88,6 +88,19 @@ describe("hand-off cards", () => {
     expect(cards()[0]!.querySelector('[data-handoff-wake="active"]')?.textContent).toBe(t("assistant-tasks.handoff_wake_active"));
   });
 
+  it("a closed Agent the hand-off resumed says Resumed", async () => {
+    await show({ id: "task-event", conversation, at, kind: "task", ref: "example-task", body: { wake: "resumed" } }, [linked("example-task", "Example task", [agent])], [agent]);
+    expect(cards()[0]!.querySelector('[data-handoff-wake="resumed"]')?.textContent).toBe(t("assistant-tasks.handoff_wake_resumed"));
+  });
+
+  it("draws the Agents the hand-off went to, not one a later message started (that one has its own card)", async () => {
+    const next: Session = { ...agent, session_id: "next-agent", title: "Next Agent" };
+    const todo = linked("example-task", "Example task", [agent, next]);
+    todo.agents![1]!.linked_at = "2026-11-10T09:00:00Z";
+    await show({ id: "task-event", conversation, at, kind: "task", ref: "example-task", body: { wake: "active" } }, [todo], [agent, next]);
+    expect(cards().map((c) => c.getAttribute("data-handoff-card"))).toEqual([`example-computer/${agent.session_id}`]);
+  });
+
   it("before its Agent is up the card is the task's: starting, and it opens the to-do", async () => {
     await show({ id: "task-event", conversation, at, kind: "task", ref: "example-task" }, [linked("example-task", "Example task", [])], []);
     const [card] = cards();

@@ -102,7 +102,7 @@ import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
 import { conversationTitle } from "../assistant/conversations";
-import { chatPlaceIn, dropChatPlace, handoffFrom, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
+import { chatPlaceIn, dropChatPlace, firstLineInView, handoffFrom, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
 import { externalOpening } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
@@ -614,7 +614,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const late = window.setTimeout(() => {
       if (!kept.current.place) return;
       kept.current.place = undefined;
-      first.current = false;
       follow(true);
       const el = scroller.current;
       if (el) el.scrollTop = el.scrollHeight;
@@ -636,10 +635,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       return;
     }
     const place = kept.current.place;
-    if (place) {
-      // the line it was at, `offset` under the view's top again; until it comes in, the view waits where it is
-      const row = el.querySelector(`[data-line="${CSS.escape(place.line!)}"]`)?.firstElementChild;
-      if (!row) return;
+    // the line it was at, `offset` under the view's top again; until that line comes in, the chat opens at its end as
+    // it always does (and goes to the line once it is there)
+    const row = place && el.querySelector(`[data-line="${CSS.escape(place.line!)}"]`)?.firstElementChild;
+    if (place && row) {
       kept.current.place = undefined;
       el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - place.offset;
       first.current = false;
@@ -1226,9 +1225,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const sc = scroller.current;
     if (sc && !origin.current) {
       // the first line still in view, and how far under the view's top it starts
-      const top = sc.getBoundingClientRect().top;
-      const at = [...sc.querySelectorAll<HTMLElement>("[data-line]")].map((el) => ({ id: el.dataset.line, r: el.firstElementChild?.getBoundingClientRect() })).find((x) => x.r && x.r.bottom > top);
-      origin.current = { atEnd: atEnd.current, line: at?.id, offset: at?.r ? at.r.top - top : 0 };
+      origin.current = { atEnd: atEnd.current, ...firstLineInView(sc) };
     }
     setSearch((x) => ({ ...x, open: true }));
   }, []);

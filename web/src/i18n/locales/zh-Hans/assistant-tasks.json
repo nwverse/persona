@@ -209,6 +209,7 @@
   "needs_group_another": "其他对话",
   "handoff_wake_created": "新建",
   "handoff_wake_active": "已在运行",
+  "handoff_wake_resumed": "已恢复",
   "handoff_last_active": "{when}活跃过",
   "handoff_active_now": "刚刚活跃过",
   "handoff_not_active": "还没有动静",

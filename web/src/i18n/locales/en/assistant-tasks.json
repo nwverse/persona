@@ -227,6 +227,7 @@
   "needs_group_another": "Another conversation",
   "handoff_wake_created": "New",
   "handoff_wake_active": "Already active",
+  "handoff_wake_resumed": "Resumed",
   "handoff_last_active": "last active {when}",
   "handoff_active_now": "last active just now",
   "handoff_not_active": "no activity yet",

@@ -59,10 +59,15 @@ export function arriving(memory: PanelMemory, session: string, open: Panel | nul
   return { memory: rest, back };
 }
 
+// The kinds a panel can be now: one kept by an older version of the page (the task and Agent panels before #5096) is
+// not brought back.
+const KINDS = new Set<Panel["kind"]>(["files", "git", "review", "file", "link", "plan", "preview"]);
+
 function load(): PanelMemory {
   try {
     const v = JSON.parse(sessionStorage.getItem(STORE) ?? "{}");
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as PanelMemory) : {};
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    return Object.fromEntries(Object.entries(v as Record<string, Panel>).filter(([, p]) => p && typeof p === "object" && KINDS.has(p.kind)));
   } catch {
     return {};
   }

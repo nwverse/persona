@@ -54,6 +54,20 @@ func TestAgentSendTaskMakesATask(t *testing.T) {
 	}
 }
 
+// A closed agent the hand-off's message resumes: its card says Resumed (#5096), not Already active.
+func TestAgentSendTaskToAClosedAgentResumesIt(t *testing.T) {
+	s, f := newQuietService(t)
+	f.setSessions("box", proto.Session{SessionID: "sec00001", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "秘书",
+		Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: time.Now()})
+	if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下",
+		"task": map[string]any{"title": "拉周报数据"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := taskCardWake(s, "conv1", onlyTodo(s).ID); got != wakeResumed {
+		t.Fatalf("card wake %q", got)
+	}
+}
+
 // taskCardWake is the wake on task todoID's card in conversation conv ("" without one, or without a body).
 func taskCardWake(s *Service, conv, todoID string) string {
 	items, _, _ := s.feed(context.Background(), conv, time.Time{})

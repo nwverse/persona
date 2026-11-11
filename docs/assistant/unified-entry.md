@@ -351,12 +351,12 @@ The owner asked that this part of the web chat follow cindy exactly (its `Sessio
 web, a task the main chat dispatched is a page you go to, never a panel beside the chat:
 
 - **One card per Agent.** Each Agent a dispatch started or a task took over is one full-width card where the dispatch is in the chat, stacked by plan order, with no heading over them. This covers a started plan, a standalone `task` item, and a message that started a new Agent for its task (`routed` with `new_agent`).
-  - **Head:** a round ↳ mark, the Agent session's title (the task's until it has one) and a badge: **New**, or **Already active** when the task took over an Agent that was running already.
+  - A task's line shows the Agents the hand-off went to: its first Agents, linked within two minutes of each other. That covers the plan's several Agents and a retry. An Agent linked later has its own card where that happened.
+  - **Head:** a round ↳ mark, the Agent session's title (the task's until it has one) and a badge: **New**, **Already active** when the task took over an Agent that was running already, or **Resumed** when the hand-off's message resumed a closed one.
   - **Second line:** "last active …" and the Agent's state word. The state shows that an Agent needs you without opening anything.
   - **End:** ↗.
   - cindy also shows a short session id. The Assistant's chat keeps ids out of sight (super rule 4), so here the id is only in the card's tooltip.
-  - cindy's third badge, Resumed, has no case: Persona never wakes a stopped Agent, and a task whose Agents all stopped gets a new one, which is New.
-- **The badge's data.** A `task` feed item made of a running Agent carries `body.wake = "active"`. The hub writes it for agent_supervise, agent_send with a task, an Agent that became a task when its turn ended, and a task moved to another conversation (`taskCard` in `server/internal/assistant/agent_control.go`). Items without it are New, as every item before the field.
+- **The badge's data.** A `task` feed item made of an Agent the task did not start carries `body.wake`. It is `"resumed"` when agent_send with a task resumed a closed Agent. It is `"active"` for agent_supervise, the other agent_send cases, an Agent that became a task when its turn ended, and a task moved to another conversation (`taskCard` in `server/internal/assistant/agent_control.go`). Items without it are New, as is every item from before the field. A stopped, read-only Agent (#4754) is never resumed this way: a task whose Agents all stopped gets a new one, which is New.
 - **Before an Agent is up.** The card stands for the task. Its second line says the Agent is starting, why it didn't start (red), that the task closed before an Agent started, or that the task no longer exists.
   - While the to-do exists, the card opens the to-do's page.
   - A task that didn't start has **Retry** and **Remove** on its Needs you row, where it waits on the user.

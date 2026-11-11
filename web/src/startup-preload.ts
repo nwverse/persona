@@ -125,13 +125,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * data and its words load on the pill's first tap). And 192 B for provider display names (#5029 added 165 B to ja:
  * plan task chips name their launcher by the provider's display name through lib/provider-names.ts, the shared cache of
  * the providers' names and the hook that reads them again after a rename). main was already 652 B over its budget at
- * 56f871fcb (ja 593,242 B against 592,590 B); that overage is kept here, not new room. And 448 B for the main chat's
- * hand-off cards (#5096 added 417 B to ja, 593,242 B to 593,659 B: a card for each dispatched Agent, a task's or an
+ * 56f871fcb (ja 593,242 B against 592,590 B); that overage is kept here, not new room. And 800 B for the main chat's
+ * hand-off cards (#5096 added 764 B to ja, 593,242 B to 594,006 B: a card for each dispatched Agent, a task's or an
  * Agent's page opened from the chat with the chat's place kept, their words; the task side panel and the dispatched
  * line they replace go, and the way-back strip on the Agent's page loads on its own). Raise it on purpose, in the
  * change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_690;
+export const FIRST_SCREEN_BUDGET = 594_042;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

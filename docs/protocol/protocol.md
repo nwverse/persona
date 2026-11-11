@@ -3122,9 +3122,10 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 // FeedItem: entries the hub inserts into an assistant chat, not in the transcript; clients draw them merged with the transcript by at
 {"id":"feed_…","conversation":"…","at":"...","kind":"plan|task|answered|receipt|routed|today|message|review|report|notice|brief","ref":"plan_…, todo_…, a date or an Inbox entry id",
  "body":{…}}
-// plan: ref is the plan id, no body; task: ref is the to-do id; body {"wake":"active"} when the task was made of an Agent that
-//   was running already (agent_supervise, agent_send with a task, an Agent that became a task when its turn ended, a task moved
-//   to this conversation; #5096, the web's Already active hand-off card), none when the task started its Agent
+// plan: ref is the plan id, no body; task: ref is the to-do id; body {"wake":"active|resumed"} when the task was made of an Agent
+//   it did not start (#5096, the web's hand-off badge): resumed when agent_send with a task resumed a closed Agent, active for an
+//   Agent running already (agent_supervise, agent_send with a task, an Agent that became a task when its turn ended, a task
+//   moved to this conversation); no body when the task started its Agent
 // answered: {"question":"Use Bash","answer":"Approved · don't ask again for this kind",
 //           "items":[{"question":"Use Bash\nnpm test\nReason: run the tests","answer":"Approved · don't ask again for this kind"}]}
 //   question / answer are the one-line summary shown when collapsed (squashed to one line, cut at 120 characters); old clients and old records from before #1231 only have these two.
