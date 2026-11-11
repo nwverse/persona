@@ -44,7 +44,8 @@ struct ExtensionStylesTests {
     }
 
     @Test func theNewTextStyles() throws {
-        #expect(try Self.names("TextStyle").contains("title") && Self.names("TextStyle").contains("headline"))
+        let styles = try Self.names("TextStyle")
+        #expect(styles.contains("title") && styles.contains("headline"))
         #expect(ExtensionUIStyle.font("title") == Theme.Font.title && ExtensionUIStyle.font("headline") == Theme.Font.heading)
         #expect(ExtensionUIStyle.font("shout") == Theme.Font.body, "an unknown one as body")
     }
