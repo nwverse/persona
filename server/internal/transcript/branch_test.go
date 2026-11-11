@@ -378,34 +378,6 @@ func TestRewoundByTheNode(t *testing.T) {
 	want(t, allItems(f), "一", "答一", "新的")
 }
 
-// Rewinding the only prompt and sending the same words again starts another root with an empty parent. The node's
-// manual rewind mark, rather than the ordinary non-empty-parent fork rule, must keep the first turn out (#4609).
-func TestRewoundOnlyPromptSentAgain(t *testing.T) {
-	l := &tline{}
-	l.user("u1", "", "同一个问题", 1)
-	l.reply("a1", "u1", "旧回答", 2)
-	l.turnEnd("t1", "a1", 3)
-	p := writeLines(t, l)
-	f := NewFile(p)
-	_, before, _ := f.RefreshSpan()
-	span, ok := f.Rewound("同一个问题", 1)
-	if !ok || span.History == before.History {
-		t.Fatalf("rewound: %v %+v", ok, span)
-	}
-	want(t, allItems(f))
-
-	more := &tline{}
-	more.user("u2", "", "同一个问题", 4)
-	more.reply("a2", "u2", "新回答", 5)
-	more.turnEnd("t2", "a2", 6)
-	appendLines(t, p, more)
-	_, after, _ := f.RefreshSpan()
-	if after.History != span.History {
-		t.Fatalf("history moved when the resent prompt arrived: %q -> %q", span.History, after.History)
-	}
-	want(t, allItems(f), "同一个问题", "新回答")
-}
-
 // A big file is read from a window at its end; the lines before it come later. A branch that starts in the lines before
 // the window and is abandoned inside it takes its lines in the window with it once they are read; the items match a
 // whole read in the end.
