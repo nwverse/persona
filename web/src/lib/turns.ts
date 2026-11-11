@@ -804,6 +804,13 @@ export function buildBlocks(items: Item[], background = false): Block[] {
       blocks.push({ kind: "row", item: it });
       continue;
     }
+    if (it.kind === "notice" && it.model_refusal) {
+      // #2528: an upstream refusal (and the model Claude Code moved to) is a line of its own after the exchange, never
+      // folded into the work row where it would go unseen
+      if (!cur) cur = newTurn(it.id);
+      cur.trailing.push(it);
+      continue;
+    }
     if (it.kind === "notice") {
       const raw = last.raw;
       const closed = blocks[last.index];
