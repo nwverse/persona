@@ -159,8 +159,10 @@ final class QueuedAttachEditUITests: XCTestCase {
         XCTAssertTrue(strip.waitForExistence(timeout: 20), "the message did not join the queue:\n\(app.debugDescription)")
         let rows = app.buttons.matching(identifier: "queue-item")
         if !rows.firstMatch.exists {
-            // The strip's id lands on its disclosure button or on a group around it, depending on the OS.
-            if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
+            // The strip's id lands on its disclosure button or on a group around it, depending on the OS. Tap its leading
+            // edge (the tray icon): at the largest text sizes Send Now fills the middle of the title row.
+            let header = strip.elementType == .button ? strip : strip.buttons.firstMatch
+            header.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
         }
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "the strip did not open:\n\(app.debugDescription)")
         return rows.count > 1 ? rows.element(boundBy: rows.count - 1) : rows.firstMatch
