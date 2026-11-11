@@ -83,5 +83,7 @@
   "inbox_signals_hint": "收件箱的 AI 分身把别人发来的新消息关联到 Persona 跟进的任务时，督办这个任务的对话会在下一条督办消息里看到；需要打开 AI 分身；会多花一些模型调用",
   "archive_closed": "已关闭的会话多久后归档",
   "archive_closed_hint": "已关闭、身上没有未完成任务的会话，闲置这么多天后移出列表，仍能在已归档里找到；0 表示不自动归档",
-  "archive_closed_unit": "天"
+  "archive_closed_unit": "天",
+  "background_folded": "后台轮次默认折叠",
+  "background_folded_footer": "主对话里由别的对话、定时任务或跟进发起的轮次折成一行，点开能看全部；问过你或通知过你的轮次照常显示。"
 }

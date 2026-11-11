@@ -80,6 +80,12 @@ func TestPutSettings(t *testing.T) {
 	if p := f.lastSnapshot().Profile; p == nil || p.Main != "m1" || p.Timezone != "Asia/Shanghai" {
 		t.Fatalf("the hub is told: %+v", p)
 	}
+	if code, out := put(`{}`); code != http.StatusOK || out["main_background_folded"] != true {
+		t.Fatalf("main_background_folded default: %d %v", code, out["main_background_folded"])
+	}
+	if code, out := put(`{"main_background_folded":false}`); code != http.StatusOK || out["main_background_folded"] != false {
+		t.Fatalf("main_background_folded off: %d %v", code, out["main_background_folded"])
+	}
 	if code, out := put(`{"main":"-"}`); code != http.StatusOK || out["main"] != nil {
 		t.Fatalf("clear main: %d %v", code, out)
 	}
@@ -355,7 +361,7 @@ func TestBoolSettingsSet(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		def  bool
-	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}, {"agent_tasks", false}, {"inbox_signals", false}} {
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}, {"agent_tasks", false}, {"main_background_folded", true}, {"inbox_signals", false}} {
 		key := "assistant." + c.name
 		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
 		set := func(value string) (string, bool) {
