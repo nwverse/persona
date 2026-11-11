@@ -9,10 +9,18 @@ import persona.core.domain.lines.WorkItem
 /** Display-only partition: the repository and timeline keep every original record and fold range. */
 data class AssistantConversation(val foreground: List<ChatLine>, val background: List<ChatLine>) {
     companion object {
-        fun project(lines: List<ChatLine>, items: List<Item>): AssistantConversation {
+        /**
+         * [folding]: the main conversation folds its background rounds (#4314, [BackgroundFolding]); null leaves every
+         * round as it was.
+         */
+        fun project(lines: List<ChatLine>, items: List<Item>, folding: BackgroundFolding? = null): AssistantConversation {
             val quiet = mutableSetOf<String>()
             val hints = mutableSetOf<String>()
             var background = false
+            // The folded round each item belongs to (its first input's id), and each such round's source and items.
+            val roundOf = mutableMapOf<String, String>()
+            val rounds = mutableMapOf<String, Pair<persona.core.contracts.MessageSource, MutableList<Item>>>()
+            var round: String? = null
             items.sortedBy { it.seq }.forEach { item ->
                 if (item.kind == "text" && item.role == "user") {
                     val injected = item.injected
@@ -21,13 +29,23 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                     val source = if (item.source != null || injected != null || metadata.found) sourceOf(item) else null
                     val systemHint = injected?.kind == "system" && injected.state != "supervise"
                     if (systemHint) hints += item.id
-                    else background = source?.kind in setOf("supervision", "patrol", "routine", "schedule") ||
-                        (source?.kind == "followup" && !source.conversationId.isNullOrBlank() && injected?.state != "wake") ||
-                        (injected?.kind == "followup" && injected.state in setOf("once", "daily", "interval")) ||
-                        injected?.kind in setOf("supervision", "routine", "patrol", "schedule")
-                } else if (item.kind == "image" && item.role == "user" && item.toolUseId == null) background = false
+                    else {
+                        background = source?.kind in setOf("supervision", "patrol", "routine", "schedule") ||
+                            (source?.kind == "followup" && !source.conversationId.isNullOrBlank() && injected?.state != "wake") ||
+                            (injected?.kind == "followup" && injected.state in setOf("once", "daily", "interval")) ||
+                            injected?.kind in setOf("supervision", "routine", "patrol", "schedule")
+                        // A round lasts until the next genuine input, a queued one included; a folded one is drawn, not moved.
+                        round = folding?.let { BackgroundFolding.sourceOf(item) }?.let { folded ->
+                            background = false
+                            rounds[item.id] = folded to mutableListOf()
+                            item.id
+                        }
+                    }
+                } else if (item.kind == "image" && item.role == "user" && item.toolUseId == null) { background = false; round = null }
                 if (background) quiet += item.id
-                if (item.role == "system" || item.kind == "notice" || item.kind == "recap") hints += item.id
+                round?.let { id -> roundOf[item.id] = id; rounds.getValue(id).second += item }
+                // An upstream refusal (#2528) is the user's to see in Persona's chats too, as on the web.
+                if ((item.role == "system" || item.kind == "notice" || item.kind == "recap") && item.modelRefusal == null) hints += item.id
             }
             val quietGroups = lines.filterIsInstance<ChatLine.Work>().filter { line ->
                 line.id.removePrefix("w-") in quiet || line.steps.any { it.originalId() in quiet }
@@ -53,7 +71,51 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                     if (clean.isEmpty() && !line.live) null else line.copy(steps = clean)
                 } else line
             }
-            return AssistantConversation(visible, record)
+            if (folding == null || rounds.isEmpty()) return AssistantConversation(visible, record)
+            return AssistantConversation(fold(visible, items, folding, roundOf, rounds, liveRound = round), record)
+        }
+
+        /**
+         * Each folded round's lines, which are consecutive, become one [BackgroundRound] line followed by them while it is
+         * open; a round that must stay shown ([supervisionVisible]) keeps its lines as they are.
+         */
+        private fun fold(
+            lines: List<ChatLine>, items: List<Item>, folding: BackgroundFolding, roundOf: Map<String, String>,
+            rounds: Map<String, Pair<persona.core.contracts.MessageSource, List<Item>>>, liveRound: String?,
+        ): List<ChatLine> {
+            val workRound = mutableMapOf<String, String>()
+            fun of(line: ChatLine): String? = when (line) {
+                is ChatLine.Row -> line.row.item?.id?.let(roundOf::get) ?: line.row.steps.firstNotNullOfOrNull { roundOf[it.originalId()] }
+                is ChatLine.UserImages -> line.images.firstNotNullOfOrNull { roundOf[it.id] }
+                // Working with nothing of this run yet: the run belongs to the round the last input started.
+                is ChatLine.Work -> (if (line.id == persona.core.domain.lines.LiveWorkId) liveRound
+                    else roundOf[line.id.removePrefix("w-")] ?: line.steps.firstNotNullOfOrNull { roundOf[it.originalId()] })
+                    ?.also { workRound[line.id] = it }
+                is ChatLine.Step -> workRound[line.groupId]
+                is ChatLine.End -> workRound[line.groupId]
+                is ChatLine.ApiError -> roundOf[line.item.id]
+                else -> null
+            }
+            val owners = lines.map(::of)
+            val results = items.filter { it.kind == "tool_result" && it.toolUseId != null }.associateBy { it.toolUseId!! }
+            val out = ArrayList<ChatLine>(lines.size)
+            var i = 0
+            while (i < lines.size) {
+                val id = owners[i]
+                if (id == null) { out += lines[i]; i++; continue }
+                // Up to the round's last line, so a round is one fold whatever is drawn between its parts.
+                val end = owners.lastIndexOf(id)
+                val members = lines.subList(i, end + 1)
+                i = end + 1
+                val live = members.any { it is ChatLine.Work && it.live }
+                val (source, ordered) = rounds.getValue(id)
+                if (supervisionVisible(ordered, results, live)) { out += members; continue }
+                val lineId = BackgroundFolding.lineId(id)
+                val open = lineId in folding.open || ordered.any { it.id == folding.reveal }
+                out += ChatLine.Extra(lineId, BackgroundRound(lineId, source, live, open, members.toList()))
+                if (open) out += members
+            }
+            return out
         }
     }
 }

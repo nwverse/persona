@@ -1,4 +1,5 @@
 import Foundation
+import MapKit
 import Testing
 @testable import Persona
 
@@ -130,5 +131,38 @@ struct SavedPlacesModelTests {
         let p = APIClient.SavedPlace(name: "公司", latitude: 31.24, longitude: 121.5)
         #expect(SavedPlaceText.detail(p) == SavedPlaceText.coordinates(p))
         #expect(SavedPlaceText.detail(APIClient.SavedPlace(name: "家", address: "1 Example Road")) == "1 Example Road")
+    }
+
+    /// The editor's map is there from the start (#4248): on the place, else on the user only when location is already
+    /// allowed, so opening a new place never asks for it.
+    @Test func theMapOpensOnThePlaceOrOnTheUserWhenAllowed() {
+        #expect(SavedPlaceText.opening(located: true, location: .denied) == .place)
+        #expect(SavedPlaceText.opening(located: false, location: .granted) == .user)
+        for status in [PhoneAuthStatus.notDetermined, .denied, .limited, .notNeeded] {
+            #expect(SavedPlaceText.opening(located: false, location: status) == .anywhere, "\(status)")
+        }
+    }
+
+    /// A tap far out (the world, a city) zooms in on the place; a tap on a street-level map keeps the user's zoom.
+    @Test func aTapZoomsInOnlyFromFarOut() {
+        #expect(SavedPlaceText.mapSpan(radius: 150) == 600)
+        #expect(SavedPlaceText.zoomsIn(shownLatitudeDelta: nil, radius: 150), "no region reported yet")
+        #expect(SavedPlaceText.zoomsIn(shownLatitudeDelta: 40, radius: 150), "a whole country")
+        #expect(!SavedPlaceText.zoomsIn(shownLatitudeDelta: 0.01, radius: 150), "about 1 km: streets")
+        #expect(!SavedPlaceText.zoomsIn(shownLatitudeDelta: 0.5, radius: 2000), "a large circle shows more around it")
+    }
+
+    /// MapKit's "nothing there" reads as no results; any other failure says the search couldn't run.
+    @Test func aFailedSearchIsToldApartFromOneThatFoundNothing() {
+        let nothing = NSError(domain: MKErrorDomain, code: Int(MKError.Code.placemarkNotFound.rawValue))
+        let offline = NSError(domain: MKErrorDomain, code: Int(MKError.Code.serverFailure.rawValue))
+        #expect(SavedPlaceText.SearchOutcome(nothing) == .nothing)
+        #expect(SavedPlaceText.SearchOutcome(offline) == .failed)
+        #expect(SavedPlaceText.SearchOutcome(URLError(.notConnectedToInternet)) == .failed)
+        #expect(SavedPlaceText.searchNote(.found, query: "x") == nil)
+        let none = SavedPlaceText.searchNote(.nothing, query: "Example Road")
+        let failed = SavedPlaceText.searchNote(.failed, query: "Example Road")
+        #expect(none?.contains("Example Road") == true)
+        #expect(failed != nil && failed != none)
     }
 }

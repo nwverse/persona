@@ -26,11 +26,19 @@ data class AssistantConfig(
      * tells you instead); null from a hub without the setting.
      */
     @SerialName("main_tasks_quiet") val mainTasksQuiet: Boolean? = null,
+    /**
+     * "Fold background rounds" (#4314): the main conversation's rounds another conversation, a scheduled task or a
+     * follow-up started show as one line; null from a hub without the setting (see [backgroundFolded]).
+     */
+    @SerialName("main_background_folded") val mainBackgroundFolded: Boolean? = null,
     /** Stable owner returned by hubs supporting per-assistant settings. */
     val manager: String? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
     @SerialName("permission_defaults") val permissionDefaults: AssistantPermissionDefaults? = null,
-)
+) {
+    /** Whether the main conversation folds its background rounds: on unless turned off, also on a hub that omits it. */
+    val backgroundFolded: Boolean get() = mainBackgroundFolded ?: true
+}
 
 /**
  * PUT /api/v1/assistant. Only the fields that are set go on the wire and change; the hub keeps the rest.
@@ -45,6 +53,7 @@ data class AssistantConfigUpdate(
     /** "-" clears the main conversation: it stays on the machine it ran on and cannot continue elsewhere. */
     val main: String? = null,
     @SerialName("main_tasks_quiet") val mainTasksQuiet: Boolean? = null,
+    @SerialName("main_background_folded") val mainBackgroundFolded: Boolean? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
 ) {
     companion object {
