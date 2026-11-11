@@ -398,6 +398,7 @@ func (s *Service) kbLoop(ctx context.Context) {
 	if s.kb.dir == "" {
 		return
 	}
+	ctx = ai.Background(ctx) // its model calls give their turn back when queued under a connection's cap (ai/limit.go)
 	var r kbRounds
 	t := time.NewTicker(kbPoll)
 	defer t.Stop()
@@ -494,9 +495,9 @@ func (s *Service) kbRound(ctx context.Context, e *kb.Engine, r *kbRounds) {
 	switch {
 	case s.kbItemsDue(r.items):
 		r.items = time.Now()
-		s.kbRun(ctx, func() { r.tagMore = s.kbCollectItems(ctx, e) })
+		s.kbRun(ctx, func() { r.tagMore = s.kbCollectItems(ctx, e, r.tagMore) })
 	case r.tagMore: // untagged items left past the last run's cap
-		s.kbRun(ctx, func() { r.tagMore = s.kbTagItems(ctx, e) })
+		s.kbRun(ctx, func() { r.tagMore = s.kbTagItems(ctx, e, r.tagMore) })
 	}
 	daily := time.Since(r.prune) >= 24*time.Hour
 	if daily {

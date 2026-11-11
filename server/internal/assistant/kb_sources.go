@@ -77,20 +77,21 @@ func (s *Service) kbConnectors(ctx context.Context, e *kb.Engine) {
 }
 
 // kbCollectItems records every connector's items (documents, meetings and events) and tags new ones; more: untagged
-// ones are left past the round's cap (kbTagItems goes on with them next round).
-func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine) (more bool) {
+// ones are left (past the round's cap, a paused connection) and kbTagItems goes on with them next round. When it
+// stops before tagging (not writable, the connectors not answering, none with items) it is more as it was.
+func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine, more bool) bool {
 	s.kb.sourceWrites.Lock()
 	defer s.kb.sourceWrites.Unlock()
 	if !s.kbWritable(ctx) {
-		return false
+		return more
 	}
 	var list assistantwire.Archives
 	if err := s.appCall(ctx, AppConnectors, assistantwire.ConnectorsArchives, map[string]any{}, &list); err != nil {
 		s.logf("kb: the connectors' items: %v", err)
-		return false
+		return more
 	}
 	if len(list.Items) == 0 {
-		return false
+		return more
 	}
 	for _, id := range list.Items {
 		if err := e.CollectItems(ctx, busItems{s: s, id: id}, id); err != nil {
@@ -100,12 +101,13 @@ func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine) (more bool) 
 	return s.tagItems(ctx, e)
 }
 
-// kbTagItems goes on tagging the items a round before left past its cap, without reading the connectors again.
-func (s *Service) kbTagItems(ctx context.Context, e *kb.Engine) (more bool) {
+// kbTagItems goes on tagging the items a round before left, without reading the connectors again; more as
+// kbCollectItems.
+func (s *Service) kbTagItems(ctx context.Context, e *kb.Engine, more bool) bool {
 	s.kb.sourceWrites.Lock()
 	defer s.kb.sourceWrites.Unlock()
 	if !s.kbWritable(ctx) {
-		return true
+		return more
 	}
 	return s.tagItems(ctx, e)
 }

@@ -155,12 +155,82 @@ func TestTagItemsBackOffPerBatch(t *testing.T) {
 	}
 }
 
-// A paused connection returns at once: no item waits, all stay untagged for the next run.
+// A paused connection returns at once: no item waits, all stay untagged and more is reported (the next round goes on).
 func TestTagItemsPausedDoesNotCount(t *testing.T) {
 	m := &failingModel{err: paused()}
 	e := testEngine(t, m)
 	untaggedItems(t, e, 50)
-	if _, err := e.TagItems(context.Background(), 3); !ai.IsPaused(err) || m.calls != 1 || len(e.itemRetries) != 0 || untagged(e) != 50 {
-		t.Fatalf("err %v, %d call(s), %d waiting, %d untagged", err, m.calls, len(e.itemRetries), untagged(e))
+	more, err := e.TagItems(context.Background(), 3)
+	if !ai.IsPaused(err) || !more || m.calls != 1 || len(e.itemRetries) != 0 || untagged(e) != 50 {
+		t.Fatalf("more %v, err %v, %d call(s), %d waiting, %d untagged", more, err, m.calls, len(e.itemRetries), untagged(e))
+	}
+}
+
+// notConfigured is the error of a request with no model set up for it.
+func notConfigured(t *testing.T) error {
+	t.Helper()
+	err := ai.New(ai.Config{}).JSONMax(context.Background(), "", "", 1, &struct{}{})
+	if !ai.IsNotConfigured(err) {
+		t.Fatalf("not the not-configured error: %v", err)
+	}
+	return err
+}
+
+// No model set up is not a source's failure: nothing waits for it (it used to be retried next round, and still is), and
+// item tagging reports no more (the next collection asks again).
+func TestNotConfiguredDoesNotBackOff(t *testing.T) {
+	ctx := context.Background()
+	m := &failingModel{err: notConfigured(t)}
+	e := testEngine(t, m)
+	start := time.Now().Add(-2 * time.Hour)
+	completeRecording(t, e, "7c9e6679-7425-40de-944b-e07fc1f90ae7", start)
+	completeRecording(t, e, "9b2f6c1e-3d4a-4f5b-8c7d-2e1f0a9b8c6d", start.Add(time.Minute))
+	if n := e.SummarizeRecordings(ctx, 3); n != 0 || m.calls != 1 || len(e.recordingRetries) != 0 {
+		t.Fatalf("recordings: %d, %d call(s), %d waiting; want 0, 1, 0", n, m.calls, len(e.recordingRetries))
+	}
+	untaggedItems(t, e, 10)
+	if more, err := e.TagItems(ctx, 3); !ai.IsNotConfigured(err) || more || len(e.itemRetries) != 0 {
+		t.Fatalf("items: more %v, err %v, %d waiting", more, err, len(e.itemRetries))
+	}
+	dirtyProject(t, e, "a")
+	if e.RefreshProjects(ctx, 3); len(e.projectRetries) != 0 {
+		t.Fatalf("projects: %d waiting", len(e.projectRetries))
+	}
+}
+
+// A recording that failed is tried again at once when a new revision comes (the wait was for the old one); an item
+// whose title changed likewise.
+func TestChangedSourceDoesNotWait(t *testing.T) {
+	ctx := context.Background()
+	m := &failingModel{err: errors.New("ai: no JSON object in reply")}
+	e := testEngine(t, m)
+	start := time.Now().Add(-2 * time.Hour)
+	id := "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+	completeRecording(t, e, id, start)
+	e.SummarizeRecordings(ctx, 3)
+	if e.SummarizeRecordings(ctx, 3); m.calls != 1 {
+		t.Fatalf("%d call(s) before the new revision, want 1", m.calls)
+	}
+	if _, err := e.PutRecording(id, recUpload(2, start, true, "示例：改成周四灰度"), start.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	m.err = nil
+	if n := e.SummarizeRecordings(ctx, 3); n != 1 || m.calls != 2 {
+		t.Fatalf("new revision: summarized %d with %d call(s) in all, want 1 with 2", n, m.calls)
+	}
+
+	m.err, m.calls = errors.New("ai: no JSON object in reply"), 0
+	untaggedItems(t, e, 1)
+	_, _ = e.TagItems(ctx, 3)
+	if _, _ = e.TagItems(ctx, 3); m.calls != 1 {
+		t.Fatalf("%d call(s) before the edit, want 1", m.calls)
+	}
+	it, _ := e.Store.Item(KindDoc, "d000")
+	it.Title = "示例文档（改）"
+	if err := e.Store.PutItem(it); err != nil {
+		t.Fatal(err)
+	}
+	if _, _ = e.TagItems(ctx, 3); m.calls != 2 {
+		t.Fatalf("%d call(s) after the edit, want 2", m.calls)
 	}
 }

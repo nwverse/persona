@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -177,7 +176,7 @@ func (e *Engine) DistillTopics(ctx context.Context, max int) int {
 			continue
 		}
 		if err := e.distill(ctx, src, now); err != nil {
-			if ai.IsPaused(err) || ctx.Err() != nil {
+			if deferred(ctx, err) {
 				break
 			}
 			e.topicRetryLater(key, err, "distill")
@@ -191,7 +190,7 @@ func (e *Engine) DistillTopics(ctx context.Context, max int) int {
 }
 
 func (e *Engine) topicRetryLater(key string, err error, step string) {
-	r := retryLater(&e.topicRetries, key)
+	r := retryLater(&e.topicRetries, key, "")
 	e.logf("topics: %s %s: %v (failed %d time(s) in a row, next try in %s)", step, key, err, r.failures, retryWait(r.failures))
 }
 

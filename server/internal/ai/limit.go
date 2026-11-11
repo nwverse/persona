@@ -42,11 +42,23 @@ var (
 	capLift    = 8              // a cap raised past this is lifted
 	now        = time.Now
 	logf       = log.Printf
-
-	// slotWait is how long a request waits for a slot under the cap before it is put off (or its own deadline, if
-	// sooner): a queued background call gives its turn back instead of spending its whole deadline (minutes) waiting.
-	slotWait = 30 * time.Second
 )
+
+// backgroundSlotWait is how long a background request (Background) waits for a slot under the cap before it is put off.
+const backgroundSlotWait = 30 * time.Second
+
+// slotWaitKey carries how long a request may wait for a slot under the cap (Background); none: until its deadline.
+type slotWaitKey struct{}
+
+// Background marks ctx's requests as background work (the knowledge base's loop): queued under a connection's cap,
+// such a request waits at most 30 seconds for a slot and is then put off (PausedError, nothing sent), so it gives its
+// turn back instead of spending its deadline (minutes) in the queue. Other requests on the same connection (a reply
+// someone waits for, triage, translation) wait for a slot until their own deadline, as before.
+func Background(ctx context.Context) context.Context { return withSlotWait(ctx, backgroundSlotWait) }
+
+func withSlotWait(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, slotWaitKey{}, d)
+}
 
 // Pause is a connection held back: nothing is sent to it until Until (then one request goes first).
 type Pause struct {
@@ -146,7 +158,8 @@ func gateFor(baseURL, key string) *gate {
 // admit lets a request go out, waits for a slot under the cap, or puts it off while the connection is held. probe:
 // this request is the one finding out whether the pause is over.
 func (g *gate) admit(ctx context.Context) (probe bool, err error) {
-	var giveUp <-chan time.Time // set on the first wait for a slot
+	var giveUp <-chan time.Time // a background request's, set on its first wait for a slot (nil: none)
+	waited := false
 	for {
 		g.mu.Lock()
 		if g.held && (now().Before(g.pause.Until) || g.probing) {
@@ -158,17 +171,21 @@ func (g *gate) admit(ctx context.Context) (probe bool, err error) {
 		if g.cap > 0 && g.inflight >= g.cap {
 			wake := g.wake
 			g.mu.Unlock()
-			if giveUp == nil {
-				t := time.NewTimer(slotWait)
-				defer t.Stop()
-				giveUp = t.C
+			if !waited {
+				waited = true
+				if d, ok := ctx.Value(slotWaitKey{}).(time.Duration); ok {
+					t := time.NewTimer(d)
+					defer t.Stop()
+					giveUp = t.C
+				}
 			}
 			select {
 			case <-ctx.Done():
 				// Out of time waiting for a slot: nothing was sent, so it is put off like a paused one.
 				return false, &PausedError{Pause{Reason: ReasonBusy, Until: now()}}
 			case <-giveUp:
-				// Waited slotWait for a slot: put off the same way, so the caller's loop moves on and asks again later.
+				// A background request waited its while for a slot: put off the same way, so the caller's loop moves on
+				// and asks again later.
 				return false, &PausedError{Pause{Reason: ReasonBusy, Until: now()}}
 			case <-wake:
 			}

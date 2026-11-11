@@ -126,10 +126,11 @@ type itemTags struct {
 const tagItemsBatch = 40
 
 // TagItems tags documents, meetings and events that are new or changed, tagItemsBatch per call and at most max calls
-// per run; more reports that untagged ones are left for another run (the cap was reached). The items of a batch whose
-// call failed wait (retryWait, per item) and the next batch goes on, so a batch the model keeps failing on costs a call
-// now and then rather than every run, and does not hold back the rest. A paused connection returns its error at once
-// without counting: the items stay untagged for the next run.
+// per run; more reports that untagged ones are left for the next round: the cap was reached, the connection is paused or
+// the run ended (not when no model is set up: the next collection asks again). The items of a batch whose call failed
+// wait (retryWait, per item) and the next batch goes on, so a batch the model keeps failing on costs a call now and then
+// rather than every run, and does not hold back the rest; an item changed since (what the model reads of it) is tried
+// at once. A paused connection or no model returns its error at once without counting.
 func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 	if e.Model == nil {
 		return false, nil
@@ -142,7 +143,7 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 			if it.TaggedAt.IsZero() && it.Title != "" && !it.Locked {
 				key := it.Kind + "/" + it.ID
 				due[key] = true
-				if now.Before(e.itemRetries[key].at) {
+				if retryWaits(e.itemRetries, key, itemAbout(it), now) {
 					continue
 				}
 				todo = append(todo, it)
@@ -180,12 +181,12 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
-			if ai.IsPaused(err) || ctx.Err() != nil {
-				return false, err
+			if deferred(ctx, err) {
+				return !ai.IsNotConfigured(err), err
 			}
 			var f projectRetry
 			for _, it := range batch {
-				f = retryLater(&e.itemRetries, it.Kind+"/"+it.ID)
+				f = retryLater(&e.itemRetries, it.Kind+"/"+it.ID, itemAbout(it))
 			}
 			e.logf("tag items: %v (%d item(s), failed %d time(s) in a row, next try in %s)", err, len(batch), f.failures, retryWait(f.failures))
 			continue
@@ -225,7 +226,12 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 			}
 		}
 	}
-	return false, nil
+	return len(todo) > 0, nil // the run ended with some not tried
+}
+
+// itemAbout is what the model reads of an item to tag it: an item changed since a failure is tried at once.
+func itemAbout(it *Item) string {
+	return it.Title + "\x00" + it.At.UTC().Format(time.RFC3339) + "\x00" + it.Where + "\x00" + it.Pinned
 }
 
 // --- reading ---
