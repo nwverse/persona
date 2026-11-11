@@ -11,18 +11,20 @@ import (
 // and without a card: it is on its to-do at once (Needs you in the apps, the board), and the next briefing with facts
 // lists it under "To verify" with its recommendation, where it is answered. It is the same ask as any decision's
 // (acceptAsk, ForBriefing set while it waits for a briefing), so its default, its recheck and the owner's fixed
-// answers are unchanged. A decision that cannot be undone or that other people will see, one whose deadline is nearer
-// than decisionWaitDeadline, and every decision while no daily briefing with facts is on, is pushed as before. One
-// that no briefing listed is pushed after all (sweepWaitingDecisions), so it is late at worst, never lost.
+// answers are unchanged. A decision that cannot be undone or that other people will see, and one no daily briefing
+// with facts is due for in time (decisionWaits), is pushed as before. One that no briefing brought to the owner is
+// pushed after all (sweepWaitingDecisions), so it is late at worst, never lost.
 
 const (
-	// decisionWaitDeadline: a decision whose deadline is nearer than this when it is raised is always pushed.
+	// decisionWaitDeadline: a decision is held only when a briefing is due at least this long before its deadline, so
+	// one whose deadline is nearer than this when it is raised is always pushed.
 	decisionWaitDeadline = 12 * time.Hour
-	// decisionWaitFor: a decision that can wait and that no briefing listed this long after it was raised is pushed.
+	// decisionWaitNotice: a held decision that no briefing brought to the owner is pushed once its deadline is this
+	// near: an hour after the latest briefing it could count on, and with this long left to answer.
+	decisionWaitNotice = 11 * time.Hour
+	// decisionWaitFor: a decision is held only when a briefing is due within this long, and one that no briefing
+	// brought to the owner this long after it was raised is pushed.
 	decisionWaitFor = 24 * time.Hour
-	// decisionWaitMargin: a decision that can wait and that no briefing listed is pushed this long before its deadline
-	// at the latest, so its default is not taken without the owner having been told.
-	decisionWaitMargin = time.Hour
 )
 
 // Why a decision marked can_wait is pushed all the same, as task_review's answer says it.
@@ -30,21 +32,52 @@ const (
 	waitNoNeverDefault = "it cannot be undone or other people will see it"
 	waitNoDeadline     = "its deadline is within 12 hours"
 	waitNoBriefing     = "no daily briefing with facts is on"
+	waitNoBriefingSoon = "no daily briefing is due within 24 hours"
+	waitNoBriefingTime = "no daily briefing is due at least 12 hours before its deadline"
+	waitNotKept        = "it could not be kept as held"
 )
 
 // decisionWaits says a decision marked can_wait is held for the briefing when raised at now: why only the owner decides
 // (why), its deadline (zero: none) and whether taking its recommendation at the deadline can be undone. Else why not,
-// in the words task_review answers with.
+// in the words task_review answers with. The briefing has to come while the owner still has decisionWaitDeadline to
+// answer: the deadline is counted from when the decision is raised, not from when they are told.
 func (s *Service) decisionWaits(ctx context.Context, why string, deadline time.Time, reversible bool, now time.Time) (bool, string) {
 	switch {
 	case neverDefault(why) || !deadline.IsZero() && !reversible:
 		return false, waitNoNeverDefault
 	case !deadline.IsZero() && deadline.Sub(now) < decisionWaitDeadline:
 		return false, waitNoDeadline
-	case !s.laterBriefed(ctx): // the routine the questions that can wait count on (later.go)
+	}
+	switch due := s.briefingDue(ctx, now); {
+	case due.IsZero():
 		return false, waitNoBriefing
+	case due.Sub(now) > decisionWaitFor:
+		return false, waitNoBriefingSoon
+	case !deadline.IsZero() && due.After(deadline.Add(-decisionWaitDeadline)):
+		return false, waitNoBriefingTime
 	}
 	return true, ""
+}
+
+// briefingDue is when the next daily routine with facts runs after now, zero when none is on: the routines the
+// questions that can wait count on (laterBriefed).
+func (s *Service) briefingDue(ctx context.Context, now time.Time) time.Time {
+	loc := s.location(ctx)
+	sc, err := s.lockedSchedule(ctx)
+	if err != nil {
+		return time.Time{}
+	}
+	defer sc.mu.Unlock()
+	var due time.Time
+	for _, t := range sc.tasks {
+		if !t.Enabled || !t.Facts || t.Repeat != repeatDaily {
+			continue
+		}
+		if at := nextRun(t, now, loc); !at.IsZero() && (due.IsZero() || at.Before(due)) {
+			due = at
+		}
+	}
+	return due
 }
 
 // waitOver says why decision a, held for a briefing since it was raised, is pushed after all at now ("": it still
@@ -54,16 +87,18 @@ func waitOver(a *acceptAsk, briefed bool, now time.Time) string {
 	case !briefed:
 		return "no daily briefing with facts is on any more"
 	case now.Sub(a.AskedAt) >= decisionWaitFor:
-		return "no briefing listed it within 24 hours"
-	case !a.Deadline.IsZero() && a.DueAt.IsZero() && !now.Before(a.Deadline.Add(-decisionWaitMargin)):
-		return "no briefing listed it and its deadline is within the hour"
+		return "no briefing brought it to the owner within 24 hours"
+	case !a.Deadline.IsZero() && a.DueAt.IsZero() && !now.Before(a.Deadline.Add(-decisionWaitNotice)):
+		return "no briefing brought it to the owner and its deadline is within 11 hours"
 	}
 	return ""
 }
 
-// sweepWaitingDecisions pushes each decision held for a briefing that none will list in time (waitOver): its push and
-// its card go out as they would have when it was raised, once. One the owner hid has been seen: its wait ends without
-// a push.
+// sweepWaitingDecisions pushes each decision held for a briefing that none brought to the owner in time (waitOver).
+// The hold ends once the hub took the push (or none is due: a muted or health conversation's); a push the hub did not
+// take leaves it held, and the next sweep tries again. Its card is then due as when a decision is raised
+// (retryAcceptance, counted from the push), and a leader's is told to the main conversation now, not when it was
+// raised. One the owner hid has been seen: its wait ends without a push.
 func (s *Service) sweepWaitingDecisions(now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -75,7 +110,7 @@ func (s *Service) sweepWaitingDecisions(now time.Time) {
 	}
 	held := map[string]acceptAsk{}
 	for id, a := range b.asks {
-		if decideAsk(a) && a.ForBriefing && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() {
+		if heldForBriefing(a) {
 			held[id] = *a
 		}
 	}
@@ -100,74 +135,62 @@ func (s *Service) sweepWaitingDecisions(now time.Time) {
 		if err != nil {
 			continue // not known: the next sweep asks again
 		}
-		cp, ok := s.endWait(ctx, id, a.AskedAt)
-		if !ok || dismissed {
+		if dismissed {
+			s.endWait(ctx, id, a.AskedAt, time.Time{})
+			continue
+		}
+		if cur, ok := s.askCopy(id); !ok || !heldForBriefing(&cur) || !cur.AskedAt.Equal(a.AskedAt) {
+			continue // answered, or a briefing brought it to the owner, while the others were pushed
+		}
+		if _, err := s.pushDecisionErr(ctx, id); err != nil {
+			s.logf("task %s: its decision could wait, but %s: its push did not go out (tried again on the next sweep)", id, why)
+			continue
+		}
+		if !s.endWait(ctx, id, a.AskedAt, now) {
 			continue
 		}
 		s.logf("task %s: its decision could wait, but %s: pushed", id, why)
-		s.pushDecision(ctx, id)
-		s.postWaitedCard(ctx, t, cp)
+		if t.Supervision != nil && s.isLeader(ctx, t.Supervision.Supervisor) { // held back when it was raised (supervise_review.go)
+			s.escalateToMain(t, t.Supervision.Round, a.Reason, a.Recommend)
+		}
 	}
 }
 
-// endWait marks task id's decision asked at as no longer held for a briefing, and returns it; false when it is not
-// held (answered, listed or pushed meanwhile, or another round asks) or the book could not be written.
-func (s *Service) endWait(ctx context.Context, id string, asked time.Time) (acceptAsk, bool) {
+// heldForBriefing: a is a decision that waits for a briefing to bring it to the owner.
+func heldForBriefing(a *acceptAsk) bool {
+	return a != nil && decideAsk(a) && a.ForBriefing && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero()
+}
+
+// waitsForBriefing: task id's decision is kept and held for a briefing.
+func (s *Service) waitsForBriefing(id string) bool {
+	a, ok := s.askCopy(id)
+	return ok && heldForBriefing(&a)
+}
+
+// endWait marks task id's decision asked at as no longer held for a briefing; false when it is not held (answered,
+// brought to the owner by a briefing meanwhile, or another round asks). pushed (zero: it was not) is when it was
+// pushed after all: its card is due from then. A write that fails is logged and the hold stays ended in memory: the
+// push went, and it is not sent every minute while the store is away (after a restart it goes once more).
+func (s *Service) endWait(ctx context.Context, id string, asked, pushed time.Time) bool {
 	b := &s.accept
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cur := b.asks[id]
-	if cur == nil || !cur.AskedAt.Equal(asked) || !cur.ForBriefing || !cur.AcceptedAt.IsZero() {
-		return acceptAsk{}, false
+	if !heldForBriefing(cur) || !cur.AskedAt.Equal(asked) {
+		return false
 	}
 	cur.ForBriefing = false
-	if err := s.saveAcceptErrLocked(ctx); err != nil {
-		cur.ForBriefing = true // not written: the next sweep tries again, so it is pushed once
-		s.logf("task %s: decision: save: %v", id, err)
-		return acceptAsk{}, false
+	if !pushed.IsZero() {
+		cur.PushedAt, cur.NoCard = pushed.UTC(), false
 	}
-	return *cur, true
-}
-
-// postWaitedCard posts the card of decision a, which was held without one, when the bot can (as postAsk would have when
-// it was raised). No card of this round ever went out, so the round's key is safe however old the ask is. When it does
-// not go out the ask stays card-less: the push went, and the to-do and the briefing list it.
-func (s *Service) postWaitedCard(ctx context.Context, t Todo, a acceptAsk) {
-	st, err := s.feishuStatus(ctx)
-	if err != nil || !st.Ready || !st.Features.Reports {
-		return
-	}
-	a.NoCard = false
-	mid, err := s.botPostKeyed(ctx, "", s.acceptCard(ctx, t, a, false), askSummary(s.botLang(ctx), &a), acceptCardKey(t.ID, a.AskedAt))
-	if err != nil {
-		s.logf("task %s: decision card: %v (it stays without one)", t.ID, err)
-		return
-	}
-	b := &s.accept
-	b.mu.Lock()
-	cur := b.asks[t.ID]
-	if cur == nil || !cur.AskedAt.Equal(a.AskedAt) {
-		if cur != nil { // another round asks now: this card is an earlier round's
-			cur.Earlier = lastOf(append(slices.Clone(cur.Earlier), mid), acceptEarlierMost)
-			s.saveAcceptLocked(ctx)
-		}
-		b.mu.Unlock()
-		return
-	}
-	cur.MessageID, cur.Messages, cur.NoCard = mid, append(cur.Messages, mid), false
 	s.saveAcceptLocked(ctx)
-	cp := *cur
-	b.mu.Unlock()
-	if !cp.AcceptedAt.IsZero() { // answered while the card went out: it says so too
-		if err := s.botUpdateCard(ctx, mid, s.acceptCard(ctx, t, cp, false)); err != nil {
-			s.logf("task %s: decision card: %v", t.ID, err)
-		}
-	}
+	return true
 }
 
-// briefListed: a briefing run with the rows of f went into its conversation (the `brief` item, and the card or the
-// model's answer from the same rows). The decisions among them that were held for a briefing have now been put to the
-// owner: they are not pushed later (sweepWaitingDecisions). Only the round the row was made for counts.
+// briefListed: a briefing with the rows of f reached the owner: its run ended and its finished push says its counts,
+// and the run's `brief` item lists every row (briefPush). The decisions among them that were held for a briefing have
+// now been put to the owner: they are not pushed later (sweepWaitingDecisions). Only the round the row was made for
+// counts. The rows a briefing's Lark card shows end their hold the same way (briefAsked).
 func (s *Service) briefListed(f *briefFacts) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

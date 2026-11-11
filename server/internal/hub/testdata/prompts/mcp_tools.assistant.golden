@@ -1977,7 +1977,7 @@
         },
         "can_wait": {
           "type": "boolean",
-          "description": "needs_user, optional: true when the decision can wait for the next daily briefing (no deadline within 12 hours, a low cost_of_waiting): it is not pushed and has no card, and is in the user's Needs you at once. Ignored for why_owner irreversible and visible_to_others, a deadline within 12 hours or with reversible false, and while no daily briefing with facts is on; default false (pushed as usual)"
+          "description": "needs_user, optional: true when the decision can wait for the next daily briefing (no deadline within 12 hours, a low cost_of_waiting): it is not pushed and has no card, and is in the user's Needs you at once. Ignored (the answer says why) for why_owner irreversible and visible_to_others, a deadline within 12 hours or with reversible false, and when no daily briefing with facts is due within 24 hours and at least 12 hours before the deadline (24 hours by default: give a longer deadline for what can wait longer); default false (pushed as usual)"
         },
         "deadline": {
           "type": "string",

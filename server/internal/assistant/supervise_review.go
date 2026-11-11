@@ -323,9 +323,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		if over { // the note is the rework asked for, written to the agent: not the owner's question
 			conclusion.Note = ""
 		}
-		if !isMain && s.isLeader(ctx, v.Supervisor) { // a leader's: the main conversation hears of it too (supervise_leader.go)
-			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), decision.Recommend)
-		}
 		// One that can wait is held for the next briefing: no card and no push now (#4930, decision_wait.go).
 		held, notHeld := false, ""
 		if a.CanWait {
@@ -333,6 +330,13 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			conclusion.ForBriefing = held
 		}
 		carded := s.askConclusion(ctx, t, conclusion)
+		if held && !s.waitsForBriefing(t.ID) { // the ask was not kept as held: nothing would push it later
+			held, notHeld = false, waitNotKept
+		}
+		// A leader's: the main conversation hears of it too (supervise_leader.go); of one that is held, when it is pushed.
+		if !held && !isMain && s.isLeader(ctx, v.Supervisor) {
+			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), decision.Recommend)
+		}
 		// A recommendation is also pushed to their phone, whose OK takes it (todo_ask.go), with the bot on or off. The hub
 		// taking the push does not say a device got it, nor that the app shows its OK: without a card the supervisor still
 		// asks, and is told OK may come first.
@@ -357,8 +361,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 			return fmt.Sprintf("Task %s%s waits for the user (needs_user), and its decision can wait (can_wait): no push and no card went out. "+
 				"It is in their Needs you now, and the next daily briefing lists it with your recommendation, where they answer it; if no "+
-				"briefing lists it within 24 hours, or in time before its deadline, the hub pushes it after all. Don't ask them or push it "+
-				"yourself; review it once the agent stops.%s", t.ID, was, pushed), nil
+				"briefing reaches them with it within 24 hours, or by 11 hours before its deadline, the hub pushes it after all. Don't ask "+
+				"them or push it yourself; review it once the agent stops.%s", t.ID, was, pushed), nil
 		}
 		if notHeld != "" {
 			pushed += " can_wait was ignored (" + notHeld + "): it is pushed as usual."

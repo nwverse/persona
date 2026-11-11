@@ -224,7 +224,6 @@ func (s *Service) briefSent(id, session string, retried bool) {
 	if !retried {
 		s.briefFeed(session, id, run.label, run.facts)
 	}
-	s.briefListed(run.facts) // the decisions that waited for a briefing are put to the owner now (decision_wait.go)
 }
 
 // briefAttach moves the run of task id from the tasks to conversation session, nil when there is none.
@@ -309,6 +308,7 @@ func (s *Service) briefAsked(f *briefFacts, shown []string) {
 	for _, id := range shown {
 		if a := b.asks[id]; a != nil && a.AskedAt.Equal(asked[id]) {
 			a.RemindedAt = time.Now().UTC()
+			a.ForBriefing = false // one that waited for a briefing is put to the owner on this card (decision_wait.go)
 		}
 	}
 	s.saveAcceptLocked(ctx)
@@ -396,15 +396,18 @@ func (f *briefFacts) modelText() string {
 
 // briefPush is the text of the finished push of the routine run that conversation session is on: the counts Persona
 // worked out, "" when it is on none or its counts were said already. report: the turn is the one a scheduled run started
-// (reportTurn), not a message the owner sent into the conversation later.
+// (reportTurn), not a message the owner sent into the conversation later. With that push the briefing has reached the
+// owner: the decisions that waited for one are no longer held (briefListed).
 func (s *Service) briefPush(session string, l i18n.Lang, report bool) string {
 	run := s.briefOf(session)
 	b := &s.brief
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !report || run == nil || run.pushed {
+		b.mu.Unlock()
 		return ""
 	}
 	run.pushed = true
+	b.mu.Unlock()
+	s.briefListed(run.facts)
 	return run.facts.countsIn(l)
 }
