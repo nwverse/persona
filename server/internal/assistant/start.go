@@ -757,21 +757,42 @@ func (s *Service) appLang(ctx context.Context, lang string) i18n.Lang {
 // filled in (sendModel) and, the first one to a new main conversation started empty, what the old one left before
 // its text. A conversation the machine does not list (yet) that is not the main one keeps what it runs on.
 func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any, error) {
+	return s.messageParams(ctx, p, true)
+}
+
+// messageParams is SendParams for a message that is the owner's own (owner), or one the manager writes in their
+// place (a channel's "answer again"), which preempts nothing.
+func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (map[string]any, error) {
 	if p.Params == nil {
 		p.Params = map[string]any{}
 	}
 	delete(p.Params, "source") // app input cannot claim an automated author
 	delete(p.Params, "message_source")
-	if text, ok := p.Params["text"].(string); ok {
+	text, said := p.Params["text"].(string)
+	if said {
 		p.Params["text"] = prompts.ProtectUserMessage(text)
+	} else {
+		_, said = p.Params["images"] // the node asking what its own message runs on carries neither (NodeAnswer)
 	}
 	sent, _ := p.Params["text"].(string)
-	out, err := s.sendParams(ctx, p)
+	params, err := s.sendParams(ctx, p)
 	if err == nil && p.Human { // the hub's word: a person's own app sent it (secret_handoff.go handoffUserTurn)
 		id, _ := p.Params["client_msg_id"].(string)
 		s.humanSent.note(p.SessionID, id, sent)
 	}
-	return out, err
+	if err == nil && said && owner {
+		s.ownerInterjects(p.SessionID, params)
+	}
+	return params, err
+}
+
+// ownerInterjects: params are the owner's own message to conversation id, ready to send. On a round they did not
+// start it is read at once, whatever interject_background says (owner_preempt.go).
+func (s *Service) ownerInterjects(id string, params map[string]any) {
+	if s.ownerPreempts(id) {
+		params["interject_background"] = true
+	}
+	s.ownerSent(id)
 }
 
 // sendParams also serves manager-generated notices, which must not be marked as
@@ -801,6 +822,10 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		}
 	}
 	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params); err != nil {
+		var other *launcherOtherKind
+		if errors.As(err, &other) {
+			return nil, other.rpcError(s.appLang(ctx, p.Lang)) // 409 launcher_other_kind, with the kinds for the app
+		}
 		return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
 	if text, ok := params["text"].(string); ok {
@@ -841,6 +866,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	}
 	l, _ := p["launcher"].(string)
 	asked := l != "" // picked in the chat's menu for this message
+	if asked {
+		if err := s.otherKindPick(ctx, machine, sid, l); err != nil {
+			return err // another agent kind can't resume this conversation: refused, not swapped on the node
+		}
+	}
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
 			l = c.Launcher // no launcher picked: the one this conversation runs
