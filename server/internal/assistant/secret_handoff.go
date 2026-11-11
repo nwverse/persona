@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -322,6 +323,23 @@ type humanSend struct {
 	void  bool   // sent again by someone else, or with other words: it counts for nothing
 }
 
+// contextTagRe is a context block's opening tag in a message, with its attributes.
+var contextTagRe = lazyre.New(`<` + compat.ContextPattern() + `\b([^>]*)>`)
+
+// ownWords: text, a message a person's own app sent, holds only their own words. A context block the app put in it
+// carries someone else's (a mail or a Lark message handed on from the Inbox, a page's selection used as context or for
+// an AI edit, another conversation's message, a document): such a message is not the user's asking, whoever sent it
+// (the decision on #3962: what the inbox, mail or channels bring gets the card). Only a workspace block, which the
+// manager fills in from the user's own settings (workspace_mention.go), is theirs.
+func ownWords(text string) bool {
+	for _, m := range contextTagRe.FindAllStringSubmatch(text, -1) {
+		if contextAttrs(m[1])["kind"] != "workspace" {
+			return false
+		}
+	}
+	return true
+}
+
 // handoffLine is the transcript line an item belongs to: its id before the last "#", as the node ties a send to a line
 // (node echo.go echoLineKey); "" for an item without an id.
 func handoffLine(id string) string {
@@ -369,56 +387,77 @@ func (h *humanSends) note(session, id, text string) {
 		}
 		return
 	}
-	if len(ids) >= humanSendsMost {
-		oldest, oldestAt := "", time.Now()
-		for k, sent := range ids {
-			if !sent.at.After(oldestAt) {
-				oldest, oldestAt = k, sent.at
-			}
-		}
-		delete(ids, oldest)
-	}
+	h.makeRoomLocked(ids)
 	ids[id] = humanSend{words: words, at: time.Now()}
 }
 
-// voidSend: a send into session the hub did not vouch for carried id. Were it one a person's app sent, it no longer
-// counts (another author's line may carry it now); one not known yet is kept void, so a later vouched send of it
-// does not count either.
+// voidSend: a send into session carried id, and it is not one that counts (the hub did not vouch for it, or it carries
+// someone else's words). Were id one a person's app sent, it no longer counts (another author's line may carry it
+// now); in a conversation with vouched sends, one not known yet is kept void, so a later vouched send of it does not
+// count either. A conversation with none keeps nothing.
 func (h *humanSends) voidSend(session, id string) {
 	if session == "" || id == "" {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if len(h.m[session]) == 0 {
+		return
+	}
 	ids := h.sessionLocked(session)
 	sent, ok := ids[id]
 	if !ok {
+		h.makeRoomLocked(ids)
 		sent.at = time.Now()
-		if len(ids) >= humanSendsMost {
-			return // nothing to void: a vouched send of it later is new, and the node ties it to its own line
-		}
 	}
 	sent.void = true
 	ids[id] = sent
 }
 
-// sessionLocked is session's sends, the stale ones dropped; h.mu held.
+// sessionLocked is session's sends, the stale ones dropped; a conversation not known yet first drops the
+// conversations all of whose sends are stale. h.mu held.
 func (h *humanSends) sessionLocked(session string) map[string]humanSend {
+	now := time.Now()
 	if h.m == nil {
 		h.m = map[string]map[string]humanSend{}
 	}
 	ids := h.m[session]
 	if ids == nil {
+		for k, other := range h.m {
+			fresh := false
+			for _, sent := range other {
+				if now.Sub(sent.at) <= humanSendsKeep {
+					fresh = true
+					break
+				}
+			}
+			if !fresh {
+				delete(h.m, k)
+			}
+		}
 		ids = map[string]humanSend{}
 		h.m[session] = ids
 	}
-	now := time.Now()
 	for k, sent := range ids {
 		if now.Sub(sent.at) > humanSendsKeep {
 			delete(ids, k)
 		}
 	}
 	return ids
+}
+
+// makeRoomLocked drops the oldest of ids when it holds humanSendsMost. h.mu held.
+func (h *humanSends) makeRoomLocked(ids map[string]humanSend) {
+	if len(ids) < humanSendsMost {
+		return
+	}
+	oldest, oldestAt := "", time.Now()
+	for k, sent := range ids {
+		if !sent.at.After(oldestAt) {
+			oldest, oldestAt = k, sent.at
+		}
+	}
+	delete(ids, oldest)
 }
 
 // has: id is a send the hub vouched for into session, text (the line the node tied to it) holds its words, and line is

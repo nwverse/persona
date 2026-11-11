@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,6 +181,25 @@ func TestAConversationsFirstMessageIsAPersonsOnlyFromAFullDevice(t *testing.T) {
 	h.forwardSend(httptest.NewRecorder(), req, assistantwire.AssistantID)
 	if relayed, _, _ := m.took(); len(relayed) != 1 || relayed[0].Human {
 		t.Fatalf("another request was marked: %+v", relayed)
+	}
+}
+
+// The client_msg_id the manager gives a conversation's first message (assistantwire.FirstMessageIDPrefix) is never an
+// app's: a send that names one is refused before anything is typed, so no later line can carry it.
+func TestAnAppNeverSendsAFirstMessagesID(t *testing.T) {
+	h := newTestHub(t)
+	var sends atomic.Int32
+	pipeNode(t, h, "box", func(context.Context) error { sends.Add(1); return nil })
+	m := h.byID["box"]
+	m.mu.Lock()
+	m.sessions = []proto.Session{{SessionID: "s1", Capabilities: &proto.SessionCapabilities{Send: true}}}
+	m.mu.Unlock()
+	code, out := call(t, h.routes(), "POST", sendPath, h.cfg.Token, `{"text":"fix CI","client_msg_id":"`+assistantwire.FirstMessageIDPrefix+`0123"}`)
+	if code != http.StatusBadRequest || out["code"] != "client_msg_id_reserved" || sends.Load() != 0 {
+		t.Fatalf("a send with a first message's id: %d %v, typed %d", code, out, sends.Load())
+	}
+	if code, out := call(t, h.routes(), "POST", sendPath, h.cfg.Token, `{"text":"fix CI","client_msg_id":"c-1"}`); code != http.StatusOK || sends.Load() != 1 {
+		t.Fatalf("an app's own id: %d %v, typed %d", code, out, sends.Load())
 	}
 }
 

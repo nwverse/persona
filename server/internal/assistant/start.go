@@ -404,10 +404,10 @@ func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, erro
 // message's id already: a meeting's, Just me's).
 func humanStart(p *StartParams) string {
 	if !p.Human || p.Origin != "" && p.Origin != OriginUser || p.OpenedBy != "" || p.GuestTools != nil ||
-		p.NewSessionID != "" || p.ClientMsgID != "" {
+		p.NewSessionID != "" || p.ClientMsgID != "" || !ownWords(p.Text) {
 		return ""
 	}
-	p.ClientMsgID = "start-" + randomHex(16)
+	p.ClientMsgID = assistantwire.FirstMessageIDPrefix + randomHex(16)
 	return p.ClientMsgID
 }
 
@@ -796,7 +796,8 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	id, _ := p.Params["client_msg_id"].(string)
 	params, err := s.sendParams(ctx, p)
 	switch {
-	case !p.Human: // anyone else's id never counts, nor does a person's id once another sent it (secret_handoff.go)
+	case !p.Human || !ownWords(sent): // anyone else's id, or a person's carrying another's words (a mail handed on), never
+		// counts, nor does a person's id once another sent it (secret_handoff.go)
 		s.humanSent.voidSend(p.SessionID, id)
 	case err == nil: // the hub's word: a person's own app sent it (handoffUserTurn)
 		s.humanSent.note(p.SessionID, id, sent)

@@ -106,9 +106,15 @@ type StartParams struct {
 	// item carries it, as a send's; without, the node ties it to the new conversation's first line). Never over the bus.
 	ClientMsgID string `json:"-"`
 	// Human: a person's own app opens it, as the hub vouched (HTTPRequest.Human): its first message gets a
-	// client_msg_id and counts as theirs, as a send the hub vouched for does (SendParams.Human). Never over the bus.
+	// client_msg_id (FirstMessageIDPrefix) and counts as theirs, as a send the hub vouched for does (SendParams.Human).
+	// Never over the bus.
 	Human bool `json:"-"`
 }
+
+// FirstMessageIDPrefix begins the client_msg_id the manager gives the first message of a conversation a person's own
+// app opened (StartParams.Human). It is the manager's alone: the hub refuses an app's send that names one, so no later
+// message can carry it.
+const FirstMessageIDPrefix = "start-"
 
 // SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is
 // the app's language, the one a refusal is said in ("": the user's; an older hub sends none).
