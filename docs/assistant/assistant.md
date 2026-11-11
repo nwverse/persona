@@ -807,7 +807,7 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   (a task notice of state `done`; a concern's outcome reaches the conversation this way, since a concern has no message
   of its own), (4) everything else. One message goes per turn, as before. A supervision message or task notice that
   replaces the one still queued for the same conversation or task keeps the time the first one queued, so merging never
-  restarts its wait.
+  restarts its wait; one that only then starts to wait on a decision counts its 5 minutes from then.
 - **Compatibility.** `urgent` and `spoke` are optional fields; the queue's shape is otherwise unchanged. A previous
   version reads the queue as before and drops the two fields on its next save, after which those messages rank and wait
   as ordinary ones and no hold applies.

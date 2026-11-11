@@ -125,6 +125,27 @@ func TestSystemMessagesWaitWhileTheOwnerTalks(t *testing.T) {
 	}
 }
 
+// A task's message that would have gone straight into the idle main conversation waits for the owner as well: it is
+// queued, shown waiting, and goes in when the hold ends.
+func TestTaskMessageToAnIdleConversationWaitsForTheOwner(t *testing.T) {
+	presenceTimes(t, 400*time.Millisecond, time.Hour)
+	s, f := newQuietService(t)
+	stopHolds(t, s)
+	f.judge = `{"verdict":"done","reason":"done"}`
+	startedTask(t, s, f)
+	s.UserSpoke(context.Background(), SessionRef{MachineID: "server", SessionID: "conv1"})
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "finished the work", 0)
+	waitFor(t, "the message to queue", func() bool { return s.queuedFor("conv1") == 1 })
+	if n := f.notices(); len(n) != 0 {
+		t.Fatalf("sent while the owner talks: %q", n)
+	}
+	waitFor(t, "the message once the owner is quiet", func() bool { return len(f.notices()) == 1 && s.queuedFor("conv1") == 0 })
+	if n := f.notices()[0]; !strings.Contains(n, "finished the work") {
+		t.Fatalf("message:\n%s", n)
+	}
+}
+
 // A conversation the owner did not speak in is not held: only the one they talk in.
 func TestPresenceHoldsOnlyTheConversationSpokenIn(t *testing.T) {
 	presenceTimes(t, time.Hour, time.Hour)
@@ -204,21 +225,30 @@ func TestDecisionGoesInWhileTheOwnerKeepsTalking(t *testing.T) {
 	}
 }
 
-// A supervision message or task notice that takes a queued one's place has waited since the first queued.
+// A supervision message or task notice that takes a queued one's place has waited since the first queued; one that
+// only now waits on a decision counts from now.
 func TestReplacedQueuedMessageKeepsItsWait(t *testing.T) {
 	s, _ := newQuietService(t)
 	first := time.Now().Add(-4 * time.Minute).UTC()
-	s.queueRelay("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "one", At: first})
-	s.queueRelay("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "done", Text: "done", At: first})
-	if !s.replaceQueuedSupervise("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Urgent: true, Text: "both", At: time.Now().UTC()}) {
+	now := time.Now().UTC()
+	s.queueRelay("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Urgent: true, Text: "one", At: first})
+	s.queueRelay("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "needs", Text: "needs", At: first})
+	s.queueRelay("conv1", relayMsg{From: "t2", Tool: noticeTool, State: "done", Text: "done", At: first})
+	if !s.replaceQueuedSupervise("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Urgent: true, Text: "both", At: now}) {
 		t.Fatal("not replaced")
 	}
-	if !s.replaceQueuedNotice("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "needs", Text: "needs", At: time.Now().UTC()}) {
+	if !s.replaceQueuedNotice("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "failed", Text: "failed", At: now}) {
 		t.Fatal("notice not replaced")
 	}
+	if !s.replaceQueuedNotice("conv1", relayMsg{From: "t2", Tool: noticeTool, State: "needs", Text: "now needs", At: now}) {
+		t.Fatal("second notice not replaced")
+	}
 	q := s.relays.st.Queue["conv1"]
-	if len(q) != 2 || q[0].Text != "both" || !q[0].Urgent || !q[0].At.Equal(first) || q[1].Text != "needs" || !q[1].At.Equal(first) {
+	if len(q) != 3 || q[0].Text != "both" || !q[0].Urgent || !q[0].At.Equal(first) || q[1].Text != "failed" || !q[1].At.Equal(first) {
 		t.Fatalf("queue: %+v", q)
+	}
+	if q[2].Text != "now needs" || !q[2].At.Equal(now) {
+		t.Fatalf("a message that only now waits on a decision counts from %s, want %s", q[2].At, now)
 	}
 }
 

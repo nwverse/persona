@@ -63,8 +63,12 @@ func anyUrgent(list []superviseSignal) bool {
 }
 
 // firstQueued is when the message that takes queued message old's place counts as queued: when old was, so a
-// message replaced again and again still comes to the end of its hold.
+// message replaced again and again still comes to the end of its hold. One that only now waits on a decision counts
+// from now: its relayDecisionMax starts with the decision, not with the ordinary message it merged into.
 func firstQueued(old, msg relayMsg) time.Time {
+	if msg.decisionWaiting() && !old.decisionWaiting() {
+		return msg.At
+	}
 	if !old.At.IsZero() && old.At.Before(msg.At) {
 		return old.At
 	}
