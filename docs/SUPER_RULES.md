@@ -1,4 +1,6 @@
 # Super rules
+0. **Everyone-first product.** Persona is an Agent product for everyone, not a developer-only tool. Assistant must stay approachable for everyday people; Agents is for people who collaborate directly with tools such as Claude Code. Every design identifies its audience, and everyday-facing experiences use plain language with engineering details kept in Agents or advanced settings.
+
 
 These are the highest-priority repository rules. They take precedence over `CLAUDE.md`, `AGENTS.md`, and all other
 repository documentation; when instructions conflict, follow this file.
