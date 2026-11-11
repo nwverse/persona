@@ -2721,23 +2721,38 @@ def day_coverage(raw):
     for gap in gaps:
         if not isinstance(gap, dict) or not all(day_number(gap.get(k, 0)) for k in ("from", "to")) \
                 or not isinstance(gap.get("reason", ""), str): raise ValueError("invalid coverage gap")
-        start = max(0, gap.get("from", 0))
-        clean.append({"from": start, "to": max(start, gap.get("to", 0)),
+        start, end = sorted((max(0, gap.get("from", 0)), max(0, gap.get("to", 0))))
+        if start == end: continue
+        clean.append({"from": start, "to": end,
                       "reason": gap.get("reason", "").strip().encode()[:32].decode("utf-8", "ignore")})
     clean.sort(key=lambda g: (g["from"], g["to"]))
-
-    def join(left, right):
-        # Keep erasure visible even when the phone sends overlapping reasons.
-        return {"from": left["from"], "to": max(left["to"], right["to"]),
-                "reason": "erased" if "erased" in (left["reason"], right["reason"]) else left["reason"]}
-
     merged = []
     for gap in clean:
-        if merged and gap["from"] <= merged[-1]["to"]: merged[-1] = join(merged[-1], gap)
-        else: merged.append(gap)
-    while len(merged) > 500:
-        at = min(range(len(merged) - 1), key=lambda i: merged[i + 1]["from"] - merged[i]["to"])
-        merged[at:at + 2] = [join(merged[at], merged[at + 1])]
+        if merged:
+            last = merged[-1]
+            if gap["reason"] == last["reason"] and gap["from"] <= last["to"]:
+                last["to"] = max(last["to"], gap["to"])
+                continue
+            if gap["from"] < last["to"]:
+                gap["from"] = last["to"]
+                if gap["to"] <= gap["from"]: continue
+        merged.append(gap)
+
+    def compact(gaps, same_reason):
+        if len(gaps) <= 500: return gaps
+        pairs = [i for i, (a, b) in enumerate(zip(gaps, gaps[1:]))
+                 if a["reason"] != "erased" and b["reason"] != "erased" and (not same_reason or a["reason"] == b["reason"])]
+        pairs.sort(key=lambda i: gaps[i + 1]["from"] - gaps[i]["to"])
+        joined = set(pairs[:len(gaps) - 500])
+        out = gaps[:1]
+        for i, gap in enumerate(gaps[1:]):
+            if i in joined: out[-1]["to"] = gap["to"]
+            else: out.append(gap)
+        return out
+
+    # Like mendCoverage: closest same-reason neighbours first, then other non-erased pairs if needed.
+    # Separated erased intervals are never bridged, even when that leaves more than 500 gaps.
+    merged = compact(compact(merged, same_reason=True), same_reason=False)
     return {"to": max(0, raw.get("to", 0)), "gaps": merged}
 
 
@@ -2806,9 +2821,17 @@ def day_markdown(rec, recap):
     return "\n".join(lines).strip() + "\n"
 
 
+def day_recap_matches(rid, word):
+    """Search the kept Markdown, never the recap's internal JSON or the transcript removed by trimming."""
+    with RECORDINGS_LOCK:
+        markdown = KB_DETAIL.get(("recordings", rid), {}).get("recap", {}).get("markdown", "")
+        return [{"path": "recordings/%s/recap.md" % rid, "n": i + 1, "line": line}
+                for i, line in enumerate(markdown.splitlines()) if line.strip() and kb_match(line, word)]
+
+
 def day_recap(rid, rec, version):
     segs = sorted((s for s in rec["segments"] if s["text"] and s["start"] <= rec["coverage"]["to"]), key=lambda s: s["start"])
-    groups, actions = {}, []
+    groups, actions, used_todos = {}, [], set()
     for seg in segs:
         hour = (day_time(rec["started_at"]) + timedelta(seconds=seg["start"])).astimezone(ZoneInfo(rec["tz"])).isoformat()[:13]
         kind = "meeting" if "会议" in seg["text"] or "meeting" in seg["text"].lower() else "outside"  # i18n-ignore: fixture keywords
@@ -2818,7 +2841,12 @@ def day_recap(rid, rec, version):
         entry["points"].append({"text": seg["text"], "at": seg["start"]})
         if "负责" in seg["text"] or "will" in seg["text"].lower():  # i18n-ignore: fixture keywords
             action = {"id": "a%d" % (len(actions) + 1), "what": seg["text"], "at": seg["start"], "todo_id": ""}
-            action["todo_id"] = RECORDING_DAY_TODOS.get(rid, {}).get(day_action_key(action), "")
+            key = day_action_key(action)
+            matches = [t for t in RECORDING_DAY_TODOS.get(rid, []) if t["task"] == key and t["todo_id"] not in used_todos
+                       and abs(t["at"] - action["at"]) <= 900]
+            if matches:
+                action["todo_id"] = min(matches, key=lambda t: abs(t["at"] - action["at"]))["todo_id"]
+                used_todos.add(action["todo_id"])
             actions.append(action)
     cutoff = datetime.strptime(rec["day"], "%Y-%m-%d").replace(tzinfo=ZoneInfo(rec["tz"])) + timedelta(days=1, hours=6)
     reason = "complete" if rec.get("complete") else "cutoff" if datetime.now(timezone.utc) >= cutoff else ""
@@ -2894,8 +2922,9 @@ def day_put(h, rid, raw):
     if day_expired(rid, body): return h.send_json(day_result(rid, "expired", put=True, fallback=body)) or True
     if have and have["revision"] > body["revision"]:
         return h.send_json(day_result(rid, "stale", put=True, fallback=body)) or True
-    for key in ("calendar", "attendance", "attending_session", "room", "private", "transcription"):
+    for key in ("calendar", "attendance", "attending_session", "room", "private", "transcription", "recap_final_at"):
         body.pop(key, None)
+    if have and have.get("recap_final_at"): body["recap_final_at"] = have["recap_final_at"]
     for i, seg in enumerate(body["segments"]): seg["n"] = i + 1
     RECORDINGS[rid] = body
     day_publish(rid, repair=bool(have))
@@ -2967,16 +2996,17 @@ def day_minutes(h, rid, todos=False):
     todos = []
     for aid in dict.fromkeys(body["actions"]):
         action = actions[aid]
-        key = day_action_key(action)
-        confirmed = RECORDING_DAY_TODOS.setdefault(rid, {})
-        tid = confirmed.get(key) or "todo_day_" + hashlib.sha256((rid + "\0" + str(recap["version"]) + "\0" + aid).encode()).hexdigest()[:24]
+        confirmed = RECORDING_DAY_TODOS.setdefault(rid, [])
+        tid = action.get("todo_id") or "todo_day_" + hashlib.sha256((rid + "\0" + str(recap["version"]) + "\0" + aid).encode()).hexdigest()[:24]
         todo = next((t for t in TODOS if t["id"] == tid), None)
         if todo is None:
             now = datetime.now(timezone.utc).isoformat()
             todo = {"id": tid, "title": action["what"], "notes": "Day · %s · %s" % (rec["day"], day_clock(rec, action["at"])),
                     "created_at": now, "updated_at": now, "done_at": None, "agents": []}
             TODOS.insert(0, todo)
-        confirmed[key] = action["todo_id"] = tid
+        if not any(t["todo_id"] == tid for t in confirmed):
+            confirmed.append({"task": day_action_key(action), "at": action["at"], "todo_id": tid})
+        action["todo_id"] = tid
         todos.append(format_todo(todo))
     return h.send_json({"todos": todos, "recap": recap}) or True
 
@@ -4571,10 +4601,7 @@ def recordings_route_locked(h, method, p):
                           path="/home/me/.persona/data/recordings/" + rid)
             out = {"detail": detail}
             word = parse_qs(urlparse(h.path).query).get("q", [""])[0]
-            if word:
-                out["matches"] = [{"path": "recordings/%s/recap.md" % rid, "n": i + 1, "line": line}
-                                  for i, line in enumerate(detail.get("recap", {}).get("markdown", "").splitlines())
-                                  if line.strip() and kb_match(line, word)]
+            if word: out["matches"] = day_recap_matches(rid, word)
             return h.send_json(out) or True
     if re.fullmatch(r"/api/v1/recordings/[^/]+/segments", p) and not RECORDING_DAY["on"]:
         return h.send_json({"error": "404 page not found"}, 404, add_error_code=False) or True
@@ -18474,14 +18501,15 @@ class H(BaseHTTPRequestHandler):
                     for e in l:
                         found = [{"path": "%s/%s/messages/%s.md" % (k, e["id"], d), "n": n, "line": t}
                                  for d, n, t in reversed(kb_messages(e["id"])) if kb_match(t, word)] if k == "chats" else \
-                            photo_matches(e["id"], word) if k == "recordings" else []
+                            photo_matches(e["id"], word) + day_recap_matches(e["id"], word) if k == "recordings" else []
                         named = kb_match(e["name"], word) or kb_match(e.get("one_line") or "", word)
                         if found or named:
                             res.append({"entry": e, "count": len(found), "hits": found[:3], "in_name": kb_match(e["name"], word)})
                 return self.send_json({"results": res})
             hits = [{"path": "%s/%s/summary.md" % (k, e["id"]), "line": "- " + e["name"] + "：" + (e.get("one_line") or "")}
                     for k, l in KB.items() for e in l if word and (word in e["name"].lower() or word in (e.get("one_line") or "").lower())]
-            hits += [{"path": x["path"], "line": x["line"]} for e in KB.get("recordings", []) for x in photo_matches(e["id"], word)] if word else []
+            hits += [{"path": x["path"], "line": x["line"]} for e in KB.get("recordings", [])
+                     for x in photo_matches(e["id"], word) + day_recap_matches(e["id"], word)] if word else []
             return self.send_json({"hits": hits})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/thumb"): return self.file_thumb(p, q)
         files = mock_files(p, q)

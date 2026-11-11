@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 import unittest
+from urllib.parse import urlencode
 import uuid
 
 from test_meeting_attendance_mock import Hub, start
@@ -97,16 +98,47 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.assertEqual(self.put(coverage={"to": -10, "gaps": gaps})[0], 200)
         got = self.detail()["meta"]["coverage"]
         self.assertEqual(got, {"to": 0, "gaps": [{"from": 0, "to": 2, "reason": "future_reason"},
-                                                {"from": 8, "to": 8, "reason": "x" * 32},
-                                                {"from": 20, "to": 40, "reason": "erased"}]})
+                                                {"from": 5, "to": 8, "reason": "x" * 32},
+                                                {"from": 20, "to": 30, "reason": "pending"},
+                                                {"from": 30, "to": 40, "reason": "erased"}]})
         gaps = [{"from": i * 10, "to": i * 10 + 1, "reason": " paused "} for i in range(601)]
         self.assertEqual(self.append(coverage={"to": 7000, "gaps": list(reversed(gaps))})[0], 200)
         got = self.detail()["meta"]["coverage"]["gaps"]
         self.assertEqual(len(got), 500)
         self.assertEqual((got[0]["from"], got[-1]["to"]), (0, 6001))
         self.assertTrue(all(a["to"] < b["from"] for a, b in zip(got, got[1:])))
-        self.append(revision=21, coverage={"to": 1, "gaps": [{"reason": "界" * 20}]})
+        self.append(revision=21, coverage={"to": 1, "gaps": [{"from": 0, "to": 1, "reason": "界" * 20}]})
         self.assertLessEqual(len(self.detail()["meta"]["coverage"]["gaps"][0]["reason"].encode()), 32)
+
+    def test_coverage_preserves_different_reason_remainders(self):
+        gaps = [{"from": 10, "to": 30, "reason": "lost"}, {"from": 0, "to": 20, "reason": "pending"},
+                {"from": 2, "to": 5, "reason": "paused"}, {"from": 30, "to": 40, "reason": "interrupted"},
+                {"from": 35, "to": 45, "reason": "interrupted"}, {"from": 50, "to": 50, "reason": "empty"}]
+        self.assertEqual(self.put(coverage={"to": 60, "gaps": gaps})[0], 200)
+        self.assertEqual(self.detail()["meta"]["coverage"]["gaps"], [
+            {"from": 0, "to": 20, "reason": "pending"}, {"from": 20, "to": 30, "reason": "lost"},
+            {"from": 30, "to": 45, "reason": "interrupted"}])
+
+    def test_coverage_compacts_closest_same_reason_first(self):
+        gaps = [{"from": 0, "to": 1, "reason": "pending"}, {"from": 2, "to": 3, "reason": "lost"},
+                {"from": 6, "to": 7, "reason": "lost"}]
+        gaps += [{"from": 100 + i * 10, "to": 101 + i * 10, "reason": "paused"} for i in range(498)]
+        self.assertEqual(self.put(coverage={"to": 6000, "gaps": gaps})[0], 200)
+        self.assertEqual(self.detail()["meta"]["coverage"]["gaps"], [gaps[0], {"from": 2, "to": 7, "reason": "lost"}] + gaps[3:])
+
+    def test_coverage_keeps_separated_erased_gaps_and_recap_between_them(self):
+        text = "I will keep this un-erased sentence"
+        self.put(segments=[segment(1.25, text, end=1.75)])
+        prior = self.detail()["recap"]
+        self.call("POST", "/mock/recording_day", {"recap": "pending"})
+        gaps = [{"from": i * 2, "to": i * 2 + 1, "reason": "erased"} for i in range(501)]
+        self.assertEqual(self.put(revision=30, segments=[segment(1.25, text, end=1.75)],
+                                  coverage={"to": 1100, "gaps": gaps})[0], 200)
+        detail = self.detail()
+        self.assertEqual(detail["meta"]["coverage"]["gaps"], gaps)
+        self.assertEqual(detail["meta"]["recap_state"], "pending")
+        self.assertEqual(detail["recap"]["timeline"], prior["timeline"])
+        self.assertEqual(detail["recap"]["actions"], prior["actions"])
 
     def test_positions_retries_and_stored_revision(self):
         self.put(segments=[segment(50, "first")])
@@ -262,6 +294,30 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.assertTrue(matches)
         self.assertTrue(all(m["path"].endswith("/recap.md") for m in matches))
 
+    def test_global_search_matches_recap_before_and_after_trim(self):
+        text = "I will check ZebraQuartz731 with the team"
+        self.put(segments=[segment(0, "An ordinary morning"), segment(1, "A quiet afternoon"), segment(2, text)], complete=True)
+        self.assertNotIn("ZebraQuartz731", self.detail()["summary"])
+        for trimmed in (False, True):
+            if trimmed: self.assertEqual(self.call("POST", "/mock/recording_trim", {"id": self.rid})[0], 200)
+            for word in ("zebraquartz731", "TEAM zebraQUARTZ731"):
+                with self.subTest(trimmed=trimmed, word=word):
+                    query = urlencode({"q": word, "kind": "recordings"})
+                    matches = self.call("GET", "/api/v1/kb/recordings/" + self.rid + "?" + query)[1]["matches"]
+                    self.assertTrue(matches)
+                    self.assertTrue(all(m["path"] == "recordings/%s/recap.md" % self.rid for m in matches))
+                    status, found = self.call("GET", "/api/v1/kb-search?results=1&" + query)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(len(found["results"]), 1)
+                    result = found["results"][0]
+                    self.assertEqual(result["entry"]["id"], self.rid)
+                    self.assertEqual(result["count"], len(matches))
+                    self.assertEqual(result["hits"], matches[:3])
+                    self.assertFalse(result["in_name"])
+                    status, found = self.call("GET", "/api/v1/kb-search?" + query)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(found["hits"], [{"path": m["path"], "line": m["line"]} for m in matches])
+
     def test_recap_modes_and_manual_requests(self):
         route = "/api/v1/recordings/%s/minutes" % self.rid
         self.put()
@@ -295,6 +351,24 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.assertEqual(self.detail()["recap"]["final_reason"], "cutoff")
         self.append(base=30, revision=31, **{"from": 1}, complete=True)
         self.assertEqual(self.detail()["recap"]["final_reason"], "complete")
+
+    def test_repair_keeps_first_final_timestamp_when_reopened(self):
+        self.put(segments=[segment()], complete=True)
+        first = self.detail()["meta"]["recap_final_at"]
+        for revision, complete in ((20, True), (30, False), (40, True)):
+            with self.subTest(revision=revision, complete=complete):
+                self.assertEqual(self.put(revision=revision, segments=[segment()], complete=complete)[0], 200)
+                detail = self.detail()
+                self.assertEqual(detail["meta"]["recap_final_at"], first)
+                self.assertEqual(self.state()["recap_final_at"], first)
+                self.assertEqual(detail["recap"]["final"], complete)
+                self.assertEqual(detail["meta"].get("recap_final", False), complete)
+                self.assertEqual(self.state().get("recap_final", False), complete)
+        self.call("POST", "/mock/recording_day", {"recap": "none"})
+        self.put(revision=50)
+        self.assertNotIn("recap", self.detail())
+        self.assertEqual(self.detail()["meta"]["recap_final_at"], first)
+        self.assertEqual(self.state()["recap_final_at"], first)
 
     def test_erased_repair_withdraws_old_items_while_pending(self):
         self.put(segments=[segment(10, "I will erase this secret"), segment(20, "Keep this")])
@@ -331,6 +405,57 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.put(revision=40, segments=[segment(6, "  " + text.upper() + "  ")])
         self.assertEqual(self.detail()["recap"]["actions"][0]["todo_id"], tid)
         self.assertEqual(sum(t["id"] == tid for t in self.call("GET", "/api/v1/todos")[1]["todos"]), 1)
+
+    def test_todos_same_wording_confirm_independently(self):
+        text = "I will call the team"
+        self.put(segments=[segment(at, text) for at in (0, 60, 3600)])
+        route = "/api/v1/recordings/%s/minutes/todos" % self.rid
+        request = {"version": self.detail()["recap"]["version"], "actions": ["a1", "a2", "a3"]}
+        status, out = self.call("POST", route, request)
+        self.assertEqual(status, 200)
+        ids = [todo["id"] for todo in out["todos"]]
+        self.assertEqual(len(set(ids)), 3)
+        self.assertEqual([a["todo_id"] for a in out["recap"]["actions"]], ids)
+        self.assertEqual(self.call("POST", route, request)[1], out)
+        self.assertEqual(sum(t["id"] in ids for t in self.call("GET", "/api/v1/todos")[1]["todos"]), 3)
+        self.put(revision=30, segments=[segment(at, text) for at in (59, 3599)])
+        self.assertEqual([a["todo_id"] for a in self.detail()["recap"]["actions"]], ids[1:])
+
+    def test_todos_concurrent_confirmations_reuse_only_the_selected_action(self):
+        text = "I will call the team"
+        self.put(segments=[segment(at, text) for at in (0, 3600)])
+        route = "/api/v1/recordings/%s/minutes/todos" % self.rid
+        version = self.detail()["recap"]["version"]
+        aids = ["a1", "a2"] * 8
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            replies = list(pool.map(lambda aid: self.call("POST", route, {"version": version, "actions": [aid]}), aids))
+        ids = {}
+        for aid, (status, out) in zip(aids, replies):
+            self.assertEqual(status, 200)
+            tid = out["todos"][0]["id"]
+            self.assertEqual(ids.setdefault(aid, tid), tid)
+        self.assertNotEqual(ids["a1"], ids["a2"])
+        self.assertEqual(sum(t["id"] in ids.values() for t in self.call("GET", "/api/v1/todos")[1]["todos"]), 2)
+
+    def test_todo_carry_over_is_one_to_one_within_original_time_window(self):
+        text = "I will call the team"
+        self.put(segments=[segment(1000, text)])
+        route = "/api/v1/recordings/%s/minutes/todos" % self.rid
+        version = self.detail()["recap"]["version"]
+        status, out = self.call("POST", route, {"version": version, "actions": ["a1"]})
+        self.assertEqual(status, 200)
+        tid = out["todos"][0]["id"]
+        self.put(revision=20, segments=[segment(0, "No action this time")])
+        self.put(revision=30, segments=[segment(at, "  " + text.upper() + "  ") for at in (1000, 1001, 1900, 1901)])
+        self.assertEqual([a["todo_id"] for a in self.detail()["recap"]["actions"]], [tid, "", "", ""])
+        self.put(revision=40, segments=[segment(1900, text)])
+        recap = self.detail()["recap"]
+        self.assertEqual(recap["actions"][0]["todo_id"], tid)  # Exactly 900 seconds still matches.
+        self.assertEqual(self.call("POST", route, {"version": recap["version"], "actions": ["a1"]})[1]["todos"][0]["id"], tid)
+        self.put(revision=50, segments=[segment(1901, text)])
+        self.assertEqual(self.detail()["recap"]["actions"][0]["todo_id"], "")  # A retry never shifts the original time.
+        self.put(revision=60, segments=[segment(7200, text)])
+        self.assertEqual(self.detail()["recap"]["actions"][0]["todo_id"], "")
 
     def test_trim_keeps_recap_and_todos(self):
         self.put(segments=[segment(2, "I will keep the recap")], complete=True)

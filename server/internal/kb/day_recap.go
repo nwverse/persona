@@ -138,10 +138,14 @@ func (r *Recording) armRecap(reason string, now time.Time) {
 }
 
 // askDayRecap is AskMinutes for day recording r (as read under recMu, which the caller holds): a recap from what the
-// hub has now, never a push; ErrRecordingIncomplete while it has no text.
+// hub has now, never a push; ErrRecordingIncomplete while it has no text. Asking again is trying again: the chunks the
+// model gave up on, or that wait after running out of time, are noted afresh (retryRecapNotes).
 func (e *Engine) askDayRecap(r *Recording) error {
 	if r.Chars == 0 {
 		return ErrRecordingIncomplete
+	}
+	if err := e.Store.retryRecapNotes(r.ID); err != nil {
+		return err
 	}
 	r.RecapAsks++
 	r.armRecap(RecapDueAsked, e.now())
@@ -176,8 +180,10 @@ func (e *Engine) ReadDayRecap(rawID string) (*DayRecap, error) {
 	return e.Store.readRecap(id)
 }
 
-// putRecap writes recap.json and recap.md of recording id, and summary.md from its summary (none while it is blank),
-// unless it was deleted meanwhile (false then). The caller holds recMu.
+// putRecap writes recap.md of recording id, summary.md from its summary (none while it is blank), then recap.json,
+// unless it was deleted meanwhile (false then). recap.json goes last, so a write that failed half way leaves the
+// recap.json before it, and the next write (a PUT tried again, mendRecapFiles) writes them all again: what an erase
+// withdrew never stays in recap.md or summary.md behind a recap.json without it. The caller holds recMu.
 func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
@@ -186,38 +192,22 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	s.recFilesMu.Lock()
-	wrote, err := func() (bool, error) {
-		if err := s.recoverRecordingLocked(id); err != nil {
-			return false, err
-		}
-		s.metaMu.Lock()
-		defer s.metaMu.Unlock()
-		// writeFile makes missing directories: a recording deleted meanwhile must stay gone.
-		if _, err := os.Stat(s.path(KindRecording, id, "meta.json")); err != nil {
-			return false, nil
-		}
-		if err := writeFile(s.path(KindRecording, id, recapFile), append(raw, '\n')); err != nil {
-			return false, err
-		}
+	wrote, err := s.recapFilesLocked(id, func() error {
 		if err := writeFile(s.path(KindRecording, id, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n")); err != nil {
-			return false, err
+			return err
 		}
-		if rc.Summary == "" {
-			// summary.md is the recap's, unless the user wrote it (putSummary leaves a locked one alone too).
-			var t Tagging
-			if _, err := readJSON(s.entityPath(KindRecording, id), &t); err != nil {
-				return false, err
-			}
-			if !t.fieldLocked("summary") {
-				if err := os.Remove(s.path(KindRecording, id, "summary.md")); err != nil && !os.IsNotExist(err) {
-					return false, err
-				}
-			}
+		if rc.Summary != "" {
+			return nil
 		}
-		return true, nil
-	}()
-	s.recFilesMu.Unlock()
+		// summary.md is the recap's, unless the user wrote it (putSummary leaves a locked one alone too).
+		if locked, err := s.summaryLocked(id); err != nil || locked {
+			return err
+		}
+		if err := os.Remove(s.path(KindRecording, id, "summary.md")); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	})
 	if err != nil || !wrote {
 		return wrote, err
 	}
@@ -226,8 +216,77 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 			return true, err
 		}
 	}
+	if wrote, err = s.recapFilesLocked(id, func() error {
+		return writeFile(s.path(KindRecording, id, recapFile), append(raw, '\n'))
+	}); err != nil || !wrote {
+		return wrote, err
+	}
 	s.notify(KindRecording, id, "summary")
 	return true, nil
+}
+
+// recapFilesLocked runs write on recording id's files under recFilesMu and metaMu, unless the recording was deleted
+// meanwhile (false then: writeFile makes missing directories, and a recording deleted must stay gone).
+func (s *Store) recapFilesLocked(id string, write func() error) (bool, error) {
+	s.recFilesMu.Lock()
+	defer s.recFilesMu.Unlock()
+	if err := s.recoverRecordingLocked(id); err != nil {
+		return false, err
+	}
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	if _, err := os.Stat(s.path(KindRecording, id, "meta.json")); err != nil {
+		return false, nil
+	}
+	return true, write()
+}
+
+// summaryLocked: the user wrote recording id's summary (its meta.json locks it). The caller holds metaMu.
+func (s *Store) summaryLocked(id string) (bool, error) {
+	var t Tagging
+	if _, err := readJSON(s.entityPath(KindRecording, id), &t); err != nil {
+		return false, err
+	}
+	return t.fieldLocked("summary"), nil
+}
+
+// mendRecapFiles writes recording r's recap.md and summary.md again from its recap.json when they do not say what it
+// does (a write that failed half way, putRecap). A trimmed recording keeps no summary.md, and one the user wrote is
+// theirs. The caller holds recMu.
+func (s *Store) mendRecapFiles(r *Recording) error {
+	if s.readOnly {
+		return nil
+	}
+	rc, err := s.readRecap(r.ID)
+	if err != nil {
+		return nil // none (one that cannot be read shows nothing either)
+	}
+	md, _ := os.ReadFile(s.path(KindRecording, r.ID, recapMarkdown))
+	mdOK := string(md) == strings.TrimSpace(rc.Markdown)+"\n"
+	sumOK := r.Trimmed()
+	if !sumOK {
+		sum, err := os.ReadFile(s.path(KindRecording, r.ID, "summary.md"))
+		sumOK = rc.Summary == "" && os.IsNotExist(err) || rc.Summary != "" && err == nil && string(sum) == strings.TrimSpace(rc.Summary)+"\n"
+	}
+	if !sumOK {
+		s.metaMu.Lock()
+		sumOK, err = s.summaryLocked(r.ID)
+		s.metaMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	switch {
+	case mdOK && sumOK:
+		return nil
+	case sumOK:
+		_, err := s.recapFilesLocked(r.ID, func() error {
+			return writeFile(s.path(KindRecording, r.ID, recapMarkdown), []byte(strings.TrimSpace(rc.Markdown)+"\n"))
+		})
+		return err
+	}
+	_, err = s.putRecap(r.ID, rc)
+	return err
 }
 
 // repairDayRecap is what a PUT of day recording r (as stored before it, read under recMu, which the caller holds)
@@ -235,8 +294,10 @@ func (s *Store) putRecap(id string, rc *DayRecap) (bool, error) {
 // day-recap.md "When a recap is due"): from a recap made before it goes at once every entry overlapping an erased gap
 // of u's coverage (its title may quote the erased words), every point and action whose time no longer starts a line
 // with text in u, the entries left with no point, and the summary. An action made a to-do goes too: the to-do stays,
-// and r.RecapTodos gives it back to the same action in a later version (keepRecapTodos). The notes stay: those of a
-// chunk whose lines the PUT did not change are still its notes. recapped: r has a recap (readable or not).
+// and r.RecapTodos gives it back to the same action in a later version (keepRecapTodos). A recap withdrawn already (a
+// PUT tried again after one that failed) has recap.md and summary.md written again from it when they still differ.
+// The notes of the chunks whose lines the PUT changed go with them (pruneRecapNotes). recapped: r has a recap
+// (readable or not).
 func (e *Engine) repairDayRecap(r *Recording, u *RecordingUpload) (recapped bool, err error) {
 	st := e.Store
 	rc, err := st.readRecap(r.ID)
@@ -258,8 +319,9 @@ func (e *Engine) repairDayRecap(r *Recording, u *RecordingUpload) (recapped bool
 			return true, err
 		}
 		r.RecapVersion = rc.Version
+		return true, nil
 	}
-	return true, nil
+	return true, st.mendRecapFiles(r)
 }
 
 // rebaseRecap is what a PUT that set a new base does to r's recap targets: one still due moves to the new base with
@@ -353,10 +415,10 @@ func recapTaskKey(who, what string) string {
 	return hex.EncodeToString(h[:12])
 }
 
-// keepRecapTodos gives rc's actions the to-dos made of the same task in any earlier version of r's recap: same who
-// and what, said within recapTodoNear of it, the nearest first; each to-do goes to one action at most.
-func keepRecapTodos(rc *DayRecap, todos []RecapTodo) {
-	used := map[string]bool{}
+// keepRecapTodos gives rc's actions the to-dos made of the same task in any version of r's recap: same who and what,
+// said within recapTodoNear of it, the nearest first; each to-do goes to one action at most. True when it gave any.
+func keepRecapTodos(rc *DayRecap, todos []RecapTodo) bool {
+	used, gave := map[string]bool{}, false
 	for i := range rc.Actions {
 		a := &rc.Actions[i]
 		if a.TodoID != "" {
@@ -375,9 +437,10 @@ func keepRecapTodos(rc *DayRecap, todos []RecapTodo) {
 			}
 		}
 		if best != "" {
-			a.TodoID, used[best] = best, true
+			a.TodoID, used[best], gave = best, true, true
 		}
 	}
+	return gave
 }
 
 // rememberTodo notes that to-do todo was made of action a.
@@ -390,11 +453,14 @@ func (r *Recording) rememberTodo(a MinutesAction, todo string) bool {
 	return true
 }
 
-// SetDayRecapTodos records the to-dos made of actions (action id → to-do id) in version of day recording id's recap,
-// as SetMinutesTodos does for minutes: ErrNotFound without a recap; a recap written again since gets them by task
-// (byTask: MinutesTaskKey → to-do id) on its actions without one, and without byTask that is ErrMinutesStale. Every
-// to-do recorded is remembered with its action, so a later version with the same action has it too (keepRecapTodos).
-func (e *Engine) SetDayRecapTodos(rawID string, version int, made, byTask map[string]string) (*DayRecap, error) {
+// SetDayRecapTodos records the to-dos made of actions of version of day recording id's recap (confirmed: each action
+// as that version has it, TodoID the to-do made of it), as SetMinutesTodos does for minutes; ErrNotFound without a
+// recap. Each is remembered with its action whatever the recap says now (Recording.RecapTodos: its who and what, and
+// when it was said), so any version has it on the same task said within 15 minutes, one action each
+// (keepRecapTodos): the version confirmed on that action, one written since (a rewrite while the to-dos were made)
+// where it has the task near the same time and nowhere else, and one written later even after a version that left it
+// out.
+func (e *Engine) SetDayRecapTodos(rawID string, version int, confirmed []MinutesAction) (*DayRecap, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
@@ -411,33 +477,20 @@ func (e *Engine) SetDayRecapTodos(rawID string, version int, made, byTask map[st
 		return nil, err
 	}
 	changed, remembered := false, false
-	set := func(i int, t string) {
-		if rc.Actions[i].TodoID != t {
-			rc.Actions[i].TodoID, changed = t, true
+	for _, a := range confirmed {
+		if a.TodoID == "" {
+			continue
 		}
-		remembered = r.rememberTodo(rc.Actions[i], t) || remembered
-	}
-	switch {
-	case rc.Version == version:
-		for i, a := range rc.Actions {
-			if t := made[a.ID]; t != "" {
-				set(i, t)
-			}
+		remembered = r.rememberTodo(a, a.TodoID) || remembered
+		if rc.Version != version {
+			continue
 		}
-	case byTask == nil:
-		return rc, ErrMinutesStale
-	default:
-		used := map[string]bool{}
-		for _, a := range rc.Actions {
-			used[a.TodoID] = a.TodoID != ""
-		}
-		for i, a := range rc.Actions {
-			if t := byTask[MinutesTaskKey(a)]; t != "" && a.TodoID == "" && !used[t] {
-				used[t] = true
-				set(i, t)
-			}
+		i := slices.IndexFunc(rc.Actions, func(b MinutesAction) bool { return b.ID == a.ID })
+		if i >= 0 && rc.Actions[i].TodoID != a.TodoID {
+			rc.Actions[i].TodoID, changed = a.TodoID, true
 		}
 	}
+	changed = keepRecapTodos(rc, r.RecapTodos) || changed
 	if changed {
 		if ok, err := st.putRecap(id, rc); err != nil {
 			return nil, err

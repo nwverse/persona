@@ -1,16 +1,35 @@
 // An all-day recording's recap (#4741, docs/assistant/day-recap.md): the day's summary, its timeline by part of the day
 // on the recording's own clock (meetings marked, each point a jump into the transcript), the time nothing was recorded
-// and why, and suggested to-dos that become to-dos only when confirmed. It goes through the minutes' routes and their
-// write flow (RecordingMinutes); a day recording never offers minutes.
-import { useId } from "react";
+// and why, and suggested to-dos that become to-dos only when confirmed. A day that outgrew one recording continues in
+// further parts, each with its own recap: the page merges them by time ("Parts"). It goes through the minutes' routes
+// and their write flow (RecordingMinutes); a day recording never offers minutes.
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { formatList, t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
-import { dayClock, isKind, minutesKeptUntil, recapGaps, recapGroups, type DayPart, type DayRecapEntry, type DayRecapGap, type KBDetail, type KBEntry, type RecordingView } from "../../lib/kb";
+import { api, ApiError, enc } from "../../lib/api";
+import {
+  dayClock,
+  entryFromDetail,
+  isKind,
+  minutesKeptUntil,
+  recapGaps,
+  recapGroups,
+  recordingClock,
+  recordingView,
+  type DayPart,
+  type DayRecapEntry,
+  type DayRecapGap,
+  type KBDetail,
+  type KBDetailResponse,
+  type KBEntry,
+  type MinutesAction,
+  type RecordingView,
+} from "../../lib/kb";
 import { href } from "../../lib/router";
 import { Button, copyText, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Card, KBIcon, KIND_ICON, onPlainClick, SectionTitle, TonePill } from "./KBParts";
-import { ActionItems, PointList, TranscriptTime, useMinutesDays, useMinutesRequests, type RecordingAuth } from "./RecordingMinutes";
+import { ActionItems, PointList, TranscriptTime, useMinutesDays, useMinutesRequests, type ConfirmedActions, type RecordingAuth } from "./RecordingMinutes";
 
 type Props = {
   detail: KBDetail;
@@ -42,13 +61,29 @@ const GAP_REASON: Record<string, string> = {
   erased: "knowledge-kbdetail.recap_gap_erased",
 };
 
+/** One part of the day ("Parts" in the contract): its recording (`own`: the one this page shows), its number, and its
+ *  view (clock, and the transcript of the page's own part). */
+type DayPartView = { detail: KBDetail; rec: RecordingView; part: number; own: boolean };
+type FromPart<T> = T & { source: DayPartView };
+/** A suggested action keyed by its part (`id` names it within one part's version: `ref`). */
+type PartAction = FromPart<MinutesAction> & { ref: string };
+
 /** The recap is kept while a newer one is written or failed, and after the transcript expired (then it can't be
  *  written again). */
 export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved, onJump, onOpen }: Props) {
   const heading = useId();
   const recap = detail.recap;
   const state = detail.meta?.recap_state;
-  const { busy, needsRefresh, run } = useMinutesRequests({ id: detail.id, version: recap?.version, pending: state === "pending", recap: true, auth, current, refresh, onSaved });
+  // Before the requests: the parts are listed first, and a write is read back with them.
+  const { others, discover, reread } = useDayParts(detail, rec, auth, current);
+  const readAll = useCallback(async () => (await Promise.all([refresh(), reread()]))[0], [refresh, reread]);
+  const pollAll = useCallback(async () => (await Promise.all([refresh(), discover()]))[0], [refresh, discover]);
+  const parts: DayPartView[] = [{ detail, rec, part: rec.allDay?.part ?? 1, own: true }, ...others].sort((a, b) => a.part - b.part);
+  // Until every part's recap is final (or kept past its transcript), more can come without a request of this page's.
+  const open = !parts.every((p) => p.rec.trimmedAt || (p.detail.recap?.final === true && p.detail.meta?.recap_state !== "pending"));
+  const { busy, needsRefresh, run, confirm } = useMinutesRequests({
+    id: detail.id, version: recap?.version, pending: state === "pending", open, recap: true, auth, current, refresh: readAll, poll: pollAll, onSaved,
+  });
   const minutesDays = useMinutesDays(rec.trimmedAt, auth, current);
   const keptUntil = rec.trimmedAt ? minutesKeptUntil(rec.startedAt, minutesDays) : undefined;
 
@@ -56,18 +91,53 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
   const spoken = rec.lines.some((line) => !line.bookmark);
   const clock = (at: number) => dayClock(rec.startedAt, at, rec.tz);
   const range = (from: number, to: number) => clock(from) === clock(to) ? clock(from) : t("knowledge-kbdetail.recap_range", { from: clock(from), to: clock(to) });
-  const time = (at: number) => <TranscriptTime rec={rec} at={at} onJump={onJump} />;
+  // This part's times jump into the transcript below; another part's open that part's page, which has its transcript.
+  const time = (p: DayPartView) => (at: number) => p.own ? <TranscriptTime rec={rec} at={at} onJump={onJump} /> : <PartTime part={p} at={at} onOpen={onOpen} />;
   // What asking now does: retry a failed one, bring one up to what has arrived, or write the first before the evening.
   const ask = rec.trimmedAt || (!recap && state === "pending") || (!spoken && state !== "failed") ? null
     : state === "failed" ? "knowledge-kbdetail.recap_retry"
       : recap ? (recap.final ? "knowledge-kbdetail.recap_regenerate" : "knowledge-kbdetail.recap_update")
         : "knowledge-kbdetail.recap_write_now";
 
+  // The day's parts merged by time; a single part is shown as it is.
+  const multi = parts.length > 1;
+  const written = parts.filter((p) => p.detail.recap);
+  const entries = written.flatMap((p) => (p.detail.recap!.timeline ?? []).map((entry): FromPart<DayRecapEntry> => ({ ...entry, source: p })));
+  const actions = written.flatMap((p) => (p.detail.recap!.actions ?? []).map((a): PartAction => ({ ...a, id: `${p.detail.id}/${a.id}`, ref: a.id, source: p })));
+  if (multi) actions.sort((a, b) => a.at - b.at);
+  const gaps = multi ? dayGaps(written.map((p) => p.detail.recap!.gaps)) : recap?.gaps;
+  const summaries = written.map((p) => p.detail.recap!.summary).filter(Boolean);
+  const markdown = written.map((p) => p.detail.recap!.markdown).join("\n\n");
+  // Confirmed actions go to the part that suggested them, with that part's recap version.
+  const add = (ids: string[]) => {
+    const writes = new Map<string, ConfirmedActions>();
+    for (const action of ids.map((id) => actions.find((a) => a.id === id))) {
+      if (!action) continue;
+      const { detail: d } = action.source;
+      const write = writes.get(d.id) ?? { id: d.id, version: d.recap!.version, actions: [] };
+      write.actions.push(action.ref);
+      writes.set(d.id, write);
+    }
+    void confirm([...writes.values()]);
+  };
+  const covers = !multi ? (!recap?.final ? t("knowledge-kbdetail.recap_so_far", { time: clock(recap?.covers?.to ?? 0) })
+    : recap.final_reason === "cutoff" ? t("knowledge-kbdetail.recap_final_cutoff") : t("knowledge-kbdetail.recap_final"))
+    // The day's recap is final only once every part's is; until then each part says how far it is.
+    : written.length === parts.length && written.every((p) => p.detail.recap!.final)
+      ? t(written.some((p) => p.detail.recap!.final_reason === "cutoff") ? "knowledge-kbdetail.recap_final_cutoff" : "knowledge-kbdetail.recap_final")
+      : parts.map((p, i) => {
+        const r = p.detail.recap;
+        const label = !r ? t("knowledge-kbdetail.recap_part_none", { part: p.part })
+          : r.final ? t("knowledge-kbdetail.recap_part_final", { part: p.part })
+            : t("knowledge-kbdetail.recap_part_so_far", { part: p.part, time: clock(r.covers?.to ?? 0) });
+        return <span key={p.detail.id}>{i > 0 && " · "}<span className="whitespace-nowrap">{label}</span></span>;
+      });
+
   return (
     <section aria-labelledby={heading} data-recording-recap>
       <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.recap")}</span>} right={
         <div className="flex shrink-0 items-center gap-1.5">
-          {recap && <Button tone="quiet" disabled={busy} onClick={() => void copyText(recap.markdown)}>{t("knowledge-kbdetail.minutes_copy")}</Button>}
+          {written.length > 0 && <Button tone="quiet" disabled={busy} onClick={() => void copyText(markdown)}>{t("knowledge-kbdetail.minutes_copy")}</Button>}
           {ask && <Button tone="secondary" disabled={disabled || state === "pending"} onClick={() => void run()}>{t(ask)}</Button>}
         </div>
       } />
@@ -78,37 +148,116 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
         <Spinner />{t(recap ? "knowledge-kbdetail.recap_updating" : "knowledge-kbdetail.recap_writing")}
       </p>}
       {!rec.trimmedAt && state === "failed" && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.recap_failed")}</p>}
-      {!recap && !state && !rec.trimmedAt && <p className="px-1 text-[12.5px] leading-relaxed text-ink-3">
+      {!written.length && !state && !rec.trimmedAt && <p className="px-1 text-[12.5px] leading-relaxed text-ink-3">
         {t(spoken ? "knowledge-kbdetail.recap_absent" : "knowledge-kbdetail.recap_no_text")}
       </p>}
       {needsRefresh && !busy && <div className="mb-2 px-1">
         <Button tone="secondary" onClick={() => void run(undefined, true)}>{t("knowledge-kbdetail.minutes_retry_refresh")}</Button>
       </div>}
-      {recap && <Card>
+      {written.length > 0 && <Card>
         <div className="px-4 py-3.5">
-          {recap.summary && <p className="break-words text-[14px] leading-relaxed text-ink">{recap.summary}</p>}
-          <div className={recap.summary ? "mt-1.5 space-y-1 text-[12.5px] leading-relaxed" : "space-y-1 text-[12.5px] leading-relaxed"}>
-            <p data-recap-covers className="text-ink-2">
-              {!recap.final ? t("knowledge-kbdetail.recap_so_far", { time: clock(recap.covers?.to ?? 0) })
-                : recap.final_reason === "cutoff" ? t("knowledge-kbdetail.recap_final_cutoff") : t("knowledge-kbdetail.recap_final")}
-            </p>
-            <Gaps gaps={recap.gaps} rec={rec} />
-            {recap.partial && <p className="text-ink-3">{t("knowledge-kbdetail.recap_partial")}</p>}
+          {summaries.length > 0 && <div className="space-y-1.5">
+            {summaries.map((summary, i) => <p key={i} className="break-words text-[14px] leading-relaxed text-ink">{summary}</p>)}
+          </div>}
+          <div className={summaries.length ? "mt-1.5 space-y-1 text-[12.5px] leading-relaxed" : "space-y-1 text-[12.5px] leading-relaxed"}>
+            <p data-recap-covers className="text-ink-2">{covers}</p>
+            <Gaps gaps={gaps} rec={rec} />
+            {written.some((p) => p.detail.recap!.partial) && <p className="text-ink-3">{t("knowledge-kbdetail.recap_partial")}</p>}
           </div>
         </div>
-        {recapGroups(recap.timeline, rec.startedAt, rec.tz).map((group, i) => (
+        {recapGroups(entries, rec.startedAt, rec.tz).map((group, i) => (
           <div key={i} className="px-4 py-3.5">
             {/* A quiet label: the part of the day divides the entries, which are the content. */}
             <h3 className="mb-1.5 text-[12px] font-medium text-ink-3">{t(group.part ? PART_TITLE[group.part] : "knowledge-kbdetail.recap_timeline")}</h3>
             <ol className="divide-y divide-line">
-              {group.entries.map((entry, j) => <Entry key={j} entry={entry} range={range(entry.from, entry.to)} time={time} onOpen={onOpen} />)}
+              {group.entries.map((entry, j) => <Entry key={j} entry={entry} range={range(entry.from, entry.to)} time={time(entry.source)} onOpen={onOpen} />)}
             </ol>
           </div>
         ))}
-        <ActionItems title={t("knowledge-kbdetail.recap_actions")} actions={recap.actions} disabled={disabled} time={time} onAdd={(ids) => void run(ids)} />
+        <ActionItems title={t("knowledge-kbdetail.recap_actions")} actions={actions} disabled={disabled} time={(at, action) => time(action.source)(at)} onAdd={add} />
       </Card>}
     </section>
   );
+}
+
+/** The day's other parts: the recordings listed (`GET /recordings`) with kind day, the same day and the same
+ *  started_at, each read like this page (`GET /kb/recordings/{id}`, the same credential and assistant), without its
+ *  transcript, which is on its own page. `discover` lists them again (a part may begin while the page shows), `reread`
+ *  reads the known ones again (after a write). A failed read leaves what was shown, except a part gone since; answers
+ *  after the page's route, credential or assistant changed, or after a newer read began, are dropped. */
+function useDayParts(detail: KBDetail, rec: RecordingView, auth: RecordingAuth, current: () => boolean) {
+  const [others, setOthers] = useState<KBDetail[]>([]);
+  const known = useRef<string[]>([]);
+  const generation = useRef(0);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const own = detail.id;
+  const day = rec.allDay?.day ?? "";
+  const start = Date.parse(rec.startedAt ?? "");
+  const sameDay = useCallback((kind: unknown, d: unknown, startedAt: unknown) =>
+    kind === "day" && d === day && typeof startedAt === "string" && Date.parse(startedAt) === start, [day, start]);
+  const latest = useCallback((n: number) => alive.current && current() && n === generation.current, [current]);
+
+  const read = useCallback(async (ids: string[], n: number) => {
+    const read = await Promise.all(ids.map((id) => api<KBDetailResponse>(`/kb/recordings/${enc(id)}`, auth).then((r) => r.detail, (err) => {
+      if (err instanceof ApiError && err.status === 404) return null; // deleted since: the day goes on without it
+      throw err;
+    })));
+    if (!latest(n)) return;
+    const parts = read.filter((d): d is KBDetail => !!d && d.kind === "recordings" && d.id !== own && sameDay(d.meta?.kind, d.meta?.day, d.meta?.started_at))
+      .map((d) => ({ ...d, segments: null }));
+    known.current = parts.map((d) => d.id);
+    setOthers(parts);
+  }, [auth, own, sameDay, latest]);
+
+  const discover = useCallback(async () => {
+    if (!day || !Number.isFinite(start)) return;
+    const n = ++generation.current;
+    const list = await api<{ recordings?: { id?: unknown; kind?: unknown; day?: unknown; started_at?: unknown }[] | null }>("/recordings", auth);
+    if (!latest(n)) return;
+    const ids = (list.recordings ?? []).filter((r) => typeof r?.id === "string" && r.id !== own && sameDay(r.kind, r.day, r.started_at)).map((r) => r.id as string);
+    await read(ids, n);
+  }, [auth, own, day, start, sameDay, latest, read]);
+
+  const reread = useCallback(async () => {
+    if (known.current.length) await read(known.current, ++generation.current);
+  }, [read]);
+
+  useEffect(() => { void discover().catch(() => {}); }, [discover]);
+  const views = useMemo(() => others.map((d): DayPartView => {
+    const view = recordingView(d.kind, d.meta, null)!;
+    return { detail: d, rec: view, part: view.allDay?.part ?? 1, own: false };
+  }), [others]);
+  return { others: views, discover, reread };
+}
+
+/** The clock time an item of another part cites: its transcript is on that part's page, which this opens. */
+function PartTime({ part, at, onOpen }: { part: DayPartView; at: number; onOpen: (e: KBEntry) => void }) {
+  const clock = recordingClock(part.rec.startedAt, at, part.rec.tz);
+  const { detail } = part;
+  return (
+    <a
+      href={href({ name: "kb", kind: "recordings", id: detail.id })}
+      aria-label={t("knowledge-kbdetail.recap_part_jump", { time: clock, part: part.part })}
+      onClick={(ev) => onPlainClick(ev, () => onOpen(entryFromDetail(undefined, detail)))}
+      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-control text-[11.5px] text-accent-ink tabular-nums hover:bg-hover"
+    >
+      <Icon name="clock" size={12} />{clock}
+      <span className="text-ink-3">· {t("knowledge-kbdetail.recap_part", { part: part.part })}</span>
+    </a>
+  );
+}
+
+/** The gaps the parts name, each once: a later part holds the day's coverage as an earlier one did (they share
+ *  started_at). */
+function dayGaps(lists: (DayRecapGap[] | null | undefined)[]): DayRecapGap[] {
+  const seen = new Set<string>();
+  return lists.flatMap((gaps) => gaps ?? []).filter((g) => {
+    const key = JSON.stringify([g?.from, g?.to, g?.reason]);
+    if (!g || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** One stretch of the day: its title and clock range, the meeting it was in, then what was said. */

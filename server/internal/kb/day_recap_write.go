@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"sort"
@@ -45,13 +46,20 @@ const (
 	recapSummaryRunes = 600
 	recapNoteSummary  = 200
 	recapMaxMeetings  = 30
+	recapQuiet        = 30 * time.Minute // the cutoff waits until no upload came for this long
+	recapMeetingNear  = 15 * time.Minute // how far from an entry a calendar item the model named may start
+	dayPushRetry      = time.Minute      // the wait after a push DayRecapWritten did not take, doubled up to 16 minutes
 )
 
+// errRecapStale: the day recording a recap job read was deleted, trimmed or given another base since; the job stops,
+// keeps nothing it made, and its next round reads the recording again.
+var errRecapStale = errors.New("the recording changed under its recap: deleted, trimmed or replaced")
+
 // WriteDayRecaps is the recap lane's round: it makes the recaps that became due due (and the day's push at its recap
-// time), tells DayRecapWritten of the pushes it was not told of yet (a restart in between included), then works on up
-// to max day recordings (a due recap first, then the newest): notes of their finished chunks, and the recap when one
-// is due. How many it called the model for. With no model, or the model paused or unreachable, the work stays for a
-// later round.
+// time), tells DayRecapWritten of the pushes it was not told of yet (a restart in between included, one it failed
+// after its wait), mends the files of a recap still due (mendRecapFiles), then works on up to max day recordings (a
+// due recap first, then the newest): notes of their finished chunks, and the recap when one is due. How many it
+// called the model for. With no model, or the model paused or unreachable, the work stays for a later round.
 func (e *Engine) WriteDayRecaps(ctx context.Context, max int) int {
 	if e.Store.ReadOnly() {
 		return 0
@@ -66,6 +74,7 @@ func (e *Engine) WriteDayRecaps(ctx context.Context, max int) int {
 	}
 	e.armDayRecaps(days, now)
 	e.tellDayRecaps(ctx, days)
+	e.mendDayRecaps(days)
 	if e.Model == nil && e.ModelFor == nil {
 		return 0
 	}
@@ -80,7 +89,7 @@ func (e *Engine) WriteDayRecaps(ctx context.Context, max int) int {
 			continue
 		}
 		due := r.RecapDue != nil && !r.RecapDue.failed() && !r.RecapDue.waiting(now)
-		if due || r.Chars > 0 && r.RecapNotedRev < r.Revision {
+		if due || r.Chars > 0 && r.RecapNotedText < r.TextRev {
 			todo = append(todo, job{r, due})
 		}
 	}
@@ -99,12 +108,33 @@ func (e *Engine) WriteDayRecaps(ctx context.Context, max int) int {
 		if called {
 			n++
 		}
-		if err != nil {
+		switch {
+		case errors.Is(err, errRecapStale):
+			continue // read again at the next round
+		case err != nil:
 			e.logf("recording %s: recap: %v", j.r.ID, err)
 			return n // the model is paused or unreachable: the others would fail alike
 		}
 	}
 	return n
+}
+
+// mendDayRecaps has the files of every recap of day recordings ids that is due again say what its recap.json does
+// (mendRecapFiles): a PUT that withdrew from it and failed half way is not tried again before the recap is rewritten.
+func (e *Engine) mendDayRecaps(ids []string) {
+	st := e.Store
+	for _, id := range ids {
+		if r, ok := st.Recording(id); !ok || r.Kind != RecordingDay || r.RecapDue == nil {
+			continue
+		}
+		st.recMu.Lock()
+		if r, ok := st.Recording(id); ok && r.Kind == RecordingDay && r.RecapDue != nil {
+			if err := st.mendRecapFiles(r); err != nil {
+				e.logf("recording %s: recap files: %v", id, err)
+			}
+		}
+		st.recMu.Unlock()
+	}
 }
 
 // recapTime is the recap time of the owner's day (YYYY-MM-DD) in the owner's zone: recapBefore the evening routine's.
@@ -170,8 +200,9 @@ func earlier(a, b time.Time) time.Time {
 
 // armDayRecaps makes due the recaps that became due by now (docs/assistant/day-recap.md "When a recap is due"), each
 // once and persisted with the recording: the final one of a recording that became complete, or 6 hours after its day
-// ended without; and at the recap time of the owner's day, one for each recording recorded that day with text its
-// newest recap did not read, in the same write as the day's push (dayPushAtRecapTime).
+// ended without (once no upload came for recapQuiet: a day uploaded long after it is recapped whole); and at the recap
+// time of the owner's day, one for each recording recorded that day with text its newest recap did not read
+// (TextRev), in the same write as the day's push (dayPushAtRecapTime).
 func (e *Engine) armDayRecaps(ids []string, now time.Time) {
 	owner := e.Store.Zone()
 	today := now.In(owner).Format(time.DateOnly)
@@ -210,7 +241,7 @@ func (e *Engine) recapsArmed(r *Recording, now time.Time, today string, tonight 
 	armed := false
 	if tonight && r.RecapEvening != today {
 		r.RecapEvening, armed = today, true
-		if r.Chars > 0 && (r.RecapVersion == 0 || r.RecapRev < r.Revision) {
+		if r.Chars > 0 && (r.RecapVersion == 0 || r.RecapText < r.TextRev) {
 			r.armRecap(RecapDueEvening, now)
 		}
 	}
@@ -222,7 +253,7 @@ func (e *Engine) recapsArmed(r *Recording, now time.Time, today string, tonight 
 		r.RecapComplete = true
 		r.armRecap(RecapDueComplete, now)
 		armed = true
-	case !r.Complete && !r.RecapCutoff && !now.Before(e.dayCutoff(r)):
+	case !r.Complete && !r.RecapCutoff && !now.Before(e.dayCutoff(r)) && !now.Before(r.Updated.Add(recapQuiet)):
 		r.RecapCutoff = true
 		r.armRecap(RecapDueCutoff, now)
 		armed = true
@@ -262,9 +293,9 @@ func recapLines(r *Recording, segs []RecordingSegment) (lines []minutesLine, to 
 }
 
 // dayChunk is a chunk of a day's lines: within one hour of its clock (hour), at most minutesChunk runes. Finished:
-// coverage.to passed its hour, or it is full (the hour goes on in another chunk). End is where it ends, in seconds
-// since started_at (its hour's end, or to when sooner; a full one's where the next begins); Hash identifies its lines
-// (positions, times and texts).
+// coverage.to passed its hour, or it is full (the hour goes on in another chunk), and no held gap (heldGaps: audio the
+// watch still holds) lies in its hour. End is where it ends, in seconds since started_at (its hour's end, or to when
+// sooner; a full one's where the next begins); Hash identifies its lines (positions, times and texts).
 type dayChunk struct {
 	lines    []minutesLine
 	hour     time.Time
@@ -273,8 +304,9 @@ type dayChunk struct {
 	hash     string
 }
 
-// dayChunks cuts lines (by start) of a day recording started at start into chunks, coverage reaching to.
-func dayChunks(lines []minutesLine, start time.Time, zone *time.Location, to float64) []dayChunk {
+// dayChunks cuts lines (by start) of a day recording started at start into chunks, coverage reaching to, held its
+// gaps whose text is still to come (heldGaps).
+func dayChunks(lines []minutesLine, start time.Time, zone *time.Location, to float64, held []CoverageGap) []dayChunk {
 	var out []dayChunk
 	n := 0
 	for _, l := range lines {
@@ -295,8 +327,10 @@ func dayChunks(lines []minutesLine, start time.Time, zone *time.Location, to flo
 	for i := range out {
 		c := &out[i]
 		end := c.hour.Add(time.Hour)
-		c.finished = c.finished || !reached.Before(end)
-		c.end = min(to, end.Sub(start).Seconds())
+		from, until := c.hour.Sub(start).Seconds(), end.Sub(start).Seconds()
+		c.finished = (c.finished || !reached.Before(end)) &&
+			!slices.ContainsFunc(held, func(g CoverageGap) bool { return g.From < until && g.To > from })
+		c.end = min(to, until)
 		if i+1 < len(out) && out[i+1].hour.Equal(c.hour) {
 			c.end = out[i+1].lines[0].At
 		}
@@ -307,6 +341,22 @@ func dayChunks(lines []minutesLine, start time.Time, zone *time.Location, to flo
 		c.hash = hex.EncodeToString(h.Sum(nil)[:16])
 	}
 	return out
+}
+
+// heldGaps are day recording r's gaps whose text is still to come as of now: its pending ones (the watch still holds
+// the audio), which keep the chunks of their hours unfinished, so an hour a backlog drains into is noted once it
+// settled rather than at every sentence. None past its cutoff: what came by then is what there is.
+func (e *Engine) heldGaps(r *Recording, now time.Time) []CoverageGap {
+	if r.Coverage == nil || r.Complete || !now.Before(e.dayCutoff(r)) {
+		return nil
+	}
+	var held []CoverageGap
+	for _, g := range r.Coverage.Gaps {
+		if g.Reason == GapPending {
+			held = append(held, g)
+		}
+	}
+	return held
 }
 
 // selectChunks is the chunks a recap reads: all of them, or past recapMaxChunks the day's first recapKeepFirst and
@@ -389,22 +439,92 @@ func (n *recapNotes) chunk(hash string) *recapChunkNote {
 
 // readRecapNotes is recording id's recap_notes.json; empty without one (or one that cannot be read: noted again).
 func (s *Store) readRecapNotes(id string) recapNotes {
-	var n recapNotes
-	if raw, err := os.ReadFile(s.path(KindRecording, id, recapNotesFile)); err == nil {
-		_ = json.Unmarshal(raw, &n)
-	}
+	n, _ := s.recapNotesFile(id)
 	return n
 }
 
+// recapNotesFile is recording id's recap_notes.json, and whether there is one, read or not.
+func (s *Store) recapNotesFile(id string) (recapNotes, bool) {
+	var n recapNotes
+	raw, err := os.ReadFile(s.path(KindRecording, id, recapNotesFile))
+	if err == nil {
+		_ = json.Unmarshal(raw, &n)
+	}
+	return n, err == nil
+}
+
+// putRecapNotes writes n as recording id's recap_notes.json (none when it has no chunk left), unless the recording
+// was deleted meanwhile. The caller holds recMu.
+func (s *Store) putRecapNotes(id string, n recapNotes) error {
+	raw, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	s.recFilesMu.Lock()
+	defer s.recFilesMu.Unlock()
+	path := s.path(KindRecording, id, recapNotesFile)
+	if len(n.Chunks) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if _, err := os.Stat(s.path(KindRecording, id, "meta.json")); err != nil {
+		return nil // writeFile makes missing directories: a recording deleted meanwhile must stay gone
+	}
+	return writeFile(path, append(raw, '\n'))
+}
+
+// keepRecapNotes writes recording id's notes again with only the chunks of keep (its chunks now) when they hold
+// others: notes are kept per chunk while its lines are unchanged, and those of lines changed may quote what is gone
+// (an erase). The caller holds recMu.
+func (s *Store) keepRecapNotes(id string, keep []dayChunk) error {
+	n, there := s.recapNotesFile(id)
+	if !there {
+		return nil
+	}
+	current := map[string]bool{}
+	for _, c := range keep {
+		current[c.hash] = true
+	}
+	kept := slices.DeleteFunc(slices.Clone(n.Chunks), func(c recapChunkNote) bool { return !current[c.Hash] })
+	if len(kept) == len(n.Chunks) && len(kept) > 0 {
+		return nil
+	}
+	n.Chunks = kept // one that cannot be read keeps nothing either
+	return s.putRecapNotes(id, n)
+}
+
+// pruneRecapNotes keeps of day recording r's notes those of its chunks as segs (cleaned, by position) cut them:
+// what a PUT does to them, under recMu (which the caller holds) before it commits.
+func (s *Store) pruneRecapNotes(r *Recording, segs []RecordingSegment) error {
+	lines, to := recapLines(r, segs)
+	return s.keepRecapNotes(r.ID, dayChunks(lines, r.StartedAt, s.RecordingZone(r), to, nil))
+}
+
+// retryRecapNotes forgets the tries of recording id's chunks not noted (asked again: they are tried afresh). The
+// caller holds recMu.
+func (s *Store) retryRecapNotes(id string) error {
+	n, there := s.recapNotesFile(id)
+	if !there {
+		return nil
+	}
+	k := len(n.Chunks)
+	if n.Chunks = slices.DeleteFunc(n.Chunks, func(c recapChunkNote) bool { return !c.Noted }); len(n.Chunks) == k {
+		return nil
+	}
+	return s.putRecapNotes(id, n)
+}
+
 // updateRecapNotes changes recording id's notes with fn and writes them, keeping only the chunks of keep (the
-// recording's chunks now), only while it still has base and is neither deleted nor trimmed.
-func (e *Engine) updateRecapNotes(id string, base int64, keep []dayChunk, fn func(n *recapNotes)) error {
+// recording's chunks now), only while it still has base and is neither deleted nor trimmed (errRecapStale
+// otherwise); the notes as written.
+func (e *Engine) updateRecapNotes(id string, base int64, keep []dayChunk, fn func(n *recapNotes)) (recapNotes, error) {
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
-	cur, ok := st.Recording(id)
-	if !ok || cur.Trimmed() || cur.Base != base {
-		return nil
+	if !st.recapCurrent(id, base) {
+		return recapNotes{}, errRecapStale
 	}
 	n := st.readRecapNotes(id)
 	fn(&n)
@@ -414,16 +534,22 @@ func (e *Engine) updateRecapNotes(id string, base int64, keep []dayChunk, fn fun
 	}
 	n.Base = base
 	n.Chunks = slices.DeleteFunc(n.Chunks, func(c recapChunkNote) bool { return !current[c.Hash] })
-	raw, err := json.Marshal(n)
-	if err != nil {
-		return err
-	}
-	st.recFilesMu.Lock()
-	defer st.recFilesMu.Unlock()
-	if _, err := os.Stat(st.path(KindRecording, id, "meta.json")); err != nil {
-		return nil
-	}
-	return writeFile(st.path(KindRecording, id, recapNotesFile), append(raw, '\n'))
+	return n, st.putRecapNotes(id, n)
+}
+
+// recapCurrent: day recording id is still there with base, and not trimmed: what a recap job read of it holds. The
+// caller holds recMu.
+func (s *Store) recapCurrent(id string, base int64) bool {
+	cur, ok := s.Recording(id)
+	return ok && cur.Kind == RecordingDay && !cur.Trimmed() && cur.Base == base
+}
+
+// recapStale: day recording id changed since a job read it on base (recapCurrent, under recMu).
+func (e *Engine) recapStale(id string, base int64) bool {
+	st := e.Store
+	st.recMu.Lock()
+	defer st.recMu.Unlock()
+	return !st.recapCurrent(id, base)
 }
 
 // dayAnswer is the model's answer: a chunk's notes (kb/day_recap: Entries) or the day's recap (kb/day_recap_merge:
@@ -568,7 +694,11 @@ func renderDayLines(lines []minutesLine, start time.Time, zone *time.Location) s
 
 // writeDayRecap notes the finished chunks of day recording id that have no notes yet, from what is committed now, and
 // writes its recap when one is due (as of now). called: the model was asked. An error is one that leaves the work for
-// a later round (the model paused or unreachable); an unusable answer or a try that ran out of time is counted here.
+// a later round (the model paused or unreachable), or errRecapStale: the recording was deleted, trimmed or given
+// another base meanwhile, which is looked at before every call, so nothing it no longer has is sent to the model. An
+// unusable answer or a call that ran out of its own time is counted here; the job running out of its time counts
+// nothing (the rest at the next round). A recap due keeps a call's time of the job for the merge: noting stops when
+// less is left, and the merge reads what was noted (partial).
 func (e *Engine) writeDayRecap(ctx context.Context, id string, now time.Time) (called bool, err error) {
 	files, err := e.Store.recordingSnapshot(id)
 	if err != nil || files["meta.json"] == nil {
@@ -589,11 +719,15 @@ func (e *Engine) writeDayRecap(ctx context.Context, id string, now time.Time) (c
 	}
 	jctx, cancel := context.WithTimeout(ctx, minutesJobTimeout)
 	defer cancel()
-	ranOut := func(err error) bool { return errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil }
+	// A call ran out of its own time, while the round and the job go on.
+	ranOut := func(err error) bool {
+		return errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && jctx.Err() == nil
+	}
+	jobOver := func(err error) bool { return errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil }
 	st := e.Store
 	zone := st.RecordingZone(&r)
 	lines, to := recapLines(&r, segs)
-	chunks := dayChunks(lines, r.StartedAt, zone, to)
+	chunks := dayChunks(lines, r.StartedAt, zone, to, e.heldGaps(&r, now))
 	target := r.RecapDue
 	due := target != nil && !target.failed() && !target.waiting(now)
 	if due && len(lines) == 0 {
@@ -605,6 +739,7 @@ func (e *Engine) writeDayRecap(ctx context.Context, id string, now time.Time) (c
 	owner := prompts.KBOwner{Owner: e.ownerName()}
 	day := e.dayRecapDay(&r, zone)
 	settled := true // every finished chunk read has its notes, or was given up
+	short := false  // the job's time left is the merge's: the chunks not noted yet are left out of it
 	for _, c := range sel {
 		cn := notes.chunk(c.hash)
 		switch {
@@ -618,8 +753,23 @@ func (e *Engine) writeDayRecap(ctx context.Context, id string, now time.Time) (c
 		case jctx.Err() != nil:
 			return called, nil // the job's time is up: the rest at the next round
 		}
-		called = true
 		_, timeouts := cn.tries(r.Base)
+		need := minutesCallTime(timeouts)
+		if due {
+			need += minutesCallTime(target.Timeouts)
+		}
+		if called && e.timeLeft(jctx) < need { // the first call of a job always has its time
+			settled = false
+			if !due {
+				return called, nil // the job's time is up: the rest at the next round
+			}
+			short = true
+			break
+		}
+		if e.recapStale(id, r.Base) {
+			return called, errRecapStale
+		}
+		called = true
 		in := prompts.KBDayRecapInput{Day: day, From: recapClock(r.StartedAt, c.lines[0].At, zone),
 			To: recapClock(r.StartedAt, c.lines[len(c.lines)-1].At, zone), Transcript: renderDayLines(c.lines, r.StartedAt, zone)}
 		var ans dayAnswer
@@ -629,63 +779,73 @@ func (e *Engine) writeDayRecap(ctx context.Context, id string, now time.Time) (c
 		switch {
 		case err == nil:
 			note := chunkNotes(ans, c)
-			err = e.updateRecapNotes(id, r.Base, chunks, func(n *recapNotes) {
+			// The notes as written replace the ones read: a write refused (errRecapStale) ends the job, so the notes are
+			// never read back empty and chunks noted already sent again.
+			if notes, err = e.updateRecapNotes(id, r.Base, chunks, func(n *recapNotes) {
 				if old := n.chunk(c.hash); old != nil {
 					*old = note
 					return
 				}
 				n.Chunks = append(n.Chunks, note)
-			})
-			if err != nil {
+			}); err != nil {
 				return called, err
 			}
-			notes = st.readRecapNotes(id)
 		case ranOut(err) || unusableAnswer(err):
 			settled = false
 			timedOut := ranOut(err)
 			e.logf("recording %s: recap notes of %s: %v", id, in.From, err)
-			if err := e.recapNotesFailed(id, r.Base, chunks, c, timedOut, now); err != nil {
+			if notes, err = e.recapNotesFailed(id, r.Base, chunks, c, timedOut, now); err != nil {
 				return called, err
 			}
-			notes = st.readRecapNotes(id)
 			if timedOut && due {
 				// Slow, not wrong: the recap waits with the chunk, counted against it too, so a model that never
 				// finishes one still can't keep it pending for ever.
 				e.recapFailed(id, target.N, true, now)
 				return called, nil
 			}
-			if jctx.Err() != nil {
-				return called, nil
-			}
+		case jobOver(err):
+			return called, nil // the job's time is up: the rest at the next round, nothing counted
 		default:
 			return called, err
 		}
 	}
 	if settled {
-		e.recapNoted(id, r.Base, r.Revision)
+		if err := e.recapNoted(id, r.Base, r.TextRev, chunks); err != nil {
+			return called, err
+		}
 	}
 	if !due {
 		return called, nil
 	}
-	// The merge reads every chunk's notes; one still waiting holds it back, one given up is left out.
+	// The merge reads every chunk's notes; one still waiting holds it back, one given up (or not noted for want of
+	// time) is left out.
 	var read []minutesLine
 	var kept []recapChunkNote
 	for _, c := range sel {
 		cn := notes.chunk(c.hash)
 		if cn == nil || !cn.Noted {
-			if cn != nil && cn.gaveUp(r.Base) {
-				partial = true
-				continue
+			switch {
+			case cn != nil && cn.gaveUp(r.Base):
+			case short && !cn.waiting(r.Base, now):
+			default:
+				return called, nil
 			}
-			return called, nil
+			partial = true
+			continue
 		}
 		read = append(read, c.lines...)
 		kept = append(kept, *cn)
 	}
 	if len(kept) == 0 {
+		if short {
+			return called, nil // nothing noted yet for want of time: the next round has the job's whole time
+		}
 		// Nothing could be noted (every chunk given up): the model failed at this recap.
 		e.recapFailed(id, target.N, false, now)
 		return called, nil
+	}
+	if e.recapStale(id, r.Base) {
+		return called, errRecapStale
 	}
 	meetings := e.dayMeetings(&r, zone, now)
 	merge := prompts.KBDayRecapMergeInput{Day: day, Partial: partial}
@@ -724,6 +884,8 @@ func (e *Engine) writeDayRecap(ctx context.Context, id string, now time.Time) (c
 		e.logf("recording %s: recap: %v", id, err)
 		e.recapFailed(id, target.N, true, now)
 		return called, nil
+	case jobOver(err):
+		return called, nil // the job's time is up: the merge at the next round, nothing counted
 	case unusableAnswer(err):
 		e.logf("recording %s: recap: %v", id, err)
 		e.recapFailed(id, target.N, false, now)
@@ -744,7 +906,22 @@ func (e *Engine) writeDayRecap(ctx context.Context, id string, now time.Time) (c
 	} else if target.Reason == RecapDueCutoff || !now.Before(e.dayCutoff(&r)) {
 		rc.Final, rc.FinalReason = true, FinalCutoff
 	}
-	return called, e.storeDayRecap(ctx, &r, target, rc, now)
+	text := r.TextRev // what it read all of; with chunks left out for want of time, newer text is still to read
+	if short {
+		text = 0
+	}
+	return called, e.storeDayRecap(ctx, &r, target, rc, recapRead{text: text, chunks: chunks}, now)
+}
+
+// timeLeft is how long ctx has before its deadline (e.jobLeft in tests).
+func (e *Engine) timeLeft(ctx context.Context) time.Duration {
+	if e.jobLeft != nil {
+		return e.jobLeft(ctx)
+	}
+	if d, ok := ctx.Deadline(); ok {
+		return time.Until(d)
+	}
+	return math.MaxInt64
 }
 
 func findChunk(chunks []dayChunk, hash string) dayChunk {
@@ -786,8 +963,10 @@ func notesForDay(cn recapChunkNote, points, actions int) prompts.KBDayRecapChunk
 // action of the notes cites (noted), a person must be named in what was read, a due date must be a real day from the
 // recording's day on (within a year). An entry's span is its first and last lines' when the notes have them (noted or
 // an entry's bounds), and always takes in its points; one in a meeting recording's span is that meeting, else the
-// known meeting the model named by number, else a calendar item starting in it. An answer that cites nothing and says
-// nothing is unusable; one with only a summary is a recap of a day with nothing to note.
+// known meeting the model named by number when it is there at that time (meetingNear), else a calendar item starting
+// in it; a meeting named that is not keeps the kind the model judged, without it. The same action said again within
+// recapTodoNear is one; said again later in the day it is another. An answer that cites nothing and says nothing is
+// unusable; one with only a summary is a recap of a day with nothing to note.
 func (e *Engine) buildDayRecap(r *Recording, a dayAnswer, read []minutesLine, noted, bounds map[int]bool,
 	meetings []dayMeeting, coversTo float64) (*DayRecap, error) {
 	at := map[int]float64{}
@@ -860,7 +1039,7 @@ func (e *Engine) buildDayRecap(r *Recording, a dayAnswer, read []minutesLine, no
 		case inRecording >= 0:
 			ref := meetings[inRecording].Ref
 			en.Meeting, en.Kind = &ref, RecapMeeting
-		case i >= 1 && i <= len(meetings):
+		case i >= 1 && i <= len(meetings) && meetingNear(meetings[i-1], from, to):
 			ref := meetings[i-1].Ref
 			en.Meeting, en.Kind = &ref, RecapMeeting
 		case startsIn >= 0:
@@ -875,22 +1054,29 @@ func (e *Engine) buildDayRecap(r *Recording, a dayAnswer, read []minutesLine, no
 		}
 		rc.Timeline = append(rc.Timeline, en)
 	}
-	seen := map[string]bool{}
+	said := map[string][]float64{} // an action's task (recapTaskKey) → when each one kept was said
 	for _, x := range a.Actions {
 		t := clipText(x.What)
 		if t == "" {
 			continue
 		}
-		// The same task for two people is two actions.
-		if sec, ok := line(x.Line); ok && !seen[oneLine(x.Who)+"\x00"+t] {
-			seen[oneLine(x.Who)+"\x00"+t] = true
-			by := oneLine(x.By)
-			due := ""
-			if by != "" {
-				due = dueDate(x.DueDate, r.Day)
-			}
-			rc.Actions = append(rc.Actions, MinutesAction{Who: named(x.Who), What: t, By: by, DueDate: due, At: sec})
+		sec, ok := line(x.Line)
+		if !ok {
+			continue
 		}
+		// The same task for two people is two actions, and so is one said again hours later.
+		who := named(x.Who)
+		key := recapTaskKey(who, t)
+		if slices.ContainsFunc(said[key], func(at float64) bool { return math.Abs(at-sec) <= recapTodoNear }) {
+			continue
+		}
+		said[key] = append(said[key], sec)
+		by := oneLine(x.By)
+		due := ""
+		if by != "" {
+			due = dueDate(x.DueDate, r.Day)
+		}
+		rc.Actions = append(rc.Actions, MinutesAction{Who: who, What: t, By: by, DueDate: due, At: sec})
 	}
 	if cited == 0 && rc.Summary == "" {
 		return nil, errMinutesUnusable
@@ -910,17 +1096,37 @@ func (e *Engine) buildDayRecap(r *Recording, a dayAnswer, read []minutesLine, no
 	return rc, nil
 }
 
+// recapRead is what a recap read of its recording: text, the TextRev it read all of (0: it left some out for want of
+// time), and chunks, the recording's chunks then (whose notes are kept).
+type recapRead struct {
+	text   int64
+	chunks []dayChunk
+}
+
+// meetingNear: known meeting m is there when an entry from–to is: a meeting recording's span overlaps it, a calendar
+// item starts in it or within recapMeetingNear of it.
+func meetingNear(m dayMeeting, from, to time.Time) bool {
+	if !m.To.IsZero() {
+		return !m.From.After(to) && !m.To.Before(from)
+	}
+	return !m.From.Before(from.Add(-recapMeetingNear)) && !m.From.After(to.Add(recapMeetingNear))
+}
+
 // storeDayRecap writes recap rc of snapshot r (the revision read) for target, unless the recording was deleted or
-// trimmed meanwhile or another PUT set its base; the target is settled unless another became due since. When the
-// day's push is due with this recap (dayPushWithRecap), it is marked in the same write of meta.json that records the
-// recap, and told at once.
-func (e *Engine) storeDayRecap(ctx context.Context, r *Recording, target *RecapTarget, rc *DayRecap, now time.Time) error {
+// trimmed meanwhile or another PUT set its base (errRecapStale); the target is settled unless another became due
+// since, and the notes of chunks it no longer has go. When the day's push is due with this recap (dayPushWithRecap),
+// it is marked in the same write of meta.json that records the recap, and told at once.
+func (e *Engine) storeDayRecap(ctx context.Context, r *Recording, target *RecapTarget, rc *DayRecap, read recapRead, now time.Time) error {
 	st := e.Store
 	st.recMu.Lock()
-	cur, ok := st.Recording(r.ID)
-	if !ok || cur.Trimmed() || cur.Base != r.Base {
+	if !st.recapCurrent(r.ID, r.Base) {
 		st.recMu.Unlock()
-		return nil
+		return errRecapStale
+	}
+	cur, _ := st.Recording(r.ID)
+	if err := st.keepRecapNotes(cur.ID, read.chunks); err != nil {
+		st.recMu.Unlock()
+		return err
 	}
 	// The version after both meta's and the file's, as for minutes (storeMinutes).
 	rc.Version, rc.Revision, rc.GeneratedAt = cur.RecapVersion+1, r.Revision, now.UTC()
@@ -934,7 +1140,7 @@ func (e *Engine) storeDayRecap(ctx context.Context, r *Recording, target *RecapT
 		return err
 	}
 	e.dayPushWithRecap(cur, target, rc, now) // before RecapVersion: whether the day had a recap
-	cur.RecapVersion, cur.RecapRev, cur.RecapFinal = rc.Version, r.Revision, rc.Final
+	cur.RecapVersion, cur.RecapRev, cur.RecapText, cur.RecapFinal = rc.Version, r.Revision, read.text, rc.Final
 	if rc.Final && cur.RecapFinalAt == nil {
 		at := rc.GeneratedAt
 		cur.RecapFinalAt = &at
@@ -958,8 +1164,9 @@ func (e *Engine) storeDayRecap(ctx context.Context, r *Recording, target *RecapT
 // The day's push (docs/assistant/day-recap.md "The push"): one a day (Recording.Day), across its parts. At the recap
 // time it is due at once from a recording's ready recap, else the day waits for its first recap, which takes it in the
 // same write; a final recap of a day that had none takes it too. A recap asked for before the recap time never does.
-// Due is persisted (RecapPush) before DayRecapWritten is told, and done (RecapPushed) once it returned, so a restart in
-// between tells it again (tellDayRecaps).
+// Due is persisted (RecapPush) before DayRecapWritten is told, and done (RecapPushed) once it took it (returned nil),
+// so a restart in between tells it again (tellDayRecaps), and so does a later round after one it failed, dayPushRetry
+// after it (doubled for each one failed since, up to 16 minutes).
 
 // dayPushAtRecapTime is the day's push at r's recap time, in the same write (the caller holds recMu): due from r's
 // recap at once when it is ready, else the day waits; nothing once a part of the day has it.
@@ -1021,20 +1228,23 @@ func (e *Engine) tellDayRecaps(ctx context.Context, ids []string) {
 	}
 }
 
-// tellDayRecap calls DayRecapWritten for day recording id, whose push is due, with its recap (outside the store's
-// locks), then marks it told. Without the hook it stays due, for when the assistant sets it.
+// tellDayRecap calls DayRecapWritten for day recording id, whose push is due (and not waiting after one it failed),
+// with its recap (outside the store's locks), then marks it told; one it failed stays due, tried again after a wait.
+// Without the hook it stays due, for when the assistant sets it.
 func (e *Engine) tellDayRecap(ctx context.Context, id string) {
 	if e.DayRecapWritten == nil {
 		return
 	}
 	st := e.Store
+	now := e.now()
 	r, ok := st.Recording(id)
-	if !ok || !r.RecapPush {
+	if !ok || !r.RecapPush || now.Before(r.RecapPushAt) {
 		return
 	}
 	rc, err := st.readRecap(id)
+	var failed error
 	if err == nil {
-		e.DayRecapWritten(ctx, *r, *rc)
+		failed = e.DayRecapWritten(ctx, *r, *rc)
 	}
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
@@ -1042,7 +1252,16 @@ func (e *Engine) tellDayRecap(ctx context.Context, id string) {
 	if !ok || !cur.RecapPush {
 		return
 	}
-	cur.RecapPush, cur.RecapPushed = false, err == nil // a recap gone meanwhile pushes nothing: another part's may
+	switch {
+	case failed != nil:
+		cur.RecapPushTries++
+		wait := dayPushRetry << min(cur.RecapPushTries-1, 4)
+		cur.RecapPushAt = now.Add(wait).UTC()
+		e.logf("recording %s: recap push: %v (again in %s)", id, failed, wait)
+	default:
+		cur.RecapPush, cur.RecapPushed = false, err == nil // a recap gone meanwhile pushes nothing: another part's may
+		cur.RecapPushTries, cur.RecapPushAt = 0, time.Time{}
+	}
 	if err := st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false); err != nil {
 		e.logf("recording %s: recap push: %v", id, err)
 	}
@@ -1079,15 +1298,24 @@ func (e *Engine) settleRecap(id string, n int) error {
 	})
 }
 
-// recapNoted marks recording id's finished chunks of revision rev on base noted.
-func (e *Engine) recapNoted(id string, base, rev int64) {
-	e.updateRecap(id, func(r *Recording) bool {
-		if r.Base != base || r.RecapNotedRev >= rev {
-			return false
-		}
-		r.RecapNotedRev = rev
-		return true
-	})
+// recapNoted marks recording id's finished chunks of text (TextRev) on base noted, and keeps the notes of chunks
+// only (its chunks then); errRecapStale when it was deleted, trimmed or given another base since.
+func (e *Engine) recapNoted(id string, base, text int64, chunks []dayChunk) error {
+	st := e.Store
+	st.recMu.Lock()
+	defer st.recMu.Unlock()
+	if !st.recapCurrent(id, base) {
+		return errRecapStale
+	}
+	if err := st.keepRecapNotes(id, chunks); err != nil {
+		return err
+	}
+	r, _ := st.Recording(id)
+	if r.RecapNotedText >= text {
+		return nil
+	}
+	r.RecapNotedText = text
+	return st.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
 }
 
 // updateRecap changes day recording id's meta.json with fn (false: nothing to write).
@@ -1103,8 +1331,8 @@ func (e *Engine) updateRecap(id string, fn func(r *Recording) bool) error {
 }
 
 // recapNotesFailed counts a try of chunk c of recording id on base that ran out of time (timedOut: the next one put
-// off) or whose answer was unusable.
-func (e *Engine) recapNotesFailed(id string, base int64, chunks []dayChunk, c dayChunk, timedOut bool, now time.Time) error {
+// off) or whose answer was unusable; the notes as written (updateRecapNotes).
+func (e *Engine) recapNotesFailed(id string, base int64, chunks []dayChunk, c dayChunk, timedOut bool, now time.Time) (recapNotes, error) {
 	return e.updateRecapNotes(id, base, chunks, func(n *recapNotes) {
 		cn := n.chunk(c.hash)
 		if cn == nil {

@@ -183,14 +183,20 @@ type Recording struct {
 	Coverage *RecordingCoverage `json:"coverage,omitempty"`
 	Next     int                `json:"next,omitempty"`
 	Base     int64              `json:"base,omitempty"`
+	// TextRev counts the uploads that changed its text or coverage (every PUT, every append that stored anything),
+	// whatever their revision: an append from an older request stores its positions without raising Revision, so what
+	// the recap read is measured by it.
+	TextRev int64 `json:"text_rev,omitempty"`
 	// Its recap (day_recap.go), the hub's: the state, whether the newest recap is final and when the first final one
 	// was written; RecapRev the revision the newest recap was made from, RecapVersion how many were written; RecapDue
 	// the due recap not written yet or failed (nil without one), RecapTargets how many became due so far (each one's
-	// number), RecapAsks the user's requests.
+	// number), RecapAsks the user's requests; RecapText the TextRev the newest recap read all of (0: it left some out
+	// for want of time), so newer text is what it did not read.
 	RecapState   string       `json:"recap_state,omitempty"`
 	RecapFinal   bool         `json:"recap_final,omitempty"`
 	RecapFinalAt *time.Time   `json:"recap_final_at,omitempty"`
 	RecapRev     int64        `json:"recap_rev,omitempty"`
+	RecapText    int64        `json:"recap_text,omitempty"`
 	RecapVersion int          `json:"recap_version,omitempty"`
 	RecapDue     *RecapTarget `json:"recap_due,omitempty"`
 	RecapTargets int          `json:"recap_targets,omitempty"`
@@ -200,15 +206,17 @@ type Recording struct {
 	RecapEvening  string `json:"recap_evening,omitempty"`
 	RecapComplete bool   `json:"recap_complete,omitempty"`
 	RecapCutoff   bool   `json:"recap_cutoff,omitempty"`
-	// RecapNotedRev: every finished hour of that revision has its notes (or gave up on them).
-	RecapNotedRev int64 `json:"recap_noted_rev,omitempty"`
+	// RecapNotedText: every finished hour of that TextRev has its notes (or gave up on them).
+	RecapNotedText int64 `json:"recap_noted_text,omitempty"`
 	// The day's one push (day_recap_write.go "The push"), across its parts: RecapWait, its recap time came with no
 	// recap ready, so the day's first recap pushes; RecapPush, the push is due from this recording's recap (set in the
-	// same write as that recap, or as its recap time) and DayRecapWritten has not returned for it yet; RecapPushed, it
-	// has.
-	RecapWait   bool `json:"recap_wait,omitempty"`
-	RecapPush   bool `json:"recap_push,omitempty"`
-	RecapPushed bool `json:"recap_pushed,omitempty"`
+	// same write as that recap, or as its recap time) and DayRecapWritten has not taken it yet (RecapPushTries calls
+	// failed, the next not before RecapPushAt); RecapPushed, it has.
+	RecapWait      bool      `json:"recap_wait,omitempty"`
+	RecapPush      bool      `json:"recap_push,omitempty"`
+	RecapPushed    bool      `json:"recap_pushed,omitempty"`
+	RecapPushTries int       `json:"recap_push_tries,omitempty"`
+	RecapPushAt    time.Time `json:"recap_push_at,omitzero"`
 	// RecapTodos are the to-dos made of its recaps' actions, whatever the version (keepRecapTodos).
 	RecapTodos []RecapTodo `json:"recap_todos,omitempty"`
 	Tagging
@@ -565,6 +573,13 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	r.planRecap()
 	r.Name = e.recordingName(r)
 	r.Updated = now.UTC()
+	if day && exists {
+		// The notes of a chunk whose lines the upload changed (an erase above all) quote what it no longer says: they go
+		// now, not with the next note written. Those of the others stay theirs.
+		if err := st.pruneRecapNotes(r, u.Segments); err != nil {
+			return put, false, err
+		}
+	}
 	if err := st.commitRecording(r, u.Segments); err != nil {
 		return put, false, err
 	}

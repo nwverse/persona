@@ -402,10 +402,17 @@ type BriefFacts struct {
 // item or a channel, so the model says it even when Card is set.
 type BriefDay struct {
 	Date     string // the owner's today, YYYY-MM-DD
-	From, To string // the first and last time recorded
-	// Gaps are the time with no text, by reason; Parts each part's recap or, without one, its state.
-	Gaps  []BriefDayGap
-	Parts []BriefDayPart
+	From, To string // when it was recorded: from its start to its end, or now while it is open
+	// Transcribed is how far its text goes when that is short of To (the phone transcribes and uploads as it can).
+	Transcribed string
+	// Gaps are the time with no text by reason, the reasons with the most of it; GapReasonsLeft counts the other
+	// reasons, GapsLeft their stretches and GapMinutesLeft their minutes.
+	Gaps                                     []BriefDayGap
+	GapReasonsLeft, GapsLeft, GapMinutesLeft int
+	// Parts are each part's recap or, without one, its state, the first and the latest ones; PartsLeft counts those
+	// from the middle left out (the section's bound).
+	Parts     []BriefDayPart
+	PartsLeft int
 	// Timeline is every part's recap entries by time; Left counts those from the middle of the day left out (the
 	// section's bound).
 	Timeline []BriefDayEntry

@@ -17,6 +17,10 @@ const id = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const meetingId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 const detailPath = `/kb/recordings/${id}`;
 const minutesPath = `/recordings/${id}/minutes`;
+// The day's second part ("Parts" in docs/assistant/day-recap.md): sentences the watch sent late, whatever their time.
+const part2 = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+const part2Path = `/kb/recordings/${part2}`;
+const part2Todos = `/recordings/${part2}/minutes/todos`;
 
 // Invented words of an invented day, in English or Chinese. Times are seconds since 08:00 in Shanghai; the browser runs in
 // London, so every clock shown must be the recording's own.
@@ -27,6 +31,11 @@ const words = {
     titles: ["Design review", "Onboarding copy with Cy", "Lunch with the platform team", "Weekly sync", "Planning tomorrow"],
     meetings: ["Export design review", "Weekly sync"],
     actions: ["Look at the flaky upload test.", "Write the release notes."], by: "tomorrow",
+    part2: {
+      summary: "Late from the watch: a coffee about onboarding and the beta go/no-go.",
+      lines: ["The welcome screen needs one sentence, not three.", "We ship the beta on Friday."],
+      titles: ["Coffee with Dee", "Beta go/no-go"], action: "Send the beta checklist.",
+    },
   },
   zh: {
     name: "全天 · 11月11日", summary: "主要在推进导出功能的发布：大小限制保留并补充明确提示，测试版要等上传测试修好再发。", // i18n-ignore: fixture text
@@ -34,6 +43,11 @@ const words = {
     titles: ["设计评审", "和 Cy 讨论引导文案", "和平台组吃午饭", "每周例会", "规划明天的工作"], // i18n-ignore: fixture text
     meetings: ["导出功能设计评审", "每周例会"], // i18n-ignore: fixture text
     actions: ["看一下不稳定的上传测试。", "写发布说明。"], by: "明天", // i18n-ignore: fixture text
+    part2: {
+      summary: "手表晚到的内容：和 Dee 喝咖啡聊引导页，以及测试版是否发布。", // i18n-ignore: fixture text
+      lines: ["欢迎页一句话就够，不要三句。", "测试版周五发。"], // i18n-ignore: fixture text
+      titles: ["和 Dee 喝咖啡", "测试版发布决定"], action: "发出测试版检查清单。", // i18n-ignore: fixture text
+    },
   },
 };
 const fixture = (lang) => {
@@ -68,11 +82,31 @@ const fixture = (lang) => {
     },
   };
 };
+// Part 2 of the same day: the same day, zone and started_at, its own recap (version 2) and an action id part 1 also uses.
+const second = (lang) => {
+  const w = (lang === "en" ? words.en : words.zh).part2;
+  const base = fixture(lang);
+  return {
+    kind: "recordings", id: part2, path: `recordings/${part2}`,
+    meta: { ...base.meta, part: 2, duration: 600, revision: 4, base: 2, next: 2 },
+    summary: w.summary,
+    segments: [{ start: 7840, end: 7848, text: w.lines[0] }, { start: 30720, end: 30728, text: w.lines[1] }],
+    recap: {
+      ...base.recap, version: 2, revision: 4, summary: w.summary,
+      timeline: [
+        { from: 7800, to: 8300, kind: "outside", title: w.titles[0], points: [{ text: w.lines[0], at: 7840, who: "Dee" }] },
+        { from: 30600, to: 32400, kind: "meeting", title: w.titles[1], points: [{ text: w.lines[1], at: 30720 }] },
+      ],
+      actions: [{ id: "a1", who: "Dee", what: w.action, at: 30720 }],
+      markdown: "# 2026-11-11 (2)",
+    },
+  };
+};
 const browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
-const deadline = setTimeout(() => { console.error("FAIL recording day recap timed out"); process.exit(1); }, 180_000);
+const deadline = setTimeout(() => { console.error("FAIL recording day recap timed out"); process.exit(1); }, 300_000);
 let screenshots = 0, runs = 0;
 
-async function run(theme, lang, width, shoot) {
+async function run(theme, lang, width, shoot, twoParts = false) {
   const s = JSON.parse(await readFile(new URL(`../src/i18n/locales/${lang}/knowledge-kbdetail.json`, import.meta.url), "utf8"));
   const context = await browser.newContext({ viewport: { width, height: width < 600 ? 2400 : 2000 }, colorScheme: theme, timezoneId: "Europe/London", deviceScaleFactor: width < 600 ? 2 : 1, reducedMotion: "reduce" });
   await context.addInitScript(({ theme, lang }) => {
@@ -81,12 +115,24 @@ async function run(theme, lang, width, shoot) {
     localStorage.setItem("persona.theme", theme);
   }, { theme, lang });
   const detail = fixture(lang);
+  const detail2 = second(lang);
   const writes = [], errors = [];
+  // The parts the hub lists: a single-part day lists only itself.
+  const listed = [detail, ...(twoParts ? [detail2] : [])].map((d) => ({ id: d.id, revision: d.meta.revision, complete: false, started_at: d.meta.started_at, kind: "day", day: d.meta.day, part: d.meta.part, next: d.meta.next, base: d.meta.base }));
   await context.route("**/*", (route) => new URL(route.request().url()).origin === base.origin ? route.continue() : route.abort());
   await context.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace(/^\/api\/v1/, "");
     if (path === detailPath) return route.fulfill({ json: { detail } });
+    if (twoParts && path === part2Path) return route.fulfill({ json: { detail: detail2 } });
+    if (twoParts && path === part2Todos) {
+      assert.equal(request.method(), "POST");
+      assert.equal(request.headers()["x-persona-manager"], "assistant");
+      const body = request.postDataJSON(); writes.push({ path, body });
+      assert.deepEqual(body, { version: 2, actions: ["a1"] });
+      detail2.recap.actions[0].todo_id = "example-part2-todo";
+      return route.fulfill({ json: { todos: [{ id: "example-part2-todo" }], recap: detail2.recap } });
+    }
     if (path === minutesPath || path === `${minutesPath}/todos`) {
       assert.equal(request.method(), "POST");
       assert.equal(request.headers()["x-persona-manager"], "assistant");
@@ -103,6 +149,7 @@ async function run(theme, lang, width, shoot) {
     assert.ok(["GET", "HEAD"].includes(request.method()), `Unexpected write ${path}`);
     const data = {
       "/kb/recordings": { items: [{ kind: "recordings", id, name: detail.meta.title, relevance: 0 }], tags: [] },
+      "/recordings": { days: 14, recordings: listed, deleted: [] },
       "/sessions": { sessions: [], total: 0, has_more: false, revision: "fixture" },
       "/machines": { machines: [] }, "/interactions": { interactions: [] },
       "/assistant": { conversations: [] }, "/todos": { todos: [] },
@@ -129,6 +176,7 @@ async function run(theme, lang, width, shoot) {
   await page.waitForTimeout(350);
   assert.equal(await page.locator("vite-error-overlay").count(), 0);
   assert.equal(await page.locator("[data-recording-minutes]").count(), 0, "A day recording offers no minutes");
+  if (twoParts) return runTwoParts({ page, context, recap, s, lang, theme, width, detail, detail2, writes, errors });
   assert.deepEqual(await recap.locator("h3").allTextContents(), [s.recap_morning, s.recap_afternoon, s.recap_evening, s.recap_actions]);
   assert.equal(await recap.locator('[data-recap-entry="meeting"]').count(), 2);
   assert.equal(await recap.locator('[data-recap-entry="meeting"] a').first().getAttribute("href"), `/kb/recordings/${meetingId}`);
@@ -173,14 +221,51 @@ async function run(theme, lang, width, shoot) {
   runs++;
 }
 
+// A day in two parts, opened at part 1: one timeline and one list of suggested to-dos by time, part 2's times linking
+// to part 2's page, each part saying how far its recap is, and a part 2 to-do confirmed on part 2 with its version.
+async function runTwoParts({ page, context, recap, s, lang, theme, width, detail, detail2, writes, errors }) {
+  const fill = (text, vars) => Object.entries(vars).reduce((out, [k, v]) => out.replace(`{${k}}`, String(v)), text);
+  await recap.getByRole("heading", { name: detail2.recap.timeline[0].title, exact: true }).waitFor();
+  const titles = [...detail.recap.timeline, ...detail2.recap.timeline].sort((a, b) => a.from - b.from).map((e) => e.title);
+  assert.deepEqual(await recap.locator("h4").allTextContents(), titles);
+  assert.equal((await recap.locator("[data-recap-covers]").textContent()).trim(),
+    `${fill(s.recap_part_so_far, { part: 1, time: "19:00" })} · ${fill(s.recap_part_so_far, { part: 2, time: "19:00" })}`);
+  // The gaps both parts name, once.
+  assert.equal((await recap.locator("[data-recap-gaps]").textContent()).split("10:20").length, 2);
+  const link = recap.getByRole("link", { name: fill(s.recap_part_jump, { time: "10:10:40", part: 2 }), exact: true });
+  assert.equal(await link.getAttribute("href"), part2Path);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "No page overflow");
+  assert.ok(await recap.evaluate((section) => section.scrollWidth <= section.clientWidth + 1), "No recap overflow");
+  await page.locator("[data-recording-recap]").evaluate((el) => el.closest(".overflow-y-auto")?.scrollTo({ top: 0 }));
+  await page.screenshot({ path: join(output, `day-recap-parts-${lang}-${theme}-${width}.png`), fullPage: true });
+  screenshots++;
+
+  // Part 2's suggested to-do goes to part 2 with part 2's version, and part 1's stays to confirm.
+  const todo = recap.locator("li").filter({ hasText: detail2.recap.actions[0].what });
+  await todo.getByRole("button", { name: s.minutes_add_todo, exact: true }).click();
+  await todo.getByText(s.minutes_added, { exact: true }).waitFor();
+  assert.deepEqual(writes.map((write) => write.path), [part2Todos]);
+  await recap.locator("li").filter({ hasText: detail.recap.actions[0].what }).getByRole("button", { name: s.minutes_add_todo, exact: true }).waitFor();
+  // Part 2's time opens part 2, which lists part 1 the same way.
+  await link.click();
+  await page.waitForURL((url) => url.pathname === part2Path);
+  await recap.getByRole("link", { name: fill(s.recap_part_jump, { time: "09:05:12", part: 1 }), exact: true }).first().waitFor();
+  assert.deepEqual(errors, []);
+  await context.close();
+  runs++;
+}
+
 try {
   for (const lang of ["en", "zh-Hans"]) {
     for (const theme of ["light", "dark"]) {
       for (const width of [1440, 390]) await run(theme, lang, width, true);
     }
   }
+  for (const lang of ["en", "zh-Hans"]) {
+    for (const [theme, width] of [["light", 1440], ["dark", 390]]) await run(theme, lang, width, true, true);
+  }
   await run("dark", "ja", 390, false);
-  console.log(`PASS recording day recap: ${runs} browser runs, ${screenshots} screenshots; zone clock, timestamps, mutations, overflow and single-line buttons checked`);
+  console.log(`PASS recording day recap: ${runs} browser runs, ${screenshots} screenshots; zone clock, timestamps, mutations, two-part day, overflow and single-line buttons checked`);
 } finally {
   clearTimeout(deadline);
   await browser.close();

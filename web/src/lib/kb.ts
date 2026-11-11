@@ -857,15 +857,16 @@ export function dayClock(startedAt: string | undefined, seconds: number, tz?: st
   return Number.isFinite(Date.parse(startedAt ?? "")) ? clock.slice(0, 5) : clock;
 }
 
-export interface RecapGroup {
+export interface RecapGroup<E extends DayRecapEntry = DayRecapEntry> {
   /** Undefined when the start is unknown: the whole timeline is one group. */
   part?: DayPart;
-  entries: DayRecapEntry[];
+  entries: E[];
 }
 
-/** A recap's timeline in time order, cut by part of the day at each entry's start. */
-export function recapGroups(timeline: DayRecapEntry[] | null | undefined, startedAt: string | undefined, tz?: string): RecapGroup[] {
-  const groups: RecapGroup[] = [];
+/** A recap's timeline in time order (entries at the same time in the order given), cut by part of the day at each
+ *  entry's start. */
+export function recapGroups<E extends DayRecapEntry>(timeline: E[] | null | undefined, startedAt: string | undefined, tz?: string): RecapGroup<E>[] {
+  const groups: RecapGroup<E>[] = [];
   const sorted = [...(timeline ?? [])].filter((e) => e && Number.isFinite(e.from)).sort((a, b) => a.from - b.from);
   for (const entry of sorted) {
     const part = dayPart(startedAt, entry.from, tz);

@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 )
@@ -149,29 +152,150 @@ func dayRecording(e *kb.Engine, rawID string) (*kb.Recording, bool) {
 	return r, true
 }
 
-// dayRecapWritten pushes the day's recap (kb.Engine.DayRecapWritten, told once a day across the day's parts): a
-// stable id per day, so a restart that tells it again shows the phone one, a tap opening the main conversation, and
-// the same text with the recording's web page to the Lark bot and the channels with pushes on (at least once).
-func (s *Service) dayRecapWritten(ctx context.Context, r kb.Recording, d kb.DayRecap) {
+// dayRecapWritten pushes the day's recap (kb.Engine.DayRecapWritten of engine e, told once a day across the day's
+// parts, and again until it returns nil): to the phone, with a stable id per day, so it shows one however often it
+// is sent, a tap opening the main conversation; and the same text with the recording's web page to the Lark bot and
+// the channels with pushes on, with that id as their key, so a copy sent again lands once where they can tell (at
+// least once). It returns once each was handed over or failed (dayPushWait each), nil only when every one took it
+// (or refused it for good: sending it again would get the same); the next call sends it to the others again, all of
+// them after a restart (dayPushBook is this process's). The counts are the day's, all of its parts' recaps.
+func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Recording, d kb.DayRecap) error {
 	l := s.lang(ctx)
-	meetings := 0
-	for _, en := range d.Timeline {
-		if en.Kind == kb.RecapMeeting {
-			meetings++
-		}
-	}
 	day := cmp.Or(r.Day, d.Day)
+	meetings, actions := dayRecapCounts(e, day, r.ID, d)
 	title := i18n.T(l, "assistant-day-recap.ready_title")
-	body := i18n.T(l, "assistant-day-recap.ready_body", i18n.Args{"day": day, "meetings": meetings, "actions": len(d.Actions)})
+	body := i18n.T(l, "assistant-day-recap.ready_body", i18n.Args{"day": day, "meetings": meetings, "actions": actions})
 	set := s.settings(ctx)
-	n := Notification{ID: "ntf_dayrecap_" + day, Kind: NotifyPush, Title: title, Body: body, DeviceID: set.MachineID, SessionID: set.Main}
-	if err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
-		s.logf("assistant: day recap push: %v", err)
-	}
+	id := "ntf_dayrecap_" + day
+	n := Notification{ID: id, Kind: NotifyPush, Title: title, Body: body, DeviceID: set.MachineID, SessionID: set.Main}
 	if link := recordingLink(s.webBase(ctx), r.ID); link != "" {
 		body += "\n" + link
 	}
-	s.channelsPushed("", "", title, body) // as minutesWritten: not as the main conversation's
+	b := &s.dayPushes
+	var mu sync.Mutex
+	var failed []error
+	sent := func(to string, err error) {
+		if err == nil {
+			b.took(id, to)
+			return
+		}
+		s.logf("assistant: day recap push: %s: %v", to, err)
+		mu.Lock()
+		failed = append(failed, fmt.Errorf("%s: %w", to, err))
+		mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	if !b.has(id, dayPushPhone) {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(ctx, dayPushWait)
+			defer cancel()
+			err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}) // kept in the outbox while the hub is away
+			if err != nil && answered(err) {
+				s.logf("assistant: day recap push: the hub refused it: %v", err)
+				err = nil
+			}
+			sent(dayPushPhone, err)
+		})
+	}
+	if !b.has(id, channel.Feishu) {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(ctx, dayPushWait)
+			defer cancel()
+			sent(channel.Feishu, s.feishuPushKeyed(ctx, "", "", title, body, id+"_")) // as minutesWritten: not as the main conversation's
+		})
+	}
+	wg.Go(func() {
+		out, err := s.channelPushTo(ctx, "", "", title, body, id, func(ch string) bool { return b.has(id, ch) })
+		if err != nil {
+			sent("channels", err)
+		}
+		for ch, err := range out {
+			if errors.Is(err, errCannotSend) || errors.Is(err, errNoChannel) { // nowhere to send it: not again
+				err = nil
+			}
+			sent(ch, err)
+		}
+	})
+	wg.Wait()
+	if len(failed) > 0 {
+		return errors.Join(failed...)
+	}
+	b.forget(id)
+	return nil
+}
+
+// dayPushWait is how long the day's push waits for the phone's hand-over, and for the Lark bot's (the channels have
+// theirs, channelSendTimeout).
+const dayPushWait = 30 * time.Second
+
+// dayPushPhone is the phone among a day push's destinations (dayPushBook); the others are channel ids.
+const dayPushPhone = "phone"
+
+// dayPushBook is what took each day push not taken by all its destinations yet, by the push's id: so the push sent
+// again goes only to the others while this process runs.
+type dayPushBook struct {
+	mu   sync.Mutex
+	sent map[string]map[string]bool
+}
+
+func (b *dayPushBook) has(id, to string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.sent[id][to]
+}
+
+func (b *dayPushBook) took(id, to string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sent == nil {
+		b.sent = map[string]map[string]bool{}
+	}
+	if b.sent[id] == nil {
+		b.sent[id] = map[string]bool{}
+	}
+	b.sent[id][to] = true
+}
+
+// forget: every destination took push id.
+func (b *dayPushBook) forget(id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.sent, id)
+}
+
+// dayRecapCounts are the meetings and the suggested to-dos of day, whose recording id's recap is d: across every part
+// of the day with a recap (one of e's day recordings of day), a meeting the hub knows of counted once whatever the
+// parts it is in.
+func dayRecapCounts(e *kb.Engine, day, id string, d kb.DayRecap) (meetings, actions int) {
+	recaps := []kb.DayRecap{d}
+	if e != nil {
+		for _, p := range e.DayRecordings(day) {
+			if p.ID == id {
+				continue
+			}
+			if rc, err := e.ReadDayRecap(p.ID); err == nil {
+				recaps = append(recaps, *rc)
+			}
+		}
+	}
+	known := map[[2]string]bool{}
+	for _, rc := range recaps {
+		for _, en := range rc.Timeline {
+			if en.Kind != kb.RecapMeeting {
+				continue
+			}
+			if m := en.Meeting; m != nil && m.ID != "" {
+				if k := [2]string{m.Kind, m.ID}; known[k] {
+					continue
+				} else {
+					known[k] = true
+				}
+			}
+			meetings++
+		}
+		actions += len(rc.Actions)
+	}
+	return meetings, actions
 }
 
 // dayRecordingName is a day recording's name in the owner's language (kb.Engine.DayRecordingName), unless the user
@@ -206,7 +330,9 @@ func (s *Service) eveningClock() (int, int) {
 
 // dayRecapTodos makes a to-do of each action of version of day recording rec's recap, as minutesTodos does for
 // minutes: an id from the recording, the version and the action (todo_day_…), so a retried request makes none twice,
-// and notes that name the day and the clock time it was said in the recording's own zone.
+// and notes that name the day and the clock time it was said in the recording's own zone. The knowledge base records
+// each with its action as that version has it (who, what and when it was said), so a recap written again meanwhile
+// gets it only on the same task said at the same time (kb.Engine.SetDayRecapTodos).
 func (s *Service) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Recording, version int, actions []string) ([]Todo, *kb.DayRecap, error) {
 	s.minutesMu.Lock()
 	defer s.minutesMu.Unlock()
@@ -218,16 +344,23 @@ func (s *Service) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Recor
 		return nil, nil, kb.ErrMinutesStale
 	}
 	note := s.dayRecapTodoNotes(ctx, e, rec, rc)
-	out, made, byTask, err := s.actionTodos(ctx, rc.Actions, actions, func(aid string) string { return dayRecapTodoID(rec.ID, version, aid) }, note)
+	out, made, _, err := s.actionTodos(ctx, rc.Actions, actions, func(aid string) string { return dayRecapTodoID(rec.ID, version, aid) }, note)
+	var confirmed []kb.MinutesAction // the actions made to-dos, as this version has them
+	for _, a := range rc.Actions {
+		if t := made[a.ID]; t != "" {
+			a.TodoID = t
+			confirmed = append(confirmed, a)
+		}
+	}
 	if err != nil {
 		if made != nil { // those made so far are recorded all the same, as minutesTodos records them
-			if _, serr := e.SetDayRecapTodos(rec.ID, version, made, byTask); serr != nil {
+			if _, serr := e.SetDayRecapTodos(rec.ID, version, confirmed); serr != nil {
 				s.logf("assistant: recap to-dos of %s: %v", rec.ID, serr)
 			}
 		}
 		return out, nil, err
 	}
-	rc, err = e.SetDayRecapTodos(rec.ID, version, made, byTask)
+	rc, err = e.SetDayRecapTodos(rec.ID, version, confirmed)
 	return out, rc, err
 }
 

@@ -538,3 +538,73 @@ func TestDayRecordings(t *testing.T) {
 		t.Errorf("day recordings %+v", got)
 	}
 }
+
+// An append never takes the place of the day: stored segments that cannot be read, do not parse or are not all there
+// refuse it (a 500 for the phone to send again), with nothing written.
+func TestDayAppendUnreadableSegments(t *testing.T) {
+	now := dayClock.Add(time.Hour)
+	e := dayEngine(t, nil, &now)
+	mustPut(t, e, dayID, dayUpload(1, "早上好", "开会了"), now)
+	path := e.Store.Path(KindRecording, dayID, "segments.json")
+	good, _ := os.ReadFile(path)
+	for _, c := range []struct {
+		name string
+		bad  func()
+	}{
+		{"unparsable", func() { _ = os.WriteFile(path, []byte("[{not json"), 0o600) }},
+		{"missing", func() { _ = os.Remove(path) }},
+		{"unreadable", func() { _ = os.Remove(path); _ = os.Mkdir(path, 0o700) }},
+		{"fewer", func() { _ = os.WriteFile(path, []byte(`[{"start": 0, "end": 5, "text": "早上好", "n": 1}]`), 0o600) }},
+	} {
+		c.bad()
+		meta, _ := os.ReadFile(e.Store.Path(KindRecording, dayID, "meta.json"))
+		if got, err := e.AppendRecording(dayID, dayAppend(1, 2, 2, seg(200, "新的一句"))); err == nil {
+			t.Errorf("%s: appended %+v", c.name, got)
+		}
+		if after, _ := os.ReadFile(e.Store.Path(KindRecording, dayID, "meta.json")); string(after) != string(meta) {
+			t.Errorf("%s: meta.json written", c.name)
+		}
+		_ = os.RemoveAll(path)
+		_ = os.WriteFile(path, good, 0o600)
+	}
+	mustAppend(t, e, dayID, dayAppend(1, 2, 2, seg(200, "新的一句")))
+	if segs := e.Store.RecordingSegments(dayID); len(segs) != 3 {
+		t.Errorf("segments %+v", segs)
+	}
+}
+
+// A day's hours are hours of absolute time in its zone: the hour a fall-back repeats is two chunks, each ending when
+// its hour does, and coverage passing from one into the other finishes the first (and wakes the recap lane).
+func TestDayChunksDST(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skip(err)
+	}
+	start := time.Date(2026, 11, 1, 0, 0, 0, 0, la) // 01:00–02:00 comes twice that night
+	lines := []minutesLine{{N: 1, At: 5400, Text: "一点半，夏令时"}, {N: 2, At: 9000, Text: "一点半，标准时"}}
+	chunks := dayChunks(lines, start, la, 9600, nil) // to 01:40 PST
+	if len(chunks) != 2 {
+		t.Fatalf("chunks %+v", chunks)
+	}
+	if c := chunks[0]; c.end != 7200 || !c.finished || len(c.lines) != 1 {
+		t.Errorf("01:00 PDT: %+v", c)
+	}
+	if c := chunks[1]; c.end != 9600 || c.finished || len(c.lines) != 1 {
+		t.Errorf("01:00 PST: %+v", c)
+	}
+	if h := hourStart(start.Add(9000*time.Second), la); !h.Equal(start.Add(7200 * time.Second)) {
+		t.Errorf("hourStart %v", h)
+	}
+	now := start.Add(3 * time.Hour)
+	e := dayEngine(t, nil, &now)
+	u := dayUpload(1)
+	u.StartedAt, u.Day, u.TZ = start, "2026-11-01", "America/Los_Angeles"
+	u.Segments = []RecordingSegment{seg(5400, "一点半")}
+	u.Coverage = &RecordingCoverage{To: 6600} // 01:50 PDT
+	mustPut(t, e, dayID, u, now)
+	a := dayAppend(1, 2, 1)
+	a.Coverage = &RecordingCoverage{To: 7300} // 01:01 PST
+	if got := mustAppend(t, e, dayID, a); !got.Wake {
+		t.Error("the repeated hour began without a wake")
+	}
+}

@@ -17,8 +17,10 @@ import (
 // besides the recap's own push.
 
 const (
-	briefDayRunes   = 4000 // about what the section may take: entries from the middle of the day go first
+	briefDayRunes   = 4000 // what the section may take, all of it (briefDayBound): entries from the middle of the day go first
+	briefDayReasons = 6    // gap reasons given (those with the most time; the phone's own six fit); the rest are counted together
 	briefDayRanges  = 5    // stretches of one gap reason given with their times (the longest); the rest are counted
+	briefDayParts   = 5    // parts given (the first and the latest); those from the middle are counted
 	briefDaySummary = 300
 	briefDayTitle   = 60
 	briefDayWhat    = 100
@@ -31,7 +33,7 @@ func (s *Service) briefDay(ctx context.Context, now time.Time, loc *time.Locatio
 	if err != nil {
 		return nil
 	}
-	recs := e.TodaysDayRecordings(now)
+	recs := e.TodaysDayRecordings(now, loc) // the owner's zone: a read-only knowledge base's store is not put in it
 	if len(recs) == 0 {
 		return nil
 	}
@@ -53,7 +55,7 @@ func (s *Service) briefDay(ctx context.Context, now time.Time, loc *time.Locatio
 	var gaps []briefGap
 	var entries []entry
 	var actions []action
-	var first, last time.Time
+	var first, last, text time.Time
 	type gapKey struct {
 		from, to int64
 		reason   string
@@ -75,11 +77,16 @@ func (s *Service) briefDay(ctx context.Context, now time.Time, loc *time.Locatio
 				}
 			}
 		}
-		if first.IsZero() || r.StartedAt.Before(first) {
-			first = r.StartedAt
+		// Recorded is its span (until now while it is open); how far its text goes is said apart.
+		start, end := e.DaySpan(r, now)
+		if first.IsZero() || start.Before(first) {
+			first = start
 		}
-		if end := at(to); end.After(last) {
+		if end.After(last) {
 			last = end
+		}
+		if t := at(to); t.After(text) {
+			text = t
 		}
 		part := prompts.BriefDayPart{Part: max(r.Part, 1)}
 		rc, err := e.ReadDayRecap(r.ID)
@@ -107,6 +114,9 @@ func (s *Service) briefDay(ctx context.Context, now time.Time, loc *time.Locatio
 		d.Parts = append(d.Parts, part)
 	}
 	d.From, d.To = clock(first), clock(last)
+	if t := clock(text); text.Before(last) && t != d.To {
+		d.Transcribed = t
+	}
 	d.Gaps = briefDayGaps(gaps, clock)
 	slices.SortStableFunc(entries, func(a, b entry) int { return a.at.Compare(b.at) })
 	for _, x := range entries {
@@ -160,20 +170,46 @@ func briefDayGaps(gaps []briefGap, clock func(time.Time) string) []prompts.Brief
 	return out
 }
 
-// briefDayBound keeps d about briefDayRunes long: the timeline's entries from the middle of the day go first (its
-// start and its latest hours say the most), then the last suggested to-dos, then the summaries are cut short.
+// briefDayBound keeps d within briefDayRunes in all. At most briefDayParts parts are listed (those from the middle go,
+// counted) and briefDayReasons gap reasons (those with the least time go, counted together): with the reasons, the
+// summaries and the titles clipped, that is well within it. Then while it is longer the timeline's entries from the
+// middle of the day go (its start and its latest hours say the most), then the last suggested to-dos, then the
+// summaries are cut short.
 func briefDayBound(d *prompts.BriefDay) {
-	for prompts.BriefDayRunes(d) > briefDayRunes && len(d.Timeline) > 0 {
+	for len(d.Parts) > briefDayParts {
+		mid := len(d.Parts) / 2
+		d.Parts = slices.Delete(d.Parts, mid, mid+1)
+		d.PartsLeft++
+	}
+	if len(d.Gaps) > briefDayReasons {
+		most := slices.Clone(d.Gaps)
+		slices.SortStableFunc(most, func(a, b prompts.BriefDayGap) int { return cmp.Compare(b.Minutes, a.Minutes) })
+		keep := map[string]bool{}
+		for _, g := range most[:briefDayReasons] {
+			keep[g.Reason] = true
+		}
+		d.Gaps = slices.DeleteFunc(d.Gaps, func(g prompts.BriefDayGap) bool { // in the day's order still
+			if keep[g.Reason] {
+				return false
+			}
+			d.GapReasonsLeft++
+			d.GapsLeft += g.Count
+			d.GapMinutesLeft += g.Minutes
+			return true
+		})
+	}
+	over := func() bool { return prompts.BriefDayRunes(d) > briefDayRunes }
+	for over() && len(d.Timeline) > 0 {
 		mid := len(d.Timeline) / 2
 		d.Timeline = slices.Delete(d.Timeline, mid, mid+1)
 		d.Left++
 	}
-	for prompts.BriefDayRunes(d) > briefDayRunes && len(d.Actions) > 0 {
+	for over() && len(d.Actions) > 0 {
 		d.Actions = d.Actions[:len(d.Actions)-1]
 		d.ActionsLeft++
 	}
 	for i := range d.Parts {
-		if prompts.BriefDayRunes(d) <= briefDayRunes {
+		if !over() {
 			return
 		}
 		d.Parts[i].Summary = clip(d.Parts[i].Summary, briefDaySummary/3)

@@ -3,7 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,9 +14,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // All-day recordings through the manager's HTTP, their recap's push, to-dos, kb_get and the evening routine's facts
@@ -73,6 +77,9 @@ func newDayFixture(t *testing.T) *dayFixture {
 	setSettings(t, m.s, func(v *Settings) { v.Timezone = d.owner.String() }) // before the knowledge base opens in it
 	e := m.engine()
 	e.Model, e.ModelFor = d.model, func(string) kb.Model { return d.model }
+	// The hub's Lark bot (not paired) and channels (none), which the day's push asks of: it waits for them (kb_day.go).
+	m.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return FeishuStatus{}, nil })
+	m.f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) { return map[string]any{"channels": []channel.View{}}, nil })
 	return d
 }
 
@@ -530,13 +537,16 @@ func TestEveningFactsSayTodaysDayRecording(t *testing.T) {
 	rc := d.recap(dayRec)
 	d.putDay(dayPart2, 200, d.owner, map[string]any{"part": 2, "duration": 1800})
 
-	f := d.s.briefFactsAt(ctx, time.Now(), "evening")
+	now := time.Now()
+	f := d.s.briefFactsAt(ctx, now, "evening")
 	if f.Day == nil || len(f.Day.Parts) != 2 || len(f.Day.Timeline) != 2 || len(f.Day.Actions) != 1 || len(f.Day.Gaps) != 1 {
 		t.Fatalf("facts %+v", f.Day)
 	}
 	text := f.modelText()
 	made := rc.GeneratedAt.In(d.owner).Format("15:04")
-	for _, want := range []string{"的全天录音", "录音时段 08:00–09:05，其间没录到的：被打断（来电、Siri 等占用了麦克风） 1 段共 15 分钟（08:10–08:25）",
+	// Open, it was recorded until now; its text goes as far as the phone uploaded it.
+	recorded := "录音时段 08:00–" + now.In(d.owner).Format("15:04") + "，文字转写到 09:05，"
+	for _, want := range []string{"的全天录音", recorded + "其间没录到的：被打断（来电、Siri 等占用了麦克风） 1 段共 15 分钟（08:10–08:25）",
 		"第 1 部分：回顾写于 " + made + "，读到 ", "概要：A standup, then the export review.", "第 2 部分：录了 30 分钟，但没有转写出文字",
 		"08:01–08:01 会议以外：Standup", "09:02–09:03 会议：Export review", "Bo：Fix the flaky upload test", "所以请在回答里"} {
 		if !strings.Contains(text, want) {
@@ -580,5 +590,230 @@ func TestEveningFactsDayIsBounded(t *testing.T) {
 	}
 	if len(d.Actions) != 50 || d.ActionsLeft != 0 {
 		t.Fatalf("actions went before the timeline: %d", len(d.Actions))
+	}
+}
+
+// The day's push is done only once the phone, the Lark bot and every channel with pushes on took it (day-recap.md
+// "The push"): one that failed leaves it due in the knowledge base, and telling it again sends it to those that did
+// not take it, with the same id and keys; a refusal that sending again cannot help counts as taken.
+func TestDayRecapPushTakenByAll(t *testing.T) {
+	d := newDayFixture(t)
+	setEvening(t, d.s, "06:30", true)
+	larkFails, chanFails := 1, 1 // the answers run under d.f.mu
+	var chanErr error
+	d.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_owner", PairedAt: time.Unix(100, 0), Features: FeishuFeatures{Pushes: true}}, nil
+	})
+	d.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+		if larkFails > 0 {
+			larkFails--
+			return nil, errors.New("Lark is busy")
+		}
+		return map[string]any{"message_id": "om_day"}, nil
+	})
+	d.f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
+		return map[string]any{"channels": []channel.View{{ID: "examplechat", Name: "examplechat", Source: channel.SourcePlugin, Kind: channel.KindIM,
+			Installed: true, Enabled: true, State: channel.StateConnected, Capabilities: channel.Capabilities{Push: true}}}}, nil
+	})
+	d.f.answerApp(AppChannels, ChannelsSend, func(json.RawMessage) (any, error) {
+		if chanFails > 0 {
+			chanFails--
+			return nil, errors.New("the channel's program restarts")
+		}
+		return map[string]any{}, chanErr
+	})
+	d.s.chans.mu.Lock()
+	d.s.loadChannelsLocked(context.Background())
+	d.s.channelPrefLocked("examplechat").Features = map[string]bool{channel.FeaturePushes: true}
+	d.s.chans.mu.Unlock()
+	d.f.mu.Lock()
+	d.f.failNotify = 1
+	d.f.mu.Unlock()
+
+	// Written at the recap time, the recap takes the push, which nobody takes: it stays due.
+	d.putDay(dayRec, 100, d.owner, nil)
+	d.do("POST", segmentsPath(dayRec), "", dayLines(100, 101), http.StatusOK)
+	rc := d.recap(dayRec)
+	e := d.engine()
+	r, _ := e.Store.Recording(dayRec)
+	posts, sends := d.f.appParams(AppFeishu, FeishuPost), d.f.appParams(AppChannels, ChannelsSend)
+	if !r.RecapPush || r.RecapPushed || r.RecapPushTries != 1 || len(d.f.pushed()) != 0 || len(posts) != 1 || len(sends) != 1 {
+		t.Fatalf("a push nobody took: %d posts, %d sends, %+v", len(posts), len(sends), r)
+	}
+	tell := func() error {
+		t.Helper()
+		r, _ := e.Store.Recording(dayRec)
+		return e.DayRecapWritten(context.Background(), *r, *rc)
+	}
+	// Told again: the phone and the channel take it, the Lark bot not yet.
+	d.f.mu.Lock()
+	larkFails = 1
+	d.f.mu.Unlock()
+	if err := tell(); err == nil {
+		t.Fatal("done before the Lark bot took it")
+	}
+	// Once more: only the Lark bot gets it again, and takes it.
+	if err := tell(); err != nil {
+		t.Fatal(err)
+	}
+	id := "ntf_dayrecap_" + rc.Day
+	pushes := d.f.pushed()
+	posts, sends = d.f.appParams(AppFeishu, FeishuPost), d.f.appParams(AppChannels, ChannelsSend)
+	if len(pushes) != 1 || pushes[0].ID != id || len(posts) != 3 || len(sends) != 2 {
+		t.Fatalf("sent again to those that took it: %d pushes, %d posts, %d sends", len(pushes), len(posts), len(sends))
+	}
+	for _, p := range posts {
+		if p["uuid"] != id+"_0" {
+			t.Errorf("the Lark copy's key %v", p["uuid"])
+		}
+	}
+	for _, p := range sends {
+		if p["ref"] != id || p["kind"] != channel.OutPush || p["text"] != "🔔 "+pushes[0].Title+"\n\n"+pushes[0].Body {
+			t.Errorf("the channel's copy %v", p)
+		}
+	}
+	// Told after it was done (as after a restart), everything goes again: the hub refusing the phone's and the channel
+	// having nowhere to send it are taken as they are, not sent again and again.
+	d.f.mu.Lock()
+	d.f.refuseNotify = &rpc.Error{Code: "no_device", Message: "another manager's"}
+	chanErr = &rpc.Error{Code: CodeCannotSend, Message: "no conversation yet"}
+	d.f.mu.Unlock()
+	if err := tell(); err != nil {
+		t.Fatalf("a refusal is sent again: %v", err)
+	}
+	if posts := d.f.appParams(AppFeishu, FeishuPost); len(posts) != 4 || posts[3]["uuid"] != id+"_0" {
+		t.Fatalf("the Lark bot's copy again: %v", posts)
+	}
+}
+
+// The push counts the day's meetings and suggested to-dos across its parts' recaps.
+func TestDayRecapPushCountsEveryPart(t *testing.T) {
+	d := newDayFixture(t)
+	for i, id := range []string{dayRec, dayPart2} {
+		base := int64(100 * (i + 1))
+		d.putDay(id, base, d.owner, map[string]any{"part": i + 1})
+		d.do("POST", segmentsPath(id), "", dayLines(base, base+1), http.StatusOK)
+		d.do("POST", "/api/v1/recordings/"+id+"/minutes", "", nil, http.StatusAccepted)
+		if rc := d.recap(id); len(rc.Actions) != 1 || rc.Timeline[1].Kind != kb.RecapMeeting {
+			t.Fatalf("recap of %s: %+v", id, rc)
+		}
+	}
+	if p := d.f.pushed(); len(p) != 0 {
+		t.Fatalf("pushed before the recap time: %+v", p)
+	}
+	setEvening(t, d.s, "06:30", false)
+	d.engine().WriteDayRecaps(context.Background(), 1)
+	_, day := today8(d.owner)
+	want := i18n.T(d.s.lang(context.Background()), "assistant-day-recap.ready_body", i18n.Args{"day": day, "meetings": 2, "actions": 2})
+	if p := d.f.pushed(); len(p) != 1 || p[0].Body != want {
+		t.Fatalf("pushes %+v, want %q", p, want)
+	}
+}
+
+// The evening facts of a read-only knowledge base take the owner's today in the owner's zone (its store is not put
+// in it); what was recorded is the recording's span, and how far its text goes is said apart.
+func TestEveningFactsDayReadOnlyInTheOwnersZone(t *testing.T) {
+	d := newDayFixture(t)
+	// An owner about 12 hours from the host's zone, so their days part.
+	_, local := time.Now().Zone()
+	hours := int(math.Round(float64(local) / 3600))
+	owner := hours + 12
+	if hours > 0 {
+		owner = hours - 12
+	}
+	loc := etcZone(t, owner)
+	setSettings(t, d.s, func(v *Settings) { v.Timezone = loc.String() })
+	y := time.Now().In(loc).AddDate(0, 0, -1)
+	start := time.Date(y.Year(), y.Month(), y.Day(), 8, 0, 0, 0, loc)
+	end, now := start.Add(time.Hour), start.Add(5*time.Hour)
+	d.putDay(dayRec, 100, loc, map[string]any{"started_at": start.Format(time.RFC3339), "ended_at": end.Format(time.RFC3339),
+		"day": y.Format(time.DateOnly), "complete": true, "segments": []map[string]any{{"start": 60, "end": 65, "text": "Morning standup."}},
+		"coverage": map[string]any{"to": 1800}})
+	d.f.mu.Lock()
+	d.f.hello.KB = &KBSettings{ReadOnly: true}
+	d.f.mu.Unlock()
+	f := d.s.briefFactsAt(context.Background(), now, "evening")
+	if f.Day == nil || f.Day.Date != y.Format(time.DateOnly) {
+		t.Fatalf("the owner's day in a read-only knowledge base: %+v", f.Day)
+	}
+	if text := f.modelText(); !strings.Contains(text, "录音时段 08:00–09:00，文字转写到 08:30") {
+		t.Fatalf("recorded and transcribed:\n%s", text)
+	}
+}
+
+// The section stays within 4000 runes whatever a valid day holds: 500 gaps of as many reasons, a dozen parts. The
+// reasons with the most time and the first and latest parts are listed, the others counted.
+func TestEveningFactsDayBoundsGapsAndParts(t *testing.T) {
+	d := newDayFixture(t)
+	var gaps []map[string]any
+	for i := range 500 {
+		reason := fmt.Sprintf("reason-%03d-", i)
+		gaps = append(gaps, map[string]any{"from": 4000 + 2*i, "to": 4001 + 2*i, "reason": reason + strings.Repeat("x", 32-len(reason))})
+	}
+	lines := dayLines(100, 101)
+	lines["coverage"] = map[string]any{"to": 6000, "gaps": gaps}
+	d.putDay(dayRec, 100, d.owner, nil)
+	d.do("POST", segmentsPath(dayRec), "", lines, http.StatusOK)
+	d.do("POST", "/api/v1/recordings/"+dayRec+"/minutes", "", nil, http.StatusAccepted)
+	d.recap(dayRec)
+	for part := 2; part <= 12; part++ {
+		d.putDay(fmt.Sprintf("77777777-7777-4777-8777-%012d", part), int64(100*part), d.owner, map[string]any{"part": part, "duration": 600})
+	}
+	f := d.s.briefFactsAt(context.Background(), time.Now(), "evening")
+	if f.Day == nil {
+		t.Fatal("no day")
+	}
+	if n := prompts.BriefDayRunes(f.Day); n > briefDayRunes {
+		t.Errorf("%d runes", n)
+	}
+	day := f.Day
+	if len(day.Gaps) != briefDayReasons || day.GapReasonsLeft != 494 || day.GapsLeft != 494 || day.GapMinutesLeft != 494 ||
+		!strings.HasPrefix(day.Gaps[0].Reason, "reason-000-") {
+		t.Errorf("gaps %d listed, %d reasons left (%d, %d min): %+v", len(day.Gaps), day.GapReasonsLeft, day.GapsLeft, day.GapMinutesLeft, day.Gaps[0])
+	}
+	if len(day.Parts) != briefDayParts || day.PartsLeft != 7 || day.Parts[0].Part != 1 || day.Parts[len(day.Parts)-1].Part != 12 {
+		t.Errorf("parts %+v, %d left", day.Parts, day.PartsLeft)
+	}
+	text := f.modelText()
+	for _, want := range []string{"；另有 494 种原因共 494 段 494 分钟", "  - 中间另有 7 个部分没列出\n", "Standup"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("facts lack %q:\n%s", want, text)
+		}
+	}
+}
+
+// At its longest, every part of the section is bounded: 30 parts with long summaries, 500 gap reasons each with its
+// longest stretches, a long timeline and many to-dos still make at most 4000 runes.
+func TestEveningFactsDayBoundsEverything(t *testing.T) {
+	d := &prompts.BriefDay{Date: "2026-11-11", From: "11-10 23:58", To: "11-11 23:59", Transcribed: "11-11 23:30"}
+	for i := range 500 {
+		reason := fmt.Sprintf("reason-%03d-", i)
+		g := prompts.BriefDayGap{Reason: reason + strings.Repeat("x", 32-len(reason)), Count: 5 + i%7, Minutes: 10 + i%50, More: true}
+		for range briefDayRanges {
+			g.Ranges = append(g.Ranges, "11-10 23:59–11-11 00:30")
+		}
+		d.Gaps = append(d.Gaps, g)
+	}
+	for i := range 30 {
+		d.Parts = append(d.Parts, prompts.BriefDayPart{Part: i + 1, Made: "11-12 00:10", Upto: "11-11 23:59", Final: true, Partial: true,
+			State: "failed", Summary: strings.Repeat("概", briefDaySummary)})
+	}
+	for i := range 200 {
+		d.Timeline = append(d.Timeline, prompts.BriefDayEntry{From: fmt.Sprintf("e%03d", i), To: "11-11 23:59", Title: strings.Repeat("长", briefDayTitle)})
+	}
+	for range 50 {
+		d.Actions = append(d.Actions, prompts.BriefDayAction{Who: strings.Repeat("人", 40), What: strings.Repeat("事", briefDayWhat)})
+	}
+	briefDayBound(d)
+	if n := prompts.BriefDayRunes(d); n > briefDayRunes {
+		t.Fatalf("%d runes", n)
+	}
+	if len(d.Parts) != briefDayParts || d.PartsLeft != 25 || d.Parts[0].Part != 1 || d.Parts[len(d.Parts)-1].Part != 30 {
+		t.Errorf("parts %d, %d left", len(d.Parts), d.PartsLeft)
+	}
+	// The reasons with the most time (59 minutes: every 50th from the 49th), in the day's order.
+	if len(d.Gaps) != briefDayReasons || d.GapReasonsLeft != 494 || !strings.HasPrefix(d.Gaps[0].Reason, "reason-049-") ||
+		!strings.HasPrefix(d.Gaps[5].Reason, "reason-299-") {
+		t.Errorf("gaps %d listed, %d left: %s … %s", len(d.Gaps), d.GapReasonsLeft, d.Gaps[0].Reason, d.Gaps[len(d.Gaps)-1].Reason)
 	}
 }

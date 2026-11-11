@@ -334,13 +334,14 @@ func (e *Engine) now() time.Time {
 }
 
 // putDay sets a day recording's own fields from upload u (cleaned, a new base): its count, and the revisions an
-// older manager would otherwise match and summarize it at.
+// older manager would otherwise match and summarize it at. Its text is another (TextRev): every finished chunk is
+// looked at again, and noted again when the PUT changed its lines.
 func (r *Recording) putDay(u *RecordingUpload) {
 	r.Day, r.TZ, r.Part, r.Coverage = u.Day, u.TZ, u.Part, u.Coverage
 	r.Base, r.Next = u.Revision, u.next
 	r.Calendar, r.Meeting, r.MinutesAsked = nil, nil, false
 	r.dayGuard()
-	r.RecapNotedRev = 0 // its notes went with the old base
+	r.TextRev++
 	if !r.Complete {
 		r.RecapComplete = false // complete again later: another final recap
 	}
@@ -388,9 +389,11 @@ func (a *RecordingAppend) check() error {
 // hub holds already are skipped (a retry stores nothing twice), the rest stored after them, in any time order
 // (segments.json stays ordered by start). Its other fields apply only from a request whose revision is at least the
 // stored one, and only when present; ended_at and complete only ever get set here. The stored revision becomes the
-// larger of the two. Errors in the contract's order: ErrRecordingDeleted, ErrNotFound, ErrReadOnly, ErrBadRecording,
-// then RecordingExpired (no error: before recording_days or trimmed; nothing written), ErrNotDay, a BaseChangedError,
-// a SegmentsGapError, a DayFullError (nothing of the request stored).
+// larger of the two; TextRev counts the append whatever its revision. Errors in the contract's order:
+// ErrRecordingDeleted, ErrNotFound, ErrReadOnly, ErrBadRecording, then RecordingExpired (no error: before
+// recording_days or trimmed; nothing written), ErrNotDay, a BaseChangedError, a SegmentsGapError, a DayFullError
+// (nothing of the request stored). The stored segments that cannot be read are an error too, with nothing written:
+// the append never takes the place of the day.
 func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppended, error) {
 	id, ok := RecordingID(rawID)
 	out := RecordingAppended{ID: id}
@@ -427,7 +430,10 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	case *a.From > r.Next:
 		return out, SegmentsGapError{Next: r.Next}
 	}
-	segs := st.RecordingSegments(id)
+	segs, err := st.daySegments(r)
+	if err != nil {
+		return out, err
+	}
 	stored := 0
 	for _, sg := range segs {
 		stored += len(sg.Text)
@@ -480,6 +486,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	all := append(segs, add...)
 	sortDaySegments(all)
 	r.Segments = len(all)
+	r.TextRev++
 	for _, sg := range add {
 		r.Chars += len([]rune(sg.Text))
 	}
@@ -505,6 +512,26 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	return out, nil
 }
 
+// daySegments are day recording r's stored segments (segments.json, read through a pending undo journal like every
+// read), refused when they cannot be read, do not parse, or are not as many as r says it holds: an append must never
+// commit its own batch as the whole day.
+func (s *Store) daySegments(r *Recording) ([]RecordingSegment, error) {
+	raw, err := s.recordingRead(r.ID, "segments.json")
+	if err != nil {
+		return nil, fmt.Errorf("recording %s: segments: %w", r.ID, err)
+	}
+	var segs []RecordingSegment
+	if raw != nil {
+		if err := json.Unmarshal(raw, &segs); err != nil {
+			return nil, fmt.Errorf("recording %s: segments: %w", r.ID, err)
+		}
+	}
+	if len(segs) != r.Segments {
+		return nil, fmt.Errorf("recording %s: segments: %d stored, %d expected", r.ID, len(segs), r.Segments)
+	}
+	return segs, nil
+}
+
 // sortDaySegments orders a day recording's segments as segments.json keeps them: by start, then position.
 func sortDaySegments(segs []RecordingSegment) {
 	sort.SliceStable(segs, func(i, j int) bool {
@@ -526,10 +553,12 @@ func (r *Recording) coverageTo() float64 {
 
 func seconds(sec float64) time.Duration { return time.Duration(sec * float64(time.Second)) }
 
-// hourStart is the start of t's clock hour in zone.
+// hourStart is the start of t's clock hour in zone, by the zone's offset at t, so every hour is an hour of absolute
+// time: the hour a fall-back repeats is two of them, never one of two hours.
 func hourStart(t time.Time, zone *time.Location) time.Time {
-	t = t.In(zone)
-	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, zone)
+	_, off := t.In(zone).Zone()
+	shift := time.Duration(off) * time.Second
+	return t.Add(shift).Truncate(time.Hour).Add(-shift).In(zone)
 }
 
 // DayRecordings are the day recordings of day (YYYY-MM-DD, in each one's zone), by part, then start.
@@ -537,11 +566,18 @@ func (e *Engine) DayRecordings(day string) []Recording {
 	return e.dayRecordings(func(r *Recording) bool { return r.Day == day })
 }
 
-// TodaysDayRecordings are the day recordings recorded on the owner's day of now (Store.Zone), as the recap time takes
-// them (Engine.daySpan: one still open counts until now), by part, then start: what the evening routine reads.
-func (e *Engine) TodaysDayRecordings(now time.Time) []Recording {
-	from, to, _ := dayStart(now.In(e.Store.Zone()).Format(time.DateOnly), e.Store.Zone())
+// TodaysDayRecordings are the day recordings recorded on the owner's day of now in zone owner (the evening routine's:
+// a read-only knowledge base's store is not put in it), as the recap time takes them (DaySpan: one still open counts
+// until now), by part, then start: what the evening routine reads.
+func (e *Engine) TodaysDayRecordings(now time.Time, owner *time.Location) []Recording {
+	from, to, _ := dayStart(now.In(owner).Format(time.DateOnly), owner)
 	return e.dayRecordings(func(r *Recording) bool { return e.recordedWithin(r, now, from, to) })
+}
+
+// DaySpan is when day recording r was recorded as of now (daySpan): from its start to its end, or until now while it
+// is open, within its day.
+func (e *Engine) DaySpan(r *Recording, now time.Time) (time.Time, time.Time) {
+	return e.daySpan(r, now)
 }
 
 func (e *Engine) dayRecordings(keep func(r *Recording) bool) []Recording {

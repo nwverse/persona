@@ -329,3 +329,251 @@ describe("an all-day recording's recap in Knowledge detail", () => {
     expect(toast).not.toHaveBeenCalled();
   });
 });
+
+// A day that outgrew one recording continues in a next part with its own recap (docs/assistant/day-recap.md "Parts").
+describe("a day in two parts", () => {
+  const part2 = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+  const part2Path = `/api/v1/kb/recordings/${part2}`;
+  const listPath = "/api/v1/recordings";
+  // Part 2 holds a late morning sentence and an afternoon meeting; its own action reuses the id a1.
+  const second = (): KBDetailResponse => ({ detail: {
+    kind: "recordings", id: part2, path: `recordings/${part2}`,
+    meta: {
+      title: "Day · Nov 11", kind: "day", day: "2026-11-11", tz: "Asia/Tokyo", part: 2, started_at: started, complete: false, device: "watch", revision: 4, base: 2, next: 2,
+      recap_state: "ready", coverage: { to: 32400, gaps: [] },
+    },
+    summary: "The beta plan.",
+    segments: [{ start: 5400, end: 5410, text: "The beta waits for the upload fix." }, { start: 30000, end: 30010, text: "Ship the beta on Friday." }],
+    recap: {
+      version: 2, revision: 4, generated_at: "2026-11-11T08:00:41Z", day: "2026-11-11", covers: { from: 0, to: 32400 }, final: false,
+      summary: "The beta plan.",
+      timeline: [
+        { from: 30000, to: 30600, kind: "meeting", title: "Beta go/no-go", points: [{ text: "Ship the beta on Friday.", at: 30000 }] },
+        { from: 5400, to: 5700, kind: "outside", title: "Hallway chat about the beta", points: [{ text: "The beta waits for the upload fix.", at: 5400, who: "Cy" }] },
+      ],
+      actions: [{ id: "a1", who: "Cy", what: "Fix the upload before the beta.", at: 5400 }],
+      gaps: [{ from: 8400, to: 9900, reason: "interrupted" }, { from: 31000, to: 31200, reason: "paused" }],
+      partial: false,
+      markdown: "# 2026-11-11 (part 2)",
+    },
+  } });
+  // The list holds both parts (part 2's start in UTC: the same instant) and recordings that are not this day's.
+  const list = { days: 14, deleted: [], recordings: [
+    { id, revision: 9, complete: false, started_at: started, kind: "day", day: "2026-11-11", part: 1, next: 5, base: 1 },
+    { id: part2, revision: 4, complete: false, started_at: "2026-11-10T23:00:00Z", kind: "day", day: "2026-11-11", part: 2, next: 2, base: 2 },
+    { id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", revision: 1, complete: true, started_at: "2026-11-10T08:00:00+09:00", kind: "day", day: "2026-11-10", next: 1, base: 1 },
+    { id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", revision: 1, complete: true, started_at: "2026-11-11T09:00:00+09:00", kind: "day", day: "2026-11-11", next: 1, base: 1 },
+    { id: meetingId, revision: 1, complete: true, started_at: started },
+  ] };
+  const pendingFor = (url: string) => requests.filter((r) => r.url === url).at(-1)!;
+  const loadDay = async (one = fixture(), two = second()) => {
+    await load(one);
+    await reply(pendingFor(listPath), list);
+    await reply(pendingFor(part2Path), two);
+  };
+  const item = (text: string) => [...section().querySelectorAll("li")].find((li) => li.textContent?.includes(text))!;
+
+  it("lists the other parts of the same day and reads them like the page, then merges their recaps by time", async () => {
+    await load();
+    const listed = pendingFor(listPath);
+    expect(new Headers(listed.init.headers).get("X-Persona-Manager")).toBe("assistant");
+    const count = requests.length;
+    await reply(listed, list);
+    // Only part 2 is read: not another day, a day recording started at another time, or a meeting.
+    expect(requests.slice(count).map((r) => r.url)).toEqual([part2Path]);
+    expect(new Headers(requests.at(-1)!.init.headers).get("X-Persona-Manager")).toBe("assistant");
+    await reply(requests.at(-1)!, second());
+
+    expect(headings("h3")).toEqual(["Morning", "Afternoon", "Evening", "Suggested to-dos"]);
+    expect(headings("h4")).toEqual(["Design review", "Hallway chat about the beta", "Lunch with the platform team", "Beta go/no-go", "Evening sync"]);
+    expect(section().textContent).toContain("Mostly the export release.");
+    expect(section().textContent).toContain("The beta plan.");
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("Part 1: so far, up to 19:00 · Part 2: so far, up to 17:00");
+    // The gaps both parts name are named once.
+    expect(section().querySelector("[data-recap-gaps]")!.textContent).toBe("Not recorded: 10:20–10:45 (interrupted), 11:36–11:53, and 16:36–16:40 (paused)");
+    // Suggested to-dos of both parts in time order.
+    const todos = [...section().querySelectorAll("h3")].find((h) => h.textContent === "Suggested to-dos")!.closest("div")!.parentElement!;
+    expect([...todos.querySelectorAll("ul > li")].map((li) => li.querySelector("p")!.textContent))
+      .toEqual(["Share the review notes.", "Cy · Fix the upload before the beta.", "Bo · Look at the flaky upload test. · tomorrow · Due 2026-11-12"]);
+  });
+
+  it("cites part 2's times with a link to part 2's page, and this part's with a jump into its transcript", async () => {
+    await loadDay();
+    const link = item("Hallway chat about the beta").querySelector<HTMLAnchorElement>("a[href]")!;
+    expect(link.getAttribute("href")).toBe(`/kb/recordings/${part2}`);
+    expect(link.getAttribute("aria-label")).toBe("09:30:00 in part 2: open its transcript");
+    expect(link.textContent).toBe("09:30:00· Part 2");
+    act(() => link.click());
+    expect(opened).toHaveBeenCalledWith(expect.objectContaining({ kind: "recordings", id: part2 }));
+    // Part 2's lines are not on this page; this part's still are.
+    expect(document.getElementById("recording-line-5400")).toBeNull();
+    expect(section().querySelector('[aria-label="Go to transcript at 09:05:12"]')!.getAttribute("aria-controls")).toBe("recording-line-3912");
+    expect(item("Fix the upload before the beta.").querySelector("a[href]")!.getAttribute("href")).toBe(`/kb/recordings/${part2}`);
+  });
+
+  it("confirms an action of part 2 with part 2's version, then reads both parts back", async () => {
+    await loadDay();
+    act(() => [...item("Fix the upload before the beta.").querySelectorAll("button")].find((b) => b.textContent === "Add to to-dos")!.click());
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0].url).toBe(`/api/v1/recordings/${part2}/minutes/todos`);
+    expect(JSON.parse(writes()[0].init.body as string)).toEqual({ version: 2, actions: ["a1"] });
+    expect(new Headers(writes()[0].init.headers).get("X-Persona-Manager")).toBe("assistant");
+    const count = requests.length;
+    await reply(writes()[0], { todos: [{ id: "todo-cy" }] });
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, part2Path].sort());
+    await reply(pendingFor(detailPath), fixture());
+    expect(saved).not.toHaveBeenCalled(); // not read back until part 2 is
+    const next = second(); next.detail.recap!.actions![0].todo_id = "todo-cy";
+    await reply(pendingFor(part2Path), next);
+    expect(saved).toHaveBeenCalledOnce();
+    expect(item("Fix the upload before the beta.").textContent).toContain("Added");
+    expect(item("Look at the flaky upload test.").textContent).toContain("Add to to-dos");
+  });
+
+  it("adds all that are left, part by part, and reads back what was written when a later part fails", async () => {
+    await loadDay();
+    click("Add all");
+    expect(writes().map((w) => [w.url, JSON.parse(w.init.body as string)])).toEqual([[`/api/v1/recordings/${part2}/minutes/todos`, { version: 2, actions: ["a1"] }]]);
+    await reply(writes()[0], { todos: [{ id: "todo-cy" }] });
+    expect(writes().map((w) => [w.url, JSON.parse(w.init.body as string)]).at(-1)).toEqual([`${minutesPath}/todos`, { version: 3, actions: ["a1"] }]);
+    const count = requests.length;
+    await reply(writes()[1], { error: "boom" }, 500);
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, part2Path].sort());
+    await reply(pendingFor(detailPath), fixture());
+    await reply(pendingFor(part2Path), second());
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("Couldn’t update the recap"), "error");
+  });
+
+  it("copies every part's recap, in part order", async () => {
+    await loadDay();
+    await act(async () => button("Copy").click());
+    expect(clipboard).toHaveBeenCalledWith(`${fixture().detail.recap!.markdown}\n\n# 2026-11-11 (part 2)`);
+  });
+
+  it("calls the day's recap final only when every part's is, and reads the parts again until then", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const one = fixture(); one.detail.recap!.final = true; one.detail.recap!.final_reason = "complete";
+    await loadDay(one);
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("Part 1: final · Part 2: so far, up to 17:00");
+    // This part is final, the day is not: it is read again in a minute, with its parts.
+    const count = requests.length;
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(requests.slice(count).map((r) => r.url).sort()).toEqual([detailPath, listPath].sort());
+    await reply(pendingFor(detailPath), one);
+    await reply(pendingFor(listPath), list);
+    const two = second(); two.detail.recap!.final = true; two.detail.recap!.final_reason = "cutoff";
+    await reply(pendingFor(part2Path), two);
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("Final recap. Some of the day may not have been transcribed.");
+    const settled = requests.length;
+    act(() => vi.advanceTimersByTime(180_000));
+    expect(requests).toHaveLength(settled);
+  });
+
+  it("calls a two-part day complete when both parts are", async () => {
+    const one = fixture(); one.detail.recap!.final = true; one.detail.recap!.final_reason = "complete";
+    const two = second(); two.detail.recap!.final = true; two.detail.recap!.final_reason = "complete";
+    await loadDay(one, two);
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("Final recap of the day");
+  });
+
+  it("says which part has no recap yet, and shows the other's", async () => {
+    const one = fixture(); delete one.detail.recap; one.detail.meta!.recap_state = undefined;
+    await loadDay(one);
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("Part 1: not written yet · Part 2: so far, up to 17:00");
+    expect(section().textContent).not.toContain("The recap is written in the evening.");
+    expect(headings("h4")).toEqual(["Hallway chat about the beta", "Beta go/no-go"]);
+    expect(button("Write now")).toBeDefined();
+  });
+
+  it("shows this part alone when the list can't be read", async () => {
+    await load();
+    await reply(pendingFor(listPath), { error: "down" }, 503);
+    expect(requests.some((r) => r.url === part2Path)).toBe(false);
+    expect(headings("h4")).toEqual(["Design review", "Lunch with the platform team", "Evening sync"]);
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("So far, up to 19:00");
+  });
+});
+
+// An open day's recap changes without this page asking: new text, the hourly recap, the final one (docs/assistant/day-recap.md).
+describe("an open day's recap", () => {
+  const listPath = "/api/v1/recordings";
+  let visible: DocumentVisibilityState;
+  const reads = (from: number) => requests.slice(from).map((r) => r.url).sort();
+  // The day's parts are listed with each read: this one is the only one.
+  const unlisted = async () => {
+    const listed = requests.filter((r) => r.url === listPath).at(-1);
+    if (listed) await reply(listed, { recordings: [] });
+  };
+  const answer = async (detail: KBDetailResponse) => {
+    await reply(requests.filter((r) => r.url === detailPath).at(-1)!, detail);
+    await unlisted();
+  };
+  beforeEach(() => {
+    vi.useFakeTimers();
+    visible = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visible);
+  });
+
+  it("is read again every minute while it shows: no transcript, then a recap, then the final one, and no more", async () => {
+    const empty = fixture(); delete empty.detail.recap; delete empty.detail.meta!.recap_state; empty.detail.segments = []; delete empty.detail.summary;
+    await load(empty);
+    await unlisted();
+    expect(section().textContent).toContain(t("knowledge-kbdetail.recap_no_text"));
+    let count = requests.length;
+    act(() => vi.advanceTimersByTime(59_000));
+    expect(requests).toHaveLength(count);
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(reads(count)).toEqual([detailPath, listPath].sort());
+    await answer(fixture());
+    expect(section().textContent).toContain("Design review");
+    expect(button("Update")).toBeDefined();
+
+    count = requests.length;
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(reads(count)).toEqual([detailPath, listPath].sort());
+    const final = fixture(); final.detail.recap!.final = true; final.detail.recap!.final_reason = "complete"; final.detail.meta!.complete = true;
+    await answer(final);
+    expect(section().querySelector("[data-recap-covers]")!.textContent).toBe("Final recap of the day");
+    count = requests.length;
+    act(() => vi.advanceTimersByTime(300_000));
+    visible = "hidden"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    visible = "visible"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(requests).toHaveLength(count);
+  });
+
+  it("is read when the page shows again, never while it is hidden", async () => {
+    await load();
+    await unlisted();
+    visible = "hidden"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    const count = requests.length;
+    act(() => vi.advanceTimersByTime(180_000));
+    expect(requests).toHaveLength(count);
+    visible = "visible"; act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(reads(count)).toEqual([detailPath, listPath].sort());
+  });
+
+  it("is not read again once its transcript expired", async () => {
+    const data = fixture(); data.detail.meta!.trimmed_at = "2026-11-25T02:00:00Z"; delete data.detail.segments;
+    await load(data);
+    await unlisted();
+    await reply(requests.find((r) => r.url === "/api/v1/assistant")!, { manager: "assistant", minutes_days: 0 });
+    const count = requests.length;
+    act(() => vi.advanceTimersByTime(180_000));
+    expect(requests).toHaveLength(count);
+  });
+
+  it("is not read twice at once, nor while a write is on its way", async () => {
+    await load();
+    await unlisted();
+    let count = requests.length;
+    act(() => vi.advanceTimersByTime(120_000)); // the first minute's read is not answered yet
+    expect(reads(count)).toEqual([detailPath, listPath].sort());
+    await answer(fixture());
+    click("Update");
+    count = requests.length;
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(requests).toHaveLength(count);
+  });
+});
+

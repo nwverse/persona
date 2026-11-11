@@ -183,7 +183,7 @@ func TestDayRecapWritten(t *testing.T) {
 	m := &captureModel{reply: dayNotesReply}
 	e := dayEngine(t, m, &now)
 	var told []DayRecap
-	e.DayRecapWritten = func(_ context.Context, _ Recording, d DayRecap) { told = append(told, d) }
+	e.DayRecapWritten = func(_ context.Context, _ Recording, d DayRecap) error { told = append(told, d); return nil }
 	u := dayUpload(1, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "Bo 你周五前补上回归测试")
 	u.Coverage.To = 7200 // to 10:00: the 8 o'clock hour is finished
 	mustPut(t, e, dayID, u, now)
@@ -401,16 +401,75 @@ func TestDayRecapNotesRetries(t *testing.T) {
 	if notes, _ := f.counts(); notes != minutesTries+1 {
 		t.Errorf("%d notes calls: given up, or tried again before its time", notes)
 	}
-	// After the wait the 9 o'clock hour is noted; asked for, the recap leaves the 8 o'clock hour out.
+	// After the wait the 9 o'clock hour is noted; the recap due once the recording completes leaves the 8 o'clock hour
+	// out.
 	now = nine.RetryAt.Add(time.Second)
+	f.note = func(user string) (string, error) {
+		if strings.Contains(user, "八点") {
+			return `{"entries": "not a list"}`, nil
+		}
+		return fakeNotes(user), nil
+	}
+	c := dayAppend(1, 10, 2+minutesTries+1)
+	c.Complete = ptr(true)
+	mustAppend(t, e, dayID, c)
+	e.WriteDayRecaps(context.Background(), 1)
+	rc, err := e.ReadDayRecap(dayID)
+	if err != nil || !rc.Partial || len(f.merges) != 1 || strings.Contains(f.merges[0], "[1] 八点") || !strings.Contains(f.merges[0], "[2] 九点") {
+		t.Fatalf("recap %+v %v\n%s", rc, err, strings.Join(f.merges, "\n"))
+	}
+	// Asked again, a chunk given up is tried again: the 8 o'clock hour is in the recap now.
 	f.note = nil
 	if err := e.AskMinutes(dayID); err != nil {
 		t.Fatal(err)
 	}
 	e.WriteDayRecaps(context.Background(), 1)
-	rc, err := e.ReadDayRecap(dayID)
-	if err != nil || !rc.Partial || strings.Contains(f.merges[0], "[1] 八点") || !strings.Contains(f.merges[0], "[2] 九点") {
-		t.Fatalf("recap %+v %v\n%s", rc, err, strings.Join(f.merges, "\n"))
+	if rc, err = e.ReadDayRecap(dayID); err != nil || rc.Partial || len(f.merges) != 2 || !strings.Contains(f.merges[1], "[1] 八点") {
+		t.Fatalf("asked again: %+v %v\n%s", rc, err, strings.Join(f.merges, "\n"))
+	}
+}
+
+// Asking again is trying again: a recap that failed because the model could note none of its chunks is written once
+// the model can (the chunks' tries are forgotten, as the target's are), and so is one whose chunk waits after running
+// out of time.
+func TestDayRecapAskRetriesNotes(t *testing.T) {
+	now := dayClock.Add(2 * time.Hour)
+	f := &dayFake{note: func(string) (string, error) { return `{"entries": "not a list"}`, nil }}
+	e := dayEngine(t, f, &now)
+	u := dayUpload(1, "早上开会")
+	u.Coverage.To = 3600
+	mustPut(t, e, dayID, u, now)
+	if err := e.AskMinutes(dayID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10 && recordingNow(t, e, dayID).RecapState != MinutesFailed; i++ {
+		e.WriteDayRecaps(context.Background(), 1)
+	}
+	if r := recordingNow(t, e, dayID); r.RecapState != MinutesFailed {
+		t.Fatalf("every chunk given up: %q %+v", r.RecapState, r.RecapDue)
+	}
+	f.note = nil
+	if err := e.AskMinutes(dayID); err != nil {
+		t.Fatal(err)
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	if r := recordingNow(t, e, dayID); r.RecapState != MinutesReady {
+		t.Fatalf("asked again: %q %+v %+v", r.RecapState, r.RecapDue, e.Store.readRecapNotes(dayID))
+	}
+	// A chunk waiting after it ran out of time is tried at once when asked.
+	a := dayAppend(1, 2, 1, seg(3700, "九点的事"))
+	a.Coverage = &RecordingCoverage{To: 7200}
+	mustAppend(t, e, dayID, a)
+	f.note = func(string) (string, error) { return "", fmt.Errorf("call: %w", context.DeadlineExceeded) }
+	e.WriteDayRecaps(context.Background(), 1)
+	notes, _ := f.counts()
+	f.note = nil
+	if err := e.AskMinutes(dayID); err != nil {
+		t.Fatal(err)
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	if n, _ := f.counts(); n != notes+1 || recordingNow(t, e, dayID).RecapState != MinutesReady {
+		t.Errorf("waiting chunk: %d notes calls (%d before), %q", n, notes, recordingNow(t, e, dayID).RecapState)
 	}
 }
 
@@ -422,8 +481,9 @@ func TestDayRecapDue(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) {
+	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) error {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
+		return nil
 	}
 	const part2, empty = "2a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d", "5a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
 	u := dayUpload(1, "早上开会", "Bo 负责发布")
@@ -495,10 +555,11 @@ func TestDayRecapCutoff(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) {
+	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) error {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
+		return nil
 	}
-	mustPut(t, e, dayID, dayUpload(7, "昨天的事"), now)
+	mustPut(t, e, dayID, dayUpload(7, "昨天的事"), now.Add(-40*time.Minute))
 	e.WriteDayRecaps(context.Background(), 5)
 	if r := recordingNow(t, e, dayID); r.RecapDue != nil || r.RecapVersion != 0 {
 		t.Fatalf("before its cutoff: %+v", r.RecapDue)
@@ -521,6 +582,38 @@ func TestDayRecapCutoff(t *testing.T) {
 	}
 }
 
+// A day first uploaded long after it ended gets its cutoff recap once its uploads stopped for 30 minutes: never one of
+// the first batch, while the rest of the day is still arriving.
+func TestDayRecapCutoffWaitsForUploads(t *testing.T) {
+	now := time.Date(2026, 11, 13, 10, 0, 0, 0, goldenZone) // two days after
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	var told []string
+	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) error {
+		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
+		return nil
+	}
+	u := dayUpload(1)
+	u.Coverage.To = 6 * 3600
+	mustPut(t, e, dayID, u, now)
+	mustAppend(t, e, dayID, dayAppend(1, 2, 0, seg(60, "第一批")))
+	e.WriteDayRecaps(context.Background(), 5)
+	now = now.Add(20 * time.Minute)
+	mustAppend(t, e, dayID, dayAppend(1, 3, 1, seg(4*3600, "第二批")))
+	e.WriteDayRecaps(context.Background(), 5)
+	now = now.Add(29 * time.Minute)
+	e.WriteDayRecaps(context.Background(), 5)
+	if r := recordingNow(t, e, dayID); r.RecapDue != nil || r.RecapVersion != 0 || r.RecapCutoff || len(told) != 0 {
+		t.Fatalf("a cutoff recap while the day was still arriving: %+v told %v", r.RecapDue, told)
+	}
+	now = now.Add(time.Minute)
+	e.WriteDayRecaps(context.Background(), 5)
+	rc, err := e.ReadDayRecap(dayID)
+	if err != nil || !rc.Final || rc.FinalReason != FinalCutoff || !strings.Contains(rc.Markdown, "第二批") || len(told) != 1 {
+		t.Fatalf("cutoff after the uploads: %+v %v told %v", rc, err, told)
+	}
+}
+
 // The recap time follows the evening routine's (DayRecapClock), in the owner's zone; a recording ready then pushes
 // at once, and a pending push is told again after a restart.
 func TestDayRecapClockAndRetell(t *testing.T) {
@@ -529,7 +622,7 @@ func TestDayRecapClockAndRetell(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	e.DayRecapClock = func() (int, int) { return 19, 45 }
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) { told = append(told, r.ID) }
+	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) error { told = append(told, r.ID); return nil }
 	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
 	if err := e.AskMinutes(dayID); err != nil {
 		t.Fatal(err)
@@ -572,11 +665,12 @@ func TestDayRecapPushPersisted(t *testing.T) {
 		t.Fatalf("no hook yet: %+v", r)
 	}
 	var told []int
-	e.DayRecapWritten = func(_ context.Context, got Recording, d DayRecap) {
+	e.DayRecapWritten = func(_ context.Context, got Recording, d DayRecap) error {
 		if cur := recordingNow(t, e, got.ID); !cur.RecapPush || cur.RecapVersion != d.Version || !got.RecapPush {
 			t.Errorf("told before the push was stored: %+v", cur)
 		}
 		told = append(told, d.Version)
+		return nil
 	}
 	e.WriteDayRecaps(context.Background(), 1)
 	e.WriteDayRecaps(context.Background(), 1)
@@ -639,11 +733,11 @@ func TestDayRecapOpenSpan(t *testing.T) {
 		t.Errorf("an ended recording of another day: %q %+v", r.RecapEvening, r.RecapDue)
 	}
 	// The evening routine reads the same day recordings, in their own zone.
-	today := e.TodaysDayRecordings(now)
+	today := e.TodaysDayRecordings(now, e.Store.Zone())
 	if len(today) != 1 || today[0].ID != dayID || e.Store.RecordingZone(&today[0]).String() != "Asia/Tokyo" {
 		t.Errorf("today's %+v", today)
 	}
-	if got := e.TodaysDayRecordings(now.AddDate(0, 0, 1)); len(got) != 0 {
+	if got := e.TodaysDayRecordings(now.AddDate(0, 0, 1), e.Store.Zone()); len(got) != 0 {
 		t.Errorf("tomorrow's %+v", got)
 	}
 }
@@ -816,8 +910,14 @@ func TestDayRecapPartial(t *testing.T) {
 	}
 }
 
-// Confirming a recap's to-dos: by version, stale without by-task, by task otherwise; a later version keeps a confirmed
-// to-do on the same who and what said within 15 minutes, one action each.
+// confirmedAs is action a of a recap confirmed as to-do todo, as the assistant hands it to SetDayRecapTodos.
+func confirmedAs(a MinutesAction, todo string) []MinutesAction {
+	a.TodoID = todo
+	return []MinutesAction{a}
+}
+
+// Confirming a recap's to-dos: by version on the action confirmed; a later version keeps a confirmed to-do on the same
+// who and what said within 15 minutes, one action each, and so does one written since the version confirmed.
 func TestDayRecapTodos(t *testing.T) {
 	now := dayClock.Add(2 * time.Hour)
 	f := &dayFake{}
@@ -829,10 +929,7 @@ func TestDayRecapTodos(t *testing.T) {
 	if len(rc.Actions) != 2 || rc.Actions[0].What != "Bo 负责发布" || rc.Actions[0].Who != "Bo" || rc.Actions[1].What != "Ada 负责测试" {
 		t.Fatalf("actions %+v", rc.Actions)
 	}
-	if _, err := e.SetDayRecapTodos(dayID, 9, map[string]string{"a1": "todo_x"}, nil); !errors.Is(err, ErrMinutesStale) {
-		t.Errorf("stale: %v", err)
-	}
-	got, err := e.SetDayRecapTodos(dayID, rc.Version, map[string]string{"a1": "todo_1"}, nil)
+	got, err := e.SetDayRecapTodos(dayID, rc.Version, confirmedAs(rc.Actions[0], "todo_1"))
 	if err != nil || got.Actions[0].TodoID != "todo_1" || got.Actions[1].TodoID != "" {
 		t.Fatalf("set: %+v %v", got, err)
 	}
@@ -846,9 +943,9 @@ func TestDayRecapTodos(t *testing.T) {
 	if rc2.Version != rc.Version+1 || rc2.Actions[0].TodoID != "todo_1" || rc2.Actions[1].TodoID != "" {
 		t.Errorf("kept %+v", rc2.Actions)
 	}
-	// By task, for a version written since.
-	got, err = e.SetDayRecapTodos(dayID, rc.Version, map[string]string{"a2": "todo_2"}, map[string]string{MinutesTaskKey(rc.Actions[1]): "todo_2"})
-	if err != nil || got.Actions[1].TodoID != "todo_2" {
+	// By task said at the same time, for a version written since.
+	got, err = e.SetDayRecapTodos(dayID, rc.Version, confirmedAs(rc.Actions[1], "todo_2"))
+	if err != nil || got.Version != rc2.Version || got.Actions[1].TodoID != "todo_2" {
 		t.Errorf("by task %+v %v", got, err)
 	}
 	// Said again much later: another task.
@@ -868,7 +965,7 @@ func TestDayRecapRepair(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) { told = append(told, r.ID) }
+	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) error { told = append(told, r.ID); return nil }
 	u := dayUpload(1, "早上开会", "Bo 负责发布", "Ada 负责测试", "zebrapassword 说了不该说的")
 	u.Coverage.To = 3600
 	mustPut(t, e, dayID, u, now)
@@ -880,7 +977,7 @@ func TestDayRecapRepair(t *testing.T) {
 	}
 	writeTestRecapWith(t, e, dayID, f)
 	rc, _ := e.ReadDayRecap(dayID)
-	if _, err := e.SetDayRecapTodos(dayID, rc.Version, map[string]string{"a1": "todo_bo"}, nil); err != nil {
+	if _, err := e.SetDayRecapTodos(dayID, rc.Version, confirmedAs(rc.Actions[0], "todo_bo")); err != nil {
 		t.Fatal(err)
 	}
 	if hits := e.Search("zebrapassword", false, 10); len(hits) == 0 {
@@ -986,7 +1083,7 @@ func TestDayRecapTrimmed(t *testing.T) {
 		t.Errorf("search %v", hits)
 	}
 	rc, _ := e.ReadDayRecap(dayID)
-	if _, err := e.SetDayRecapTodos(dayID, rc.Version, map[string]string{"a1": "todo_1"}, nil); err != nil {
+	if _, err := e.SetDayRecapTodos(dayID, rc.Version, confirmedAs(rc.Actions[0], "todo_1")); err != nil {
 		t.Errorf("confirm: %v", err)
 	}
 	if e.WriteDayRecaps(context.Background(), 1); recordingNow(t, e, dayID).RecapVersion != rc.Version {
@@ -1026,5 +1123,405 @@ func TestDayRecordingNeverMeeting(t *testing.T) {
 	}
 	if _, err := e.Store.ReadMinutes(dayID); err == nil {
 		t.Error("minutes of a day recording")
+	}
+}
+
+// An erase repair that empties a whole hour takes that hour's notes with it in the PUT: nothing erased stays in
+// recap_notes.json, while the notes of the hours it did not change stay (and are not read again).
+func TestDayRecapEraseDropsNotes(t *testing.T) {
+	now := dayClock.Add(3 * time.Hour)
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	u := dayUpload(1)
+	u.Segments = []RecordingSegment{seg(0, "八点的事"), seg(60, "八点一分"), seg(4200, "zebrasecret 密码是一二三")}
+	u.Coverage = &RecordingCoverage{To: 7300}
+	mustPut(t, e, dayID, u, now)
+	writeTestRecapWith(t, e, dayID, f)
+	path := e.Store.Path(KindRecording, dayID, recapNotesFile)
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "zebrasecret") {
+		t.Fatalf("the 9 o'clock hour was not noted: %s", raw)
+	}
+	erased := dayUpload(5)
+	erased.Segments = []RecordingSegment{seg(0, "八点的事"), seg(60, "八点一分"), seg(4200, "")}
+	erased.Coverage = &RecordingCoverage{To: 7300, Gaps: []CoverageGap{{From: 4100, To: 4300, Reason: GapErased}}}
+	mustPut(t, e, dayID, erased, now)
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "zebrasecret") {
+		t.Errorf("erased words kept in the notes: %s", raw)
+	}
+	if notes := e.Store.readRecapNotes(dayID); len(notes.Chunks) != 1 || !notes.Chunks[0].Noted || notes.Chunks[0].FromN != 1 {
+		t.Errorf("the 8 o'clock notes: %+v", notes.Chunks)
+	}
+	before, _ := f.counts()
+	e.WriteDayRecaps(context.Background(), 1)
+	if n, merges := f.counts(); n != before || merges != 2 {
+		t.Errorf("after the erase: %d notes calls (%d before), %d merges", n, before, merges)
+	}
+}
+
+// A recap job looks at the recording before every call: deleted, or repaired with a new base meanwhile, the rest of
+// what it read is not sent to the model and nothing it made is kept; the round goes on with the other recordings.
+func TestDayRecapStopsWhenStale(t *testing.T) {
+	put := func(t *testing.T, e *Engine, now time.Time) {
+		u := dayUpload(1)
+		u.Segments = []RecordingSegment{seg(0, "八点"), seg(3700, "九点"), seg(7300, "十点 kiwisecret")}
+		u.Coverage = &RecordingCoverage{To: 4 * 3600}
+		mustPut(t, e, dayID, u, now)
+		if err := e.AskMinutes(dayID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("deleted", func(t *testing.T) {
+		now := dayClock.Add(5 * time.Hour)
+		f := &dayFake{}
+		e := dayEngine(t, f, &now)
+		put(t, e, now)
+		other := dayUpload(1, "另一部分")
+		other.Part, other.Coverage.To = 2, 3600
+		mustPut(t, e, recIDDay2, other, now)
+		calls := 0
+		f.note = func(user string) (string, error) {
+			if calls++; calls == 1 {
+				if _, err := e.DeleteRecording(dayID, now); err != nil {
+					t.Error(err)
+				}
+			}
+			return fakeNotes(user), nil
+		}
+		e.WriteDayRecaps(context.Background(), 5)
+		if notes, merges := f.counts(); notes != 2 || merges != 0 || slices.ContainsFunc(f.notes, func(p string) bool {
+			return strings.Contains(p, "九点") || strings.Contains(p, "kiwisecret")
+		}) || !strings.Contains(f.notes[1], "另一部分") {
+			t.Errorf("after the delete: %d notes, %d merges\n%s", notes, merges, strings.Join(f.notes, "\n---\n"))
+		}
+	})
+	t.Run("erased", func(t *testing.T) {
+		now := dayClock.Add(5 * time.Hour)
+		f := &dayFake{}
+		e := dayEngine(t, f, &now)
+		put(t, e, now)
+		calls := 0
+		f.note = func(user string) (string, error) {
+			if calls++; calls == 1 {
+				erased := dayUpload(5)
+				erased.Segments = []RecordingSegment{seg(0, "八点"), seg(3700, "九点"), seg(7300, "")}
+				erased.Coverage = &RecordingCoverage{To: 4 * 3600, Gaps: []CoverageGap{{From: 7200, To: 7400, Reason: GapErased}}}
+				if _, err := e.PutRecording(dayID, erased, now); err != nil {
+					t.Error(err)
+				}
+			}
+			return fakeNotes(user), nil
+		}
+		e.WriteDayRecaps(context.Background(), 1)
+		if notes, merges := f.counts(); notes != 1 || merges != 0 {
+			t.Errorf("after the erase: %d notes, %d merges", notes, merges)
+		}
+		if notes := e.Store.readRecapNotes(dayID); len(notes.Chunks) != 0 {
+			t.Errorf("notes made on the old base kept: %+v", notes)
+		}
+		// The next round notes the hours of the new base and writes the recap, the erased one never read.
+		e.WriteDayRecaps(context.Background(), 1)
+		notes, merges := f.counts()
+		if notes != 3 || merges != 1 {
+			t.Errorf("next round: %d notes, %d merges", notes, merges)
+		}
+		for _, p := range append(slices.Clone(f.notes), f.merges...) {
+			if strings.Contains(p, "kiwisecret") {
+				t.Errorf("erased text sent to the model:\n%s", p)
+			}
+		}
+		if rc, err := e.ReadDayRecap(dayID); err != nil || strings.Contains(rc.Markdown, "kiwisecret") {
+			t.Errorf("recap %+v %v", rc, err)
+		}
+	})
+}
+
+// A recap written again while its to-dos were being made: the confirmation lands only on the same task said at the
+// same time (never on the same words said hours later), is remembered when the version written meanwhile left the
+// task out, and comes back with the action in a later version, who and what matched trimmed and case-folded.
+func TestDayRecapTodosRewrittenMeanwhile(t *testing.T) {
+	now := dayClock.Add(12 * time.Hour)
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	u := dayUpload(1)
+	u.Segments = []RecordingSegment{seg(60, "Bo will ship the release"), seg(10*3600, "Bo will ship the release"),
+		seg(10*3600+60, "晚上开会")}
+	u.Coverage = &RecordingCoverage{To: 11 * 3600}
+	mustPut(t, e, dayID, u, now)
+	merge := func(actions string) func(string) (string, error) {
+		return func(string) (string, error) {
+			return `{"summary": "发布。", "timeline": [{"from_line": 3, "to_line": 3, "kind": "outside", "title": "晚上",
+			  "points": [{"text": "晚上开会", "line": 3}]}], "actions": [` + actions + `]}`, nil
+		}
+	}
+	f.merge = merge(`{"who": "Bo", "what": "Ship the release", "line": 1}`)
+	writeTestRecapWith(t, e, dayID, f)
+	v1, _ := e.ReadDayRecap(dayID)
+	if len(v1.Actions) != 1 || v1.Actions[0].At != 60 {
+		t.Fatalf("v1 %+v", v1.Actions)
+	}
+	// The to-do is made of v1's action; v2, written before it is recorded, has the same words at 18:00 only.
+	f.merge = merge(`{"who": "Bo", "what": "Ship the release", "line": 2}`)
+	writeTestRecapWith(t, e, dayID, f)
+	got, err := e.SetDayRecapTodos(dayID, v1.Version, confirmedAs(v1.Actions[0], "todo_morning"))
+	if err != nil || got.Version != v1.Version+1 || len(got.Actions) != 1 || got.Actions[0].TodoID != "" {
+		t.Fatalf("landed on the evening's action: %+v %v", got, err)
+	}
+	if r := recordingNow(t, e, dayID); len(r.RecapTodos) != 1 || r.RecapTodos[0].At != 60 || r.RecapTodos[0].Todo != "todo_morning" {
+		t.Fatalf("not remembered: %+v", r.RecapTodos)
+	}
+	// v3 leaves the task out; v4 has it back at 08:01 (written otherwise) and again at 18:00.
+	f.merge = merge(``)
+	writeTestRecapWith(t, e, dayID, f)
+	f.merge = merge(`{"who": " Bo ", "what": "ship  the release", "line": 1}, {"who": "Bo", "what": "Ship the release", "line": 2}`)
+	writeTestRecapWith(t, e, dayID, f)
+	v4, _ := e.ReadDayRecap(dayID)
+	if v4.Version != v1.Version+3 || len(v4.Actions) != 2 || v4.Actions[0].TodoID != "todo_morning" || v4.Actions[1].TodoID != "" {
+		t.Errorf("v4 %+v", v4.Actions)
+	}
+	// Confirmed on the version current: on that action.
+	if got, err := e.SetDayRecapTodos(dayID, v4.Version, confirmedAs(v4.Actions[1], "todo_evening")); err != nil ||
+		got.Actions[1].TodoID != "todo_evening" || got.Actions[0].TodoID != "todo_morning" {
+		t.Errorf("same version: %+v %v", got, err)
+	}
+}
+
+// The same action said twice within 15 minutes is one; said again hours later it is another.
+func TestDayRecapActionsSaidAgain(t *testing.T) {
+	now := dayClock.Add(12 * time.Hour)
+	f := &dayFake{merge: func(string) (string, error) {
+		return `{"summary": "发布。", "actions": [{"who": "Bo", "what": "发布", "line": 1}, {"who": "Bo", "what": "发布", "line": 2},
+		  {"who": "Bo", "what": "发布", "line": 3}, {"who": "Ada", "what": "发布", "line": 2}]}`, nil
+	}}
+	e := dayEngine(t, f, &now)
+	u := dayUpload(1)
+	u.Segments = []RecordingSegment{seg(0, "Bo 负责发布"), seg(300, "Ada 和 Bo 都负责发布"), seg(10*3600, "Bo 晚上又说负责发布")}
+	u.Coverage = &RecordingCoverage{To: 11 * 3600}
+	mustPut(t, e, dayID, u, now)
+	writeTestRecapWith(t, e, dayID, f)
+	rc, _ := e.ReadDayRecap(dayID)
+	var got []string
+	for _, a := range rc.Actions {
+		got = append(got, a.Who+"@"+strconv.FormatFloat(a.At, 'f', -1, 64))
+	}
+	if !slices.Equal(got, []string{"Bo@0", "Ada@300", "Bo@36000"}) {
+		t.Errorf("actions %v", got)
+	}
+}
+
+// An append from an older request (a slow retry) stores its new positions without raising the revision: its text is
+// noted, and at the recap time it is text the newest recap did not read.
+func TestDayRecapOlderAppend(t *testing.T) {
+	now := dayClock.Add(2 * time.Hour)
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	u := dayUpload(1, "八点")
+	u.Coverage.To = 7200
+	mustPut(t, e, dayID, u, now)
+	mustAppend(t, e, dayID, dayAppend(1, 10, 1, seg(3700, "九点")))
+	writeTestRecapWith(t, e, dayID, f)
+	before, _ := f.counts()
+	got := mustAppend(t, e, dayID, dayAppend(1, 5, 2, seg(600, "迟到的一句")))
+	if got.Revision != 10 || got.Next != 3 || !got.Wake {
+		t.Fatalf("older append %+v", got)
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	if n, _ := f.counts(); n != before+1 || !strings.Contains(f.notes[n-1], "迟到的一句") {
+		t.Fatalf("not noted: %d calls (%d before)", n, before)
+	}
+	now = dayClock.Add(13 * time.Hour) // the recap time
+	e.WriteDayRecaps(context.Background(), 1)
+	if rc, err := e.ReadDayRecap(dayID); err != nil || rc.Version != 2 || !strings.Contains(rc.Markdown, "迟到的一句") {
+		t.Errorf("at the recap time: %+v %v", rc, err)
+	}
+}
+
+// The withdrawal of an erase is done again whenever it failed half way: recap.json is written last, so a PUT tried
+// again withdraws again; and recap.md and summary.md that still say what recap.json no longer does are written again
+// from it, by the PUT and by the recap lane while the recap is due (even with no model to rewrite it).
+func TestDayRecapWithdrawalMended(t *testing.T) {
+	now := dayClock.Add(2 * time.Hour)
+	f := &dayFake{merge: func(string) (string, error) {
+		return `{"summary": "提到了 zebrapassword。", "timeline": [{"from_line": 1, "to_line": 2, "kind": "outside", "title": "早上",
+		  "points": [{"text": "早上开会", "line": 1}, {"text": "zebrapassword 说了不该说的", "line": 2}]}]}`, nil
+	}}
+	e := dayEngine(t, f, &now)
+	u := dayUpload(1, "早上开会", "zebrapassword 说了不该说的")
+	u.Coverage.To = 3600
+	mustPut(t, e, dayID, u, now)
+	writeTestRecapWith(t, e, dayID, f)
+	path := func(name string) string { return e.Store.Path(KindRecording, dayID, name) }
+	staleMD, _ := os.ReadFile(path(recapMarkdown))
+	staleSum, _ := os.ReadFile(path("summary.md"))
+	if !strings.Contains(string(staleMD), "zebrapassword") || !strings.Contains(string(staleSum), "zebrapassword") {
+		t.Fatalf("recap.md %s summary.md %s", staleMD, staleSum)
+	}
+	withdrawn := func(when string) {
+		t.Helper()
+		for _, name := range []string{recapFile, recapMarkdown, "summary.md"} {
+			if raw, _ := os.ReadFile(path(name)); strings.Contains(string(raw), "zebrapassword") {
+				t.Errorf("%s: %s still has it:\n%s", when, name, raw)
+			}
+		}
+	}
+	// recap.md cannot be written: the PUT fails, and recap.json, written last, still has it all.
+	_ = os.Remove(path(recapMarkdown))
+	if err := os.MkdirAll(path(recapMarkdown)+"/x", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	erase := dayUpload(5, "早上开会", "")
+	erase.Coverage = &RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 50, To: 70, Reason: GapErased}}}
+	if _, err := e.PutRecording(dayID, erase, now); err == nil {
+		t.Fatal("a PUT whose withdrawal failed succeeded")
+	}
+	_ = os.RemoveAll(path(recapMarkdown))
+	_ = os.WriteFile(path(recapMarkdown), staleMD, 0o600)
+	mustPut(t, e, dayID, erase, now) // tried again
+	withdrawn("the PUT tried again")
+	// A recap.json withdrawn already behind recap.md and summary.md that were not.
+	_ = os.WriteFile(path(recapMarkdown), staleMD, 0o600)
+	_ = os.WriteFile(path("summary.md"), staleSum, 0o600)
+	e.Model = nil
+	e.WriteDayRecaps(context.Background(), 1)
+	withdrawn("the recap lane")
+	if _, err := os.Stat(path("summary.md")); !os.IsNotExist(err) {
+		t.Errorf("summary.md: %v", err)
+	}
+	rc, _ := e.ReadDayRecap(dayID)
+	if md, _ := os.ReadFile(path(recapMarkdown)); string(md) != strings.TrimSpace(rc.Markdown)+"\n" {
+		t.Errorf("recap.md %q", md)
+	}
+}
+
+// An hour whose audio the watch still holds (a pending gap) is not finished, however far the coverage reaches: a
+// backlog draining into it is noted once it settled, not at every sentence.
+func TestDayRecapPendingHoursWait(t *testing.T) {
+	now := dayClock.Add(7 * time.Hour) // 15:00
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	pending := &RecordingCoverage{To: 7 * 3600, Gaps: []CoverageGap{{From: 3600, To: 3 * 3600, Reason: GapPending}}}
+	u := dayUpload(1)
+	u.Segments = []RecordingSegment{seg(600, "八点十分"), seg(3600+600, "九点十分"), seg(4*3600, "十二点")}
+	u.Coverage = pending
+	mustPut(t, e, dayID, u, now)
+	e.WriteDayRecaps(context.Background(), 1)
+	if n, _ := f.counts(); n != 2 || slices.ContainsFunc(f.notes, func(p string) bool { return strings.Contains(p, "九点十分") }) {
+		t.Fatalf("%d notes: %v", n, f.notes)
+	}
+	for i := range 3 {
+		a := dayAppend(1, int64(2+i), 3+i, seg(float64(3600+1200*(i+1)), "补上的一句"))
+		a.Coverage = pending
+		mustAppend(t, e, dayID, a)
+		e.WriteDayRecaps(context.Background(), 1)
+	}
+	if n, _ := f.counts(); n != 2 {
+		t.Errorf("a pending hour noted while it drains: %d", n)
+	}
+	a := dayAppend(1, 10, 6)
+	a.Coverage = &RecordingCoverage{To: 7 * 3600}
+	mustAppend(t, e, dayID, a)
+	e.WriteDayRecaps(context.Background(), 1)
+	if n, _ := f.counts(); n != 4 {
+		t.Errorf("settled: %d notes", n)
+	}
+	// Past its cutoff a gap still pending holds nothing back.
+	if held := e.heldGaps(&Recording{Day: "2026-11-11", Coverage: pending}, time.Date(2026, 11, 12, 6, 0, 0, 0, goldenZone)); held != nil {
+		t.Errorf("held past the cutoff: %+v", held)
+	}
+}
+
+// A meeting the model names is the entry's only when it is there at that time: a calendar item hours away is not
+// (the entry keeps the kind the model judged), one starting within 15 minutes of it is.
+func TestDayRecapMeetingNamedFar(t *testing.T) {
+	now := dayClock.Add(8 * time.Hour)
+	f := &dayFake{merge: func(string) (string, error) {
+		return `{"summary": "看牙。", "timeline": [
+		  {"from_line": 1, "to_line": 1, "kind": "outside", "title": "电话", "meeting": 1, "points": [{"text": "打电话说牙疼", "line": 1}]},
+		  {"from_line": 3, "to_line": 3, "kind": "meeting", "title": "复诊", "meeting": 1, "points": [{"text": "约了复诊", "line": 3}]},
+		  {"from_line": 2, "to_line": 2, "kind": "outside", "title": "诊所", "meeting": 1, "points": [{"text": "到了诊所", "line": 2}]}]}`, nil
+	}}
+	e := dayEngine(t, f, &now)
+	_ = e.Store.PutItem(&Item{Kind: KindEvent, ID: "e1", Title: "看牙", At: dayClock.Add(2 * time.Hour)}) // 10:00
+	u := dayUpload(1)
+	u.Segments = []RecordingSegment{seg(7*3600, "打电话说牙疼"), seg(2*3600+600, "到了诊所"), seg(6*3600, "约了复诊")}
+	u.Coverage = &RecordingCoverage{To: 8 * 3600}
+	mustPut(t, e, dayID, u, now)
+	writeTestRecapWith(t, e, dayID, f)
+	rc, _ := e.ReadDayRecap(dayID)
+	if len(rc.Timeline) != 3 {
+		t.Fatalf("timeline %+v", rc.Timeline)
+	}
+	clinic, recall, call := rc.Timeline[0], rc.Timeline[1], rc.Timeline[2]
+	if clinic.Meeting == nil || clinic.Meeting.ID != "e1" || clinic.Kind != RecapMeeting {
+		t.Errorf("10 minutes after it: %+v", clinic)
+	}
+	if recall.Meeting != nil || recall.Kind != RecapMeeting || call.Meeting != nil || call.Kind != RecapOutside || call.Title != "电话" {
+		t.Errorf("hours away: %+v %+v", recall, call)
+	}
+}
+
+// A recap due keeps a call's time of the job for its merge: once less is left, noting stops and the merge reads what
+// was noted (partial), counting no timeout; the rest is noted at the next round, and the recap time reads it.
+func TestDayRecapMergeKeepsItsTime(t *testing.T) {
+	now := dayClock.Add(4 * time.Hour)
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	e.jobLeft = func(context.Context) time.Duration { return 2*minutesCallTimeout - time.Minute }
+	u := dayUpload(1)
+	u.Segments = []RecordingSegment{seg(0, "八点"), seg(3700, "九点"), seg(7300, "十点")}
+	u.Coverage = &RecordingCoverage{To: 4 * 3600}
+	mustPut(t, e, dayID, u, now)
+	if err := e.AskMinutes(dayID); err != nil {
+		t.Fatal(err)
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	notes, merges := f.counts()
+	rc, err := e.ReadDayRecap(dayID)
+	if notes != 1 || merges != 1 || err != nil || !rc.Partial || !strings.Contains(rc.Markdown, "八点") || strings.Contains(rc.Markdown, "十点") {
+		t.Fatalf("%d notes, %d merges: %+v %v", notes, merges, rc, err)
+	}
+	if r := recordingNow(t, e, dayID); r.RecapDue != nil || r.RecapState != MinutesReady {
+		t.Errorf("target %+v %q", r.RecapDue, r.RecapState)
+	}
+	e.jobLeft = nil
+	e.WriteDayRecaps(context.Background(), 1)
+	if notes, _ := f.counts(); notes != 3 {
+		t.Errorf("the rest: %d notes", notes)
+	}
+	now = dayClock.Add(13 * time.Hour)
+	e.WriteDayRecaps(context.Background(), 1)
+	if rc, _ := e.ReadDayRecap(dayID); rc.Version != 2 || rc.Partial || !strings.Contains(rc.Markdown, "十点") {
+		t.Errorf("at the recap time %+v", rc)
+	}
+}
+
+// The day's push is done once DayRecapWritten took it: an error leaves it due, told again at a later round after a
+// short wait that grows with each failure, then done once.
+func TestDayRecapPushRetried(t *testing.T) {
+	now := dayClock.Add(13 * time.Hour) // 21:00, the recap time
+	f := &dayFake{}
+	e := dayEngine(t, f, &now)
+	told := 0
+	var fail error = errors.New("the phone is unreachable")
+	e.DayRecapWritten = func(context.Context, Recording, DayRecap) error { told++; return fail }
+	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
+	e.WriteDayRecaps(context.Background(), 1)
+	if r := recordingNow(t, e, dayID); told != 1 || !r.RecapPush || r.RecapPushed || r.RecapPushTries != 1 || !r.RecapPushAt.Equal(now.Add(dayPushRetry)) {
+		t.Fatalf("failed once: told %d %+v", told, r)
+	}
+	e.WriteDayRecaps(context.Background(), 1)
+	if told != 1 {
+		t.Errorf("told before its wait: %d", told)
+	}
+	now = now.Add(dayPushRetry)
+	e.WriteDayRecaps(context.Background(), 1)
+	if r := recordingNow(t, e, dayID); told != 2 || r.RecapPushTries != 2 || !r.RecapPushAt.Equal(now.Add(2*dayPushRetry)) {
+		t.Fatalf("failed twice: told %d %+v", told, r)
+	}
+	fail = nil
+	now = now.Add(2 * dayPushRetry)
+	e.WriteDayRecaps(context.Background(), 1)
+	e.WriteDayRecaps(context.Background(), 1)
+	if r := recordingNow(t, e, dayID); told != 3 || r.RecapPush || !r.RecapPushed || r.RecapPushTries != 0 {
+		t.Errorf("taken: told %d %+v", told, r)
 	}
 }

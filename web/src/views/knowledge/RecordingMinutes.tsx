@@ -79,20 +79,31 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   );
 }
 
+/** An open all-day recording's recap (not final yet) is read again this often while the page shows. */
+const OPEN_POLL_MS = 60_000;
+
+/** Actions confirmed from one recording's minutes (or recap): the recording and the version they were shown from. */
+export type ConfirmedActions = { id: string; version?: number; actions: string[] };
+
 /** Asking for minutes and confirming their actions through `POST /recordings/{id}/minutes[/todos]`; an all-day
- *  recording's recap (#4741) goes through the same routes (`recap` picks its messages). One request at a time; a
- *  successful write, or a stale-version rejection, is read back before another mutation is allowed; answers that arrive
- *  after the route, credential or assistant changed are dropped; a pending one is read again every 5 s while the page
- *  shows. */
-export function useMinutesRequests({ id, version, pending, recap = false, auth, current, refresh, onSaved }: {
+ *  recording's recap (#4741) goes through the same routes (`recap` picks its messages), and `confirm` sends each of its
+ *  parts' actions to that part. One request at a time; a successful write, or a stale-version rejection, is read back
+ *  before another mutation is allowed; answers that arrive after the route, credential or assistant changed are
+ *  dropped; a pending one is read again every 5 s while the page shows, an `open` one (a recap not final yet) with
+ *  `poll` every 60 s and when the page shows again. */
+export function useMinutesRequests({ id, version, pending, open = false, recap = false, auth, current, refresh, poll = refresh, onSaved }: {
   id: string;
   /** The shown minutes' (or recap's) version, sent with confirmed actions. */
   version?: number;
   pending: boolean;
+  /** More may come without a request of this page's: an all-day recording whose recap is not final yet. */
+  open?: boolean;
   recap?: boolean;
   auth: RecordingAuth;
   current: () => boolean;
   refresh: () => Promise<boolean>;
+  /** The read of an open one; `refresh` when absent. */
+  poll?: () => Promise<boolean>;
   onSaved: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -112,6 +123,19 @@ export function useMinutesRequests({ id, version, pending, recap = false, auth, 
     }, 5000, documentPage);
   }, [pending, current, refresh]);
 
+  useEffect(() => {
+    if (pending || !open) return;
+    // The page was just read: the next read is a minute later, or when the page shows again.
+    let polling = false, started = false;
+    const stop = visiblePoll(() => {
+      if (!started || polling || inFlight.current || !current()) return;
+      polling = true;
+      void poll().catch(() => {}).finally(() => { polling = false; });
+    }, OPEN_POLL_MS, documentPage);
+    started = true;
+    return stop;
+  }, [pending, open, current, poll]);
+
   // A successful write (or stale-version rejection) must be read back before another mutation is allowed.
   const readback = async () => {
     setNeedsRefresh(true);
@@ -125,32 +149,43 @@ export function useMinutesRequests({ id, version, pending, recap = false, auth, 
     }
   };
 
-  const run = async (actions?: string[], refreshOnly = false) => {
-    if (inFlight.current || !valid() || (needsRefresh && !refreshOnly)) return;
+  // `writes`: the actions to confirm, recording by recording, in order; null asks for this recording's minutes (recap).
+  const send = async (writes: ConfirmedActions[] | null, refreshOnly: boolean) => {
+    if (inFlight.current || !valid() || (needsRefresh && !refreshOnly) || writes?.length === 0) return;
     inFlight.current = true;
     setBusy(true);
     try {
       if (!refreshOnly) {
-        try {
-          await api(`/recordings/${enc(id)}/minutes${actions ? "/todos" : ""}`, {
-            method: "POST", ...auth,
-            ...(actions ? { json: { version: version!, actions } } : {}),
-          });
-        } catch (err) {
-          if (!valid()) return;
-          if (!(err instanceof ApiError && err.status === 409 && err.code === "minutes_stale")) throw err;
-          toast(t(recap ? "knowledge-kbdetail.recap_stale" : "knowledge-kbdetail.minutes_stale"), "error");
+        // A write that took effect (or found a newer version) is read back even when a later one fails.
+        let changed = false, stale = false, failure: { err: unknown } | undefined;
+        for (const write of writes ?? [null]) {
+          try {
+            await api(write ? `/recordings/${enc(write.id)}/minutes/todos` : `/recordings/${enc(id)}/minutes`, {
+              method: "POST", ...auth,
+              ...(write ? { json: { version: write.version!, actions: write.actions } } : {}),
+            });
+            changed = true;
+          } catch (err) {
+            if (!valid()) return;
+            if (!(err instanceof ApiError && err.status === 409 && err.code === "minutes_stale")) { failure = { err }; break; }
+            if (!stale) toast(t(recap ? "knowledge-kbdetail.recap_stale" : "knowledge-kbdetail.minutes_stale"), "error");
+            stale = changed = true;
+          }
         }
-      }
-      if (valid()) await readback();
+        if (failure && !changed) throw failure.err;
+        if (valid()) await readback();
+        if (failure) throw failure.err;
+      } else if (valid()) await readback();
     } catch (err) {
       if (valid()) toast(t(recap ? "knowledge-kbdetail.recap_request_failed" : "knowledge-kbdetail.minutes_request_failed", { error: errorText(err) }), "error");
     } finally {
       if (valid()) { inFlight.current = false; setBusy(false); }
     }
   };
+  const run = (actions?: string[], refreshOnly = false) => send(actions ? [{ id, version, actions }] : null, refreshOnly);
+  const confirm = (writes: ConfirmedActions[]) => send(writes, false);
 
-  return { busy, needsRefresh, run };
+  return { busy, needsRefresh, run, confirm };
 }
 
 /** Until when a trimmed recording's minutes (or recap) stay: the assistant's minutes_days in effect, when its hub says;
@@ -200,11 +235,11 @@ export function PointList({ items, time }: { items: MinutesPoint[]; time: (at: n
 }
 
 /** Suggested actions, each added to the to-dos only when the user confirms it (or all that are left). */
-export function ActionItems({ title, actions, disabled, time, onAdd }: {
+export function ActionItems<A extends MinutesAction>({ title, actions, disabled, time, onAdd }: {
   title: string;
-  actions?: MinutesAction[] | null;
+  actions?: A[] | null;
   disabled: boolean;
-  time: (at: number) => React.ReactNode;
+  time: (at: number, action: A) => React.ReactNode;
   onAdd: (ids: string[]) => void;
 }) {
   if (!actions?.length) return null;
@@ -219,7 +254,7 @@ export function ActionItems({ title, actions, disabled, time, onAdd }: {
         {actions.map((action) => <li key={action.id} className="py-2 first:pt-0 last:pb-0">
           <p className="break-words text-[13px] leading-relaxed text-ink">{[action.who, action.what, action.by, action.due_date && t("knowledge-kbdetail.minutes_due", { date: action.due_date })].filter(Boolean).join(" · ")}</p>
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-            {time(action.at)}
+            {time(action.at, action)}
             {action.todo_id ? <TonePill>{t("knowledge-kbdetail.minutes_added")}</TonePill> :
               <Button tone="secondary" disabled={disabled} onClick={() => onAdd([action.id])}>{t("knowledge-kbdetail.minutes_add_todo")}</Button>}
           </div>
