@@ -49,15 +49,17 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 				p.mu.Unlock()
 			}
 		}
-		// A recorded profile holding no copy of the transcript (a launcher switch, a
-		// rollback that resumed elsewhere) would make Claude answer "No conversation
-		// found": resume where the transcript is. A profile that holds a copy, its
-		// projects/ shared through a symlink included, keeps the conversation.
+		// When one id has several copies, the newest is the conversation (transcriptPath).
+		// A recorded profile holding no copy (a launcher switch) would make Claude answer
+		// "No conversation found"; one holding only an older copy (a rollback continued
+		// the conversation elsewhere) would resume from the old point and drop the later
+		// turns. Either way resume where the newest copy is. A profile whose copy is the
+		// newest, its projects/ shared through a symlink included, keeps the conversation.
 		if path := n.transcriptPath(id); path != "" {
 			project := filepath.Dir(path)
 			projects := filepath.Dir(project)
 			if filepath.Base(projects) == "projects" && (selected == "" ||
-				!fileExists(filepath.Join(n.assistantConfigPath(selected), "projects", filepath.Base(project), filepath.Base(path)))) {
+				!holdsNewestCopy(filepath.Join(n.assistantConfigPath(selected), "projects", filepath.Base(project), filepath.Base(path)), path)) {
 				selected = filepath.Dir(projects)
 				if sameScopePath(selected, filepath.Join(n.home, ".claude")) {
 					// Preserve the old unset-profile global config, unless
@@ -111,6 +113,17 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 		}
 	}
 	return selected, nil
+}
+
+// holdsNewestCopy reports whether copy exists and is no older than newest: the same file reached through a symlink, or
+// an equally recent copy. Comparing times rather than paths also holds when newest came from a stale remembered path.
+func holdsNewestCopy(copy, newest string) bool {
+	c, err := os.Stat(copy)
+	if err != nil {
+		return false
+	}
+	m, err := os.Stat(newest)
+	return err != nil || !m.ModTime().After(c.ModTime())
 }
 
 func sameAssistantProfile(a, b string) bool {
