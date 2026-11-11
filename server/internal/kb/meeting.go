@@ -77,6 +77,9 @@ type MeetingRoom struct {
 	// EndingAt: the meeting's end batch went to the room then; it turns ended once that turn ends, at the latest a
 	// little later.
 	EndingAt time.Time `json:"ending_at,omitzero"`
+	// Started: the room came up (it was ready once): its ids are shown from then on. A start that never got there
+	// keeps them here only, for the deletion.
+	Started bool `json:"started,omitempty"`
 }
 
 // MeetingFollowup is the meeting's follow-up conversation.
@@ -447,7 +450,7 @@ func (m Meeting) RoomView() *RoomView {
 	if v.State == RoomUnavailable {
 		v.Problem = rm.Problem
 	}
-	if v.State != RoomNone && v.State != RoomDeleted && !rm.Pending && rm.SessionID != "" {
+	if v.State != RoomNone && v.State != RoomDeleted && rm.Started && rm.SessionID != "" {
 		v.MachineID, v.SessionID = rm.MachineID, rm.SessionID
 	}
 	return v
@@ -499,3 +502,6 @@ func metaWithMeeting(raw []byte, m *Meeting) []byte {
 	}
 	return out
 }
+
+// HasMinutes: recording id has minutes that can be read.
+func (s *Store) HasMinutes(id string) bool { return s.hasMinutes(id) }

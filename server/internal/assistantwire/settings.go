@@ -88,6 +88,9 @@ type StartParams struct {
 	// GuestTools: a guest conversation (assistant/guest.go) that may use only these connector tools; nil is an
 	// ordinary one.
 	GuestTools []string `json:"guest_tools,omitempty"`
+	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
+	// that cannot picks its own. Never over the bus.
+	NewSessionID string `json:"-"`
 }
 
 // SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is

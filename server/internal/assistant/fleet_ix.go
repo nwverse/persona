@@ -210,6 +210,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		}
 	}
 	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
+	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID) // a Just me turn's: pushed without its content
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
 		if ix.Resumable { // its hook's earlier attempt left the card pending: it is answered too
 			_ = s.resolveRemembered(ix.ID, r, false)

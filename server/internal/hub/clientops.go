@@ -147,6 +147,13 @@ type clientOpForgetter interface {
 // coming back for good. A notification choice and a conversation's start only release a definitely offline receipt;
 // uncertain delivery stays recorded.
 func clientOpRetry(kind string, body []byte) bool {
+	if kind == meetingJustMeOp || kind == meetingFollowupOp { // never reached the manager: the same call runs again
+		var res struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(body, &res)
+		return res.Code == assistantwire.CodeAssistantOffline
+	}
 	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" {
 		return false
 	}
@@ -248,6 +255,9 @@ func (h *Hub) waitClientOp(w http.ResponseWriter, r *http.Request, op *db.Client
 			writeClientOpResult(w, result)
 			return
 		case "unknown":
+			if op.Kind == meetingFollowupOp && h.rerunClientOp(w, r, op) {
+				return // a follow-up's call a restart cut off runs again: its creation record makes nothing twice
+			}
 			// Start, checkout and reply retries must not repeat side effects or replace a recorded HTTP outcome.
 			// A recovered pending operation has no result and remains explicitly unknown.
 			if op.Kind == "start" || op.Kind == "assistant_start" || op.Kind == "worktree_create" || op.Kind == "lark_send" || op.Kind == "inbox_reply" || op.Kind == "inbox_handoff" || op.Kind == "lark_thread_reply" {

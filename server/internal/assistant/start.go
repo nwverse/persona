@@ -254,6 +254,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		// The node starts it with no built-in tools and only these of Persona's (node/assistant_guest.go).
 		params["guest"] = map[string]any{"tools": p.GuestTools}
 	}
+	if p.NewSessionID != "" {
+		params["new_session_id"] = p.NewSessionID // node/assistant_guest.go: under this id, once
+	}
 	purpose := p.Purpose
 	if purpose == "" {
 		purpose = "assistant"
@@ -745,6 +748,9 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		params = map[string]any{}
 	}
 	params["is_main"] = false
+	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
+		return nil, err // an ended room: 409 meeting_ended (meeting_room.go)
+	}
 	if s.isGuest(ctx, p.MachineID, p.SessionID) {
 		// A guest conversation keeps what it started on: no launcher, model, runtime or mode picked for a message
 		// (the node refuses a change too, node/assistant_guest.go).

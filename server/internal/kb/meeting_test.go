@@ -183,7 +183,7 @@ func TestPrivateMarkAndDetail(t *testing.T) {
 		t.Fatal("an upload undid the mark")
 	}
 	if _, err := e.MeetingUpdate(recID, func(m *Meeting, _ Recording) error {
-		m.Room.State, m.Room.MachineID, m.Room.SessionID = RoomReady, "server", "room-1"
+		m.Room.State, m.Room.MachineID, m.Room.SessionID, m.Room.Started = RoomReady, "server", "room-1", true
 		m.Followup = &MeetingFollowup{MachineID: "server", SessionID: "fu-1"}
 		return nil
 	}); err != nil {
@@ -236,10 +236,11 @@ func TestRoomView(t *testing.T) {
 	}{
 		{MeetingRoom{}, RoomView{State: RoomNone}},
 		{MeetingRoom{State: RoomStarting, MachineID: "m", SessionID: "s", Pending: true}, RoomView{State: RoomStarting}},
-		{MeetingRoom{State: RoomReady, MachineID: "m", SessionID: "s"}, RoomView{State: RoomReady, MachineID: "m", SessionID: "s"}},
+		{MeetingRoom{State: RoomReady, MachineID: "m", SessionID: "s", Started: true}, RoomView{State: RoomReady, MachineID: "m", SessionID: "s"}},
 		{MeetingRoom{State: RoomUnavailable, Problem: RoomNodeTooOld}, RoomView{State: RoomUnavailable, Problem: RoomNodeTooOld}},
-		{MeetingRoom{State: RoomEnded, Problem: RoomStartFailed, MachineID: "m", SessionID: "s"}, RoomView{State: RoomEnded, MachineID: "m", SessionID: "s"}},
-		{MeetingRoom{State: RoomDeleted, MachineID: "m", SessionID: "s"}, RoomView{State: RoomDeleted}},
+		{MeetingRoom{State: RoomUnavailable, Problem: RoomStartFailed, MachineID: "m", SessionID: "s"}, RoomView{State: RoomUnavailable, Problem: RoomStartFailed}},
+		{MeetingRoom{State: RoomEnded, Problem: RoomStartFailed, MachineID: "m", SessionID: "s", Started: true}, RoomView{State: RoomEnded, MachineID: "m", SessionID: "s"}},
+		{MeetingRoom{State: RoomDeleted, MachineID: "m", SessionID: "s", Started: true}, RoomView{State: RoomDeleted}},
 	} {
 		room := c.room
 		if got := (Meeting{Room: &room}).RoomView(); *got != c.want {

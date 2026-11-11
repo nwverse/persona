@@ -55,6 +55,12 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 		s.logf("mcp tools: %v", err)
 		return []proto.Tool{}
 	}
+	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}
+		}
+		return meetingRoomTools() // a meeting's room: its meeting tools only (meeting_room_tools.go)
+	}
 	if !guest {
 		if guestHint {
 			return []proto.Tool{}
