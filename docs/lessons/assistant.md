@@ -232,3 +232,13 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   and then heard nothing when they finished. The sink now builds the ending line for every quiet end and, with no card,
   posts it as a card of its own (the same rule #3930's timeout relies on). The result stays quiet: the line is
   "Done · took X", not an empty answer.
+
+- **A card nests a list by four spaces per level, not by the Markdown rule** (#4180). Lark's Markdown component documents
+  one nesting level as four leading spaces (a list's sub-items are indented four spaces per level), while CommonMark — and
+  so a model writing an answer — indents a sub-item by its parent marker's width: two spaces under "- ", three under
+  "1. ". The answer's Markdown was passed through unchanged, so every nested list arrived as a flat list of siblings and
+  the hierarchy the answer was written with was gone. `CardMarkdown` now maps each item's observed indentation to a level
+  and writes four spaces per level (`listIndent` in `feishubot/card.go`) in one pass over the whole answer, so the levels
+  carry across a fenced code block and a list goes on around it; a list item's continuation lines, a list inside a
+  blockquote, and four-or-more-space indented code at the left margin stay as written, and a paragraph at the left margin
+  ends the list. Test the conversion through `CardMarkdown` and through the answer builder (`answerCards`).
