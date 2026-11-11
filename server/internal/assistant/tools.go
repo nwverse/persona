@@ -284,9 +284,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		text := a.Text
 		if a.Task == nil {
-			if _, theirs, err := s.supervisedElsewhere(ctx, self, am, c); err != nil {
+			if t, theirs, err := s.supervisedElsewhere(ctx, self, am, c); err != nil {
 				return "", err // Unknown task ownership must not strip message provenance.
 			} else if theirs {
+				// Read after the phone: the agent may have become another conversation's task while the user was asked.
+				if err := exitRefused(c, t, a.Text, len(atts)); err != nil {
+					return "", err
+				}
 				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
 			}
 		}

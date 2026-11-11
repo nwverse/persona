@@ -73,6 +73,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	} else if !ok {
 		return "The user declined on the phone: the agent goes on as it was.", nil
 	}
+	// Again after the phone: the agent may have become another conversation's task while the user was asked.
+	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {
+		return "", err
+	}
 	// Only a turn under way is stopped: an agent still starting has none yet (then is queued for it, as agent_send does).
 	working := c.Status == proto.StatusWorking
 	if working {
@@ -324,6 +328,16 @@ func (s *Service) exitAllowed(ctx context.Context, self string, am Device, c pro
 	t, theirs, err := s.supervisedElsewhere(ctx, self, am, c)
 	if err != nil || !theirs {
 		return err
+	}
+	return exitRefused(c, t, text, attachments)
+}
+
+// exitRefused is exitAllowed's answer once c is known to work for t, a task another conversation supervises: the
+// refusal for a bare /exit or /quit, nil for any other text. A tool that asked the phone first reads the task again
+// after the answer and checks with it, since the agent may have become that task's while the user was asked.
+func exitRefused(c proto.Session, t Todo, text string, attachments int) error {
+	if !exitText(text) || attachments > 0 {
+		return nil
 	}
 	return fmt.Errorf("%s works for task %q (%s) of another conversation: %s asks to close the agent that task runs on, which is "+
 		"not this conversation's to do; nothing was sent or stopped. The user can close it in the app, or with agent_archive "+

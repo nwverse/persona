@@ -613,3 +613,59 @@ func TestAgentSendExitToAnotherConversationsAgentAsksNothing(t *testing.T) {
 		t.Fatalf("%s, sent %q", out, sentToAgent(f))
 	}
 }
+
+// The check is made again once the phone answered (#3537): an agent that became another conversation's task while the
+// user was asked is not closed by an approved /exit, nor sent it wrapped as a side conversation, from agent_send or as
+// agent_interrupt's then.
+func TestAgentSendExitRecheckedAfterThePhone(t *testing.T) {
+	for _, tc := range []struct{ tool, args string }{
+		{"agent_send", `{"session_id":"code-0000-0000","text":"/exit"}`},
+		{"agent_interrupt", `{"machine":"server","session_id":"code-0000-0000","then":"/exit"}`},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			f := healthHub()
+			f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app",
+				Agent: "claude", Status: proto.StatusIdle, Title: "app"})
+			s := newTestService(t, f)
+			setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
+			ctx := t.Context()
+			done := make(chan struct{})
+			var out string
+			var isErr bool
+			go func() {
+				defer close(done)
+				out, isErr = spaceTool(t, s, "sleep-000-0000", tc.tool, tc.args)
+			}()
+			var qs []proto.Interaction
+			for deadline := time.Now().Add(5 * time.Second); len(qs) == 0 && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+				qs = s.pendingQuestions()
+			}
+			if len(qs) != 1 {
+				t.Fatalf("no card on the phone: %+v", qs)
+			}
+			// While the phone is asked, the main conversation takes the agent under its supervision.
+			todo, err := s.createTodo(ctx, "Chart the app", "notes", "main-0000-0000", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.superviseTodo(ctx, todo.ID, "main-0000-0000", []string{"a chart"}, 30)
+			if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/src/app", "claude"); err != nil {
+				t.Fatal(err)
+			}
+			allow := true
+			raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+			if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: qs[0].ID, Answer: raw}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no answer after the phone")
+			}
+			if !isErr || !strings.Contains(out, "asks to close the agent that task runs on") || len(sentToAgent(f)) != 0 ||
+				len(f.interrupted()) != 0 {
+				t.Fatalf("%s, sent %q, interrupted %v", out, sentToAgent(f), f.interrupted())
+			}
+		})
+	}
+}
