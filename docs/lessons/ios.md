@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## What a VNC client can count on from macOS Screen Sharing (#3075)
+
+- ClientCutText reaches the Mac's pasteboard only as the legacy `com.apple.traditional-mac-plain-text` type, without `public.utf8-plain-text`: AppleScript's `the clipboard` reads it, `pbpaste` and Terminal do not, so a ⌘V after it pasted nothing. Write the clipboard through the node, which answers once the text is there.
+- `pbcopy` / `pbpaste` take the text encoding from the locale. A launchd-started node has none and uses MacRoman, so 中文 became ‰∏≠Êñá; set `LANG`, `LC_ALL` and `LC_CTYPE` for them.
+- Key events in a session's first 2 to 3 seconds are dropped; pointer events are not, and no message marks the end. An early pointer move or Shift press does not wake the keyboard. Hold keys after every sign-in (`RFBInputQueue`), reconnects included.
+- `UIPasteboard.general.string` on the main thread blocks it while iOS asks Allow Paste (a device, and from iOS 27 the simulator too): the live picture stops and a UI test cannot query the app. Read it in `Task.detached` (`UIPasteboard` is Sendable) and answer the question in SpringBoard.
+- To measure, sign in with ARD to 127.0.0.1:5900 from a script, read a Terminal window with `stty -echo; dd of=FILE bs=1 count=N` and compare bytes; read the Mac's own pointer through CoreGraphics (`CGEventGetLocation`). A real-Mac paste test steals focus: tell the lanes sharing the screen first, and close only windows you opened (match their titles through System Events; AppleScript to Terminal blocks on the Automation prompt).
+
 ## An environment font design replaces every run's font (#2984)
 
 `.fontDesign(_:)` in the environment, even `.default`, replaces the font of every run in a `Text`'s attributed string
@@ -126,6 +134,22 @@ from colliding with its buttons.
 - **A second fog starts where the first stops being solid.** The manager switcher under the bar draws its own fog. Lifting it to the top of
   the screen drew it over the bar and hid the bar's buttons; it starts at `AssistantTopBar.fogSolid`, the bar fog's solid end, and goes
   down from there. The bar, the shell's moving bar and the switcher share `fogSolid` and `fade` so they cannot drift apart.
+
+## Fog under the chat's footer (#3696)
+
+The chat list and its footer (Persona's capsules, cards, the composer) are stacked, not overlaid, so the keyboard shortens the
+page and the newest message stays over the composer. A fade drawn by the footer over the list's last 48 pt still left three faults:
+
+- **The list's own edge is a line.** The gradient ended at the list's bottom, where the scroll view clips: a card crossing it lost
+  its rounded bottom to a straight cut, and below it was only page. A fade must end where nothing is drawn any more: the fog is
+  solid at the list's bottom edge (`FooterFog`), so whatever the clip cuts is already invisible.
+- **A band under the capsules reads as a plate.** To fade behind the capsules, the list runs on under the footer by a fixed band
+  (`ChatView.underDock`, negative bottom padding on the list) and its newest end gets the same extra content margin. Positions,
+  `newestGap` (offset + inset) and the follow logic are unchanged; what reads the list's frame (`scratch.listFrame`, the scroll
+  geometry's height, the navigator, the arrow) takes the part over the footer. The band is a constant per chat type, never the
+  footer's measured height: margins that track the footer would move the list on every card, tray and line of text.
+- **Whatever is drawn after the fade covers what is drawn before it.** The footer's gradient also dimmed Jump to Latest, which is
+  an overlay of the list. The fog is now the list's first overlay; the navigator and the arrow come after it.
 
 ## Personal Agent entry availability (#2935)
 
@@ -1713,6 +1737,16 @@ A worktree's display name and its Agents' conversation names are different comma
   next to a black / white chevron that read as a navigation link. Use a borderless button with the expand / collapse icon
   in `.secondary`, as `ReadinessCard`'s Details does.
 
+## A `Menu` draws no section header over an inline picker (2026-11-11, #3719)
+
+- The Agents header's mode menu wanted "Permission Mode: …" over its modes, as the web and Android have. Inside a `Menu`,
+  neither `Section(title) { Picker … .pickerStyle(.inline) }` nor `Picker { Section { … } header: { Text } }` drew it (iOS 27
+  simulator; the UI test found no element with the words, and the shot showed the bare list). The section titles above
+  were in a picker's own menu (a `Picker` in a `Form`), not an inline picker inside a `Menu`.
+- The modes became `Toggle`s, the current one on, in a `Section { … } header: { Text }`: a menu draws that header, as the
+  composer's ultracode section does, and a check mark beside the switch that is on, as a picker does. The Agents menu's
+  Display note (#3182) is the second shape above; look at it in a shot before counting on it.
+
 ## A menu inside a menu keeps the items it was first built with (2026-11-09, #1644)
 
 - **What went wrong**: the Persona chat's avatar menu nests "Launcher" › each launcher › its models. The models are read a moment after the bar comes up. An `.id` on the innermost menu (built from the list) was not enough: the "Launcher" menu around it had none, kept the launchers' submenus it was built with before the lists came in, and the claude submenu showed only Default and "Other Model…" for as long as the app ran, although the state had all ten models. Whether a run saw it depended on when the outer menu happened to be built first, so a passing UI test proved little.
@@ -1765,6 +1799,24 @@ A worktree's display name and its Agents' conversation names are different comma
 ## Configuration refusals are not retryable connection failures (#1915)
 
 HTTP failures live in `Shared/APIClient.swift`, not PersonaKit's model-response `APIErrorInfo`. Classify business codes before status or timeout wording. A background sync must pause on disabled/read-only configuration without discarding uploads or deletion intent; another local save cannot repair that configuration. Reopen/foreground can explicitly recheck. Do not continue writes after failed reconciliation, and do not acknowledge a remote deletion from an unsupported 404. Keep the list's pending-delete explanation durable across relaunch.
+
+## A header holding a Menu can stretch the scroll edge blur over a whole List (2026-11-11, #4218)
+
+- On an iPhone (TestFlight), the inbox's rows all turned blurred and washed out as soon as a section title stuck under the navigation bar,
+  and came back only at the list's top. Section titles stayed sharp, but the edge's hairline sat at the bottom of Done's title, the header
+  of an empty section (`Section { EmptyView() } header:`) holding a `Menu` (Jump To), and that title was blurred with the rows.
+- The iOS 27.0 and 27.1 simulators never blurred the rows (same style, grouping, sections, an end bounce, the offset set directly with
+  `personactl.py scroll`, real drags in a UI test), but they did draw that one title washed out like a stuck title's, wherever it was:
+  its secondary text at about half the luminance spread of Collapsed's title, an empty-section header with the same styling and no
+  `Menu` (0.23 to 0.28 against 0.46 to 0.56, light and dark). Other empty-section headers rendered normally. Measure titles' contrast
+  on screenshots: a header the edge treats as stuck shows there even when the blur itself is device-only.
+- How the edge is built (iOS 27, read from a running app with `xcrun lldb -p <pid>`, `recursiveDescription` and `_ivarDescription`): a
+  List's top `UIKit.ScrollEdgeEffectView` is sized to a `PocketElementModel`'s region: the bar, the status bar, and the content of every
+  stuck header, which SwiftUI registers as "floating" elements (`ScrollPocketElementInteraction` views in each header cell). With a
+  floating element the automatic style draws `thinFilm(floating)`, a film down to the region's bottom with a hairline there; forcing
+  `.soft` draws `soft` over the same region. A header counted as floating while it is not stuck therefore takes the film down to it.
+- So a title with a `Menu` and nothing under it is a row, not a section header (Done's title in `InboxView`; it never stuck anyway).
+  `InboxScrollEdgeTests` measures both the rows and that title. Look for the region in the lldb dump first when a list blurs as a whole.
 
 ## Rolling recording
 

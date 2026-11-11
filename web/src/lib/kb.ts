@@ -93,6 +93,8 @@ export interface MinutesPoint {
   text: string;
   at: number;
   who?: string;
+  /** The meeting photo it cites instead of a transcript line (#3862 phase 3): its `n`; `at` is then the photo's. */
+  photo?: number;
 }
 
 export interface MinutesAction {
@@ -103,6 +105,8 @@ export interface MinutesAction {
   due_date?: string;
   at: number;
   todo_id?: string;
+  /** The meeting photo it cites instead of a transcript line (#3862 phase 3): its `n`; `at` is then the photo's. */
+  photo?: number;
 }
 
 export interface RecordingMinutes {
@@ -110,7 +114,11 @@ export interface RecordingMinutes {
   revision: number;
   generated_at: string;
   title: string;
+  /** The hub's fixed-format span ("2026-11-10 14:00–15:10"), shown only without `start` / `end` (an older hub). */
   when: string;
+  /** The recording's span (RFC 3339, #4713), formatted here like the app's other dates (`formatSpan`). */
+  start?: string;
+  end?: string;
   where?: string;
   attendees?: string[];
   points?: MinutesPoint[];
@@ -189,7 +197,8 @@ export interface RecordingAsk {
   answer: string;
   lang?: string;
   speak?: boolean;
-  sources?: { kind: string; id: string; name: string; when?: string }[] | null;
+  /** An earlier meeting's `when` / `start` / `end` are its minutes' (#4713). */
+  sources?: { kind: string; id: string; name: string; when?: string; start?: string; end?: string }[] | null;
   error?: string;
   asked_at: string;
   answered_at?: string;
@@ -225,11 +234,55 @@ export interface RecordingLive {
   problem?: string;
   asks?: RecordingAsk[] | null;
   /** The meeting conversation (#3862): the private mark (absent until chosen), a room meeting's room, the follow-up once
-   *  made, and each part's revision (`room`, `asks`, `private`, `followup`; numbers that only go up). */
+   *  made, and each part's revision (`room`, `asks`, `private`, `followup`; numbers that only go up). `photos` has a
+   *  revision here and no field: its list is `GET …/photos` (phase 3). */
   private?: boolean;
   room?: MeetingRoom;
   followup?: MeetingConversation;
   revs?: Record<string, number>;
+}
+
+/** One of a meeting's photos as `GET /api/v1/recordings/{id}/photos` lists them (docs/assistant/meeting-minutes.md
+ *  "Phase 3: photos", #3862): `n` counts from 1 per recording and is never reused, `at` is seconds from the start,
+ *  `text` what the phone recognized in it, `caption` the owner's words, `note` the room's description, `cited` whether
+ *  the current minutes cite it, `forwarded` whether it went into the room. Its image is `GET …/photos/{n}`. */
+export interface RecordingPhoto {
+  n: number;
+  id: string;
+  at: number;
+  mime: string;
+  width: number;
+  height: number;
+  text?: string;
+  caption?: string;
+  note?: string;
+  cited: boolean;
+  forwarded: boolean;
+  added_at: string;
+}
+
+/** The photo a minutes item cites (`"photo": n`), when it names one. */
+export function citedPhoto(item: { photo?: unknown }): number | undefined {
+  return Number.isInteger(item.photo) && (item.photo as number) > 0 ? (item.photo as number) : undefined;
+}
+
+/** `GET …/photos`'s list read defensively, oldest first: entries without a positive whole `n` or a string `id` are left
+ *  out, blank texts read as absent. */
+export function recordingPhotos(v: unknown): RecordingPhoto[] {
+  const raw = v && typeof v === "object" && !Array.isArray(v) ? (v as { photos?: unknown }).photos : undefined;
+  if (!Array.isArray(raw)) return [];
+  const out: RecordingPhoto[] = [];
+  for (const x of raw as Record<string, unknown>[]) {
+    if (!x || typeof x !== "object" || !Number.isInteger(x.n) || (x.n as number) <= 0 || typeof x.id !== "string" || !x.id) continue;
+    const words = (k: "text" | "caption" | "note") => (typeof x[k] === "string" && (x[k] as string).trim() ? { [k]: (x[k] as string).trim() } : {});
+    out.push({
+      n: x.n as number, id: x.id, at: typeof x.at === "number" && Number.isFinite(x.at) ? Math.max(0, x.at) : 0,
+      mime: str(x.mime) ?? "", width: Number(x.width) || 0, height: Number(x.height) || 0,
+      ...words("text"), ...words("caption"), ...words("note"),
+      cited: x.cited === true, forwarded: x.forwarded === true, added_at: str(x.added_at) ?? "",
+    });
+  }
+  return out.sort((a, b) => a.n - b.n);
 }
 
 /** What `detail.meta` (or a `GET …/live`) says of a recording's meeting conversation (#3862): well-formed values only. */
@@ -269,7 +322,12 @@ export function meetingConversation(v: unknown): MeetingConversation | undefined
 /** Whether a recording is a meeting as #2981 counts them (`kind: meeting` or minutes asked for): only those take the
  *  private mark (docs/assistant/meeting-minutes.md "The private mark"). */
 export function countsAsMeeting(meta?: Record<string, unknown> | null): boolean {
-  return str(meta?.kind)?.trim().toLowerCase() === "meeting" || meta?.minutes_asked === true;
+  return meetingKind(meta) || meta?.minutes_asked === true;
+}
+
+/** Whether a recording's `kind` is `meeting`: only those take photos (#3862 phase 3, `409 not_meeting` otherwise). */
+export function meetingKind(meta?: Record<string, unknown> | null): boolean {
+  return str(meta?.kind)?.trim().toLowerCase() === "meeting";
 }
 
 /** A line a search found: `path` relative to the data dir, `n` its line number in that file. */
@@ -928,6 +986,17 @@ export function formatAt(iso: string, now = new Date(), tz?: string): string {
   return d.getFullYear() === now.getFullYear()
     ? t("lib-kb.at_this_year", { date: monthDay(d, zone), weekday: weekday(d, zone), time: hm })
     : t("lib-kb.at_other_year", { date: yearMonthDay(d, zone), time: hm });
+}
+
+/** A span the hub sends as `start` / `end` (RFC 3339) in this app's dates, as `formatAt` says a time (#4713): "Fri, Oct 30
+ *  14:00–15:10", with the end's date too when it is another day. `fallback` (the hub's fixed-format `when`) when either
+ *  is missing or unreadable: a hub from before them. */
+export function formatSpan(start: string | undefined, end: string | undefined, fallback = "", now = new Date()): string {
+  const s = new Date(start ?? "");
+  const e = new Date(end ?? "");
+  if (!start || !end || Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return fallback;
+  const sameDay = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth() && s.getDate() === e.getDate();
+  return sameDay ? `${formatAt(start, now)}–${pad(e.getHours())}:${pad(e.getMinutes())}` : `${formatAt(start, now)} – ${formatAt(end, now)}`;
 }
 
 /** "2026-10-30" → "Fri, Oct 30", with the year when it is not this one. */

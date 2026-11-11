@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
-import { minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesAction, type MinutesPoint, type RecordingView } from "../../lib/kb";
+import { citedPhoto, formatSpan, minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesAction, type MinutesPoint, type RecordingView } from "../../lib/kb";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
-import { Button, copyText, toast } from "../../ui/atoms";
+import { Button, copyText, cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Card, SectionTitle, TonePill } from "./KBParts";
+import { PhotoCite, type MeetingPhotos } from "./RecordingPhotos";
 
 export type RecordingAuth = { token: string; tokenOwner: string; headers: Record<string, string> };
 
@@ -17,11 +18,14 @@ type Props = {
   refresh: () => Promise<boolean>;
   onSaved: () => void;
   onJump: (id: string) => void;
+  /** The meeting's photos (#3862 phase 3): an item citing one shows it in place of its transcript time. */
+  photos?: MeetingPhotos;
 };
 
 /** Minutes are retained during regeneration; suggested actions become to-dos only on explicit confirmation. A trimmed
- *  recording (its transcript expired, #3780) keeps its minutes and their to-dos, but they can't be made again. */
-export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved, onJump }: Props) {
+ *  recording (its transcript expired, #3780) keeps its minutes and their to-dos, but they can't be made again. An item
+ *  may cite a meeting photo instead of a transcript line (`"photo": n`): its thumbnail goes to it under **Photos**. */
+export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved, onJump, photos }: Props) {
   const heading = useId();
   const minutes = detail.minutes;
   const state = detail.meta?.minutes_state;
@@ -33,10 +37,15 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   const disabled = busy || needsRefresh;
   const canGenerate = !rec.trimmedAt && (!!minutes || state === "failed" || (!rec.partial && !state));
   const time = (at: number) => <TranscriptTime rec={rec} at={at} onJump={onJump} />;
+  // An item's source: the photo it cites, else its time in the transcript.
+  const cite = (item: { at: number; photo?: number }) => {
+    const n = citedPhoto(item);
+    return n ? <PhotoCite n={n} at={item.at} rec={rec} photos={photos} onJump={onJump} /> : time(item.at);
+  };
   const points = (title: string, items?: MinutesPoint[]) => items?.length ? (
     <div className="px-4 py-3.5">
       <h3 className="mb-2 text-[13px] font-semibold text-ink">{title}</h3>
-      <PointList items={items} time={time} />
+      <PointList items={items} time={time} cite={cite} />
     </div>
   ) : null;
 
@@ -64,7 +73,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
         <div className="px-4 py-3.5">
           <h3 className="break-words text-[14px] font-semibold leading-relaxed text-ink">{minutes.title}</h3>
           <div className="mt-1.5 space-y-1 break-words text-[12.5px] leading-relaxed text-ink-2">
-            {minutes.when && <p>{minutes.when}</p>}
+            {(minutes.start || minutes.when) && <p data-minutes-when>{formatSpan(minutes.start, minutes.end, minutes.when)}</p>}
             {minutes.where && <p>{t("knowledge-kbdetail.minutes_where", { where: minutes.where })}</p>}
             {!!minutes.attendees?.length && <p>{t("knowledge-kbdetail.minutes_attendees", { attendees: minutes.attendees.join(" · ") })}</p>}
           </div>
@@ -72,7 +81,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
         </div>
         {points(t("knowledge-kbdetail.minutes_points"), minutes.points)}
         {points(t("knowledge-kbdetail.minutes_decisions"), minutes.decisions)}
-        <ActionItems title={t("knowledge-kbdetail.minutes_actions")} actions={minutes.actions} disabled={disabled} time={time} onAdd={(ids) => void run(ids)} />
+        <ActionItems title={t("knowledge-kbdetail.minutes_actions")} actions={minutes.actions} disabled={disabled} time={(_at, action) => cite(action)} onAdd={(ids) => void run(ids)} />
         {points(t("knowledge-kbdetail.minutes_open"), minutes.open)}
       </Card>}
     </section>
@@ -224,14 +233,18 @@ export function TranscriptTime({ rec, at, onJump }: { rec: RecordingView; at: nu
   );
 }
 
-/** Points with who said them and their time. */
-export function PointList({ items, time }: { items: MinutesPoint[]; time: (at: number) => React.ReactNode }) {
+/** Points with who said them and their time, or (cite) the photo one cites (#3862 phase 3). */
+export function PointList({ items, time, cite }: {
+  items: MinutesPoint[];
+  time: (at: number) => React.ReactNode;
+  cite?: (item: MinutesPoint) => React.ReactNode;
+}) {
   return (
     <ul className="space-y-2">
       {items.map((item, i) => (
-        <li key={i} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] leading-relaxed">
+        <li key={i} className={cx("flex flex-wrap gap-x-3 gap-y-1 text-[13px] leading-relaxed", citedPhoto(item) ? "items-center" : "items-baseline")}>
           <p className="min-w-0 flex-1 break-words text-ink">{[item.who, item.text].filter(Boolean).join(" · ")}</p>
-          {time(item.at)}
+          {cite ? cite(item) : time(item.at)}
         </li>
       ))}
     </ul>
