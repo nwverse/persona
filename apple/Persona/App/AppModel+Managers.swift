@@ -208,15 +208,19 @@ extension AppModel {
 }
 
 /// Where each hub's current assistant is kept on this device (`AppModel.assistantPicks`: group → manager id): the
-/// app's defaults, so it outlives the caches; a test's model keeps its own file in its state folder.
+/// app's defaults, so it outlives the caches; a test's model keeps its own file in its state folder, read through
+/// `StateCache` like the model's other state-folder files (#4695). The write stays synchronous: a test reads it back
+/// at once, and `StateCache.save` writes later.
 nonisolated enum AssistantPickStore {
     static let key = "assistant.manager"
+    /// The file's name in a test's state folder, one `StateCache` keeps as it is.
+    private static let fileName = "assistant-manager"
 
-    private static func file(_ folder: URL) -> URL { folder.appending(path: key + ".json") }
+    private static func file(_ folder: URL) -> URL { folder.appending(path: fileName + ".json") }
 
     static func load(folder: URL?) -> [String: String] {
         if let folder {
-            return (try? Data(contentsOf: file(folder))).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+            return StateCache.load(fileName, as: [String: String].self, in: folder) ?? [:]
         }
         return UserDefaults.standard.dictionary(forKey: key)?.compactMapValues { $0 as? String } ?? [:]
     }
