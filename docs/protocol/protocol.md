@@ -2464,6 +2464,8 @@ hub → node requests:
 | `connector.search` | `{id, query, limit?, days?, keep?}` → `{hits:[{chat, message}]}`: messages from the last `days` (default 365) days whose text contains `query`, newest first (the assistant's `imessage_search`); `keep` and masking as above. Matching only; `query` is never spliced into SQL |
 | `codex.answer` | `{session_id, id, resolution}`: answers a Codex card the node listed (`docs/integrations/codex.md` ("Questions and approvals")); a refusal is an error with `code`, and nothing is typed |
 
+`git.status` also accepts `{cwd, identity_only: true}` for manager authorization matching. It reads local metadata only and returns `{version: 1, path_resolved?, is_repo, cwd, root?, common_dir?, origin?, head_oid?}`. `path_resolved: true` certifies physical path resolution before cleaning parent segments; managers require it for paths named by standing-authorization cards. Older nodes omit it and those cards remain manual. `cwd` and Git paths are resolved on the node; `origin` is a credential-free canonical repository identifier. Linked worktrees share `common_dir`, the only cross-directory repository authorization evidence. Clones can share `origin`, but a copied URL proves no identity; independent clones require separate standing grants. Other status requests keep their existing response.
+
 Stash selections (#1480) carry the full lowercase object ID (`oid`, SHA-1 or SHA-256) from the list.
 `apply`, `pop` and `drop` require both `index` and `oid`; missing identities and moved, removed or mismatched
 entries return `git_stash_stale` before applying or deleting anything. Refresh and explicitly reselect; never

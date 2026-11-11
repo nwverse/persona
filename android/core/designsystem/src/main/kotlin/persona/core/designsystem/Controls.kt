@@ -562,7 +562,7 @@ fun JBadge(count: Int, modifier: Modifier = Modifier, text: String? = null) {
         Box(modifier.heightIn(min = HomeTokens.sidebarBadgeSize).widthIn(min = HomeTokens.sidebarBadgeSize)
             .clip(CircleShape).background(fill).padding(horizontal = Tokens.Space.xs), contentAlignment = Alignment.Center) {
             Text(label, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-                color = ExtensionThemeColors.on(fill), maxLines = 1)
+                color = palette.onAccentFill(fill), maxLines = 1)
         }
         return
     }

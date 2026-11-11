@@ -571,6 +571,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		CreationID       string        `json:"creation_id"`
 		Incarnation      string        `json:"incarnation"`
 		Cwd              string        `json:"cwd"`
+		IdentityOnly     bool          `json:"identity_only"`
 		Launcher         string        `json:"launcher"`
 		AgentType        string        `json:"agent_type"`
 		Model            string        `json:"model"`
@@ -1473,6 +1474,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "fs.watch": // the folders and Git directories the web panels have open (fswatch.go)
 		return n.fsWatch(params)
 	case "git.status":
+		if p.IdentityOnly {
+			return n.gitIdentity(ctx, p.Cwd)
+		}
 		return n.gitStatus(ctx, p.Cwd)
 	case "git.pull":
 		return n.gitPull(ctx, p.Cwd)

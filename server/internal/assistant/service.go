@@ -82,7 +82,8 @@ type Service struct {
 	mux    *http.ServeMux
 	routes []string
 
-	standingMu sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
+	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
+	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
