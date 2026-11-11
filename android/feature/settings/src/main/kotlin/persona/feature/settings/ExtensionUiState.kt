@@ -278,15 +278,16 @@ internal object ExtensionViewText {
     /** How long the search box waits after typing stops before asking the extension. */
     const val SearchPauseMillis = 300L
 
-    /** How a chart's value is written: the extension's own words, else short with the unit (`1.2M tokens`). */
-    fun display(value: Double, display: String?, unit: String?): String =
-        display?.takeIf { it.isNotBlank() } ?: (ChartMath.compact(value) + (unit?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""))
+    /** How a chart's value is written: the extension's own words, else short in [locale] with the unit (`1.2M tokens`). */
+    fun display(value: Double, display: String?, unit: String?, locale: java.util.Locale = java.util.Locale.ENGLISH): String =
+        display?.takeIf { it.isNotBlank() } ?: (ChartMath.compact(value, locale) + (unit?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""))
 
     /**
      * A chart item as the design system's chart: the first series' labels along the bottom, every series cut to as
-     * many points (the hub checks they match), a role colour for a series with a tone. None when there is nothing to draw.
+     * many points (the hub checks they match), a role colour for a series with a tone; numbers in [locale]'s words.
+     * None when there is nothing to draw.
      */
-    fun chart(item: ExtensionViewItem): JChartData? {
+    fun chart(item: ExtensionViewItem, locale: java.util.Locale = java.util.Locale.ENGLISH): JChartData? {
         val kind = when (item.kind) {
             "bar" -> JChartKind.Bar; "line" -> JChartKind.Line
             // UI version 6
@@ -305,16 +306,17 @@ internal object ExtensionViewText {
         val volumes = candles.all { it.volume != null }
         return JChartData(kind, labels, series.map { s ->
             val points = s.points.take(labels.size)
-            JChartSeries(s.name?.takeIf { it.isNotBlank() }, points.map { it.value }, points.map { display(it.value, it.display, item.unit) },
+            JChartSeries(s.name?.takeIf { it.isNotBlank() }, points.map { it.value }, points.map { display(it.value, it.display, item.unit, locale) },
                 s.tone?.takeIf { it.isNotBlank() }?.let(::tone), hue(s.color))
         }, stacked = item.stacked == true && (kind == JChartKind.Bar || kind == JChartKind.Area),
-            axis = if (kind == JChartKind.Candlestick) ::price else ChartMath::compact,
+            axis = { v -> if (kind == JChartKind.Candlestick) price(v, locale) else ChartMath.compact(v, locale) },
             candles = if (volumes) candles else candles.map { it.copy(volume = null) },
             risingRed = item.rising == "red", center = item.center?.takeIf { it.isNotBlank() && kind == JChartKind.Donut })
     }
 
     /** A price on a candlestick's scale and in its numbers: up to two decimals ("182.35", "1,234.5"), large ones short. */
-    fun price(value: Double): String = if (!value.isFinite()) "—" else if (kotlin.math.abs(value) >= 100_000) ChartMath.compact(value)
+    fun price(value: Double, locale: java.util.Locale = java.util.Locale.ENGLISH): String = if (!value.isFinite()) "—"
+    else if (kotlin.math.abs(value) >= 100_000) ChartMath.compact(value, locale)
     else java.math.BigDecimal(value).setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 
     /** A stat_grid's numbers, up to six. */

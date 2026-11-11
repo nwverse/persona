@@ -45,7 +45,9 @@ class ChatSessionInfoTest {
         assertEquals("950", formatTokens(950, res))
         assertEquals("12.3K", formatTokens(12_345, res))
         assertEquals("500K", formatTokens(500_000, res))
-        assertEquals("1.20M", formatTokens(1_200_000, res))
+        assertEquals("999.9K", formatTokens(999_949, res))
+        assertEquals("1M", formatTokens(999_950, res))
+        assertEquals("1.2M", formatTokens(1_200_000, res))
     }
 
     @Test fun claudesSessionShowsWhatItRunsHowFarAndWhere() {

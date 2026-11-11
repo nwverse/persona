@@ -1847,7 +1847,9 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
                     # went (#3780, MOCK_MINUTES_DAYS): 0 means forever; finite windows are never fewer than the recordings'.
                     "recording_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
-                    "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0"))}
+                    "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0")),
+                    # Knowledge points by topic (#3783), on by default.
+                    "kb_topics": True}
 # What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
 RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
 
@@ -1865,7 +1867,7 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"])
+        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"], kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -2334,7 +2336,7 @@ def apply_todo_plan(t, body):
 
 # MOCK_TODO_ASKS=1 (#2056, docs/assistant/todos.md "Waiting for the owner"): to-dos carry the ask they wait on, as GET
 # /api/v1/todos lists it: a decision with a recommendation (the PR check, its agent idle), a conclusion that cannot be done
-# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" (the brief's accept row). POST …/accept takes one
+# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" and the cache decision (the brief's accept rows). POST …/accept takes one
 # (accept_brief): its ask is gone from the list, and a second press is 409.
 TODO_ASKS = {
     "todo_review": {"outcome": "decide", "verdict": "🤔 要你拍板：PR #42 改了公开接口，旧接口留不留", "recommend": "先合入，下个版本再删旧接口"},
@@ -3261,6 +3263,67 @@ if os.environ.get("MOCK_KB_MANY_LINKS") == "1":
         [kb_link("people", "p_sample_%d" % _i) for _i in range(4)]
 
 
+# MOCK_KB_TOPICS=1: knowledge points curated by topic (#3783, docs/assistant/knowledge.md "Topics"), out of the example
+# projects and chats, for the Topics tab, a topic's page and the knowledge map's Topics view.
+def kb_topic(slug, name, note, points, tags=()):
+    """A topic: its list entry (extra is its point count, as the hub's) and its detail (points, the entries they came from)."""
+    pts = [dict(p, id="p%d" % (i + 1)) for i, p in enumerate(points)]
+    srcs = sorted({(x["kind"], x["id"]) for p in pts for x in p.get("sources", [])})
+    KB.setdefault("topics", []).append({"kind": "topics", "id": slug, "name": name, "one_line": note, "importance": "P2",
+                                        "relevance": 60, "tags": list(tags), "updated": ago(hours=len(KB.get("topics", [])) + 1),
+                                        "extra": str(len(pts))})
+    KB_DETAIL[("topics", slug)] = {"summary": "# %s\n\n%s" % (name, note), "points": pts, "links": [kb_link(k, i) for k, i in srcs],
+                                   "meta": {"name": name, "note": note, "points": len(pts), "tags": list(tags),
+                                            "projects": sorted({i for k, i in srcs if k == "projects"}),
+                                            "chats": sorted({i for k, i in srcs if k == "chats"})}}
+
+
+def kb_point(kind, text, path=(), why="", src=(("projects", "weather-app"),), when="2026-10-30"):
+    return {"path": list(path), "kind": kind, "text": text, "why": why, "when": when,
+            "sources": [{"kind": k, "id": i, "day": when} for k, i in src]}
+
+
+if os.environ.get("MOCK_KB_TOPICS") == "1":
+    _team = (("projects", "weather-app"), ("chats", "oc_team"))
+    kb_topic("ios-widgets", "iOS 小组件", "小组件的刷新、布局和降雨条怎么做", [
+        kb_point("concept", "小组件靠时间线刷新：一次给出未来几个时间点的条目，系统按时切换", ("时间线刷新",)),
+        kb_point("decision", "时间线按小时刷新", ("时间线刷新",), "逐小时预报本来就按小时更新，再密只是多耗电", when="2026-10-30"),
+        kb_point("pitfall", "刷新预算有限，频繁 reload 会被系统限流", ("时间线刷新",), "后台刷新次数按天计", when="2026-10-28"),
+        kb_point("practice", "数据层复用逐小时预报，小组件不单独请求", ("时间线刷新", "数据"), when="2026-10-28"),
+        kb_point("decision", "先做小号和中号两种尺寸", ("布局",), "大号的信息量和 App 首页重复", _team, "2026-10-24"),
+        kb_point("fact", "设计稿 v3 定了小号、中号两种布局", ("布局",), src=(("docs", "doc_widget"),), when="2026-10-29"),
+        kb_point("decision", "降雨条改成逐小时柱状", ("降雨条",), "连续色带看不出哪个小时下雨", (("meetings", "m_review"),), "2026-10-26"),
+        kb_point("pitfall", "中号的降雨条颜色太浅，看不清", ("降雨条",), "浅色背景上对比度不够", (("chats", "oc_team"),), "2026-10-30"),
+        kb_point("practice", "降雨概率先格式化成整数百分比再画", ("降雨条",), when="2026-10-31"),
+        kb_point("question", "深色模式下降雨条用哪种蓝", ("降雨条",), src=_team, when="2026-10-31"),
+        kb_point("fact", "周五前要一版能装的给产品试用", src=_team, when="2026-10-30"),
+    ], ("iOS",))
+    kb_topic("photo-pipeline", "照片处理", "HEIC 转换和同步到相册的做法", [
+        kb_point("concept", "HEIC 是 iPhone 默认的照片格式，很多网页和旧软件打不开", ("HEIC 转换",), src=(("projects", "photo-sync"),)),
+        kb_point("decision", "同步前统一转成 JPEG", ("HEIC 转换",), "家里的电视和相框只认 JPEG", (("projects", "photo-sync"),), "2026-10-27"),
+        kb_point("pitfall", "转换时会丢掉拍摄时间", ("HEIC 转换",), "默认不复制 EXIF", (("projects", "photo-sync"),), "2026-10-27"),
+        kb_point("practice", "转换后把 EXIF 原样写回", ("HEIC 转换",), src=(("projects", "photo-sync"),), when="2026-10-28"),
+        kb_point("practice", "按文件哈希去重，重复的不再上传", ("同步",), src=(("projects", "photo-sync"),), when="2026-10-29"),
+        kb_point("question", "Live Photo 的视频部分要不要一起同步", ("同步",), src=(("projects", "photo-sync"),), when="2026-10-29"),
+    ], ("脚本",))
+    kb_topic("static-blog", "静态博客", "博客从旧系统迁到 Astro 的经验", [
+        kb_point("decision", "博客迁到 Astro", ("迁移",), "文章都是 Markdown，构建快，不用维护服务器", (("projects", "blog"),), "2026-10-20"),
+        kb_point("fact", "32 篇文章已经迁完", ("迁移",), src=(("projects", "blog"),), when="2026-10-25"),
+        kb_point("pitfall", "旧文章的链接带日期目录，直接迁过去全部 404", ("链接",), "新站按标题生成路径", (("projects", "blog"),), "2026-10-22"),
+        kb_point("practice", "旧链接都加 301 跳到新地址", ("链接",), src=(("projects", "blog"),), when="2026-10-23"),
+        kb_point("practice", "图片放到文章同目录，用相对路径引用", ("迁移",), src=(("projects", "blog"),), when="2026-10-21"),
+    ], ("前端",))
+    kb_topic("design-review", "设计评审", "评审怎么开、结论怎么落地", [
+        kb_point("practice", "评审前一天把设计稿发到群里，会上只讨论有分歧的地方", src=(("chats", "design-review"),), when="2026-10-29"),
+        kb_point("decision", "结论当场写进设计稿的评论", why="会后再整理容易漏", src=(("chats", "design-review"), ("people", "lilei")), when="2026-10-29"),
+        kb_point("fact", "每周三下午开", src=(("chats", "design-review"),), when="2026-10-22"),
+    ], ("工作",))
+    kb_topic("reading", "读书方法", "读书笔记的整理方式", [
+        kb_point("practice", "每季度把读书笔记整理一次，只留能用上的", src=(("projects", "reading"),), when="2026-10-01"),
+        kb_point("concept", "读完一本书写三句话：讲了什么、哪里有用、哪里不同意", src=(("projects", "reading"),), when="2026-10-01"),
+    ], ("个人",))
+
+
 # ---------- items ----------
 _seq = [0]
 
@@ -3661,6 +3724,8 @@ if MOCK_TASKS:
                    "/Users/me/code/weather", 44, "plan_mock_1"),
         _task_todo("todo_task_tests", "补齐网络层的单元测试", "网络层的单元测试补到 80% 覆盖。", "macbook", TESTS,
                    "/Users/me/code/weather", 44, "plan_mock_1"),
+        _task_todo("todo_task_cache", "选缓存方案", "本地缓存还是 Redis，选定后交给网络层 Agent。", "macbook", TESTS,
+                   "/Users/me/code/weather", 130, ""),
         _task_todo("todo_task_release", "整理发布说明", "把这周合并的 PR 整理成发布说明，只读。", "macbook", RELEASE,
                    "/Users/me/code/weather", 30, "plan_mock_2"),
         _task_todo("todo_task_blog", "博客迁移到 Astro", "把博客从 Hexo 迁到 Astro。", "studio", BLOG,
@@ -3711,6 +3776,11 @@ if MOCK_TASKS:
             if _t["id"] == "todo_task_blog":
                 _t["check"] = {"verdict": "waiting", "reason": "等 Vercel 部署跑完", "at": ago(minutes=11),  # i18n-ignore
                                "work_since": ago(minutes=40)}
+    if os.environ.get("MOCK_TODO_ASKS") == "1":
+        TODO_ASKS["todo_task_cache"] = {
+            "outcome": "decide", "verdict": "需要你拍板：本地缓存还是 Redis",  # i18n-ignore
+            "recommend": "本地缓存，先不引入 Redis",
+        }
     TODOS = copy.deepcopy(TODOS_INIT)
     # MOCK_TASK_DECISION=1: a stopped task whose owner can finish without another Agent turn.
     if os.environ.get("MOCK_TASK_DECISION") == "1":
@@ -3823,8 +3893,8 @@ if MOCK_TASKS:
                      {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
             # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
-                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT,
                         "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
@@ -4305,9 +4375,16 @@ def tasks_area(h, method, p, raw):
         h.send_json({"plan": plan})
         return True
     if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith("/accept"):
-        # The Accept button of a brief item: the first press verifies the task, a second one is a round that is over (409).
+        # Accept only the current round; a Brief's older row is already handled, while an ordinary card uses its current ask.
         tid = p.split("/")[4]
-        if tid in BRIEF_ACCEPTED:
+        sent = json.loads(h.last_body or b"{}")
+        brief = next((row for feeds in TASK_FEED.values() for item in feeds if item.get("kind") == "brief"
+                      for row in item.get("body", {}).get("accept", []) if row.get("id") == tid), None)
+        current = next((t for t in sorted_todos() if t["id"] == tid), None)
+        current_ask = (current or {}).get("ask")
+        # With asks shown the hub accepts only the current round; MOCK_TASKS_NO_ASKS hides that state for visual tests.
+        expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
+        if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
         else:
             BRIEF_ACCEPTED.add(tid)
@@ -15158,6 +15235,7 @@ VOICE_VOICES = {
 # What --help lists after the options.
 MOCK_HELP = [
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
@@ -17658,6 +17736,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["archive_closed_days"] = days
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("kb_topics"), bool):
+                ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)

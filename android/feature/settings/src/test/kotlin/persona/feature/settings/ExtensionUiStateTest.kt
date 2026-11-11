@@ -261,6 +261,13 @@ class ExtensionUiStateTest {
         assertFalse(ExtensionViewText.drawable(chart.copy(kind = "future-chart")))
         assertFalse(ExtensionViewText.drawable(chart.copy(series = listOf(ExtensionChartSeries("空")))))
         assertEquals(JChartKind.Line, ExtensionViewText.chart(chart.copy(kind = "line"))!!.kind)
+        // In Chinese the values and the scale count in ten-thousands; the extension's own words stay as they are (#4149).
+        val chinese = ExtensionViewText.chart(chart, java.util.Locale.SIMPLIFIED_CHINESE)!!
+        assertEquals(listOf("1.2M", "80万 tokens"), chinese.series[0].displays)
+        assertEquals("12亿", chinese.axis(1_200_000_000.0))
+        assertEquals("1.2B", data.axis(1_200_000_000.0))
+        assertEquals("12億", ExtensionViewText.price(1_200_000_000.0, java.util.Locale.JAPANESE))
+        assertEquals("182.35", ExtensionViewText.price(182.35, java.util.Locale.JAPANESE))
 
         val grid = ExtensionViewItem("stat_grid", stats = listOf(ExtensionStat("今天", "1.2M", "+12%", "caution"), ExtensionStat("费用", "¥36.20", tone = "lilac")))
         assertTrue(ExtensionViewText.drawable(grid))
