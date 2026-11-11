@@ -806,6 +806,12 @@ On a Linux development machine without the Android SDK or Xcode, pure-logic clie
   A list's logic that sits in a SwiftUI file builds too when only its `nonisolated` top-level declarations are taken, each from its first line to the
   next line that is only `}` (`SpaceGroup` and `AgentFilter` from `ChatsView.swift`, `AppGroups` from `AgentAppGroups.swift`): the real `AgentListProjection.swift`
   and its tests ran so with about 90 lines of stand-ins (#4767). Tests that reach `AppModel`, `AgentListRows` or the projection's cache still need Xcode.
+- **iOS screenshots**: a throwaway branch (never a PR) whose `apple-test.yml` runs a UI test against `scripts/mock/mock_hub.py` on the hosted runner and uploads
+  the PNGs as an artifact, started with `gh workflow run` (#4767). Create the simulator as `scripts/ci/apple.sh` does (`sim-boot.sh --create-only`) and let
+  `xcodebuild test-without-building` boot it: a `sim-boot.sh` boot on the runner waited out its 15-minute `bootstatus` deadline, while the iOS lane's
+  Xcode-owned boot was ready in under 5 minutes. `simctl ui` needs a booted device, so set the look with launch arguments (`-ui.scheme dark`,
+  `-UIPreferredContentSizeCategoryName`, `-AppleLanguages (en)`), one test per screen and look. Scroll by dragging from the window and read only the
+  row you wait for: reading the frame of a row that scrolled out of the hierarchy fails and ends the test.
 
 ## 后台测量停滞时，先区分未完成测量与残留管道（2026-11-06，#5766）
 
