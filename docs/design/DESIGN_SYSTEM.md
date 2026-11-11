@@ -576,7 +576,7 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Horizontal drag between pages | pager with 3x resistance past the ends; flick above 300 pt/s or past half way |
 | Edge swipe back | system; the pan yields to it |
 | Swipe on a message (Agents) | quote, threshold 66 pt, with a VoiceOver "Quote" action |
-| Long press on a message | lifted menu with an action bar; a message only on this device ends it in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
+| Long press on a message | lifted menu with an action bar, over the whole page dimmed (a page's floating top bar included); a message taller than the room shows the part pressed and scrolls inside, the bar fixed; a selection handle held within `Theme.Lift.edgeScroll` of its top or bottom edge scrolls it on, up to `Theme.Lift.edgeScrollSpeed`; a message only on this device ends the bar in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
 | Tap a photo in the + panel's grid | its ring (and a 45 pt corner round it) picks it, as before; the rest of the photo opens it in the image editor. VoiceOver's activation picks, Edit is an action (#4963) |
@@ -698,6 +698,11 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   diff until Show All and four at the accessibility sizes, so the card's choices stay in view. A card that carries only the
   path (a Codex edit read off its terminal) shows the path as before.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
+- **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
+  approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the
+  item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
+  password card it is answered on the card only: no quick answer on a row, a notification, the Live Activity, the watch or
+  Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
 - **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
@@ -962,6 +967,24 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Structure: in every grouping a session that needs the user is visible without opening anything; rows follow the work-item row; primary screens show no raw model IDs, session IDs, paths or engine names (sections 3.4, 5.6).
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
 - [ ] Performance (Apple clients): the review checklist in `docs/apple/performance.md` is pasted and marked; no new main-thread IO, expensive `@State` initial value or work in `body`, and a change to a hot path (chat list, composer, Agents list, pushes, launch, images) attaches before and after numbers.
+
+## Values a form fills in by itself (#4975)
+
+Where a form can work out a value from what the user already gave it (the web provider wizard's Claude Code tiers, read
+from the checked models), it fills the value in and marks it with a neutral **Auto** `Pill`, in the summary and on the
+field, with one line under them saying that automatic values follow what they were read from until the user changes
+one. A value the user picks is never filled in again, an empty one ("Same as default model") included. When what it was
+read from changes (a model unchecked, another default), only values still marked Auto follow, and one that no longer
+fits goes back to empty. Something already saved is never refilled when it is opened: when what it holds would read
+differently now, one line under the summary says what it suggests and **Apply** (the status line's action) takes it.
+The line warns (`--orange` with the warning mark) when the current value costs more for no reason, such as light
+requests running on the heaviest model while a lighter one is checked, and otherwise suggests (`--ink-2`). The summary
+is the inset well (`rounded-card`, `bg-inset`, `shadow-hairline`) with label / value rows; **Adjust** is an accent text
+button with `aria-expanded` that swaps the rows for their fields in place, and rarely changed fields stay under
+Advanced (principle 2). Reason: a default the product can work out should not wait behind a folded group (principle
+1), and an automatic value the user cannot tell from their own, or one that changes after they set it, would take
+control away from them (principle 3). This reuses the wizard's field, pill and status-line styles and adds no setting,
+style or motion.
 
 ## Codex speed controls (#3865)
 

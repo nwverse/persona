@@ -248,6 +248,8 @@ struct AttachSheet<More: View>: View {
     @State private var going = false
     @FocusState private var captionFocused: Bool
     @State private var keyboardUp = false
+    /// How far the keyboard reaches up from the bottom of the screen (0: down): the caption rides on it, as in Telegram.
+    @State private var keyboard: CGFloat = 0
 
     private var tabs: [AttachTab] { showsMore ? AttachTab.allCases : [.photos, .files] }
     /// What was picked, with the edits of those of them edited here.
@@ -272,16 +274,19 @@ struct AttachSheet<More: View>: View {
                     .accessibilityLabel("Close")
                     .accessibilityAddTraits(.isButton)
                     .accessibilityIdentifier("attach-dim")
-                // The sheet is laid out over the whole screen, its foot at the screen's: the keyboard's room comes from here.
-                sheet(width: width, height: height, top: top, rest: rest, offset: resting, keyboard: keyboardUp ? outer.safeAreaInsets.bottom : 0)
+                sheet(width: width, height: height, top: top, rest: rest, offset: resting)
             }
             .ignoresSafeArea(.container)
             .onAppear { appear(rest: rest) }
             .onChange(of: panel.leaving != nil) { _, leaving in if leaving, let outcome = panel.leaving { leave(outcome) } }
             .onChange(of: captionFocused) { _, focused in if focused { settle(to: 0, velocity: 0, motion: Theme.Motion.keyboard) } }
         }
+        // The sheet lays itself out over the whole screen, so the system's keyboard avoidance would move nothing in it
+        // and the caption would stay under the keyboard (#3004): the keyboard's own frame says how far up things go.
+        .ignoresSafeArea(.keyboard)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { keyboardMoved($0) }
         .task { await library.load() }
         .onDisappear { library.forget() }
         .fullScreenCover(item: $previewing, onDismiss: {
@@ -314,9 +319,20 @@ struct AttachSheet<More: View>: View {
         if sending { afterPreview = { leave(.send(picks)) } }
     }
 
+    /// The keyboard comes up, goes down or changes height: the caption moves with it, on its curve.
+    /// The panel is the iPhone's only (the iPad keeps the menu), where the window is the whole screen.
+    private func keyboardMoved(_ note: Notification) {
+        let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        let screen = (note.object as? UIScreen)?.bounds
+            ?? UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.bounds }.first
+        let reach = AttachSheetPhysics.keyboardReach(end: end, screen: screen)
+        guard reach != keyboard else { return }
+        withAnimation(reduceMotion ? nil : Theme.Motion.keyboard) { keyboard = reach }
+    }
+
     // MARK: The sheet
 
-    private func sheet(width: CGFloat, height: CGFloat, top: CGFloat, rest: CGFloat, offset: CGFloat, keyboard: CGFloat) -> some View {
+    private func sheet(width: CGFloat, height: CGFloat, top: CGFloat, rest: CGFloat, offset: CGFloat) -> some View {
         let progress = AttachSheetPhysics.restProgress(offset: offset, rest: rest)
         let sheetTop = top + offset + drop + dip + Theme.Space.xxs * progress
         let sheetHeight = height - top - offset
@@ -332,12 +348,15 @@ struct AttachSheet<More: View>: View {
             bottomLeadingRadius: round + (Theme.Attach.bottomRadius - round) * cornered,
             bottomTrailingRadius: round + (Theme.Attach.bottomRadius - round) * cornered,
             topTrailingRadius: round + (Theme.Attach.topRadius - round) * cornered, style: .continuous)
+        // The sheet reaches the screen's bottom and is open all the way while the keyboard is up (the caption opens it),
+        // so the keyboard covers its last `keyboard` points and the caption sits on it. The grid goes on under the
+        // keyboard, as scroll views do; scrolling it puts the keyboard away.
         return VStack(spacing: 0) {
             header
             page(width: width, open: offset == 0)
         }
         .opacity(contentShown ? 1 : 0)
-        .overlay(alignment: .bottom) { bar(width: width, keyboard: keyboard).opacity(contentShown ? 1 : 0) }
+        .overlay(alignment: .bottom) { bar(width: width).padding(.bottom, keyboard).opacity(contentShown ? 1 : 0) }
         .frame(width: width, height: sheetHeight)
         .background(surface, in: shape)
         .clipShape(shape)
@@ -448,10 +467,9 @@ struct AttachSheet<More: View>: View {
 
     // MARK: The bar
 
-    /// The tabs, or once photos are picked the caption and Send: over the keyboard while the caption is typed (`keyboard`,
-    /// how far it reaches up). The sheet's foot is under the keyboard, and the field went there with nothing showing what
-    /// was typed (#3704).
-    @ViewBuilder private func bar(width: CGFloat, keyboard: CGFloat) -> some View {
+    /// The tabs, or once photos are picked the caption and Send. The sheet lifts it by the keyboard's reach while the
+    /// keyboard is up: its foot is under the keyboard, where the field showed nothing of what was typed (#3704, #3004).
+    @ViewBuilder private func bar(width: CGFloat) -> some View {
         ZStack(alignment: .bottom) {
             if picked.isEmpty {
                 AttachTabBar(tabs: tabs, selected: tab, width: AttachSheetPhysics.barWidth(tabs: tabs.count, width: width), pick: pick)
@@ -463,7 +481,7 @@ struct AttachSheet<More: View>: View {
                             .combined(with: .opacity.animation(Theme.Motion.attachBarAway))))
             } else {
                 captionBar
-                    .padding(.bottom, captionFocused ? keyboard + Theme.Space.s : Theme.Attach.barInset)
+                    .padding(.bottom, captionFocused ? Theme.Space.s : Theme.Attach.barInset)
                     .transition(.opacity.animation(Theme.Motion.attachBarBack))
             }
         }
@@ -667,6 +685,9 @@ private struct AttachGrid: View {
         }
         .contentMargins(.bottom, Theme.Attach.gridBottom, for: .scrollContent)
         .scrollIndicators(.hidden)
+        // Typing the caption, a drag of the grid puts the keyboard away and the caption back down. Not
+        // `scrollDismissesKeyboard`: it leaves the caption's keyboard up, the field being outside the grid.
+        .onScrollPhaseChange { _, phase in if phase == .interacting { Keyboard.dismiss() } }
         .accessibilityIdentifier("attach-grid")
     }
 
