@@ -20,4 +20,10 @@ func TestClaudeProcessEnvDefaultUnsetsConfigDir(t *testing.T) {
 	if !slices.Contains(got, "CLAUDE_CONFIG_DIR=/p") {
 		t.Fatalf("a chosen directory is not set: %q", got)
 	}
+	if cmd := n.launcherCommandIn("claude", "", shellQuote); strings.Contains(cmd, "CLAUDE_CONFIG_DIR=") {
+		t.Fatalf("default sets CLAUDE_CONFIG_DIR in the shell command: %q", cmd)
+	}
+	if cmd := n.launcherCommandIn("claude", "/p", shellQuote); !strings.HasPrefix(cmd, "CLAUDE_CONFIG_DIR=") {
+		t.Fatalf("a chosen directory is not set in the shell command: %q", cmd)
+	}
 }

@@ -220,5 +220,9 @@ func (n *Node) launcherCommandIn(name, dir string, q func(string) string) string
 	if _, managed := n.managedLauncher(name); managed {
 		cmd = q(n.bin) + " launch " + name
 	}
+	if dir == "" {
+		// "default": unset after the shell's rc files, not an empty value (claudeProcessEnv)
+		return "unset CLAUDE_CONFIG_DIR; " + cmd
+	}
 	return "CLAUDE_CONFIG_DIR=" + q(dir) + " " + cmd
 }
