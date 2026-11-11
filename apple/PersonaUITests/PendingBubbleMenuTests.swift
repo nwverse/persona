@@ -90,9 +90,13 @@ final class PendingBubbleMenuTests: XCTestCase {
         for each in [XCUIDevice.Appearance.dark, .light] {
             XCUIDevice.shared.appearance = each
             sleep(1)
+            press(bubble, until: delete) // a switch of appearance may have put the message back
             shot("bar-delete")
         }
-        XCUIDevice.shared.appearance = look
+        XCUIDevice.shared.appearance = look // as the run was
+        sleep(1)
+        press(bubble, until: delete)
+        XCTAssertTrue(delete.exists, "the bar went with the switch of appearance:\n\(app.debugDescription)")
 
         delete.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
         XCTAssertTrue(bubble.waitForNonExistence(timeout: 5), "Delete left the failed message")
@@ -107,7 +111,7 @@ final class PendingBubbleMenuTests: XCTestCase {
         XCTAssertTrue(bubble.waitForNonExistence(timeout: 5), "the mark's Delete left the failed message")
         sleep(2) // the outbox is written 300 ms after a change
         app.terminate()
-        app.launchArguments = ["-openSession", "macbook/" + widget] // paired already; nothing sent this time
+        app.launchArguments = ["-pairURL", pair, "-openSession", "macbook/" + widget] // the same hub (its chats kept); nothing sent
         app.launchPinned()
         let first = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "给天气 App 加一个主屏幕小组件")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 25), "the chat did not open again:\n\(app.debugDescription)")
