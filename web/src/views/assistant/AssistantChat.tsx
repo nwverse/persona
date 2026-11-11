@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import {
-  assistantInfoText, conversationKey, effectiveLauncher, NEW_CONVERSATION, pickLauncher, pickModel, runsAssistant, shortModel, usePickedLauncher,
+  assistantInfoText, conversationKey, effectiveLauncher, NEW_CONVERSATION, pickLauncher, pickModel, launcherOffered, runsAssistant, shortModel, usePickedLauncher,
   usePickedModel, type AssistantLauncher,
 } from "../../lib/assistant-chat";
 import {
@@ -17,6 +17,8 @@ import {
 import { modelIdRule, TYPED_MODELS_FEATURE, typedModelProblem } from "../../lib/model-id";
 import { runtimeFallbackText } from "../../lib/model-config";
 import { personaState } from "../../lib/persona";
+import { conversationPage } from "../../lib/conversation-page";
+import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import { hubHas, refreshAssistant, useStore } from "../../lib/store";
 import type { Item, Session } from "../../lib/types";
@@ -88,12 +90,16 @@ export function AssistantLauncherChip({ session }: { session: Session }) {
   const [knownModels, setKnownModels] = useState<{ machine: string; name: string; options: AgentModel[] } | null>(null);
   const isMain = assistant?.main === session.session_id;
   const { list, def, error } = useAssistantLaunchers(session.machine_id, isMain || Boolean(menu.anchor));
-  const current = effectiveLauncher({ isMain, picked, session: session.launcher, config: (isMain && def?.provider) || assistant?.launcher });
+  // A launcher the list no longer offers (gone, or one that can't run the assistant) is not what the next message runs
+  // on: the hub moves a conversation off it to the main chat's (assistant/launcher_mainchat.go), and refuses a pick of it.
+  const own = launcherOffered(list, session.launcher) ? session.launcher : undefined;
+  useStalePickDropped(key, picked, list);
+  const current = effectiveLauncher({ isMain, picked, session: own, config: (isMain && def?.provider) || assistant?.launcher });
   // With no pick the main chat runs the model configuration's default; another conversation keeps the launcher it started with.
-  const fallback = isMain ? def ?? { provider: assistant?.launcher } : { provider: session.launcher || assistant?.launcher, model: session.launcher ? session.model : undefined };
+  const fallback = isMain ? def ?? { provider: assistant?.launcher } : { provider: own || assistant?.launcher, model: own ? session.model : undefined };
   const defaultModel = isMain
-    ? def?.model || (session.launcher === current ? session.model : list?.find((l) => l.name === current)?.model)
-    : (!session.launcher || session.launcher === current ? session.model : list?.find((l) => l.name === current)?.model);
+    ? def?.model || (own === current ? session.model : list?.find((l) => l.name === current)?.model)
+    : (own === current || (!own && !session.launcher) ? session.model : list?.find((l) => l.name === current)?.model);
   const modelId = pickedM ?? (picked ? list?.find((l) => l.name === picked)?.model : defaultModel);
   const named = knownModels?.machine === session.machine_id && knownModels.name === current ? knownModels.options.find((m) => m.id === modelId) : undefined;
   const model = named ? modelName(named) : shortModel(modelId);
@@ -215,6 +221,15 @@ export function AssistantLauncherChip({ session }: { session: Session }) {
   );
 }
 
+/** Drops a launcher picked under key that the list no longer offers (gone, or one that can't run the assistant), saying so. */
+function useStalePickDropped(key: string, picked: string | undefined, list: AssistantLauncher[] | null) {
+  useEffect(() => {
+    if (!picked || launcherOffered(list, picked)) return;
+    pickLauncher(key, undefined);
+    toast(t("assistant-assistantchat.pick_dropped", { launcher: picked }), "info");
+  }, [key, picked, list]);
+}
+
 /** The new-conversation page's chip: what the conversation starts with (the default unless picked). */
 export function StarterLauncherChip() {
   const menu = useMenu();
@@ -222,6 +237,7 @@ export function StarterLauncherChip() {
   const picked = usePickedLauncher(NEW_CONVERSATION);
   const current = effectiveLauncher({ isNew: true, picked, config: assistant?.launcher });
   const { list, def, error } = useAssistantLaunchers(assistant?.machine_id, true);
+  useStalePickDropped(NEW_CONVERSATION, picked, list);
   if (!assistant) return null;
   const label = defaultLabel(def ?? { provider: assistant.launcher });
   return (
@@ -275,7 +291,7 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
   const items: MenuItem[] = [
     { key: "profile", label: t("assistant-assistantchat.details"), icon: "info", onSelect: () => navigate({ name: "profile" }) },
     { key: "kb", label: t("assistant-assistantchat.knowledge"), icon: "book", onSelect: () => navigate({ name: "kb" }) },
-    ...(assistant?.main && !isMain ? [{ key: "main", label: t("assistant-assistantchat.back_to_main"), icon: "home" as const, onSelect: () => navigate({ name: "persona", sid: assistant.main }) }] : []),
+    ...(assistant?.main && !isMain ? [{ key: "main", label: t("assistant-assistantchat.back_to_main"), icon: "home" as const, onSelect: () => navigate(conversationPage(assistant.main!, assistant.machine_id, shownManager())) }] : []),
     ...(isMain && canCompact
       ? [{ key: "compact", label: compacting ? t("assistant-assistantchat.compacting") : t("assistant-assistantchat.compact"), icon: "layers" as const, disabled: compacting, onSelect: () => void startCompaction(session) }]
       : []),

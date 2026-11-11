@@ -103,7 +103,7 @@ extension DevGrouping {
 
 /// How Develop groups its agents (the menu at the top left; remembered).
 enum DevGrouping: String, CaseIterable, Identifiable {
-    case repo, space, todo, state, machine, recent
+    case repo, space, todo, state, machine, app, recent
     /// What an app that never chose a grouping shows (#2108): machines → repositories → working trees, after Orca.
     static let standard = DevGrouping.repo
     var id: String { rawValue }
@@ -114,6 +114,7 @@ enum DevGrouping: String, CaseIterable, Identifiable {
         case .todo: String(localized: "By To-do")
         case .state: String(localized: "By Status [Chats View 5aa882]")
         case .machine: String(localized: "By Machine")
+        case .app: String(localized: "By App")
         case .recent: String(localized: "Recently Used")
         }
     }
@@ -124,6 +125,7 @@ enum DevGrouping: String, CaseIterable, Identifiable {
         case .todo: Theme.Icon.todo
         case .state: Theme.Icon.byState
         case .machine: Theme.Icon.machine
+        case .app: Theme.Icon.byApp
         case .recent: Theme.Icon.recent
         }
     }
@@ -601,7 +603,8 @@ private struct AgentsList: View {
     static let emptyNoComputerMessage = String(localized: "Add one and Persona can work on it for you.")
     @Environment(AppModel.self) private var model
     @Environment(\.shell) private var shell
-    /// Regular width (iPhone Duo open): the list is the sidebar column of a split.
+    /// The list's own column: regular beside the iPad's split; on a phone's split (iPhone Duo open) the sidebar column
+    /// reads compact while the page is regular (#1971). `covered` goes by `ownsTop` instead (#3680).
     @Environment(\.horizontalSizeClass) private var widthClass
     @Binding var path: NavigationPath
     @Binding var spaceAt: [Int: String]
@@ -688,11 +691,16 @@ private struct AgentsList: View {
     @State private var herdr = HerdrWatch()
 
     /// A page pushed over it (beside it in the split it is in sight), the other page of the shell or another tab (the
-    /// shell's slide between the pages shows it again).
+    /// shell's slide between the pages shows it again). Whether a page is pushed over it goes by the page's layout
+    /// (`ownsTop`), not this column's width class: the split's sidebar column reads compact on a phone (#1971), and on
+    /// iPhone Duo open the list beside a chat opened in code (the one remembered at launch, a card, New Session, a
+    /// worktree line) was held as out of sight: its last lines, order and new agents stopped coming in (#3680).
     private var covered: Bool {
-        if widthClass != .regular && !path.isEmpty { return true }
         #if os(iOS) || os(visionOS)
+        if ownsTop && !path.isEmpty { return true }
         if model.selectedTab != .chats && shell?.pager.moving != true { return true }
+        #else
+        if widthClass != .regular && !path.isEmpty { return true }
         #endif
         return false
     }
@@ -1015,6 +1023,8 @@ private struct AgentsList: View {
                 stateSections(unpinned.filter { $0.state.isLive })
             } else if grouping == .machine {
                 machineSections(unpinned.filter { $0.state.isLive })
+            } else if grouping == .app {
+                appSections(unpinned) // offline ones too, as the apps' sidebars list them
             } else if grouping == .repo {
                 repoSections(tree, byHost: byHost)
             } else {
@@ -1296,6 +1306,7 @@ private struct AgentsList: View {
             shown = rows.todos(groups) { g in g.todoID == nil ? isFolded(g.key, otherwise: g.folded) : isFolded(g.key) }
         case .state: shown = rows.states(live)
         case .machine: shown = rows.machines(live, order: machineOrder(live).map(\.ref))
+        case .app: shown = rows.apps(AppGroups.build(unpinned))
         case .repo: shown = rows.repos(tree, byHost: byHost)
         case .space:
             let hosts = byHost ? RepoTree.hostOrder(Set((active + quiet).map(\.machineRef)), machines: machines.map(\.ref)) : nil
@@ -2285,6 +2296,31 @@ private struct AgentsList: View {
                 }
                 .listSectionSpacing(folded ? .custom(0) : .default)
             }
+        }
+    }
+
+    /// An app section's spoken counts: the state counts, then the offline agents, which they leave out.
+    static func appDetail(_ group: SpaceGroup) -> String {
+        let offline = group.sessions.filter { $0.state == .offline }.count
+        return ([StateCounts.spoken(group)].filter { !$0.isEmpty } + (offline > 0 ? [String(localized: "\(offline) \(AgentState.offline.label)")] : []))
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
+    }
+
+    /// By App (#3756): a section per app (`AppGroups`) with its running and offline agents, the latest first; each folds
+    /// as a machine's section does, its state counts on its title.
+    @ViewBuilder private func appSections(_ sessions: [Session]) -> some View {
+        ForEach(AppGroups.build(sessions)) { app in
+            let group = SpaceGroup(id: app.id, machineID: "", spaceID: "-", name: app.title, index: 0, sessions: app.sessions)
+            listSection {
+                if !isFolded(app.id) {
+                    cappedRows(app.sessions, key: app.id) { s in slotRow(s, context: true) }
+                }
+            } header: {
+                FoldButton(title: app.title, folded: isFolded(app.id), detail: Self.appDetail(group)) { toggleFold(app.id) } label: {
+                    AppSectionHeader(app: app, counts: group)
+                }
+            }
+            .listSectionSpacing(isFolded(app.id) ? .custom(0) : .default)
         }
     }
 

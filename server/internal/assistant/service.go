@@ -51,8 +51,12 @@ type Service struct {
 	nodeAnswering atomic.Int64
 	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
 	taskStarting atomic.Int64
+	// leaderStarts counts task leaders being started: until one is linked its agent is no leader to the hub (task_leader.go).
+	leaderStarts atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
+	refs launcherSecrets
 
 	hub   Hub
 	store func() Store
@@ -66,6 +70,9 @@ type Service struct {
 	// taskRetry is how long a task waits before its one retry after a dropped link (0: taskStartRetryDelay; tests
 	// shorten it).
 	taskRetry time.Duration
+	// leaderResume bounds each attempt to put a supervision message into a closed task leader agent, and is the first
+	// wait of the retries after one failed (0: leaderResumeWait; tests shorten it, task_leader.go leaderResumeTime).
+	leaderResume time.Duration
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
@@ -75,10 +82,10 @@ type Service struct {
 	mux    *http.ServeMux
 	routes []string
 
-	// preparedMD is the CLAUDE.md this hub last wrote on a machine for a directory (key: machine id NUL directory),
-	// by prepareSpaceIf; refreshInstructions writes again what differs.
+	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
+	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
 	preparedMu sync.Mutex
-	preparedMD map[string]string
+	prepared   map[string]preparedState
 
 	epoch string
 	pubMu sync.Mutex
@@ -89,24 +96,31 @@ type Service struct {
 	// running is Run's context: it ends when the service stops (runCtx).
 	running atomic.Pointer[context.Context]
 
-	titles    titleBook      // titles.go
-	prefs     settingsBook   // profile.go
-	main      mainBook       // start.go
-	archived  archiveBook    // conversations.go
-	origins   originBook     // origins.go
-	guests    guestBook      // guest.go
-	relays    relayBook      // conversations.go
-	quiet     quietBook      // quiet.go
-	supervise superviseBook  // supervise_signals.go
-	autoRuns  autoReviewBook // supervise_autoreview.go
-	reports   reportBook     // reports.go
-	upReports reportRate     // agent_control.go: report_to_supervisor
-	noteRate  reportRate     // todo_decisions.go: todo_decision_add
-	dispatch  dispatchBook   // dispatch.go: dispatch_start, dispatch_read
-	adoptMu   sync.Mutex     // agent_control.go: one agent_supervise at a time
-	placeBook placeBook      // places.go
-	accept    acceptBook     // acceptance.go
-	deploy    deployProbe    // deploy_check.go: is the work in the running hub
+	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
+	interrupts interruptBook
+
+	titles    titleBook     // titles.go
+	prefs     settingsBook  // profile.go
+	main      mainBook      // start.go
+	archived  archiveBook   // conversations.go
+	origins   originBook    // origins.go
+	guests    guestBook     // guest.go
+	relays    relayBook     // conversations.go
+	quiet     quietBook     // quiet.go
+	supervise superviseBook // supervise_signals.go
+	tbriefs   taskBriefBook // task_brief.go
+	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
+	// what a plan does once it exists set it; the hub never does.
+	briefsOptional bool
+	autoRuns       autoReviewBook // supervise_autoreview.go
+	reports        reportBook     // reports.go
+	upReports      reportRate     // agent_control.go: report_to_supervisor
+	noteRate       reportRate     // todo_decisions.go: todo_decision_add
+	dispatch       dispatchBook   // dispatch.go: dispatch_start, dispatch_read
+	adoptMu        sync.Mutex     // agent_control.go: one agent_supervise at a time
+	placeBook      placeBook      // places.go
+	accept         acceptBook     // acceptance.go
+	deploy         deployProbe    // deploy_check.go: is the work in the running hub
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll bool
 	later            laterBook    // later.go: questions that can wait for a briefing

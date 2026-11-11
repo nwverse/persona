@@ -62,9 +62,13 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 	n, p := c.p.ownerOr(c.n), c.p
 	var ev struct {
 		ThreadID string `json:"threadId"`
-		TurnID   string `json:"turnId"`
-		Delta    string `json:"delta"`
-		Turn     struct {
+		Settings struct {
+			Model       string          `json:"model"`
+			ServiceTier json.RawMessage `json:"serviceTier"`
+		} `json:"threadSettings"`
+		TurnID string `json:"turnId"`
+		Delta  string `json:"delta"`
+		Turn   struct {
 			ID     string          `json:"id"`
 			Status string          `json:"status"`
 			Error  json.RawMessage `json:"error"`
@@ -93,6 +97,15 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		return // a subagent's thread: its items are in the main rollout's events anyway
 	}
 	switch method {
+	case "thread/settings/updated":
+		c.mu.Lock()
+		c.speedModel = firstNonEmpty(ev.Settings.Model, c.speedModel)
+		if tier := codexServiceTier(ev.Settings.ServiceTier); tier != "" {
+			c.serviceTier = tier
+			c.serviceTierRevision++
+		}
+		c.mu.Unlock()
+		n.notifyCodex()
 	case "turn/started":
 		c.mu.Lock()
 		c.turnID = ev.Turn.ID
@@ -187,7 +200,7 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		}
 		recovering := n.recoverAssistantResult(p, failure != "", failure, failureKinds...)
 		if !recovering {
-			n.clearAssistantRecovery(p)
+			n.clearAssistantRecovery(p, failure == "")
 		}
 		p.mu.Lock()
 		if !recovering {

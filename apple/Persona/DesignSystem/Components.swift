@@ -58,6 +58,14 @@ struct StatusDot: View {
     }
 }
 
+/// The small Working spinner shared by activity rows. System animation runs without a per-frame SwiftUI timeline.
+struct WorkingIndicator: View {
+    var body: some View {
+        ProgressView().controlSize(.mini).tint(Theme.busy)
+            .accessibilityLabel(StateName.working.text)
+    }
+}
+
 /// Machine glyph inside a soft tinted squircle with the state dot in the corner.
 struct SessionAvatar: View {
     var machine: Machine?

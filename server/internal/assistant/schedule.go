@@ -47,7 +47,8 @@ type Task struct {
 	Title     string `json:"title"`
 	Prompt    string `json:"prompt"`
 	Repeat    string `json:"repeat"` // once / daily / interval
-	// once: when; interval: the next run (the hub moves it on after each run).
+	// At is the next run of the task's own rule. An early run while a leader has open supervised
+	// todos does not move it, so the original interval and its next run resume when they close.
 	At           time.Time `json:"at,omitempty"`
 	Time         string    `json:"time,omitempty"`     // daily: "HH:MM" in the user's time zone
 	Weekdays     []int     `json:"weekdays,omitempty"` // daily: 1 = Monday … 7 = Sunday; empty = every day
@@ -69,6 +70,8 @@ type Task struct {
 	factsText string
 	// kbDir is the knowledge directory the run's hint names (a daily run with the knowledge base on); set on the copy, never stored.
 	kbDir string
+	// cadenceEvery is the run's effective interval when a leader's open todos shorten it; set on the copy, never stored.
+	cadenceEvery int
 	// The conversation it came from (on MachineID), runs go into it; empty = the task's own conversation.
 	MachineID string `json:"machine_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
@@ -125,6 +128,12 @@ const (
 // minEvery: an interval task runs at most this often (each run is a whole claude turn).
 const minEvery = 5
 
+// A leader with active supervised agents gets a follow-up every 10 minutes, whatever longer interval the task has.
+const (
+	leaderOpenEveryMinutes = 10
+	leaderOpenEvery        = leaderOpenEveryMinutes * time.Minute
+)
+
 // maxEvery: the longest interval, 7 days in minutes (checkTask); anything rarer is a one-off or a daily task.
 const maxEvery = 7 * 24 * 60
 
@@ -157,7 +166,7 @@ func (t Task) labelIn(l i18n.Lang) string {
 // done: a once task that already ran.
 func (t Task) done() bool { return t.Repeat == repeatOnce && !t.Enabled && !t.LastRun.IsZero() }
 
-// next is when the task runs next after `after`; zero when it is off.
+// next is when the task's own rule runs next after `after`; zero when it is off.
 func (t Task) next(after time.Time, loc *time.Location) time.Time {
 	if !t.Enabled {
 		return time.Time{}
@@ -166,6 +175,75 @@ func (t Task) next(after time.Time, loc *time.Location) time.Time {
 		return nextRun(t, after, loc)
 	}
 	return t.At
+}
+
+// shortForLeader reports whether active supervised work shortens this interval follow-up to 10 minutes.
+func shortForLeader(t Task, open map[string]bool) bool {
+	return t.Enabled && t.Repeat == repeatInterval && t.SessionID != "" && t.EveryMinutes > leaderOpenEveryMinutes && open[t.SessionID]
+}
+
+// nextWithLeaderCadence keeps At on the task's original rule and derives only the earlier runs from the last run.
+// A task that has never run uses its creation time. With neither timestamp, it runs now rather than moving
+// a now-based deadline forward on every read.
+func (t Task) nextWithLeaderCadence(now time.Time, loc *time.Location, open map[string]bool) time.Time {
+	next := t.next(now, loc)
+	if next.IsZero() || !shortForLeader(t, open) {
+		return next
+	}
+	anchor := t.LastRun
+	if anchor.IsZero() {
+		anchor = t.CreatedAt
+	}
+	if anchor.IsZero() {
+		if next.After(now) {
+			return now
+		}
+		return next
+	}
+	if early := anchor.Add(leaderOpenEvery); early.Before(next) {
+		return early
+	}
+	return next
+}
+
+// leaderOpenWork returns leaders with an open supervised todo whose agents are working or waiting automatically.
+// Read agent sessions outside todos.mu, and take this snapshot before schedule.mu.
+func (s *Service) leaderOpenWork(ctx context.Context) map[string]bool {
+	cfg := s.settings(ctx)
+	leaders := map[string]bool{}
+	for _, id := range cfg.Leaders {
+		if id != "" && id != cfg.Main {
+			leaders[id] = true
+		}
+	}
+	if len(leaders) == 0 {
+		return nil
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return nil // a read failure leaves the task's own interval in place for this pass
+	}
+	var todos []Todo
+	s.todos.mu.RLock()
+	for _, t := range s.todos.todos {
+		if t.DoneAt != nil || t.Supervision == nil || !leaders[t.Supervision.Supervisor] {
+			continue
+		}
+		todos = append(todos, copyTodoLocked(t))
+	}
+	s.todos.mu.RUnlock()
+	open := map[string]bool{}
+	for _, t := range todos {
+		if open[t.Supervision.Supervisor] {
+			continue
+		}
+		for _, c := range s.taskAgents(ctx, t) {
+			if c.State == proto.StateWorking || c.Work != nil && managerWaits(c.Work) {
+				open[t.Supervision.Supervisor] = true
+				break
+			}
+		}
+	}
+	return open
 }
 
 // Routine and Followup are the lists from before 2026-10-31, read once to move them into tasks.
@@ -558,7 +636,7 @@ func stopsAt(t Task, loc *time.Location) string {
 
 // scheduleHeader is the first line of a run's message (taskPrompt, prompts/assistant/task_run.md) and the notes under it. A patrol told to
 // "schedule the next one with the same prompt" copies them along; they are dropped so they don't pile up.
-var scheduleHeader = lazyre.New(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^\n]*）|（本该[^\n]*）|（(?:Persona|Persona) 会[^\n]*）|（又到时间了[^\n]*）|（这个任务只在你用 notify_user[^\n]*）)\s*`)
+var scheduleHeader = lazyre.New(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^\n]*）|（本该[^\n]*）|（(?:Persona|Persona) 会[^\n]*）|（又到时间了[^\n]*）|（这个任务只在你用 notify_user[^\n]*）|（没有变化就立即结束，不做长汇报。）)\s*`)
 
 func stripScheduleHeader(p string) string {
 	p = strings.TrimSpace(p)
@@ -685,6 +763,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	if needsOwn && t.SessionID != "" { // it would run on that conversation's launcher, not its own
 		return "", errTaskModelNeedsOwnConversation
 	}
+	open := s.leaderOpenWork(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return "", err
@@ -700,8 +779,9 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	}
 	s.broadcastSchedule()
 	if every > 0 {
+		first := t.nextWithLeaderCadence(now, loc, open)
 		return fmt.Sprintf("Scheduled %s every %s, first at %s (%s); %s. It repeats by itself: don't schedule the next run from a run.",
-			t.ID, everyText(every), at.In(loc).Format("01-02 15:04 Mon"), until(at), pushText(t)) + stopsAt(t, loc), nil
+			t.ID, everyText(every), first.In(loc).Format("01-02 15:04 Mon"), until(first), pushText(t)) + stopsAt(t, loc), nil
 	}
 	return fmt.Sprintf("Scheduled %s for %s (%s); %s.", t.ID, at.In(loc).Format("01-02 15:04 Mon"), until(at), pushText(t)), nil
 }
@@ -717,6 +797,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		return "", "", false, nil
 	}
 	loc, mayBeMain := s.location(ctx), s.mayBeMainNow(ctx)
+	open := s.leaderOpenWork(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return "", "", false, err
@@ -778,7 +859,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	case t.Repeat != repeatOnce && !t.Enabled:
 		out = fmt.Sprintf("%s「%s」 is a repeating task the user turned off; it stays off (they can turn it on in the app).", t.ID, t.label())
 	case t.Repeat != repeatOnce:
-		next := t.next(time.Now(), loc)
+		next := t.nextWithLeaderCadence(time.Now(), loc, open)
 		out = fmt.Sprintf("%s「%s」 already repeats (%s); next run %s (%s). Kept its prompt up to date. Don't schedule its next run yourself.",
 			t.ID, t.label(), ruleText(*t, loc), next.In(loc).Format("01-02 15:04 Mon"), until(next))
 	default:
@@ -789,8 +870,9 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		t.At, t.Enabled = at.UTC(), true
 		if every > 0 {
 			t.Repeat, t.EveryMinutes = repeatInterval, every
+			next := t.nextWithLeaderCadence(time.Now(), loc, open)
 			out = fmt.Sprintf("%s「%s」 now repeats every %s by itself (next %s, %s); the user sees it in Persona › 定时任务. "+
-				"Don't schedule its next run from now on.", t.ID, t.label(), everyText(every), at.In(loc).Format("01-02 15:04 Mon"), until(at))
+				"Don't schedule its next run from now on.", t.ID, t.label(), everyText(every), next.In(loc).Format("01-02 15:04 Mon"), until(next))
 		} else {
 			out = fmt.Sprintf("Rescheduled %s「%s」 for %s (%s).", t.ID, t.label(), at.In(loc).Format("01-02 15:04 Mon"), until(at))
 		}
@@ -895,6 +977,7 @@ func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
 func (s *Service) describeSchedule(ctx context.Context, space string) string {
 	loc := s.location(ctx)
 	now := time.Now()
+	open := s.leaderOpenWork(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return err.Error()
@@ -911,7 +994,7 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 		fmt.Fprintf(&b, "- %s 「%s」: %s", t.ID, t.label(), ruleText(t, loc))
 		if !t.Enabled {
 			b.WriteString(", off")
-		} else if next := t.next(now, loc); !next.IsZero() && t.Repeat != repeatOnce {
+		} else if next := t.nextWithLeaderCadence(now, loc, open); !next.IsZero() && t.Repeat != repeatOnce {
 			b.WriteString(", next " + next.In(loc).Format("01-02 15:04 Mon"))
 		}
 		switch {
@@ -986,6 +1069,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		}
 	}
 	mayBeMain := s.mayBeMainNow(ctx)
+	open := s.leaderOpenWork(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return "", err
@@ -1050,7 +1134,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	}
 	s.broadcastSchedule()
 	state := "off"
-	if next := t.next(time.Now(), loc); !next.IsZero() {
+	if next := t.nextWithLeaderCadence(time.Now(), loc, open); !next.IsZero() {
 		state = "next run " + next.In(loc).Format("01-02 15:04 Mon") + " (" + until(next) + ")"
 	}
 	return fmt.Sprintf("Saved %s「%s」: %s, %s; %s. The user sees and edits it in the app (Persona › 定时任务).",
@@ -1243,6 +1327,7 @@ func (sc *schedule) wakeup() chan struct{} {
 // nextDue is the earliest moment an enabled task is due; zero when nothing is scheduled.
 func (s *Service) nextDue(ctx context.Context, now time.Time) time.Time {
 	loc := s.location(ctx)
+	open := s.leaderOpenWork(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return time.Time{} // read again on the next idle wake-up
@@ -1250,7 +1335,7 @@ func (s *Service) nextDue(ctx context.Context, now time.Time) time.Time {
 	defer sc.mu.Unlock()
 	var next time.Time
 	for _, t := range sc.tasks {
-		if n := t.next(now, loc); !n.IsZero() && (next.IsZero() || n.Before(next)) {
+		if n := t.nextWithLeaderCadence(now, loc, open); !n.IsZero() && (next.IsZero() || n.Before(next)) {
 			next = n
 		}
 	}
@@ -1267,6 +1352,7 @@ type dueTask struct {
 
 func (s *Service) runDue(ctx context.Context, now time.Time) {
 	loc := s.location(ctx)
+	open := s.leaderOpenWork(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return // this turn is skipped: a task run now could not be marked as run
@@ -1319,16 +1405,30 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 				skipped = append(skipped, ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: next.UTC(), At: now.UTC(),
 					Status: runSkipped, Error: t.LastError, of: now.UTC()})
 			}
-		case repeatOnce, repeatInterval:
+		case repeatOnce:
 			if t.At.After(now) {
 				continue
 			}
 			due = append(due, dueTask{*t, t.At})
+			t.LastRun, t.Enabled, changed = now.UTC(), false, true
+		case repeatInterval:
+			next := t.nextWithLeaderCadence(now, loc, open)
+			if next.After(now) {
+				continue
+			}
+			dueAt := next
+			if t.At.After(now) {
+				// This is an extra run before the task's original At. Keep that anchor so closing the
+				// last supervised todo restores the original interval without one more shortened run.
+				// Due is now: activation can make an old LastRun overdue without a hub outage.
+				dueAt = now
+			}
+			due = append(due, dueTask{*t, dueAt})
 			t.LastRun, changed = now.UTC(), true
-			if t.Repeat == repeatOnce {
-				t.Enabled = false
-			} else if t.At = t.At.Add(time.Duration(t.EveryMinutes) * time.Minute); !t.At.After(now) {
-				t.At = now.Add(time.Duration(t.EveryMinutes) * time.Minute).UTC() // missed several: once now, then on from here
+			if !t.At.After(now) {
+				if t.At = t.At.Add(time.Duration(t.EveryMinutes) * time.Minute); !t.At.After(now) {
+					t.At = now.Add(time.Duration(t.EveryMinutes) * time.Minute).UTC() // missed several: once now, then on from here
+				}
 			}
 		}
 	}
@@ -1456,12 +1556,15 @@ func taskMessageSource(t Task) *proto.MessageSource {
 	if t.Repeat == repeatOnce {
 		kind = proto.SourceFollowup
 	}
-	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label()}
+	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label(), Push: t.Push}
 }
 
 func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (proto.Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if t.Repeat == repeatInterval && t.EveryMinutes > leaderOpenEveryMinutes && shortForLeader(t, s.leaderOpenWork(ctx)) {
+		t.cadenceEvery = leaderOpenEveryMinutes
+	}
 	loc, kb := s.location(ctx), s.kbReady(ctx)
 	run := ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: due.UTC(), At: time.Now().UTC(), Manual: manual, Status: runOK,
 		Retried: retried, of: now.UTC()}
@@ -1498,20 +1601,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
-			// A quiet task's run there holds the conversation's pushes, as a supervision message does, until the
-			// user or anything else speaks there (schedule_push.go). Not while another turn is on there (one the user
-			// started): that turn's finish would go unpushed with it; then this run is pushed as ever.
-			hold := t.pushesOnlyAsked() && (s.supervising(t.SessionID) || !s.sessionBusy(ctx, m.ID, t.SessionID))
-			if hold {
-				params[holdPushesParam] = true
-				s.holdPushes(ctx, t.SessionID) // before the send: a quick turn can end before the call returns
-			}
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params)
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
-			}
-			if err != nil && hold {
-				s.releasePushes(ctx, t.SessionID)
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.MachineID, t.SessionID
@@ -2134,6 +2226,9 @@ func taskPrompt(t Task, due, now time.Time, loc *time.Location, manual, kb, cont
 		Prompt: t.Prompt, KBHint: kb && t.Repeat == repeatDaily, KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), Facts: t.factsText}
 	if r.Interval {
 		r.Every = everyText(t.EveryMinutes)
+		if t.cadenceEvery > 0 {
+			r.Every, r.Accelerated = everyText(t.cadenceEvery), true
+		}
 	}
 	if late := now.Sub(due); !manual && t.Repeat != repeatDaily && late > 2*time.Minute {
 		r.Late = humanDuration(late)
@@ -2171,6 +2266,8 @@ func (s *Service) broadcastSchedule() {
 
 // taskViews are the tasks as the snapshot reports them; nil while the schedule can't be read.
 func (s *Service) taskViews(ctx context.Context) []TaskView {
+	loc, now := s.location(ctx), time.Now()
+	open := s.leaderOpenWork(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return nil
@@ -2178,7 +2275,11 @@ func (s *Service) taskViews(ctx context.Context) []TaskView {
 	defer sc.mu.Unlock()
 	out := make([]TaskView, 0, len(sc.tasks))
 	for _, t := range sc.tasks {
-		out = append(out, TaskView{ID: t.ID, Label: t.label(), Repeat: t.Repeat, Enabled: t.Enabled, At: t.At, EveryMinutes: t.EveryMinutes,
+		at := t.At
+		if t.Repeat == repeatInterval {
+			at = t.nextWithLeaderCadence(now, loc, open)
+		}
+		out = append(out, TaskView{ID: t.ID, Label: t.label(), Repeat: t.Repeat, Enabled: t.Enabled, At: at, EveryMinutes: t.EveryMinutes,
 			MachineID: t.MachineID, RunMachineID: t.RunMachineID, RunSessionID: t.RunSessionID, Push: t.Push})
 	}
 	return out
@@ -2191,6 +2292,7 @@ func (s *Service) tasksView(ctx context.Context, keep func(Task) bool) []Task {
 	loc := s.location(ctx)
 	machine := s.settings(ctx).MachineID
 	now := time.Now()
+	open := s.leaderOpenWork(ctx)
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	out := []Task{}
@@ -2198,7 +2300,7 @@ func (s *Service) tasksView(ctx context.Context, keep func(Task) bool) []Task {
 		if t.done() || (keep != nil && !keep(t)) {
 			continue
 		}
-		t.NextRun = t.next(now, loc)
+		t.NextRun = t.nextWithLeaderCadence(now, loc, open)
 		if t.MachineID == "" {
 			t.MachineID = machine
 		}

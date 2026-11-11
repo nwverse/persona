@@ -56,6 +56,8 @@ const (
 	CodeCallFailed       = "call_failed"
 	CodeShapeChanged     = "shape_changed"
 	CodeToolChanged      = "tool_changed"
+	CodeNoModel          = "no_model"     // drafting: no model is set up for it
+	CodeModelFailed      = "model_failed" // drafting: the model's call failed
 )
 
 // Problem is a code and one English sentence. Clients localize the code; the sentence never carries source content.
@@ -115,6 +117,12 @@ type Subscription struct {
 	SnapshotHash    string     `json:"-"` // the last snapshot's content hash
 	RunState        string     `json:"-"` // the state as runs left it; State is StateOff over it while both switches are off
 	Runs            []Run      `json:"-"`
+	// The destinations' marks (#2039, deliver.go): when the Inbox was turned on (its catch-up reaches a day before),
+	// the first run since (the items stored up to it are the catch-up), and when the knowledge base was turned on
+	// (it starts a day before).
+	InboxFrom    *time.Time `json:"-"`
+	InboxCatchup *time.Time `json:"-"`
+	KBFrom       *time.Time `json:"-"`
 }
 
 // Run is one execution, as the subscription's history keeps it (the newest RunsKept).
@@ -141,6 +149,14 @@ type Shape struct {
 	// Arrays are the top-level keys whose values are lists: where items may be.
 	Arrays []string `json:"arrays,omitempty"`
 	Items  *int     `json:"items,omitempty"`
+}
+
+// ModelInfo is what a model purpose runs on now: the display name of its connection and its model, for the consent
+// the pages ask before content goes to it. OK false: nothing can be called for it (drafting answers no_model).
+type ModelInfo struct {
+	OK       bool   `json:"ok"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // Features says which later stages are in: the pages show their parts only then.
@@ -260,12 +276,14 @@ type Filter struct {
 	Extension string
 }
 
-// CreateRequest makes a subscription: with no recipe, the source's first own one.
+// CreateRequest makes a subscription: with no recipe, the source's first own one. RecipeOrigin says a given recipe
+// is a model's draft taken as it was (model); otherwise it is the user's.
 type CreateRequest struct {
-	Connector string  `json:"connector"`
-	Source    string  `json:"source"`
-	Recipe    *Recipe `json:"recipe,omitempty"`
-	Label     string  `json:"label,omitempty"`
+	Connector    string  `json:"connector"`
+	Source       string  `json:"source"`
+	Recipe       *Recipe `json:"recipe,omitempty"`
+	RecipeOrigin string  `json:"recipe_origin,omitempty"`
+	Label        string  `json:"label,omitempty"`
 }
 
 // Patch changes a subscription made at Revision; nil fields stay as they are.
@@ -296,6 +314,8 @@ type Error struct {
 	RetryAfter float64       `json:"retry_after,omitempty"`
 	DryRun     *DryRun       `json:"-"`
 	Current    *Subscription `json:"-"`
+	// Draft is a model's draft that did not pass, as far as it got: the pages start the manual editor from it.
+	Draft *Recipe `json:"-"`
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }

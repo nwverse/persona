@@ -5,6 +5,28 @@ import { MAX_PORT_LINKS, portLabel, portLink, portLinks, portURL } from "./port-
 import { localhostLink } from "./preview";
 
 describe("a port link", () => {
+  it.each([
+    ["http://localhost:80/app?x=1#top", 80, "/app?x=1#top", false],
+    ["https://localhost:443/app", 443, "/app", true],
+    ["http://127.0.0.1:00080/app", 80, "/app", false],
+    ["https://app.localhost:00443/", 443, "/", true],
+    ["http://[::1]:80/app", 80, "/app", false],
+    ["https://[::1]:443/", 443, "/", true],
+    ["http://localhost:443/app", 443, "/app", false],
+  ] as const)("preserves the explicit authority port in %s", (url, port, path, secure) => {
+    expect(portLink(url)).toEqual({ port, path, secure });
+  });
+
+  it.each([
+    "https://localhost/app", "http://localhost/path:80?next=:443#port:80",
+    "http://localhost/?next=http://localhost:80/app", "http://[::1]/app",
+    "http://localhost:80@example.com/", "http://example.com:80/",
+    "https://192.0.2.10:443/", "http://name:80@localhost/", "http://localhost:80@localhost/",
+    "http://localhost:0/", "http://localhost:65536/",
+  ])("does not borrow a port or host from another part of %s", (url) => {
+    expect(portLink(url)).toBeNull();
+  });
+
   it("is a local host with a port", () => {
     expect(portLink("http://localhost:5173/")).toEqual({ port: 5173, path: "/", secure: false });
     expect(portLink("http://127.0.0.1:8000/docs?x=1#top")).toEqual({ port: 8000, path: "/docs?x=1#top", secure: false });
@@ -31,6 +53,16 @@ describe("a port link", () => {
 });
 
 describe("port links in an answer", () => {
+  it("finds explicit default ports in scheme and bare links, preserving scheme and suffix", () => {
+    expect(portLinks("Open http://localhost:80/app?x=1#top or https://studio.local:443/docs then localhost:80/bare", ["studio"])).toEqual([
+      { port: 80, path: "/app?x=1#top", secure: false },
+      { port: 443, path: "/docs", secure: true },
+      { port: 80, path: "/bare", secure: false },
+    ]);
+    expect(localhostLink("http://localhost:80/app?x=1#top")).toEqual({ port: 80, path: "/app?x=1#top" });
+    expect(localhostLink("https://localhost:443/docs")).toEqual({ port: 443, path: "/docs" });
+  });
+
   it("finds scheme links, Markdown links and bare localhost:port, in order, once each", () => {
     // i18n-ignore: an agent's reply as it is written
     const text = [

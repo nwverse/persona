@@ -225,6 +225,8 @@ func (d *Devices) Run(ctx context.Context) error {
 		}()
 	}
 	go d.usageLoop(mctx)
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
@@ -637,12 +639,25 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
+	if refusesHandoff(p.Method, params) {
+		return nil, errHandoffRefused
+	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
+	var receipt string
+	var prepareErr error
+	params, receipt, prepareErr = d.prepareShareCall(ctx, p, params)
+	if prepareErr != nil {
+		return nil, wireError(prepareErr)
+	}
+	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
+		return nil, errHandoffRefused
+	}
 	var out json.RawMessage
 	err := m.call(ctx, p.Method, params, &out)
+	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
 		return nil, wireError(err)
@@ -918,3 +933,12 @@ func (w *wrapped) Error() string   { return w.message.Error() }
 func (w *wrapped) Unwrap() []error { return []error{w.message, w.err} }
 
 func explain(message, err error) error { return &wrapped{message: message, err: err} }
+
+// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another manager's
+// to ask for (Devices.Call), so nobody else can stage values or start an Agent with them.
+var errHandoffRefused = &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+
+// refusesHandoff: a hub-relayed call that would stage values or start with a ticket.
+func refusesHandoff(method string, params json.RawMessage) bool {
+	return method == proto.MethodSecretStage || method == "session.start" && startHasSecretTicket(params)
+}

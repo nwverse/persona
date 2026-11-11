@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -102,7 +105,7 @@ func (s *Service) elicitationReachable(ix proto.Interaction) bool {
 // card goes to its supervisor first when leaders are configured (ask_route.go); a question the assistant may answer for
 // the user goes to it first (fleet_delegate.go).
 func (s *Service) announce(ix proto.Interaction) {
-	if s.routeAsk(ix) {
+	if !s.agentSupervisedSession(ix.MachineID, ix.SessionID) && s.routeAsk(ix) { // a worker's card stays the user's (task_leader.go)
 		return
 	}
 	if forget := s.delegable(ix); forget != nil {
@@ -177,6 +180,36 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
 	}
+	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
+	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
+	report := ix.Kind == proto.IxPermission && slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), ix.ToolName)
+	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
+		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
+			plans, err := s.conversationPlans(ctx, todo.Origin)
+			if err != nil {
+				return proto.Resolution{}, err
+			}
+			for _, plan := range plans {
+				if plan.State != planStarted {
+					continue
+				}
+				for _, task := range plan.Tasks {
+					if task.TodoID == todo.ID && task.Readonly {
+						if report {
+							if todo.Supervision == nil || todo.Supervision.Supervisor == "" {
+								continue
+							}
+							allow := true
+							return proto.Resolution{Allow: &allow}, nil
+						}
+						approve := false
+						return proto.Resolution{Approve: &approve, Feedback: prompts.RenderReadonlyTaskPlanExit()}, nil
+					}
+				}
+			}
+		}
+	}
+	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
 		if ix.Resumable { // its hook's earlier attempt left the card pending: it is answered too
 			_ = s.resolveRemembered(ix.ID, r, false)
@@ -244,7 +277,13 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 		s.finished(old)
 	}
 	if again {
-		s.show(ix)
+		// A card the history has as pending and this manager does not hold was left by a manager that restarted: its
+		// node may claim it before the hub's handshake restores the others (restoreInteractions), so it finds its route
+		// here too (restoreRoute), or the assistant goes on deciding on it (resumeDelegations). Any other is only shown
+		// again, as before.
+		if !s.restoreRoute(ctx, ix) && !s.resumeDelegations(ctx, ix) {
+			s.show(ix)
+		}
 	} else {
 		s.record(ix)
 		s.announce(ix)
@@ -456,6 +495,7 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 	}
 	if p != nil {
 		r.Values = declaredValues(p.ix, r.Values)
+		r = honest(p.ix, r)
 	}
 	if p != nil && p.persisting != nil {
 		attempt := p.persisting
@@ -773,7 +813,7 @@ func (s *Service) askHub(ctx context.Context, ix proto.Interaction) (proto.Resol
 	if m, ok := s.fleetMachine(ix.MachineID); ok {
 		ix.MachineID = m.ID
 	}
-	return s.waitInteraction(ctx, ix)
+	return s.waitInteraction(ctx, s.ownCard(ctx, ix))
 }
 
 // ---- "Always allow in this session" (#2202, docs/assistant/assistant.md "Always allow in this session") ----
@@ -784,6 +824,57 @@ func (s *Service) askHub(ctx context.Context, ix proto.Interaction) (proto.Resol
 
 // maxAlwaysKeys bounds what one card may name (a file change's paths, a gated command's calls).
 const maxAlwaysKeys = 32
+
+// Whether a card's "Always allow" is kept is the manager's word (proto.Interaction.AlwaysHonored, #3590), never a
+// node's: the apps offer it only where it is.
+
+// nodeCard is a node's card as the apps get it. On an assistant conversation only the manager keeps Always (its
+// agent is given no session rule): honored when the manager will remember the keys the card names (remembering is a
+// conversation's store), not when it names keys it will not (too many, a card with fields, no store) or is a health
+// conversation's (confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps
+// it itself). A node names no tool for people, and has no say in either: only the manager's own cards do.
+func nodeCard(ix proto.Interaction, remembers, health bool) proto.Interaction {
+	ix.AlwaysHonored, ix.ToolTitle = nil, ""
+	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health) {
+		return ix
+	}
+	kept := remembers && !health && alwaysCard(ix)
+	ix.AlwaysHonored = &kept
+	return ix
+}
+
+// honest is r without an Always the card does not keep (AlwaysHonored false): an older app, or one that does not
+// read the field, may still send it, and the answer's history must not say "always allowed" for a grant no one keeps.
+func honest(ix proto.Interaction, r proto.Resolution) proto.Resolution {
+	if ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
+		r.Always = false
+	}
+	return r
+}
+
+// ownCard is a permission card the manager asks itself (its tools', the extensions', the hub's persona_settings): its
+// Always is kept only where the card says what it keeps (AlwaysLabel: the apps a computer may use, LCU's own scopes),
+// nowhere else, and the tool gets its name for people when the catalog has one.
+func (s *Service) ownCard(ctx context.Context, ix proto.Interaction) proto.Interaction {
+	if ix.Kind != proto.IxPermission {
+		return ix
+	}
+	kept := strings.TrimSpace(ix.AlwaysLabel) != ""
+	ix.AlwaysHonored = &kept
+	if ix.ToolTitle == "" {
+		ix.ToolTitle = toolTitle(s.lang(ctx), ix.ToolName)
+	}
+	return ix
+}
+
+// toolTitle is one of the manager's own tools by its name for people ("iPhone control"), "" for any other.
+func toolTitle(l i18n.Lang, tool string) string {
+	key := "assistant-tool_titles." + strings.ReplaceAll(tool, ".", "_")
+	if tool == "" || !i18n.Has(key) {
+		return ""
+	}
+	return i18n.T(l, key)
+}
 
 func alwaysCard(ix proto.Interaction) bool {
 	return ix.Kind == proto.IxPermission && ix.SessionID != "" && len(ix.AlwaysKeys) > 0 &&
@@ -881,7 +972,8 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 
 // restoreInteractions takes back, as the manager starts, the resumable cards the last one left pending: their hooks
 // reconnect through the next node and claim them again (waitInteraction), without a second push; the others it left
-// are over (cancelled in the history).
+// are over (cancelled in the history). A card that was on its way up to the user finds its route again (restoreRoute);
+// one the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
 func (s *Service) restoreInteractions(ctx context.Context) {
 	st, ok := s.store().(interface {
 		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, error)
@@ -897,13 +989,55 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 		s.logf("expire stale interactions: %v", err)
 		return
 	}
+	var back []proto.Interaction
 	s.fleet.mu.Lock()
 	m := s.ixMapLocked()
 	for _, ix := range resumable {
 		if m[ix.ID] == nil {
 			m[ix.ID] = &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
 			s.orphanLocked(m[ix.ID])
+			back = append(back, ix)
 		}
 	}
 	s.fleet.mu.Unlock()
+	var unrouted []proto.Interaction
+	for _, ix := range back {
+		if !s.restoreRoute(ctx, ix) {
+			unrouted = append(unrouted, ix)
+		}
+	}
+	s.resumeDelegations(ctx, unrouted...)
+}
+
+// restoreRoute puts card ix, restored after a restart, back on its way to the supervisor of the task it belongs to:
+// the route lived on the pending card only, and the apps got the card back without it. The ladder is derived now, as
+// routeAsk does for a new card, so a card whose task is done or already waits for the user stays the user's. The
+// supervisor hears of it as any card held with it (signalAsk). Whether the user was told of the card before the
+// restart is not kept: a question that may have rung then only goes back on the apps when its time is up, while an
+// approval rings (ringAsks). True when it was routed.
+func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
+	if !routable(ix) {
+		return false
+	}
+	ladder, todo, home, ok := s.askLadder(ctx, ix.MachineID, ix.SessionID)
+	if !ok {
+		return false
+	}
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
+		s.fleet.mu.Unlock()
+		return false
+	}
+	now := time.Now()
+	// A question may have rung the user before the restart: its timeout only puts it back on the apps. An approval is
+	// not quiet: only the user can answer it, so its timeout rings (ringAsks) instead of leaving the agent blocked
+	// with nobody told.
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
+	p.ix.Delegating = true
+	shown := p.ix
+	s.fleet.mu.Unlock()
+	s.show(shown)
+	s.signalAsk(todo, ladder[0], ix, 0)
+	return true
 }

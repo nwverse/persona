@@ -5,16 +5,16 @@
 package closeout
 
 import (
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 var (
-	blockRe = regexp.MustCompile(`(?s)<closeout\b([^>]*)>(.*?)</closeout>`)
-	attrRe  = regexp.MustCompile(`([a-z_]+)\s*=\s*"([^"]*)"`)
+	blockRe = lazyre.New(`(?s)<closeout\b([^>]*)>(.*?)</closeout>`)
+	attrRe  = lazyre.New(`([a-z_]+)\s*=\s*"([^"]*)"`)
 )
 
 // Example is the form an agent is asked to write, as the prompts show it.
@@ -90,6 +90,18 @@ func Strip(reply string) string {
 func Has(reply string) bool {
 	_, _, ok := Parse(reply)
 	return ok
+}
+
+// WaitsOnNobody reports whether reply's closeout says the turn is finished and needs nobody: status done, with no
+// missing and no waiting line. An agent that needs someone says blocked or names what is missing, so a closing
+// question in such a reply is conversation or an offer, not a wait (docs/protocol/agent-states.md "Awaiting your
+// reply", #4110). False when the reply has no closeout.
+func WaitsOnNobody(reply string) bool {
+	if !strings.Contains(reply, "<closeout") { // most replies have none: no regexp run, nothing allocated
+		return false
+	}
+	c, _, ok := Parse(reply)
+	return ok && c.Status == proto.CloseoutDone && c.Missing == "" && c.Waiting == ""
 }
 
 // cutKey splits "key: value", taking a full-width colon as well and a leading list marker.

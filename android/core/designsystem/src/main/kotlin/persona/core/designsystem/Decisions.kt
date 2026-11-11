@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
@@ -400,6 +401,64 @@ fun DecisionActions(primary: JAction?, alternatives: List<JAction>, overflowLabe
     }
 }
 
+/** How many of [options] (their widths, in order) fit in [available] beside what follows them, each [gap] apart: the first always. */
+internal fun fittingOptions(options: List<Float>, available: Float, gap: Float): Int {
+    var left = available
+    var count = 0
+    for (width in options) {
+        if (count > 0 && width > left) break
+        left -= width + gap
+        count++
+    }
+    return count.coerceAtLeast(if (options.isEmpty()) 0 else 1)
+}
+
+/**
+ * The answers of a decision on its row (#3804): [options] as buttons on one line, the first (the recommended one) the
+ * only solid one, as many as fit and the first always (alone and still too wide, its label is cut short, never
+ * wrapped); then [other], a quiet button that opens the task to answer in words; then a menu with the options that did
+ * not fit and [more] (the answers that are no option), under a rule when both are there. [busy] is an answer on its
+ * way: nothing can be pressed.
+ */
+@Composable
+fun DecisionAnswers(options: List<JAction>, other: JAction, more: List<JAction>, overflowLabel: String,
+    modifier: Modifier = Modifier, busy: Boolean = false) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val type = PersonaTheme.type.labelSmall
+    val size = JButtonSize.Small
+    var menu by remember { mutableStateOf(false) }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val gap = with(density) { Tokens.Space.s.toPx() }
+        val minimum = with(density) { Tokens.MinTouch.android.toPx() }
+        fun button(label: String, padding: Dp) =
+            (measurer.measure(label, style = type, maxLines = 1, softWrap = false).size.width + with(density) { (padding * 2).toPx() }).coerceAtLeast(minimum)
+        val widths = options.map { button(it.label, size.padding) }
+        // the quiet button and, when anything is behind it, the menu's button stay whatever the options take
+        val tail = button(other.label, QuietButtonPadding) + gap
+        val room = with(density) { maxWidth.toPx() } - tail
+        // without fixed answers the menu exists only for the options that do not fit: leave room for it only then
+        val all = fittingOptions(widths, room, gap)
+        val fit = if (more.isEmpty() && all == options.size) all else fittingOptions(widths, room - minimum - gap, gap)
+        val hidden = options.drop(fit)
+        val items = hidden + more.mapIndexed { index, action -> if (index == 0 && hidden.isNotEmpty()) action.copy(separatorBefore = true) else action }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+            options.take(fit).forEachIndexed { index, action ->
+                JButton(action.label, action.onClick, Modifier.weight(1f, fill = false), kind = if (index == 0) JButtonKind.Primary else JButtonKind.Secondary,
+                    size = size, enabled = action.enabled && !busy)
+            }
+            JButton(other.label, other.onClick, kind = JButtonKind.Quiet, size = size, enabled = other.enabled && !busy)
+            if (items.isNotEmpty()) Box {
+                JIconButton(PhIcons.DotsThree, overflowLabel, { menu = true }, enabled = !busy)
+                JMenu(menu && !busy, { menu = false }, items.map { it.copy(enabled = it.enabled && !busy) })
+            }
+        }
+    }
+}
+
+/** The horizontal padding of a quiet [JButton], whatever its size. */
+private val QuietButtonPadding = 8.dp
+
 /**
  * The answer buttons of a decision: [secondary] on the left, [primary] on the right, [more] as quiet buttons
  * underneath. On the board the primary is wider.
@@ -416,6 +475,30 @@ fun DecisionButtons(primary: JAction, modifier: Modifier = Modifier, secondary: 
         // Several secondary choices (a plan's "Approve and run automatically" and "Confirm each step") wrap to a second line instead of squeezing.
         if (more.isNotEmpty()) FlowRow(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Center) {
             more.forEach { JTextButton(it.label, it.onClick, enabled = it.enabled && !busy) }
+        }
+    }
+}
+
+/** A reply draft has one primary Send and two reversible secondary choices. Stack at large text or narrow widths. */
+@Composable
+fun DraftDecisionButtons(send: JAction, later: JAction, dismiss: JAction, modifier: Modifier = Modifier,
+    busy: Boolean = false, sendModifier: Modifier = Modifier, laterModifier: Modifier = Modifier, dismissModifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val stacked = LocalDensity.current.fontScale >= 1.3f || maxWidth < 320.dp
+        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            JButton(send.label, send.onClick, sendModifier.fillMaxWidth(), kind = JButtonKind.Primary,
+                size = JButtonSize.Large, enabled = send.enabled && !busy, loading = busy)
+            if (stacked) {
+                JButton(later.label, later.onClick, laterModifier.fillMaxWidth(), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = later.enabled && !busy)
+                JButton(dismiss.label, dismiss.onClick, dismissModifier.fillMaxWidth(), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = dismiss.enabled && !busy)
+            } else Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                JButton(later.label, later.onClick, laterModifier.weight(1f), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = later.enabled && !busy)
+                JButton(dismiss.label, dismiss.onClick, dismissModifier.weight(1f), kind = JButtonKind.Secondary,
+                    size = JButtonSize.Large, enabled = dismiss.enabled && !busy)
+            }
         }
     }
 }
