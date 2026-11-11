@@ -782,6 +782,38 @@ the way quiet supervision rounds already were (#1988, `docs/assistant/unified-en
   Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
   notify or push is unchanged.
 
+## Messages from the system wait for the owner (#4925)
+
+The owner comes first in every assistant conversation, the main chat and leader conversations alike
+(`docs/design/proposals/main-chat-availability.md` 3b rules 1 and 3; `server/internal/assistant/relay_presence.go`).
+What the system puts into a conversation (supervision messages, task notices, late `ask_user` answers, messages from
+other conversations) goes through one per-conversation queue (`assistant.relay`, "Managing its own conversations"):
+
+- **Owner present, system messages wait.** The owner is present in a conversation for 2 minutes after their last message
+  to it (`ownerPresentFor`); the time is taken from `session.user_spoke` and stored as `assistant.relay`'s `spoke`. While
+  they are present nothing from the system is delivered there, whether the conversation is idle or not: a message that
+  would have gone straight into an idle conversation is queued instead.
+- **Nothing hangs.** A message that waits on a decision is held for a present owner at most 5 minutes from when it queued
+  (`relayDecisionMax`, the time a card stays on one rung, `askHoldFor`), however long the owner keeps talking. These are a
+  late `ask_user` answer, a supervision message carrying a decision-waiting signal (the queued message's `urgent`: the
+  signals supervision sends in its 2-minute gap, `docs/assistant/unified-entry.md` "Supervision"), and a task notice of
+  state `needs`, `interrupted` or `failed`.
+- **What ends the hold.** A timer per conversation drains its queue when the first hold ends. The supervision tick (30
+  seconds) drains any conversation whose hold ended without a timer: after a manager restart (the queue and `spoke` are
+  in settings, the timers are not), or when the conversation list could not be read at that moment. A conversation that is
+  on a turn then gets its queue when the turn ends, as before.
+- **The queue is ranked.** The next message to go is the best rank among those not held, the one that queued first
+  within a rank: (1) late `ask_user` answers, (2) messages that wait on a decision, (3) outcomes to report to the owner
+  (a task notice of state `done`; a concern's outcome reaches the conversation this way, since a concern has no message
+  of its own), (4) everything else. One message goes per turn, as before. A supervision message or task notice that
+  replaces the one still queued for the same conversation or task keeps the time the first one queued, so merging never
+  restarts its wait.
+- **Compatibility.** `urgent` and `spoke` are optional fields; the queue's shape is otherwise unchanged. A previous
+  version reads the queue as before and drops the two fields on its next save, after which those messages rank and wait
+  as ordinary ones and no hold applies.
+- **Not covered**: a scheduled task or follow-up that runs in the conversation at its time, and a meeting's feed, do not
+  go through the queue and are not held. Interrupting a round already running is F2 of the proposal.
+
 ## Chat titles
 
 Requested: "Generate titles after starting new chats; standardize as ‘MMDD | Type | Topic’." Implemented as follows:
@@ -865,8 +897,8 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
     if a reply is needed, use `conversation_send`; do not reply merely to acknowledge receipt. `Item.source.kind="conversation"` retains the stable sender id and title, separately from the runtime role and native peer `from`. Clients show a source message rather than a user bubble; the relay's instructions remain inspectable as Context. Explicit source metadata is persisted in a separate `message-source` context, not a selectable Context card. Full canonical legacy relay contexts remain recognizable; user-pasted templates are protected at the entry point.
   - **A spawned chat reports back** (#4669, `assistant/spawned.go`): a chat `conversation_new` opened is followed (`assistant.relay`'s `spawned`, kept 7 days) until it sends to its opener with `conversation_send`. A turn of it that fails, or one that ends without it ever having reported, leaves one notice in the opener (`OriginRef`; `prompts/assistant/spawn_notice.md`) with its id, link and error or last words. The notice is a message from the spawned chat under the same hop and rate limits as its own `conversation_send`; past them the log says the opener was not told.
   - **A failed turn is a failure** (#4669): the node makes a Claude turn whose result is `is_error`, or whose whole answer is an auth / upstream error line (`assistantwire.ErrorOnlyText`, sharing `AuthErrorWords` with the triage's `userErrorWords`), the session's `turn_error`: the apps show it failed, the push is ⚠️ and goes out however quick the turn was, and the hub logs `assistant <id>: turn failed (launcher …, kind …, code …)` without the error's words.
-  - **Queue while running**: if target is running or already queued, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
-    (session `queued`). After its turn ends (no longer working), hub sends one at a time. Don't write into running processes: Codex merges through `turn/steer`, not queueing.
+  - **Queue while running**: if target is running, already queued, or the owner is talking in it, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
+    (session `queued`). After its turn ends (no longer working) and the owner's hold is over, hub sends one at a time, by rank ("Messages from the system wait for the owner"). Don't write into running processes: Codex merges through `turn/steer`, not queueing.
     They come after the user's own queued messages, and `queued_relayed` counts them: the apps only show and copy them.
 - **The user's own queue** (#4342): a message the user sends while a chat works goes to its headless Claude at once and waits in Claude Code's
   queue until the next step takes it in. The transcript notes that wait without the words, so the node gives each message an id and follows

@@ -182,7 +182,7 @@ func (s *Service) drainConversations(machine string, ids []string) bool {
 // drainHeldRelays is the look every superviseTick that nothing held for the owner is left behind: a conversation
 // the owner spoke in, with a message that may go by now and no timer of its own (the manager restarted meanwhile, or
 // the timer could not read the list), is drained. The owner's last message is forgotten once ownerPresentFor passed
-// and nothing it held is left to hand on.
+// and what it held was handed on.
 func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 	b := &s.relays
 	b.mu.Lock()
@@ -190,20 +190,19 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 		b.mu.Unlock()
 		return
 	}
-	var due, over []string
+	var due []string
 	for id, spoke := range b.st.Spoke {
-		queued := len(b.st.Queue[id]) > 0
-		if queued && b.holds[id] == nil && !b.draining[id] {
-			if i, _ := b.pickLocked(id, now); i >= 0 {
-				due = append(due, id)
-			}
-		}
-		if now.Sub(spoke) >= ownerPresentFor {
-			if queued {
-				over = append(over, id) // forgotten below, once its queue was handed to drainRelays
-			} else {
+		if len(b.st.Queue[id]) == 0 {
+			if now.Sub(spoke) >= ownerPresentFor {
 				delete(b.st.Spoke, id)
 			}
+			continue
+		}
+		if b.holds[id] != nil || b.draining[id] {
+			continue
+		}
+		if i, _ := b.pickLocked(id, now); i >= 0 {
+			due = append(due, id)
 		}
 	}
 	b.mu.Unlock()
@@ -215,9 +214,9 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 		return
 	}
 	b.mu.Lock()
-	for _, id := range over {
-		if slices.Contains(due, id) && now.Sub(b.st.Spoke[id]) >= ownerPresentFor {
-			delete(b.st.Spoke, id)
+	for _, id := range due {
+		if spoke, ok := b.st.Spoke[id]; ok && now.Sub(spoke) >= ownerPresentFor {
+			delete(b.st.Spoke, id) // handed on: a delivery that fails waits for the list to change, as ever
 		}
 	}
 	b.mu.Unlock()
