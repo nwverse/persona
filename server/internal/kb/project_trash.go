@@ -80,14 +80,28 @@ func (e *Engine) DeleteProject(slug string, now time.Time) (TrashEntry, error) {
 	// Under metaMu, which a pipeline write holds while it checks that the project is still there: once moved, none
 	// can write it back.
 	st.metaMu.Lock()
-	err := os.Rename(st.path(KindProject, p.Slug), st.trashPath(entry.ID, "project"))
+	var moved [][2]string // from, to: put back if a later move fails, so nothing is left half in the trash
+	move := func(from, to string) error {
+		err := os.Rename(from, to)
+		if err == nil {
+			moved = append(moved, [2]string{from, to})
+		}
+		return err
+	}
+	err := move(st.path(KindProject, p.Slug), st.trashPath(entry.ID, "project"))
 	if err == nil && len(entry.Merged) > 0 {
 		err = os.Mkdir(st.trashPath(entry.ID, "merged"), 0o755)
 		for _, m := range entry.Merged {
 			if err == nil {
-				err = os.Rename(st.path(KindProject, m), st.trashPath(entry.ID, "merged", SafeID(m)))
+				err = move(st.path(KindProject, m), st.trashPath(entry.ID, "merged", SafeID(m)))
 			}
 		}
+	}
+	if err != nil {
+		for i := len(moved) - 1; i >= 0; i-- {
+			_ = os.Rename(moved[i][1], moved[i][0])
+		}
+		_ = os.RemoveAll(st.trashPath(entry.ID))
 	}
 	st.metaMu.Unlock()
 	if err != nil {
@@ -169,7 +183,8 @@ func (e *Engine) RestoreProject(id string) (TrashEntry, error) {
 		}
 	}
 	// A timeline line appended while the project was being deleted can leave projects/<slug>/log.md alone; it goes
-	// back onto the restored timeline.
+	// back onto the restored timeline. mu (after metaMu) holds AppendLog off until the timeline is back in place.
+	st.mu.Lock()
 	stray, _ := os.ReadFile(st.path(KindProject, entry.Slug, "log.md"))
 	err := os.MkdirAll(filepath.Join(st.Dir, KindProject), 0o755)
 	if err == nil {
@@ -187,6 +202,7 @@ func (e *Engine) RestoreProject(id string) (TrashEntry, error) {
 	if err == nil && len(stray) > 0 {
 		err = appendLogFile(st.path(KindProject, entry.Slug, "log.md"), stray)
 	}
+	st.mu.Unlock()
 	st.metaMu.Unlock()
 	if err != nil {
 		e.logf("kb: restoring project %s: %v", entry.Slug, err)
