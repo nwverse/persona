@@ -8,5 +8,5 @@ export function packageDownloads(downloads?: number): string | null {
 
 export function ExtensionDownloads({ downloads }: { downloads?: number }) {
   const text = packageDownloads(downloads);
-  return text === null ? null : <span data-extension-downloads title={t("settings-extensions.package_downloads_definition")} className="text-[11px] text-ink-3">{text}</span>;
+  return text === null ? null : <span data-extension-downloads title={t("settings-extensions.package_downloads_definition")} className="text-[length:var(--extension-meta-size)] text-ink-3">{text}</span>;
 }

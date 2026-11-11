@@ -101,7 +101,7 @@ class ExtensionPopularityShotsTest {
 
     private val timestamp = "2026-11-11T08:00:00Z"
     private val entries = listOf(
-        CatalogExtension("official", id = "popular", name = "Zeta notes", version = "1.0.0", description = "Keep your notes together",
+        CatalogExtension("official", id = "popular", name = "GitHub", version = "1.0.0", description = "Repository activity",
             iconUrl = "https://extensions.example.com/notes.png", downloads = 20, downloadsUpdatedAt = timestamp),
         CatalogExtension("official", id = "lower", name = "Alpha tools", version = "1.0.0", description = "A logo that cannot load",
             iconUrl = "https://extensions.example.com/missing.png", downloads = 10),
@@ -183,7 +183,7 @@ class ExtensionPopularityShotsTest {
         }
         for (p in Page.entries) for (s in AppStyle.entries) {
             var defaultLight: IntArray? = null
-            for (scale in listOf(1f, 1.5f)) {
+            for (scale in listOf(1f, 2f)) {
                 var light: IntArray? = null
                 for (d in listOf(false, true)) {
                     rule.runOnIdle { page = p; style = s; dark = d; fontScale = scale }
@@ -196,6 +196,25 @@ class ExtensionPopularityShotsTest {
                     } else assertFalse("Light and dark must differ", pixels.contentEquals(light!!))
                 }
             }
+        }
+    }
+
+    /** Primary market evidence pairs the real public logo with its brand; metadata and counts remain a synthetic fixture. */
+    @Test fun marketBrandMatchesCatalogLogoInEveryStyle() {
+        org.junit.Assume.assumeTrue("An actual catalog PNG was supplied for brand evidence", realLogo != null)
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+                Box(Modifier.testTag("shot").fillMaxSize().background(PersonaTheme.palette.background)) { ExtensionMarketPage(api, {}, {}, {}) }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            rule.runOnIdle { style = s; dark = d }
+            ready(Page.Market)
+            assertTrue(rule.onAllNodesWithText("GitHub").fetchSemanticsNodes().isNotEmpty())
+            assertTrue(rule.onAllNodesWithText("Repository activity", substring = true).fetchSemanticsNodes().isNotEmpty())
+            capture("brand-market-${s.key}-${if (d) "dark" else "light"}-default")
         }
     }
 
