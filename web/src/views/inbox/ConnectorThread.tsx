@@ -20,7 +20,6 @@ import { ImageViewer } from "../chat/ImageViewer";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Monogram } from "./InboxParts";
 import { LarkInboxContent } from "./LarkInboxContent";
-import { larkInboxCard } from "../../lib/lark-inbox-card";
 import { ConnectorReadNotice, ConnectorReplyTarget, conversationFailure, type ConversationFailure } from "./ConnectorReadNotice";
 
 /** A link the system handles (sms:, tg://) goes to it; a web page opens in a tab. */
@@ -378,7 +377,8 @@ function Bubble({ id, m, head, group, lit, onQuote, onReply }: {
 }) {
   if (m.event) return <p data-mid={m.id} className="px-2 py-2 text-center text-[11.5px] text-ink-3">{m.text || t("inbox-connectorthread.message_unavailable")}</p>;
   const mine = !!m.mine;
-  const larkCard = id === "larkcli" && !!larkInboxCard(m.text || "");
+  // The content component validates the full envelope once; layout only needs a candidate check.
+  const larkCard = id === "larkcli" && /^\s*<card(?:\s|>)/.test(m.text || "");
   const pictures = (m.media ?? []).filter((x) => (x.kind === "image" || x.kind === "sticker" || x.kind === "video") && (x.ref || x.thumb));
   const others = (m.media ?? []).filter((x) => !pictures.includes(x));
   const bare = !m.text && !m.reply_to && !others.length; // only pictures: no bubble around them

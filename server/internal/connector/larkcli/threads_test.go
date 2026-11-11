@@ -102,3 +102,19 @@ func TestConversationContentPreservesCardAndUnknownJSON(t *testing.T) {
 		t.Fatal("lost read error")
 	}
 }
+
+func TestConversationTimeAcceptsCLIWallTimeInItsProcessZone(t *testing.T) {
+	previous := time.Local
+	time.Local = time.FixedZone("Example offset", 8*60*60)
+	t.Cleanup(func() { time.Local = previous })
+	for _, value := range []string{"2030-01-01 12:34", "2030-01-01 12:34:56"} {
+		got := conversationTime(value)
+		_, offset := got.Zone()
+		if got.Year() != 2030 || got.Hour() != 12 || got.Minute() != 34 || offset != 8*60*60 {
+			t.Fatalf("wall time = %s", got)
+		}
+	}
+	if got := conversationTime("2030-01-01T12:34:56-05:00"); got.Hour() != 12 {
+		t.Fatalf("explicit offset changed: %s", got)
+	}
+}

@@ -129,10 +129,12 @@ export async function sentBytes(dir: string, files: string[]): Promise<number> {
  * import beyond the first screen), in bytes as gzipBytes counts them (vite.config.ts startupPreload fails the build past
  * it): 29,143 B at #2798 plus 3% (28,085 B at #2880; #2798 moved ModelIdField, which the model popover now shares with
  * the idle ModelPicker, out of the first screen into a chunk of its own), and 64 B for managing launchers from the
- * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter). Every other lazy
+ * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter), plus 16 B for
+ * changed shared-chunk hash references with #856 (no new idle modules or executable code; measured 6 B over).
+ * Every other lazy
  * page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 30_081;
+export const IDLE_TIER_BUDGET = 30_097;
 
 const gzip = promisify(gzipCompress);
 

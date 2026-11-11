@@ -102,6 +102,13 @@ func conversationTime(value string) time.Time {
 	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return t
 	}
+	// CLI 1.0.99's common.FormatTime emits local wall time without an offset.
+	// Keep the CLI process's local zone; interpreting it as UTC shifts the chat.
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return t
+		}
+	}
 	n, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || n <= 0 {
 		return time.Time{}
