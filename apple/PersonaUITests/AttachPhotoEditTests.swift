@@ -52,6 +52,8 @@ final class AttachPhotoEditTests: XCTestCase {
             XCTAssertTrue(canvas.waitForNonExistence(timeout: 5), "Cancel closes the editor")
             XCTAssertTrue(pickedCells(app).isEmpty, "Cancel picks nothing (\(scheme))")
             XCTAssertFalse(app.descendants(matching: .any)["attach-caption"].exists, "and the tabs stay: no caption bar")
+            settle()
+            assertPanelLooks(scheme, app)
             app.buttons["attach-close"].firstMatch.tap()
             app.terminate()
         }
@@ -83,6 +85,7 @@ final class AttachPhotoEditTests: XCTestCase {
 
             let caption = app.descendants(matching: .any)["image-edit-caption"].firstMatch
             caption.tap()
+            clear(caption) // the draft outlives the app: an earlier run's caption may be in it
             caption.typeText("看这里")
             app.buttons["image-edit-done"].tap()
             XCTAssertTrue(canvas.waitForNonExistence(timeout: 10), "Select closes the editor")
@@ -92,6 +95,7 @@ final class AttachPhotoEditTests: XCTestCase {
             let panelCaption = app.descendants(matching: .any)["attach-caption"].firstMatch
             XCTAssertTrue(panelCaption.waitForExistence(timeout: 5), "picked: the caption bar shows")
             XCTAssertTrue((panelCaption.value as? String ?? "").contains("看这里"), "the caption typed in the editor is the panel's: \(panelCaption.value ?? "")")
+            assertPanelLooks(scheme, app)
             shot(app, "attach-edit-picked-\(scheme)")
 
             cell.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.6)).tap()
@@ -115,6 +119,13 @@ final class AttachPhotoEditTests: XCTestCase {
             settle()
             shot(app, "attach-edit-strip-editor-\(scheme)")
             app.buttons["image-edit-cancel"].tap()
+            XCTAssertTrue(canvas.waitForNonExistence(timeout: 5))
+            // The caption is the chat's draft, which outlives the app: empty it for the next run.
+            let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+            if field.waitForExistence(timeout: 5) {
+                field.tap()
+                clear(field)
+            }
             app.terminate() // the composer's photos live in memory: the next run starts with none
         }
     }
@@ -152,6 +163,41 @@ final class AttachPhotoEditTests: XCTestCase {
         app.buttons["attach-tab-photos"].firstMatch.tap() // the tab shown: opens the panel all the way
         settle()
         return app
+    }
+
+    /// The panel's header is drawn in `scheme`: the editor's own dark look didn't stay on the panel it was opened from.
+    @MainActor private func assertPanelLooks(_ scheme: String, _ app: XCUIApplication, line: UInt = #line) {
+        let close = app.buttons["attach-close"].firstMatch.frame
+        guard let light = brightness(at: CGPoint(x: close.maxX + 24, y: close.midY)) else {
+            return XCTFail("no screenshot to read the panel's color from", line: line)
+        }
+        if scheme == "dark" {
+            XCTAssertLessThan(light, 0.35, "the panel's header is dark in dark mode (\(light))", line: line)
+        } else {
+            XCTAssertGreaterThan(light, 0.75, "the panel's header is light in light mode, not left dark by the editor (\(light))", line: line)
+        }
+    }
+
+    /// How bright the screen is at `point` (points), 0 to 1.
+    @MainActor private func brightness(at point: CGPoint) -> CGFloat? {
+        let image = XCUIScreen.main.screenshot().image
+        guard let cg = image.cgImage, image.size.width > 0 else { return nil }
+        let k = CGFloat(cg.width) / image.size.width
+        guard let pixel = cg.cropping(to: CGRect(x: Int(point.x * k), y: Int(point.y * k), width: 1, height: 1)) else { return nil }
+        var rgba = [UInt8](repeating: 0, count: 4)
+        rgba.withUnsafeMutableBytes { buffer in
+            let ctx = CGContext(data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            ctx?.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        return (CGFloat(rgba[0]) + CGFloat(rgba[1]) + CGFloat(rgba[2])) / (3 * 255)
+    }
+
+    /// Deletes what a text field holds (its placeholder reads as its value when it is empty).
+    @MainActor private func clear(_ field: XCUIElement) {
+        let value = field.value as? String ?? ""
+        guard !value.isEmpty, value != field.placeholderValue else { return }
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count + 2))
     }
 
     @MainActor private func pickedCells(_ app: XCUIApplication) -> [XCUIElement] {

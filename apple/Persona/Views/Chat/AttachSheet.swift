@@ -800,7 +800,7 @@ private struct AttachPhotoEditor: View {
                 .toolbarBackground(.black, for: .navigationBar)
                 .toolbarColorScheme(.dark, for: .navigationBar)
             }
-            .preferredColorScheme(.dark)
+            .environment(\.colorScheme, .dark) // as the editor's: never `preferredColorScheme`, which reaches the panel
             .task {
                 if let picture = await AttachLibrary.editable(asset) {
                     source = picture

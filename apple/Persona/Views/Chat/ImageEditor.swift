@@ -66,22 +66,26 @@ struct ImageEditor: View {
             .navigationTitle("Edit Image")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.black, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .accessibilityIdentifier("image-edit-cancel")
                 }
-                // Undo and Redo up top, as Photos has them: the tools' rows below stay one line on the smallest iPhone.
-                ToolbarItemGroup(placement: .principal) {
-                    Button(action: undo) { ThemedIcon(Theme.Icon.undo) }
-                        .disabled(!history.canUndo || finishing)
-                        .accessibilityLabel("Undo")
-                        .accessibilityIdentifier("image-edit-undo")
-                    Button(action: redo) { ThemedIcon(Theme.Icon.redo) }
-                        .disabled(!history.canRedo || finishing)
-                        .accessibilityLabel("Redo")
-                        .accessibilityIdentifier("image-edit-redo")
+                // Undo and Redo up top, as Photos has them: the tools' rows below stay one line on the smallest iPhone. One
+                // item: the bar's middle shows only the first of a group.
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: Theme.Space.s) {
+                        Button(action: undo) { ThemedIcon(Theme.Icon.undo).tapTargetFrame() }
+                            .disabled(!history.canUndo || finishing)
+                            .accessibilityLabel("Undo")
+                            .accessibilityIdentifier("image-edit-undo")
+                        Button(action: redo) { ThemedIcon(Theme.Icon.redo).tapTargetFrame() }
+                            .disabled(!history.canRedo || finishing)
+                            .accessibilityLabel("Redo")
+                            .accessibilityIdentifier("image-edit-redo")
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(doneTitle) { finish(sending: false) }
@@ -92,7 +96,9 @@ struct ImageEditor: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        // Dark whatever the appearance, as the image viewer. Through the environment, not `preferredColorScheme`: that
+        // reaches past this cover to the one it was presented from (the + panel stayed dark after the editor closed).
+        .environment(\.colorScheme, .dark)
         .task {
             guard pixels == nil else { return }
             pixels = await ImageEditWork.pixels(start.source)
@@ -355,49 +361,64 @@ struct ImageEditor: View {
     }
 
     /// What the tool shown can change: the ink and the width for Box and Pen, the turn, the shape and Reset for Crop. At
-    /// large text sizes it scrolls rather than wrapping.
+    /// large text sizes Crop's buttons drop their words and the inks scroll, the width staying in sight; nothing wraps.
     @ViewBuilder private var options: some View {
-        ViewThatFits(in: .horizontal) {
-            optionRow
-            ScrollView(.horizontal, showsIndicators: false) { optionRow }
-        }
-    }
-
-    @ViewBuilder private var optionRow: some View {
         if tool == .crop {
-            HStack(spacing: Theme.Space.s) {
-                Button(action: turnLeft) {
-                    Label { Text("Rotate").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.rotateLeft) }
-                        .font(Theme.Font.secondaryStrong)
-                }
-                .themedButton()
-                .accessibilityIdentifier("image-edit-rotate")
-                shapeMenu
-                Spacer(minLength: 0)
-                Button { change { $0.resetFrame() } } label: {
-                    Text("Reset [Image Editor 4b1e7c]").lineLimit(1).font(Theme.Font.secondaryStrong)
-                }
-                .themedButton()
-                .disabled(edits.isFramedAsIs)
-                .accessibilityIdentifier("image-edit-reset")
+            ViewThatFits(in: .horizontal) {
+                cropRow(labeled: true)
+                cropRow(labeled: false)
+                ScrollView(.horizontal, showsIndicators: false) { cropRow(labeled: false) }
             }
         } else {
-            HStack(spacing: Theme.Space.flush) {
-                ForEach(Theme.ImageEdit.inks.indices, id: \.self) { i in
-                    Button { ink = i } label: {
-                        Circle().fill(Color(cgColor: ImageMark.color(i)))
-                            .scaledFrame(width: Theme.Size.iconL, height: Theme.Size.iconL)
-                            .overlay(Circle().stroke(.white, lineWidth: ink == i ? Theme.ImageEdit.swatchRing : Theme.ImageEdit.swatchRingIdle)
-                                .opacity(ink == i ? 1 : Theme.ImageEdit.swatchRingIdleOpacity))
-                            .tapTargetFrame()
-                            .contentShape(.circle)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Self.inkName(i))
-                    .accessibilityAddTraits(ink == i ? .isSelected : [])
+            HStack(spacing: Theme.Space.s) {
+                ViewThatFits(in: .horizontal) {
+                    swatches
+                    ScrollView(.horizontal, showsIndicators: false) { swatches }
                 }
                 widthMenu
                 Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func cropRow(labeled: Bool) -> some View {
+        HStack(spacing: Theme.Space.s) {
+            Button(action: turnLeft) {
+                if labeled {
+                    Label { Text("Rotate").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.rotateLeft) }
+                        .font(Theme.Font.secondaryStrong)
+                } else {
+                    ThemedIcon(Theme.Icon.rotateLeft).font(Theme.Font.secondaryStrong)
+                }
+            }
+            .themedButton()
+            .accessibilityLabel("Rotate")
+            .accessibilityIdentifier("image-edit-rotate")
+            shapeMenu(labeled: labeled)
+            Spacer(minLength: 0)
+            Button { change { $0.resetFrame() } } label: {
+                Text("Reset [Image Editor 4b1e7c]").lineLimit(1).font(Theme.Font.secondaryStrong)
+            }
+            .themedButton()
+            .disabled(edits.isFramedAsIs)
+            .accessibilityIdentifier("image-edit-reset")
+        }
+    }
+
+    private var swatches: some View {
+        HStack(spacing: Theme.Space.flush) {
+            ForEach(Theme.ImageEdit.inks.indices, id: \.self) { i in
+                Button { ink = i } label: {
+                    Circle().fill(Color(cgColor: ImageMark.color(i)))
+                        .scaledFrame(width: Theme.Size.iconL, height: Theme.Size.iconL)
+                        .overlay(Circle().stroke(.white, lineWidth: ink == i ? Theme.ImageEdit.swatchRing : Theme.ImageEdit.swatchRingIdle)
+                            .opacity(ink == i ? 1 : Theme.ImageEdit.swatchRingIdleOpacity))
+                        .tapTargetFrame()
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Self.inkName(i))
+                .accessibilityAddTraits(ink == i ? .isSelected : [])
             }
         }
     }
@@ -418,7 +439,7 @@ struct ImageEditor: View {
         .accessibilityIdentifier("image-edit-width")
     }
 
-    private var shapeMenu: some View {
+    private func shapeMenu(labeled: Bool) -> some View {
         Menu {
             Picker(selection: Binding(get: { edits.shape }, set: { s in change { $0.reshape(s, size: pixelSize) } })) {
                 ForEach(CropShape.allCases) { s in Text(Self.shapeName(s)).tag(s) }
@@ -427,8 +448,12 @@ struct ImageEditor: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Label { Text(Self.shapeName(edits.shape)).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.cropRatio) }
-                .font(Theme.Font.secondaryStrong)
+            if labeled {
+                Label { Text(Self.shapeName(edits.shape)).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.cropRatio) }
+                    .font(Theme.Font.secondaryStrong)
+            } else {
+                ThemedIcon(Theme.Icon.cropRatio).font(Theme.Font.secondaryStrong)
+            }
         }
         .themedButton()
         .accessibilityLabel("Aspect Ratio")
