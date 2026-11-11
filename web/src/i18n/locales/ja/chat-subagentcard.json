@@ -18,15 +18,5 @@
   "running_for": "実行時間 {duration}",
   "open_in_background": "バックグラウンドタスクで開く",
   "workflow_progress_line": "{phase} · {done}/{total} Agent",
-  "workflow_progress_count": "{done}/{total} Agent",
-  "fork": "フォーク",
-  "background": "バックグラウンド",
-  "ended": "終了",
-  "view_full": "全過程を表示",
-  "starting": "起動中…",
-  "steps_other": "{count} ステップ",
-  "agents_running_other": "サブエージェント {count} 件が実行中",
-  "agents_ran_other": "サブエージェント {count} 件を実行",
-  "agents_steps_other": "計 {count} ステップ",
-  "result": "結果"
+  "workflow_progress_count": "{done}/{total} Agent"
 }

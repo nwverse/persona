@@ -3,6 +3,7 @@
 
 import { formatDate, t } from "../i18n";
 import type { BackgroundTask, Item, LoopInfo, Subagent, TaskNote } from "./types";
+import type { Step } from "./turns";
 import type { AgentStatus } from "./work-groups";
 import { launchedTaskID } from "./task-association";
 export { attachedAgentNotices } from "./task-association";
@@ -376,6 +377,44 @@ export function nestedSubagents(all: Subagent[] | undefined, id: string): Subage
   for (let i = at + 1; i < rows.length && rows[i].depth > base; i++) out.push({ agent: rows[i].agent, depth: rows[i].depth - base - 1 });
   return out;
 }
+
+/** The id a nested subagent's card stands under among an exchange's steps (`withNestedSubagents`). */
+const NESTED = "subagent:";
+
+/** A card for a subagent another subagent launched: its call is in that subagent's transcript, not in the chat's. */
+export const isNestedSubagentStep = (s: Step): boolean => s.kind === "tool" && s.use.id.startsWith(NESTED);
+
+/** How a nested subagent is going: only the session's list knows (no call result of the chat's says it). */
+export const nestedSubagentStatus = (a: Subagent | undefined): AgentStatus => (a?.running ? "running" : "completed");
+
+/** An exchange's steps with the subagents its subagents launched (and theirs), each a card of its own (#5030, cindy:
+ *  no tree), among the steps by when it started: after the last step that started before it, never before the call
+ *  of the subagent it descends from. */
+export function withNestedSubagents(steps: Step[], all: Subagent[]): Step[] {
+  if (!all.length) return steps;
+  const out = [...steps];
+  const seen = new Set<string>();
+  for (const s of steps) {
+    if (s.kind !== "tool" || (s.use.tool_name !== "Agent" && s.use.tool_name !== "Task")) continue;
+    const root = subagentFor(all, s.use);
+    if (!root) continue;
+    for (const { agent: a } of nestedSubagents(all, root.id)) {
+      if (seen.has(a.id) || !a.tool_use_id) continue;
+      seen.add(a.id);
+      const from = out.findIndex((x) => x === s);
+      const at = Date.parse(a.started_at ?? "");
+      let i = from + 1;
+      while (i < out.length && (Date.parse(stepTs(out[i]) ?? "") || Infinity) <= at) i++;
+      const before = out[i - 1];
+      const seq = before.kind === "tool" ? before.use.seq : before.item.seq;
+      const use: Item = { id: `${NESTED}${a.id}`, seq, ts: a.started_at, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: a.tool_use_id, tool_input: { description: a.description ?? "", ...(a.type ? { subagent_type: a.type } : {}) } };
+      out.splice(i, 0, { kind: "tool", id: use.id, use, images: [] });
+    }
+  }
+  return seen.size ? out : steps;
+}
+
+const stepTs = (s: Step) => (s.kind === "tool" ? s.use.ts : s.item.ts);
 
 export interface SubagentRow {
   agent: Subagent;

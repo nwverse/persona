@@ -67,7 +67,11 @@ import { latestPlan, PlanPill, usePlanOutOfView } from "./PlanCard";
 import { publishPlan } from "../../lib/plan-store";
 import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { addFreshWords, resetFreshWords } from "./fresh-words";
-import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
+import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
+import { waitingOnSubagents } from "../../lib/background-work";
+import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
+import { openExpanded } from "./expanded";
+import { subagentCardKey } from "./SubagentCard";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
 import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, USER_INPUT_PAGE_SIZE } from "../../lib/user-input-index";
@@ -982,7 +986,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // of the turn's "Working…" clock going on. Other background work (a command, a Monitor, a subagent) leaves the turn as
   // it was. A message of yours on its way, or one it is answering, is a turn again.
   // The same for an agent that only waits on background commands (#6045): its turn is drawn finished.
-  const backgroundOnly = (waitingOnWorkflow(session) || Boolean(session && backgroundWaiting(session))) && !tr.streaming && !outgoing && !awaiting;
+  // The same for a background subagent still running after the turn ended (#5030, cindy's background subtasks).
+  const subtasks = !readOnly && waitingOnSubagents(session, subagents);
+  const backgroundOnly = (waitingOnWorkflow(session) || Boolean(session && backgroundWaiting(session)) || subtasks) && !tr.streaming && !outgoing && !awaiting;
   const lastLive = (readOnly ? Boolean(viewed?.running) : working && !backgroundOnly) && !tr.loading;
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain && !readOnly);
@@ -1131,6 +1137,18 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [mid, sid, follow, expandFold, landRow],
   );
   const jump = useCallback((call: string) => void jumpToCall(call), [jumpToCall]);
+  // A link to one of its subagents' conversations (#5030, lib/subagent-link.ts): that subagent's card in view, opened; a
+  // workflow agent's, its run's card. Once the chat and its subagents are in; a subagent no longer listed: just the chat.
+  const linkedAgent = useSubagentLink(mid, sid);
+  useEffect(() => {
+    if (!linkedAgent || !session || tr.loading || detail.loading) return;
+    doneSubagentLink(mid, sid);
+    const agent = subagents?.find((a) => a.id === linkedAgent);
+    const call = agent?.tool_use_id ?? workflowAgentFor(session, `${sid}@${linkedAgent}`)?.run.tool_use_id;
+    if (!call) return;
+    if (agent) openExpanded([subagentCardKey(`${mid}/${sid}:`, call)]);
+    jump(call);
+  }, [linkedAgent, session, tr.loading, detail.loading, subagents, mid, sid, jump]);
   // its workflow runs by the Workflow call that launched each (#3434): rebuilt only when a run starts or goes, not with
   // each push of a run's progress (the cards read that themselves), so the exchanges do not all render again
   const runs = session?.workflows;
@@ -1363,7 +1381,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => (readOnly ? null : backgroundLine(session)), [readOnly, session]);
   const wait = useMemo(() => (readOnly || outgoing || awaiting ? null : backgroundWaitLine(session)), [readOnly, outgoing, awaiting, session]);
-  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} startedAt={runStart} clock={barClock.current} agents={waitingOn} background={background} wait={wait} /> : null;
+  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} startedAt={runStart} clock={barClock.current} agents={waitingOn} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
   const queue =
     session && queued.length > 0 ? (
       <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn}

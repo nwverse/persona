@@ -8,8 +8,11 @@
 // "Background workflow · Verify · 169/185+", timed from the workflow's start (the turn's own time read as if the agent
 // were still at it). The count stays whole on a narrow screen: the words before it give way first. An agent whose
 // background commands only wait (#6045, `background_waiting`) gets a still line instead: what it waits on (the header
-// says the state, #3956), timed from when it started waiting, with no breath and no tokens. With the hub out of reach the
-// bar says so in front of the last state it knew, and its clock stands still (nothing new can have arrived).
+// says the state, #3956), timed from when it started waiting, with no breath and no tokens. A subagent still running in
+// the background after the turn (#5030, cindy's background subtasks) gets "Background subtasks running, still consuming
+// model usage…" with no time and no tokens (the turn's would be left over); cindy's "Stop all" waits for a node that can
+// stop a subagent. With the hub out of reach the bar says so in front of the last state it knew, and its clock stands
+// still (nothing new can have arrived).
 import { useEffect, useRef, useState } from "react";
 import { duration } from "../../lib/format";
 import { useSessionLive } from "../../lib/live";
@@ -53,11 +56,11 @@ export function statusText(live: SessionLive | null, agents?: AgentsWorking | nu
   return live.verb ? `${live.verb}…` : t("chat-runningstatusbar.running");
 }
 
-export function RunningStatusBar({ mid, sid, working, startedAt, clock, agents, background, wait }: { mid: string; sid: string; working: boolean; startedAt?: string; clock?: boolean; agents?: AgentsWorking | null; background?: BackgroundLine | null; wait?: WaitLine | null }) {
+export function RunningStatusBar({ mid, sid, working, startedAt, clock, agents, background, wait, subtasks }: { mid: string; sid: string; working: boolean; startedAt?: string; clock?: boolean; agents?: AgentsWorking | null; background?: BackgroundLine | null; wait?: WaitLine | null; subtasks?: boolean }) {
   const live = useSessionLive(mid, sid);
   const offline = useStore((s) => s.conn !== "online");
   if (wait && working) return <WaitingView wait={wait} offline={offline} />;
-  return <RunningStatusView live={live} working={working} startedAt={startedAt} clock={clock} agents={agents} background={background} offline={offline} />;
+  return <RunningStatusView live={live} working={working} startedAt={startedAt} clock={clock} agents={agents} background={background} subtasks={subtasks} offline={offline} />;
 }
 
 /** In front of the last state the bar knows, while the hub is out of reach. */
@@ -113,7 +116,7 @@ type Phase = "on" | "linger" | "fading" | "off";
 
 /** The bar for a given status line (RunningStatusBar subscribes; tests render this). `clock: false`: no time, the
  *  chat's live work line shows it. */
-export function RunningStatusView({ live, working, startedAt, clock = true, agents, background, offline }: { live: SessionLive | null; working: boolean; startedAt?: string; clock?: boolean; agents?: AgentsWorking | null; background?: BackgroundLine | null; offline?: boolean }) {
+export function RunningStatusView({ live, working, startedAt, clock = true, agents, background, subtasks, offline }: { live: SessionLive | null; working: boolean; startedAt?: string; clock?: boolean; agents?: AgentsWorking | null; background?: BackgroundLine | null; subtasks?: boolean; offline?: boolean }) {
   const phase = usePhase(working);
   // after the turn: what it last said, while it lingers and fades
   const last = useRef(live);
@@ -127,8 +130,12 @@ export function RunningStatusView({ live, working, startedAt, clock = true, agen
   if (working) hadClock.current = clock;
   const ownClock = working ? clock : hadClock.current;
   const behind = inBackground(bg, shown, ownClock, working ? agents : null);
+  const lastSubtasks = useRef(subtasks);
+  if (working) lastSubtasks.current = subtasks;
+  // the turn is over and background subagents run on: neither the turn's time nor its tokens say anything of them
+  const usage = !behind && Boolean(working ? subtasks : lastSubtasks.current);
   // The workflow has a clock of its own, which no work line shows (the hub says the turn is over: it is drawn finished)
-  const showClock = behind || ownClock;
+  const showClock = behind || (ownClock && !usage);
   const now = useNow(1000, phase === "on" && !offline);
   // from the run's start; a run that does not say when it started, from the turn's (not from when the bar appeared)
   const elapsed = useElapsed(behind ? null : shown, behind ? (bg.since ?? startedAt) : startedAt, now);
@@ -139,7 +146,7 @@ export function RunningStatusView({ live, working, startedAt, clock = true, agen
   return (
     <div
       data-running-status={phase}
-      data-running-background={behind ? "workflow" : undefined}
+      data-running-background={behind ? "workflow" : usage ? "subtasks" : undefined}
       className="flex select-none items-center justify-between gap-3 px-2 py-1.5 text-[13px] font-medium"
       style={{ opacity: phase === "fading" ? 0 : 1, transition: `opacity ${FADE_OUT_MS}ms ease-out` }}
     >
@@ -148,6 +155,10 @@ export function RunningStatusView({ live, working, startedAt, clock = true, agen
         {offline && <Disconnected />}
         {behind ? (
           <BackgroundWords line={bg} />
+        ) : usage ? (
+          <span className="truncate" data-running-verb>
+            {t("chat-runningstatusbar.background_subtasks")}
+          </span>
         ) : (
           <span className="truncate" data-running-verb>
             {statusText(shown, working ? agents : null)}
@@ -156,7 +167,7 @@ export function RunningStatusView({ live, working, startedAt, clock = true, agen
       </div>
       <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums">
         {showClock && <span data-running-elapsed>{duration(elapsed * 1000)}</span>}
-        {!behind && shown?.tokens_down !== undefined && (
+        {!behind && !usage && shown?.tokens_down !== undefined && (
           <>
             {showClock && <span aria-hidden>·</span>}
             <span data-running-tokens>↓ {tokenCount(tokens)} tokens</span>

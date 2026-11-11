@@ -18,15 +18,5 @@
   "running_for": "已运行 {duration}",
   "open_in_background": "在后台任务中打开",
   "workflow_progress_line": "{phase} · {done}/{total} Agent",
-  "workflow_progress_count": "{done}/{total} Agent",
-  "fork": "分叉",
-  "background": "后台",
-  "ended": "已结束",
-  "view_full": "查看完整过程",
-  "starting": "启动中…",
-  "steps_other": "{count} 步",
-  "agents_running_other": "{count} 个子 Agent 在运行",
-  "agents_ran_other": "跑了 {count} 个子 Agent",
-  "agents_steps_other": "共 {count} 步",
-  "result": "结果"
+  "workflow_progress_count": "{done}/{total} Agent"
 }

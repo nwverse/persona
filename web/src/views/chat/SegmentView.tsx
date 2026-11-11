@@ -2,7 +2,7 @@ import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayo
 import { clock } from "../../lib/format";
 import { stripCloseout } from "../../lib/closeout";
 import { getSession, getState } from "../../lib/store";
-import { agentStatus, subagentFor } from "../../lib/tasks";
+import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
 import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Context, type Segment, type UserMessage } from "../../lib/turns";
@@ -33,7 +33,7 @@ import { useFoldScroll } from "./fold-scroll";
 import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
-import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
+import { inTheOpen, WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 
@@ -271,17 +271,19 @@ export const SegmentView = memo(function SegmentView({
   offscreen?: (section: HTMLElement) => () => void;
 }) {
   const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment } = useChatContext();
-  const steps = useMemo(() => exchangeSteps(seg), [seg]);
+  // the subagents its subagents launched, each a card of its own by when it started (#5030); a trace shows the calls only
+  const steps = useMemo(() => (trace ? exchangeSteps(seg) : withNestedSubagents(exchangeSteps(seg), subagents)), [seg, trace, subagents]);
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {
-    const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live, s.use.tool_use_id ? tasks.notes.get(s.use.tool_use_id) : undefined);
+    const agent = (s: ToolStep) =>
+      isNestedSubagentStep(s) ? nestedSubagentStatus(subagentFor(subagents, s.use)) : agentStatus(s.result, subagentFor(subagents, s.use), live, s.use.tool_use_id ? tasks.notes.get(s.use.tool_use_id) : undefined);
     return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live };
   }, [mid, sid, scope, expandFold, subagents, tasks, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
   const identity = segmentIdentity(seg);
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
-    [steps, live, turnStart, streaming !== undefined, identity],
+    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity, inTheOpen: (s) => inTheOpen(s, p) }),
+    [steps, live, turnStart, streaming !== undefined, identity, p],
   );
   useCallSeeker(scope, nodes);
   // the pictures the agent looked at this turn, between its work and its last words

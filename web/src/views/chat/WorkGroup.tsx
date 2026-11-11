@@ -1,8 +1,7 @@
 // One folded execution summary while running or completed; manual expansion reveals its complete trace (#2602).
-import { lazy, memo, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useSessionLive } from "../../lib/live";
 import { useStore } from "../../lib/store";
-import { subagentFor } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
 import { groupTitle, nestedLineDefault, togglesLiveOverride, workLineOpen, workLineOpens, isAgentStep, isPlanStep, isRowStep, isWorkflowStep, planTodos, workDuration, type AgentStatus, type ToolStep, type WorkGroupNode, type WorkLineStyle, type WorkNode } from "../../lib/work-groups";
 import type { WorkflowCalls } from "../../lib/workflows";
@@ -10,7 +9,7 @@ import type { Step } from "../../lib/turns";
 import { Collapse, cx, Spinner, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ActionRow } from "./ActionRow";
-import { LiveClockContext, useChatContext } from "./chat-context";
+import { LiveClockContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { inOpenedFold, openFoldRange, useExpanded, useLiveOverride } from "./expanded";
 import { useReveal } from "./search-reveal";
@@ -18,12 +17,10 @@ import { nodeItemIds } from "../../lib/chat-search";
 import { PlanCard } from "./PlanCard";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
+import { SubagentCard } from "./SubagentCard";
 import { WorkflowCallCard } from "./WorkflowCard";
 import { ThinkingCard } from "./ThinkingCard";
 import { t } from "../../i18n";
-
-// This card is only mounted inside manually opened work; keep its report reader off the first screen.
-const SubagentCard = lazy(() => import("./SubagentCard").then((m) => ({ default: m.SubagentCard })));
 
 export interface WorkProps {
   mid: string;
@@ -49,6 +46,10 @@ export interface WorkProps {
 
 /** A Workflow call that draws its run's card (the hub lists the run); one that does not is the row it always was. */
 const workflowCard = (s: ToolStep, p: WorkProps) => isWorkflowStep(s) && Boolean(s.use.tool_use_id && p.workflowCalls?.known.has(s.use.tool_use_id));
+
+/** A step the work summary never folds (#5030, work-groups.ts `inTheOpen`): a running subagent's card, a workflow run's
+ *  card. An opened supervision trace draws every call as a row, in its summary. */
+export const inTheOpen = (s: Step, p: WorkProps): boolean => !p.trace && s.kind === "tool" && ((isAgentStep(s) && p.agentStatus(s) === "running") || workflowCard(s, p));
 
 /** A step drawn as an action row, sitting with the rows next to it. */
 const drawnAsRow = (s: Step, p: WorkProps): s is ToolStep => (p.trace && s.kind === "tool") || isRowStep(s) || (isWorkflowStep(s) && !workflowCard(s, p));
@@ -155,31 +156,22 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
   );
 });
 
-/** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments. `fade`: the
- *  agent's words among them that just came in fade in (fresh-words.ts); not inside a group. */
+/** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments; each subagent
+ *  is a card of its own, in the order it was launched (#5030: no grid). `fade`: the agent's words among them that just
+ *  came in fade in (fresh-words.ts); not inside a group. */
 export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean }) {
-  const runs: (WorkNode | ToolStep[] | AgentRun)[] = [];
+  const runs: (WorkNode | ToolStep[])[] = [];
   for (const n of nodes) {
     const last = runs[runs.length - 1];
     if (n.kind === "step" && drawnAsRow(n.step, p)) {
       if (Array.isArray(last)) last.push(n.step);
       else runs.push([n.step]);
-    } else if (n.kind === "step" && isAgentStep(n.step)) {
-      // subagents launched one after another (in parallel) sit together in one grid (#5602)
-      if (last && "agents" in last) last.agents.push(n.step as ToolStep);
-      else runs.push({ agents: [n.step as ToolStep] });
     } else runs.push(n);
   }
   return (
     <>
       {runs.map((run) =>
-        "agents" in run ? (
-          run.agents.length === 1 ? (
-            <StepView key={run.agents[0].id} step={run.agents[0]} p={p} live={live} fade={fade} />
-          ) : (
-            <AgentGrid key={run.agents[0].id} agents={run.agents} p={p} />
-          )
-        ) : Array.isArray(run) ? (
+        Array.isArray(run) ? (
           <div key={run[0].id} className="flex min-w-0 flex-col">
             {run.map((s) => (
               <ActionRow key={s.id} step={s} running={live && !s.result} mid={p.mid} sid={p.sid} trace={p.trace} />
@@ -192,35 +184,6 @@ export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: Work
         ),
       )}
     </>
-  );
-}
-
-interface AgentRun {
-  agents: ToolStep[];
-}
-
-/** Subagents launched together: "Running N agents" while any runs, "Ran N agents · M steps" after; their cards in a
- *  grid, two to a row where there is room, in the order they were launched. */
-function AgentGrid({ agents, p }: { agents: ToolStep[]; p: WorkProps }) {
-  const { subagents } = useChatContext();
-  const statuses = agents.map((a) => p.agentStatus(a));
-  const running = statuses.filter((s) => s === "running").length;
-  const steps = agents.reduce((n, a) => n + (subagentFor(subagents, a.use)?.steps ?? 0), 0);
-  const head = running
-    ? t("chat-subagentcard.agents_running", { count: running })
-    : [t("chat-subagentcard.agents_ran", { count: agents.length }), steps ? t("chat-subagentcard.agents_steps", { count: steps }) : ""].filter(Boolean).join(" · ");
-  return (
-    <div className="@container flex min-w-0 flex-col gap-1.5" data-subagent-grid={agents.length}>
-      <div className="flex items-center gap-1.5 text-[12px] leading-[1.333333] text-ink-2">
-        {running ? <Spinner size={11} /> : <Icon name="agent" size={12} />}
-        <span className="min-w-0 truncate">{head}</span>
-      </div>
-      <div className="grid min-w-0 grid-cols-1 gap-2 @[560px]:grid-cols-2">
-        {agents.map((a, i) => (
-          <SubagentCard key={a.id} step={a} status={statuses[i]} mid={p.mid} sid={p.sid} scope={p.scope} />
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -237,7 +200,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
   switch (step.kind) {
     case "tool":
       if (p.trace) return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} trace />;
-      if (isAgentStep(step)) return <Suspense fallback={null}><SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} /></Suspense>;
+      if (isAgentStep(step)) return <SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} />;
       if (isPlanStep(step)) return <PlanCard id={step.id} todos={planTodos(step)} live={live} mid={p.mid} sid={p.sid} />;
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;
