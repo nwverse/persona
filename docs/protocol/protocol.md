@@ -401,7 +401,7 @@ Approval IDs contain machine / instance / connection generation / thread / the o
 
 ultracode is independent of reasoning effort and adds no level to `EffortLevels`. It applies only to the current Claude process, defaults to off, and does not remember the last choice or change launcher settings or the user's default effort.
 This API is for ordinary Claude Code Agent sessions; Persona's headless assistant chats, including the main chat, do not support it. Client controls are tracked in web #3428, Android #3429 and Apple #3430.
-The assistant's `agent_start` and `task_plan` take `ultracode` per Agent and pass `true` on to `session.start` (#12), with the same refusals as below; a refused start does not count against the launcher's health. The web and iOS / Mac show and change it on plan cards and to-dos ([web.md](../web/web.md), "Claude Code ultracode"; [ios.md](../apple/ios.md), "Claude Code ultracode"); Android is still to come in #12.
+The assistant's `agent_start` and `task_plan` take `ultracode` per Agent and pass `true` on to `session.start` (#12). A start refused for it (`ultracode_unsupported` or `node_outdated` below: a Codex or other non-Claude launcher the tier or default picked, an older Claude Code, a node too old for it) goes again without it, once, since both refusals come before anything starts. `agent_start`'s answer gives the reason. A task keeps it in the stored plan task's why, and the hub log has it: no client draws a started plan's why. Once the start went through, the stored plan keeps ultracode off, so a retry starts too; a start that failed after all keeps asking, so a task moved to a computer that can have it gets it (#3596). A refused start does not count against the launcher's health. The web and iOS / Mac show and change it on plan cards and to-dos ([web.md](../web/web.md), "Claude Code ultracode"; [ios.md](../apple/ios.md), "Claude Code ultracode"); Android is still to come in #12.
 
 Optional Session fields:
 
@@ -615,10 +615,14 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "supervision":{"supervisor":"<main chat id>",
                 "done_when":["PR merged into master","Light / dark screenshots posted in the PR"],   // acceptance criteria, may be an empty array
                 "expect_minutes":30,                                    // estimated minutes, 0 / absent = not given
-                "state":"",       // "" in progress | pending_review awaiting review | rework being reworked | needs_user waiting for the user to decide | accepted accepted | cancelled cancelled
+                "state":"",       // "" in progress | pending_review awaiting review | rework being reworked | needs_user waiting for the user to decide | parked waiting on purpose until a time (#3804) | accepted accepted | cancelled cancelled
                                   // (for accepted / cancelled the to-do is done; after the user reopens it, it counts as in progress)
+                // only while state is parked (#3804, docs/assistant/todos.md "Parked tasks"; additive): what the task waits for in one sentence, until when (RFC 3339),
+                // what kind of thing it waits on (owner_priority | someone_else | external_event | date) and how many times in a row it was parked with no agent turn in between;
+                // a parked task is open and is not waiting on the user. Clients that do not know the state show the task as in progress
+                "parked":{"reason":"The design team has to pick the icon set first","until":"...","waiting_on":"someone_else","count":1},
                 "round":1,        // how many rework rounds, at most 2
-                "reviews":[{"at":"...","verdict":"accepted|rework|needs_user|cancelled","round":1,   // round only on rework; "by":"reviewer" on a rework the independent review started (#2173)
+                "reviews":[{"at":"...","verdict":"accepted|rework|needs_user|parked|cancelled","round":1,   // round only on rework; "by":"reviewer" on a rework the independent review started (#2173)
                             "checks":[{"criterion":"Light / dark screenshots posted in the PR","met":false,"evidence":"Only the light one"}],"note":"Add the dark screenshot"}],
                 // its agent's latest report to the supervisor (report_to_supervisor, #5112); absent until it reports, and after a hub restart until it reports again
                 "progress":{"kind":"progress|question|blocked|done","step":3,"steps":5,"text":"one line of what it said",   // step / steps absent = not said
@@ -3007,8 +3011,9 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 //         progress reports are not written here (only supervision.progress); clients that don't know it skip this entry. `later`: a question the Agent sent with urgent false (#6287): nobody was woken, it is in the briefing's "Can wait" queue (`docs/extensions/bots.md` ("Questions that can wait")); clients that don't know the field draw it as any question
 // notice: no ref; a one-line note the hub writes into the chat {"text":"…"} (already written in the hub's language); clients draw it as a centered line of small text, and clients that don't know it skip it.
 //         There's only one kind now: after scheduled tasks were skipped because the main chat wasn't set up, once ready, before the first run the main chat gets "Computers and models are set up; scheduled tasks are running again, this time 'Morning briefing'" (#4253)
-// review: ref is the to-do id; the supervisor did one acceptance review (#3124): {"title","verdict":"accepted|rework|needs_user|cancelled","round":1,"note":"…",
-//         "checks":[{"criterion","met","evidence"}]}; clients that don't know it skip this entry
+// review: ref is the to-do id; the supervisor did one acceptance review (#3124): {"title","verdict":"accepted|rework|needs_user|parked|cancelled","round":1,"note":"…",
+//         "checks":[{"criterion","met","evidence"}]}; a parked review (#3804) also has "until" (RFC 3339) and "waiting_on", and its note is what the task waits for
+//         when the review gave none; clients that don't know it skip this entry
 // message: ref is the Inbox entry id; the AI twin drafted a reply to a message related to the task:
 //         {"todo_id","source":"lark|mail|…","account","chat","sender","text":"original words (truncated)","draft":"the draft"}; sending goes through the Inbox send endpoint
 // today: ref is the user's date for that day; {"date":"2026-11-03","done":[{"id","title"}],"waiting":[{"id","title"}],"pending_review":[{"id","title"}],"working":2,
