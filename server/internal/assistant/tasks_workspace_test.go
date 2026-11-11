@@ -380,3 +380,104 @@ func TestTaskWorkspaceSettingsHTTPAndApproval(t *testing.T) {
 		t.Fatalf("saved preference did not affect dispatch: %+v, %v", task, err)
 	}
 }
+
+// herdrCoreService is a machine whose default engine cannot prepare a checkout (herdr-core), with /code/app already
+// written in by another task. The error is the node's text as it crosses the wire.
+func herdrCoreService(t *testing.T, supportsPrepare bool) (*Service, *fakeHub) {
+	t.Helper()
+	s, f := workspaceTaskService(t)
+	if !supportsPrepare {
+		f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) {
+			return nil, errors.New("unsupported: herdr-core cannot do this")
+		}
+	}
+	owner, err := s.createTodo(context.Background(), "Other writer", "", "other-chat", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(context.Background(), owner.ID, "box", "writer", owner.Title, "/code/app", ""); err != nil {
+		t.Fatal(err)
+	}
+	return s, f
+}
+
+func TestTaskWorkspaceInferredFallsBackToCwdWhenEngineCannotPrepare(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, f := herdrCoreService(t, false)
+		p := workspacePlan(t, s, "")
+		if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		saved, _ := s.loadPlan(context.Background(), p.ID)
+		task := saved.Tasks[0]
+		if task.Error != "" || len(f.starts) != 1 || f.starts[0]["cwd"] != "/code/app" {
+			t.Fatalf("inferred task did not start in its cwd: error=%q starts=%v", task.Error, f.starts)
+		}
+		if task.Workspace.Mode != workspaceNone || task.WorkspaceResolved == nil || !task.WorkspaceResolved.Shared ||
+			task.WorkspaceResolved.Path != "/code/app" || task.WorkspaceResolved.Created {
+			t.Fatalf("fallback not recorded as a shared cwd: workspace=%+v resolved=%+v", task.Workspace, task.WorkspaceResolved)
+		}
+		for _, call := range f.worktrees {
+			if call["method"] == DeviceWorktreeCreate {
+				t.Fatalf("created a checkout on an engine that cannot: %v", f.worktrees)
+			}
+		}
+	})
+}
+
+func TestTaskWorkspaceInferredPreferNewFallsBackToFreeCwd(t *testing.T) {
+	s, f := workspaceTaskService(t)
+	f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) {
+		return nil, errors.New("unsupported: herdr-core cannot do this")
+	}
+	setSettings(t, s, func(v *Settings) { v.TaskWorkspacePreference = preferNew })
+	task := PlanTask{Machine: "box", Cwd: "/code/app"}
+	if err := s.resolveTaskWorkspace(context.Background(), &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Workspace.Mode != workspaceExisting || task.Workspace.Existing != "/code/app" ||
+		task.WorkspaceResolved.Path != "/code/app" || task.WorkspaceResolved.Shared {
+		t.Fatalf("free cwd not reused: workspace=%+v resolved=%+v", task.Workspace, task.WorkspaceResolved)
+	}
+}
+
+func TestTaskWorkspaceExplicitNewStillFailsWhenEngineCannotPrepare(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, f := herdrCoreService(t, false)
+		args := `{"tasks":[{"title":"Fix login","prompt":"Fix login and add tests","machine":"box","cwd":"/code/app","permission":"bypassPermissions","workspace":"new"}]}`
+		_, err := s.toolTaskPlan(context.Background(), "workspace-chat", json.RawMessage(args))
+		reason := ""
+		if err != nil {
+			reason = err.Error()
+		} else {
+			p := readonlyFeedPlan(t, s, "workspace-chat")
+			if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
+				reason = err.Error()
+			}
+			synctest.Wait()
+			saved, _ := s.loadPlan(context.Background(), p.ID)
+			reason += saved.Tasks[0].Error
+		}
+		if len(f.starts) != 0 || !strings.Contains(reason, "unsupported: herdr-core cannot do this") {
+			t.Fatalf("explicit new did not refuse: reason=%q starts=%v", reason, f.starts)
+		}
+	})
+}
+
+func TestTaskWorkspaceInferredBusyStillCreatesWhenEngineCanPrepare(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, f := herdrCoreService(t, true)
+		p := workspacePlan(t, s, "")
+		if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		saved, _ := s.loadPlan(context.Background(), p.ID)
+		task := saved.Tasks[0]
+		if task.Workspace.Mode != workspaceNew || !task.WorkspaceResolved.Created || task.WorkspaceResolved.Shared ||
+			!strings.HasPrefix(task.WorkspaceResolved.Path, "/wt/app/") || len(f.starts) != 1 || f.starts[0]["cwd"] != task.WorkspaceResolved.Path {
+			t.Fatalf("supported engine lost its new checkout: workspace=%+v resolved=%+v starts=%v", task.Workspace, task.WorkspaceResolved, f.starts)
+		}
+	})
+}
