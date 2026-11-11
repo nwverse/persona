@@ -157,9 +157,10 @@ type Session struct {
 	// configuration › Main chat (the main conversation, a scheduled task's) or what the conversation runs. Set by the
 	// manager.
 	ModelPick *ModelPick `json:"model_pick,omitempty"`
-	// ArchiveChangedAt is the manager's last explicit archive/restore visibility change.
-	// The hub uses it only to order its legacy delete tombstones against that report.
-	ArchiveChangedAt time.Time `json:"archive_changed_at,omitzero"`
+	// ArchiveChangedAt is the manager's last explicit archive/restore visibility change; nil when there was none. The
+	// hub uses it only to order its legacy delete tombstones against that report. A pointer, not a time.Time: the 16
+	// bytes it saves keep Session in its size class (session_size_test.go).
+	ArchiveChangedAt *time.Time `json:"archive_changed_at,omitempty"`
 	// NativeArchive is whether the tool that owns an archived (or just restored) agent session has it the same way
 	// in its own archive (Codex's archived threads): only on GET /api/v1/sessions/archived rows, nil when the manager
 	// never asked the tool.

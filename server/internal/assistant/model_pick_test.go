@@ -269,7 +269,7 @@ func TestSendRefusesAPickThatCantRun(t *testing.T) {
 	// The default's launcher that can't run it still gives way to one that can (finishMainChatModel), as before.
 	s, _ := pickFixture(t)
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.codex-gw"})
-	if p, err := send(t, s, "main", map[string]any{}); err != nil || p["launcher"] != "claude" {
+	if p, err := send(t, s, "main", map[string]any{}); err != nil || p["launcher"] == "codex-gw" || p["launcher"] == nil {
 		t.Fatalf("default fallback: %v %v", p, err)
 	}
 }
@@ -446,4 +446,103 @@ func TestWarmTakesTheMainConversationsPick(t *testing.T) {
 	if p := warmed(); p == nil || p["launcher"] != "claude" {
 		t.Fatalf("named: %v", p)
 	}
+}
+
+// A new conversation takes a model with its first message, as a message does, and keeps what it was started with as
+// its pick: its later messages run on it. Nothing named, nothing kept; a launcher that is gone falls back as before,
+// with its model dropped and no pick kept.
+func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
+	start := func(t *testing.T, s *Service, body string) (int, map[string]any) {
+		t.Helper()
+		r := appRequest(t, s, "POST", "/api/v1/assistant/conversations", body, "en")
+		var out struct {
+			Session proto.Session `json:"session"`
+		}
+		_ = json.Unmarshal(r.Body.Bytes(), &out)
+		got := map[string]any{"body": r.Body.String(), "sid": out.Session.SessionID}
+		if out.Session.ModelPick != nil {
+			got["pick"] = *out.Session.ModelPick
+		}
+		return r.Code, got
+	}
+	t.Run("launcher, model and effort", func(t *testing.T) {
+		s, f := pickFixture(t)
+		code, got := start(t, s, `{"prompt":"hi","launcher":"cx","model":"vendor/typed-1","effort":"high"}`)
+		want := proto.ModelPick{Launcher: "cx", Model: "vendor/typed-1", Effort: "high"}
+		if code != 200 || got["pick"] != want {
+			t.Fatalf("%d %v", code, got)
+		}
+		if p := f.lastSend(t); p["launcher"] != "cx" || p["model"] != "vendor/typed-1" || p["effort"] != "high" {
+			t.Fatalf("first message: %v", p)
+		}
+		sid := got["sid"].(string)
+		f.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Launcher: "cx"})
+		if p, err := send(t, s, sid, map[string]any{}); err != nil || p["launcher"] != "cx" || p["model"] != "vendor/typed-1" || p["effort"] != "high" {
+			t.Fatalf("next message: %v %v", p, err)
+		}
+	})
+	t.Run("a model for the default launcher", func(t *testing.T) {
+		s, f := pickFixture(t)
+		code, got := start(t, s, `{"prompt":"hi","model":"m9"}`)
+		if want := (proto.ModelPick{Launcher: "gw", Model: "m9"}); code != 200 || got["pick"] != want {
+			t.Fatalf("%d %v", code, got)
+		}
+		if p := f.lastSend(t); p["launcher"] != "gw" || p["model"] != "m9" {
+			t.Fatalf("first message: %v", p)
+		}
+	})
+	t.Run("an older app's launcher alone", func(t *testing.T) {
+		s, _ := pickFixture(t)
+		if code, got := start(t, s, `{"prompt":"hi","launcher":"claude"}`); code != 200 || got["pick"] != (proto.ModelPick{Launcher: "claude"}) {
+			t.Fatalf("%d %v", code, got)
+		}
+	})
+	t.Run("the main conversation", func(t *testing.T) {
+		s, _ := pickFixture(t)
+		code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"cx"}`)
+		if code != 200 || got["pick"] != (proto.ModelPick{Launcher: "cx"}) {
+			t.Fatalf("%d %v", code, got)
+		}
+		if p, ok := s.modelPickOf(context.Background(), "server", got["sid"].(string)); !ok || p.Launcher != "cx" || !s.isMain(context.Background(), got["sid"].(string)) {
+			t.Fatalf("main pick: %+v %v", p, ok)
+		}
+	})
+	t.Run("nothing named", func(t *testing.T) {
+		s, _ := pickFixture(t)
+		if code, got := start(t, s, `{"prompt":"hi"}`); code != 200 || got["pick"] != nil {
+			t.Fatalf("%d %v", code, got)
+		}
+		if picks, _ := s.modelPicksSet(); len(picks) != 0 {
+			t.Fatalf("kept: %v", picks)
+		}
+	})
+	t.Run("a launcher that is gone", func(t *testing.T) {
+		s, f := pickFixture(t)
+		code, got := start(t, s, `{"prompt":"hi","launcher":"gone","model":"m9"}`)
+		if code != 200 || got["pick"] != nil {
+			t.Fatalf("%d %v", code, got)
+		}
+		if p := f.lastSend(t); p["launcher"] != "gw" || p["model"] != nil {
+			t.Fatalf("first message: %v", p)
+		}
+	})
+	t.Run("refused before anything starts", func(t *testing.T) {
+		s, f := pickFixture(t)
+		f.modelsLocked = map[string]string{"cx": "it passes --model itself"}
+		for body, words := range map[string]string{
+			`{"prompt":"hi","launcher":"claude","model":"-rf"}`: "-rf",
+			`{"prompt":"hi","launcher":"cx","model":"gpt-5"}`:   "sets its own model",
+		} {
+			code, got := start(t, s, body)
+			if code != 400 || !strings.Contains(got["body"].(string), words) {
+				t.Fatalf("%s: %d %v", body, code, got)
+			}
+		}
+		if len(f.sends) != 0 {
+			t.Fatalf("started: %v", f.sends)
+		}
+		if picks, _ := s.modelPicksSet(); len(picks) != 0 {
+			t.Fatalf("kept: %v", picks)
+		}
+	})
 }

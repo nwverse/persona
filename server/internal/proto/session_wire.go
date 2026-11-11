@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0xe278b57c3741422f
+const sessionWireLayout = 0x76ec4c462535710c
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout
 
@@ -126,8 +126,8 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	if s.ModelPick != nil {
 		w.value(`"model_pick":`, s.ModelPick)
 	}
-	if !s.ArchiveChangedAt.IsZero() {
-		w.time(`"archive_changed_at":`, s.ArchiveChangedAt)
+	if s.ArchiveChangedAt != nil {
+		w.time(`"archive_changed_at":`, *s.ArchiveChangedAt)
 	}
 	if s.NativeArchive != nil {
 		w.value(`"native_archive":`, s.NativeArchive)
