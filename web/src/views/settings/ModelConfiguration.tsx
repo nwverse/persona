@@ -172,7 +172,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   const chosen = data?.providers.find((v) => v.id === (draft.provider || p?.effective?.provider));
   const larkAgent = p?.id === "lark.agent";
   const writable = p && (["provider", "model", "effort"] as const).some((field) => supportsField(p, field));
-  const effortAllowed = p && supportsField(p, "effort") && (larkAgent || !(chosen?.kind === "api" && chosen.api !== "responses" && chosen.api !== "messages" && chosen.api !== ""));
+  const effortAllowed = p && supportsField(p, "effort") && (larkAgent || chosen?.kind !== "api" || chosen.api === "responses" || chosen.api === "messages" || !chosen.api);
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
   useEffect(() => {
     const refresh = refreshNext.current;
