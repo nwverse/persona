@@ -225,7 +225,7 @@ nonisolated enum RecordingAudioSpec {
 }
 
 nonisolated enum RecordingFormat {
-    /// A meeting's span in the date style of the recording page's header ("1月15日 17:00–18:00"): the end's time alone on
+    /// A meeting's span in the date style of the recording page's header ("Jan 15, 17:00–18:00"): the end's time alone on
     /// the same day, its date too on another (#4875).
     static func span(_ start: Date, _ end: Date, locale: Locale = .autoupdatingCurrent, timeZone: TimeZone = .autoupdatingCurrent) -> String {
         var style = Date.IntervalFormatStyle.interval.month().day().hour().minute()
