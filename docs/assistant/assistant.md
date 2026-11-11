@@ -777,6 +777,54 @@ the way quiet supervision rounds already were (#1988, `docs/assistant/unified-en
   Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
   notify or push is unchanged.
 
+## Availability metrics (#4924)
+
+Step M1 of `docs/design/proposals/main-chat-availability.md`: four numbers that say whether the main chat stays
+available to the owner while background work grows. They are measured for every assistant conversation and read with
+`GET /api/v1/assistant/availability?hours=168` (full devices only, `docs/protocol/protocol.md`); nothing shows them in
+an app or a briefing yet. Each number in one sentence:
+
+- **Reply wait** (`reply_wait`): the seconds from the manager taking the owner's message for a conversation to the
+  first reply text after it, split by what the conversation was doing when the message came (`idle`, on a round the
+  owner started `owner_round`, on a round they did not `background_round`).
+- **Background share** (`background_share`): per day and conversation, the round time and the number of rounds by
+  what started the round (`owner`, `supervision`, `followup`, `patrol`, `conversation`, `notice`, `other`), and the
+  share of that time the owner did not start.
+- **Queue wait** (`queue_wait`): for each system message queued behind a conversation's turn, the seconds from
+  queueing to delivery and the queue's length when it was added, by kind, plus what is queued right now.
+- **Ask outcome** (`ask_outcome`): per card kind, how many cards each of the owner, a supervisor, the delegate, a
+  standing authorization or the default at a decision's deadline answered, and after how many seconds.
+
+How they are recorded (`server/internal/assistant/availability.go`): each is a row in `session_work_events`, kept 30
+days as the triage statistics are, with no new table, no model call and no transcript read. One row per answered
+owner message (`reply_wait`), per ended round (`round`), per delivered queued message (`queue_wait`) and per ended
+card (`ask_outcome`); the read joins `ask_outcome` with the `delegate_start` and `standing_authorized` events that
+already existed and with the task cards of the acceptance book.
+
+What the numbers do and do not say:
+
+- **Reply text** is the first change of the conversation's last text in its node's session list once nothing of the
+  owner's is still queued behind the turn, so it is about a second coarse and is the first written text block, not the
+  first streamed token. A reply the list never showed changing counts when its round ends, and a message with no reply
+  within 30 minutes is recorded `unanswered` at that bound. Several messages sent before a reply count as one wait,
+  from the first. The first message of a new conversation is not measured.
+- **Rounds**: the manager names a round after the last input it sent or accepted before the round started. `notice`
+  is a task notice, a late `ask_user` answer or a spawned conversation's report; `other` is a round whose input the
+  manager did not see (a new conversation's first message, a background task reporting back, a round under way when
+  the manager restarted, which also reads `unknown_round` for a wait). A message taken into a running round
+  (interjecting) does not start a round of its own. A recorded meeting's batches are side exchanges and are not rounds.
+- **Queue wait** counts delivered messages only: a notice dropped because its card was answered meanwhile is not a
+  wait. A supervision message or notice that replaces a queued one keeps the first one's queueing time.
+- **Ask outcome**: `dismissed` is a card that ended without an answer; `remembered` an "Always allow in this session"
+  kept earlier. An answer the assistant gave counts as the `delegate`'s when the delegate had taken the card up
+  (`delegate_start`), as a `standing_authorization`'s when one answered it, else as a `supervisor`'s (a conversation's
+  `interaction_answer`). Cards that expire unanswered are not counted, and the task cards (`decision`, `conclusion`, `verify`)
+  are those the acceptance book still holds, so a card whose task was closed or asked again has left the count.
+- Rounds and waits under way are in the manager's memory: a manager restart loses those, not the recorded rows.
+
+The route is a separate one because the north-star read of #4601 is not on `main`; its four top-level fields are
+named so that they can be served from that read unchanged once it is.
+
 ## Chat titles
 
 Requested: "Generate titles after starting new chats; standardize as ‘MMDD | Type | Topic’." Implemented as follows:
