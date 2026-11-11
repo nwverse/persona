@@ -254,6 +254,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 ```
 
 - **Create a new simulator**, not one paired to a real hub: App disk caches (chats/Inbox) can leak real data into screenshots.
+- **A system alert over every screenshot** ("Persona Would Like to Send You Notifications", #5089): a notification request the App made earlier on that simulator and nobody answered (a test run, `-showTestNotification`) stays pending, and the alert comes back on every later launch, reinstalled or not, even one that asks for nothing (`-pairURL` already skips the App's own push request, `PushRegistrar`). Only a reboot clears it: `scripts/app/sim-boot.sh --reslim "<name>"` on your own simulator. The slim profile is not the cause (the same build shows no alert on a freshly slimmed boot). If a system alert still covers the screenshots, take them on `--profile stock`.
 - Mock item ids are fixed; after changing mock data or ids, uninstall/reinstall the App or old caches merge with new data and duplicate steps.
 - Agent chat work is collapsed to one line by default; `-openAllWork YES` expands it. `-tab` has no chat tab and stays on the last tab:
   uninstall/reinstall to photograph the chat tab (the fresh-install default).
