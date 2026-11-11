@@ -96,6 +96,9 @@ nonisolated enum ServerEvent: Sendable {
     case meetingLive(recordingID: String, changed: [String], revs: [String: Int64])
     case error(SessionKey?, String)
 
+    private struct EventType: Decodable { var type: String }
+    private static let subscriptionType = Data(#""type":"subscription""#.utf8)
+
     private struct Envelope: Decodable {
         var type: String
         var machineID: String?
@@ -218,6 +221,12 @@ nonisolated enum ServerEvent: Sendable {
     }
 
     static func decode(_ data: Data) -> ServerEvent? {
+        // A source subscription was saved, ran or was deleted (#2041): its pages are drawn again, as an invalidate of theirs.
+        // Read before the envelope, whose `revision` is a string where this event's is a number; the hub's compact JSON is
+        // looked for first, so every other message skips the extra decode.
+        if data.range(of: subscriptionType) != nil, (try? JSON.decoder.decode(EventType.self, from: data))?.type == "subscription" {
+            return .extensionInvalidate(extension: SubscriptionsUI.id, id: nil)
+        }
         guard let e = try? JSON.decoder.decode(Envelope.self, from: data) else { return nil }
         let key = e.machineID.flatMap { m in e.sessionID.map { SessionKey(machineID: m, sessionID: $0) } }
         switch e.type {

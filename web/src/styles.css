@@ -83,6 +83,9 @@
   --mark-green: #34c759;
   --mark-blue: #007aff;
   --mark-white: #fff;
+  /* Public package artwork may contain a transparent black mark: keep its backing light in both schemes. */
+  --extension-logo-backing: var(--mark-white);
+  --extension-meta-size: 11px;
   --mark-black: #000;
   --shadow-hairline: 0 0 0 1px var(--line);
   --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px #1018280d;
@@ -317,6 +320,21 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 @layer base { * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
 /* A row that scrolls sideways without a bar (still by wheel, trackpad and touch); WebKit before 18.2 needs the pseudo. */
 @utility scrollbar-none { scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
+/* Conversation chrome: retain the native hit strip and drag behavior, with no opaque track or layout shift.
+   Only enhanced browsers fade the thumb; forced colors and unsupported browsers keep the native bar. */
+:root { --chat-scrollbar-fade: 220ms; }
+@media (forced-colors: none) {
+  [data-chat-scroll][data-chat-scrollbar="native"] {
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color var(--chat-scrollbar-fade) ease-out;
+  }
+  [data-chat-scroll][data-scrollbar-visible="true"] { scrollbar-color: var(--ink-3) transparent; }
+}
+/* The navigator's measured clearance grows only where the centered column's existing margin is insufficient. */
+[data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 5), var(--chat-nav-clearance, 0px)); }
+@media (min-width: 640px) {
+  [data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 8), var(--chat-nav-clearance, 0px)); }
+}
 button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
 /* Blue bubbles need stronger muted text in dark mode and a readable focus indicator in both schemes.
    Keep this local: page text and extension accent colors are unchanged. */
@@ -417,6 +435,27 @@ button:disabled { cursor: default; }
 .dark { --mode-plans: #4fd1c5; }
 :root { --mode-plans-tint: color-mix(in srgb, var(--mode-plans) 12%, transparent); --mode-acts-tint: color-mix(in srgb, var(--mode-acts) 12%, transparent); --mode-allows-tint: color-mix(in srgb, var(--mode-allows) 12%, transparent); }
 @theme inline { --color-mode-plans: var(--mode-plans); --color-mode-acts: var(--mode-acts); --color-mode-allows: var(--mode-allows); --color-mode-plans-tint: var(--mode-plans-tint); --color-mode-acts-tint: var(--mode-acts-tint); --color-mode-allows-tint: var(--mode-allows-tint); }
+
+/* The unified model panel (#5032, after Cindy's model selector; ui/model-panel). An effort level's color says how
+ * strong the level is, not how light the page is, so it is the same in light and dark, taken by the level itself
+ * (lib/model-panel.ts effortColor): a model whose top is High ends blue, and purple is only the true top (Codex's Ultra
+ * takes Max's). Fast's blue shows only in the setup flyout (rows and the pill draw Fast in their own ink); the star
+ * turns gold under the pointer and once saved. The panel opens out of the pill (--model-panel-morph, the design system's
+ * ease) and its content fades in after it; its rows' hover glides between them. */
+:root {
+  --effort-minimal: #2aae5b; --effort-low: #2aae5b; --effort-medium: #14b8a6; --effort-high: #3b82f6; --effort-xhigh: #4f46e5; --effort-max: #8b5cf6;
+  --fast: #3b9eff; --fast-tint: color-mix(in srgb, var(--fast) 16%, transparent);
+  --favorite-star: #d99a06;
+  --model-panel-morph: 220ms; --model-panel-fade: 140ms; --model-panel-fade-delay: 50ms; --model-panel-glide: 80ms; --model-panel-ease: var(--ease-out-strong);
+  --effort-move: 200ms; --effort-resize: 150ms; --effort-ease: var(--ease-link);
+}
+.dark { --favorite-star: #e8b425; }
+@theme inline { --color-fast: var(--fast); --color-fast-tint: var(--fast-tint); --color-favorite-star: var(--favorite-star); }
+/* From the pill's shape (--model-panel-from, set where it opens) to the panel; the clip ends past the panel's edges so
+   its shadow is whole, and goes when the animation does. */
+@keyframes model-panel-morph{0%{clip-path:var(--model-panel-from);transform:translateY(var(--model-panel-shift,0px))}to{clip-path:inset(-32px round 44px);transform:none}}
+@keyframes model-panel-content{0%{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce) { :root { --model-panel-fade-delay: 0ms; } }
 
 /* ── Phones (#1996) ─────────────────────────────────────── */
 /* The chat's reading sizes: 15 / 14 on wide screens, 16 / 15 on a phone (the user's call: iOS reads at 17, but tool rows

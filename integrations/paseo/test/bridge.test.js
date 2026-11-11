@@ -45,7 +45,7 @@ async function setup(t, o = {}) {
   const logs = []
   const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, log: (m) => logs.push(m) })
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
-    { socketPath: node.path, mcpConfig: o.mcpConfig, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500,
+    { socketPath: node.path, mcpConfig: o.mcpConfig, allowTools: o.allowTools, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500,
       listMax: o.listMax, pageSize: o.pageSize, closedChecks: o.closedChecks, sweepMs: o.sweepMs ?? 0 })
   bridge.start()
   t.after(() => bridge.stop())
@@ -645,6 +645,109 @@ test('agents archived while the bridge was away are read a page at a time, newes
   assert.ok(pages.every((r) => r.sort?.[0]?.key === 'updated_at' && r.sort[0].direction === 'desc'))
 })
 
+test('a session Persona started keeps its id once archived: a row not running, its transcript the content; a message takes the agent back under that id (#4771)', async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  const pushed = () => node.last('runtime.sessions')
+  const row = () => rows().find((r) => r.session_id === 'paseo-e1')
+  await until('the archive read', () => pushed().unlisted_transcripts)
+  await call(node, 'session.close', { session_id: 'paseo-e1' })
+  assert.equal(fake.requestsOf('archive_agent_request').at(-1).agentId, a.labeled.id)
+  await until('not running', () => row()?.status === 'offline')
+  assert.deepEqual([row().transcript, row().title, row().space_id, row().slot_name, row().agent, row().launcher],
+    [SID2, 'E', 'prj_1', '主线', 'claude', 'my-claude'], 'the same row in the same place, its transcript the conversation')
+  assert.equal(rows().some((r) => r.session_id === SID2), false, "no row under its transcript's id")
+  assert.equal(pushed().unlisted_transcripts.includes(SID2), false, 'nor is its transcript named: the row names it')
+  // Archived already: nothing runs, its modes stay as they are, and closing it again closes nothing more.
+  const n = (type) => fake.requestsOf(type).length
+  const before = [n('cancel_agent_request'), n('archive_agent_request')]
+  await call(node, 'session.interrupt', { session_id: 'paseo-e1' })
+  await call(node, 'session.close', { session_id: 'paseo-e1' })
+  assert.deepEqual([n('cancel_agent_request'), n('archive_agent_request')], before)
+  const refused = await call(node, 'session.modes', { session_id: 'paseo-e1', permission_mode: 'plan' }).catch((e) => e)
+  assert.equal(refused.code, 'not_running')
+  assert.equal(n('set_agent_mode_request'), 0, 'Paseo is not asked: it refuses an archived agent')
+  // Renamed: Paseo renames its record and tells no list; the row takes the name all the same.
+  await call(node, 'session.rename', { session_id: 'paseo-e1', title: '改过' })
+  assert.equal(fake.requestsOf('update_agent_request').at(-1).agentId, a.labeled.id)
+  await until('renamed', () => row()?.title === '改过')
+  // Watched while archived: its agent is followed, and a message takes it back from the archive under the same id.
+  await call(node, 'session.watch', { session_id: 'paseo-e1', since_seq: 0, transcript: true })
+  await until('followed', () => [...fake.subs.values()].some((s) => s.kind === 'timeline' && s.agentIds[0] === a.labeled.id))
+  await call(node, 'session.send', { session_id: 'paseo-e1', text: '接着来', client_msg_id: 'cm-back' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, a.labeled.id)
+  await until('running again', () => row()?.status === 'working')
+  assert.equal(fake.agents.get(a.labeled.id).agent.labels['persona.session'], 'paseo-e1', 'its label as it was')
+  fake.stream(a.labeled.id, { type: 'timeline', provider: 'claude', turnId: 't', item: { type: 'assistant_message', text: '在', messageId: 'm' } }, 5)
+  await until('its live text', () => node.all('session.delta').some((d) => d.session_id === 'paseo-e1' && d.text === '在'))
+  assert.equal(rows().filter((r) => r.transcript === SID2).length, 1, 'one row for the conversation')
+  assert.equal(node.all('runtime.sessions').some((p) => p.sessions.some((r) => r.session_id === SID2) || p.unlisted_transcripts?.includes(SID2)), false,
+    'never under its transcript id, in no list')
+})
+
+test('continuing a session an archived agent keeps: Paseo imports it into that agent, its label as it was', async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  await call(node, 'session.close', { session_id: 'paseo-e1' })
+  await until('not running', () => rows().find((r) => r.session_id === 'paseo-e1')?.status === 'offline')
+  const plan = await call(node, 'session.start', { cwd: '/tmp', resume: 'paseo-e1', permission_mode: 'plan' }).catch((e) => e)
+  assert.equal(plan.code, 'readonly_unsupported', 'a takeover keeps its own mode')
+  const res = await call(node, 'session.start', { cwd: '/nowhere', resume: 'paseo-e1' })
+  const imp = fake.requestsOf('import_agent_request').at(-1)
+  assert.deepEqual([imp.provider, imp.sessionId, imp.cwd, imp.labels['persona.session']], ['my-claude', SID2, '/tmp', 'paseo-e1'],
+    "its own provider, Claude session and directory: Paseo's record of it")
+  assert.equal(res.session.session_id, 'paseo-e1')
+  assert.deepEqual([fake.agents.get(a.labeled.id).agent.archivedAt, fake.agents.size], [null, 5], 'the same agent, back: no second one')
+  await until('listed as running again', () => rows().find((r) => r.session_id === 'paseo-e1')?.status === 'idle')
+  // Listed again, it is the agent Paseo has, whatever the session was called.
+  const again = await call(node, 'session.start', { cwd: '/tmp', resume: 'paseo-e1' })
+  assert.equal(again.session.session_id, 'paseo-e1')
+  assert.equal(fake.requestsOf('import_agent_request').length, 1)
+})
+
+test("Paseo's archive at connect: archived agents that keep their id are rows, the latest of the week beside the list's limit; the agents Paseo lists come first; a deleted one leaves", async (t) => {
+  const day = 86_400_000
+  const transcript = (n) => `ffffffff-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const kept = (n, days, o = {}) => {
+    const at = new Date(Date.now() - days * day - n * 1000).toISOString()
+    return { agent: agentSnapshot({ id: `kept-${n}`, provider: 'my-claude', cwd: '/tmp', title: `K${n}`, status: 'closed', archivedAt: at, updatedAt: at,
+      labels: { 'persona.session': `paseo-kept-${n}` }, persistence: { provider: 'my-claude', sessionId: transcript(n), metadata: { provider: 'claude' } }, ...o }),
+      project: PROJECT }
+  }
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  // 82 archived this week, one 9 days ago; one whose session id an agent Paseo lists has, one whose transcript another has.
+  const later = new Date(Date.now() + 60_000).toISOString() // the newest: within the list's limit
+  const live = [
+    { agent: agentSnapshot({ id: 'live-1', provider: 'my-claude', cwd: '/tmp', title: 'L1', labels: { 'persona.session': 'paseo-kept-90' }, updatedAt: later,
+      persistence: { provider: 'my-claude', sessionId: transcript(190), metadata: { provider: 'claude' } } }), project: PROJECT },
+    { agent: agentSnapshot({ id: 'live-2', provider: 'my-claude', cwd: '/tmp', title: 'L2', updatedAt: later,
+      persistence: { provider: 'my-claude', sessionId: transcript(91), metadata: { provider: 'claude' } } }), project: PROJECT },
+  ]
+  const archivedOnes = [...Array.from({ length: 82 }, (_, i) => kept(i + 1, 1)), kept(100, 9), kept(90, 1), kept(91, 1)]
+  const { fake, node, bridge, paseo, rows } = await setup(t, { listMax: 4, sweepMs: 40, agents: [...base, ...live, ...archivedOnes] })
+  const keptOf = (list) => list.filter((r) => r.session_id.startsWith('paseo-kept-') && r.status === 'offline')
+  const keptRows = () => keptOf(rows())
+  await until('rows of the archived ones', () => keptRows().length === 80)
+  assert.deepEqual(keptRows().map((r) => r.title).sort(), Array.from({ length: 80 }, (_, i) => `K${i + 1}`).sort(),
+    'the latest 80 of the week: not older ones, and not one whose id or transcript an agent Paseo lists has')
+  assert.equal(rows().length - keptRows().length, 4, 'the list keeps its own limit')
+  assert.ok(rows().some((r) => r.title === 'L1' && r.session_id === 'paseo-kept-90' && r.status !== 'offline'), 'the agent Paseo lists is the session')
+  assert.equal(node.last('runtime.sessions').unlisted_transcripts.some((x) => x.startsWith('ffffffff-')), false, 'no transcript of theirs is named')
+  // Deleted in Paseo while archived: found out by the next reading of the archive, its row leaves; the next one in.
+  fake.delete('kept-1')
+  await until('the deleted one gone', () => !rows().some((r) => r.session_id === 'paseo-kept-1'))
+  await until('the next one listed', () => keptRows().some((r) => r.title === 'K81'))
+  // The bridge again, from nothing (a restart): the same rows under the same ids, once it has read the archive.
+  const ids = keptRows().map((r) => r.session_id).sort()
+  bridge.stop()
+  const again = createPaseoBridge({ paseo: new PaseoClient({ home: paseo.home, retryMin: 30, retryMax: 100 }) },
+    { socketPath: node.path, retryMs: 30, pushDelayMs: 5, refreshMs: 0, callWait: 1500, listMax: 4, sweepMs: 0 })
+  const mark = node.events.length
+  again.start()
+  t.after(() => again.stop())
+  const fresh = () => node.events.slice(mark).filter((e) => e.event === 'runtime.sessions').at(-1)?.params.sessions ?? []
+  await until('listed again', () => keptOf(fresh()).length === 80, 5000)
+  assert.deepEqual(keptOf(fresh()).map((r) => r.session_id).sort(), ids)
+})
+
 test('an agent running Codex names its thread, an agent of Claude Code its transcript', async (t) => {
   const THREAD = '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002'
   const { fake, rows } = await setup(t)
@@ -845,6 +948,29 @@ test('Paseo restarting: the bridge connects again and keeps the sessions; gone f
     return gone
   }, 5000)
   assert.ok(logs.some((l) => /away/.test(l)))
+})
+
+test("an Agent Persona started calls its own Persona tools without a card; everything else still asks (#4966)", async (t) => {
+  const own = ['mcp__persona__report_to_supervisor', 'mcp__persona__todo_decision_add']
+  const { fake, node, a } = await setup(t, { allowTools: own })
+  node.resolve = () => ({ allow: true })
+  fake.permission(a.labeled.id, { id: 'own-1', provider: 'claude', name: 'mcp__persona__todo_decision_add', kind: 'tool',
+    input: { decision: 'Use the smaller icon' }, suggestions: [{ type: 'addRules', rules: [{ toolName: 'mcp__persona__todo_decision_add' }], behavior: 'allow', destination: 'session' }] })
+  await until('the own tool answered', () => fake.requestsOf('agent_permission_response').length === 1)
+  assert.deepEqual(fake.requestsOf('agent_permission_response')[0].response, { behavior: 'allow' }, 'allowed once: no rule kept, no mode set')
+  assert.equal(node.asked.length, 0, 'no card for it')
+  // Still asked: dispatch and the phone's tools in the same Agent, any tool of an agent made in Paseo's own app, a plan.
+  const asks = [
+    [a.labeled.id, { id: 'dispatch-1', provider: 'claude', name: 'mcp__persona__dispatch_start', kind: 'tool', input: {} }],
+    [a.labeled.id, { id: 'phone-1', provider: 'claude', name: 'mcp__persona__phone_notify', kind: 'tool', input: {} }],
+    [a.claude.id, { id: 'mine-1', provider: 'claude', name: 'mcp__persona__report_to_supervisor', kind: 'tool', input: { kind: 'done', text: 'x' } }],
+  ]
+  for (const [agentId, request] of asks) fake.permission(agentId, request)
+  await until('the others asked', () => node.asked.length === asks.length)
+  assert.deepEqual(node.asked.map((ix) => [ix.session_id, ix.tool_name]).sort(), [
+    ['paseo-e1', 'mcp__persona__dispatch_start'], ['paseo-e1', 'mcp__persona__phone_notify'], [SID, 'mcp__persona__report_to_supervisor'],
+  ].sort())
+  assert.equal(fake.requestsOf('set_agent_mode_request').length, 0)
 })
 
 for (const toolName of ['mcp__persona__report_to_supervisor', 'mcp__jarvis__report_to_supervisor']) {

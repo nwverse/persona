@@ -225,6 +225,22 @@ nonisolated enum RecordingAudioSpec {
 }
 
 nonisolated enum RecordingFormat {
+    /// A meeting's span in the date style of the recording page's header ("1月15日 17:00–18:00"): the end's time alone on
+    /// the same day, its date too on another (#4875).
+    static func span(_ start: Date, _ end: Date, locale: Locale = .autoupdatingCurrent, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        var style = Date.IntervalFormatStyle.interval.month().day().hour().minute()
+        style.locale = locale
+        style.timeZone = timeZone
+        return (start..<max(end, start)).formatted(style)
+    }
+
+    /// The hub's `start` / `end` (RFC 3339) as `span`; `fallback`, the hub's fixed-format `when`, when either is missing or
+    /// unreadable (a hub from before them). nil when there is nothing to show.
+    static func span(start: String?, end: String?, fallback: String?) -> String? {
+        if let s = start.flatMap(JSON.parseDate), let e = end.flatMap(JSON.parseDate) { return span(s, e) }
+        return fallback?.isEmpty == false ? fallback : nil
+    }
+
     static func clock(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max) else { return "0:00" }
         let value = Int(seconds)

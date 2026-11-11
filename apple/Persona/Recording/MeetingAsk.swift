@@ -326,7 +326,11 @@ extension MeetingAsk.Deps {
 
     nonisolated struct Source: Decodable, Equatable, Sendable {
         var name: String?
+        /// The hub's fixed-format time of a meeting: shown only from a hub without `start` / `end`.
         var when: String?
+        /// A meeting's span, RFC 3339 (#4713): formatted as the recording page's header writes dates.
+        var start: String?
+        var end: String?
     }
 
     /// One line a heard ask was about.
@@ -394,7 +398,7 @@ extension MeetingAsk.Deps {
         MeetingAsk.Answer(question: ask.question, text: ask.answer ?? "", lang: ask.lang, speak: ask.speak ?? false,
                           sources: (ask.sources ?? []).compactMap { s in
                               guard let name = s.name, !name.isEmpty else { return nil }
-                              return s.when.map { "\(name) · \($0)" } ?? name
+                              return RecordingFormat.span(start: s.start, end: s.end, fallback: s.when).map { "\(name) · \($0)" } ?? name
                           }, via: ask.via)
     }
 

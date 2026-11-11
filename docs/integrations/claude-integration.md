@@ -7,9 +7,9 @@ Except where a section states otherwise, conclusions were tested with Claude Cod
 Node's `session.start`:
 
 1. Find a herdr workspace whose label equals the directory name (one workspace per project). If present, `tab create --label persona` inside it; otherwise `workspace create --label <directory name>`. Both use `--cwd <directory>` and `--no-focus`, without stealing focus on the computer.
-2. `pane run <pane> "<launcher> --session-id <uuid> --mcp-config ~/.persona/mcp.json --plugin-dir ~/.persona/agent-plugin --plugin-dir ~/.persona/claude-hooks --plugin-dir ~/.persona/claude-live-replies"`
-   (local Claude Code ≥ 2.1; the last plugin only while the computer's live replies setting is on, see "Live replies (MessageDisplay)"; older or unreadable versions use `<launcher> --session-id <uuid> --settings ~/.persona/claude-settings.json --mcp-config ~/.persona/mcp.json`; see Hooks below). Launchers are functions in `~/.zshrc` (`<launcher-a>`, `<launcher-b>`, etc.) ending in `claude … "$@"`, so arguments pass through. Resume uses `--resume <id>`.
-   Sending to a non-running session resumes it first. Launcher choice follows this order (`resumeLauncher` in `node/sendsafe.go`, #411):
+2. `pane run <pane> "<launcher> --session-id <uuid> --mcp-config ~/.persona/mcp.json --allowedTools <the Agent's own Persona tools>,<office rule> --plugin-dir ~/.persona/agent-plugin --plugin-dir ~/.persona/claude-hooks --plugin-dir ~/.persona/claude-live-replies"`
+   (local Claude Code ≥ 2.1; the last plugin only while the computer's live replies setting is on, see "Live replies (MessageDisplay)"; older or unreadable versions use `<launcher> --session-id <uuid> --settings ~/.persona/claude-settings.json --mcp-config ~/.persona/mcp.json --allowedTools <the Agent's own Persona tools>`; see Hooks below and "Persona tools Agents call without a card"). Launchers are functions in `~/.zshrc` (`<launcher-a>`, `<launcher-b>`, etc.) ending in `claude … "$@"`, so arguments pass through. Resume uses `--resume <id>`.
+   A non-running session is read-only (#4754, `docs/integrations/engines.md` "Agents run in a terminal"): a message is refused (`agent_stopped`), and the user's Resume on its terminal page resumes it, in the shell it left when that is still there. A branch nothing has run yet is started by its first message. Launcher choice for both follows this order (`resumeLauncher` in `node/sendsafe.go`, #411):
    launcher recorded when Persona started it → inferred from transcript gateway address and model (`inferLauncher`, externally started sessions) → New Agent launcher and model supplied by hub (only for non-running Claude sessions with unknown launchers, `hub/send.go`) → bare `claude`.
    The first two retain the original model. Previously, failure to infer meant bare `claude`; on computers normally authenticated through launchers, the session showed only “Not logged in” and could not send.
 3. `waitReady`: every 500 ms, read the screen (`pane read --source visible`) + `agent get`:
@@ -18,7 +18,7 @@ Node's `session.start`:
    - State idle/done and composer footer visible (`shift+tab` / `? for shortcuts` / `bypass permissions` / `esc to interrupt`), twice consecutively → ready.
    - Other blocked state (model selection, etc.) → return immediately; hub pushes the screen to the phone as a `screen` interaction.
 4. Record pane → session, `agent rename j-<first 6 characters of id>`, send first message (`agent prompt`).
-5. Confirm first message reached the transcript (`node/firstprompt.go`, #2423): a visible composer does not mean Claude has finished drawing startup auto-update notices or Auto mode explanations. Text typed then may be swallowed, leaving the Agent idle. A send counts only when that user message appears in the transcript. If it remains in the composer after `submitGrace`, send Enter once more. If absent after 15 seconds and Claude is not working, rerun `waitReady`, verify the composer is empty, and resend, up to 3 attempts. If still unsuccessful, a dialog is open, or other input exists, mark the session Needs you (`blocked` + explanatory `attention_reason`), not silently idle. Any later message entering the transcript, from phone or computer, restores normal state.
+5. Confirm first message reached the transcript (`node/firstprompt.go`): a visible composer does not mean Claude has finished drawing startup auto-update notices or Auto mode explanations. Text typed then may be swallowed, leaving the Agent idle. A send counts only when the matching user message appears in a full incremental `promptWatch` from the byte offset captured before typing. The quick metadata head/tail is insufficient: a multi-megabyte image line can exceed both reads and hide an already-submitted first prompt, causing duplicate re-pastes (#4794). If the file does not exist before typing, attach when it appears and filter older rows by the send time. If the owned draft remains after `submitGrace`, retry only Enter with another grace between attempts, within the 15-second confirmation window. Image and long-text placeholders (`[Image #1][Pasted text #2 +26 lines]`) use the same `pendingPrompt` match as ordinary sends, not a visible-text-only comparison (#4794). Startup also pins the placeholder IDs before recovery; fresh sessions expect the image chips followed by their first text chip, and later or changed placeholders are left alone. Once a recovery Enter has been attempted, never paste the first message again: even an empty composer without a transcript receipt is ambiguous. Only a message dropped before any recovery Enter can be retyped after `waitReady` confirms an empty composer and Claude is not working, up to 3 attempts. If still unsuccessful, a dialog is open, or other input exists, mark the session Needs you (`blocked` + explanatory `attention_reason`), not silently idle. Any later message entering the transcript, from phone or computer, restores normal state.
    Confirmation runs in the background; launch still returns immediately. Messages sent meanwhile queue behind it under the same typing lock, without mixing with first-message retries.
    This marker exists only in node memory; after node restart, herdr state is shown.
    The first message was not made a `claude` argument: launchers may be zsh functions / aliases / `personad launch`, with inconsistent argument forwarding. Variable-length options such as `--allowedTools` can swallow later positional arguments, and long messages would enter the shell command line. Transcript verification works for every launcher.
@@ -41,6 +41,34 @@ value that is not an object is refused rather than replaced). It offers Persona'
 Claude Code starts in it when no `--permission-mode` is given: an Agent started from the Agents page with Follow, and,
 through the hub, a planned task the assistant left unset (`docs/assistant/todos.md`, "Permission of a planned task").
 A mode picked when starting an Agent, and the assistant's default permission mode, still come first.
+
+## Persona tools Agents call without a card
+
+An Agent Persona starts has Persona's MCP tools (`~/.persona/mcp.json`) and, in Claude Code's default mode, would ask
+before each call. Its own tools run without asking (#4966): `report_to_supervisor`, `todo_decisions`,
+`todo_decision_add`, `todo_bind_thread`, and a task leader's `task_plan` and `task_review`
+(`assistantwire.AgentOwnTools`). They act only inside Persona and for the Agent calling them (the node names the session
+of its pane, `callerTools`), the manager bounds them (a report is rate limited; a leader's `task_plan` adds workers only
+below its own task, its `task_review` reaches only its direct workers), and a card for each one would ask the user about
+the Agent's own bookkeeping.
+
+- **How**: the start and herdr's resume command of every Claude Agent Persona starts carry `--allowedTools` with exactly
+  these tools under both names `mcp.json` registers (`node/agentplugin.go` `agentAllowedTools`, beside the office
+  skill's rule). It is Claude Code's own rule for that process only: nothing is written to the machine's Claude settings
+  or to the files every session shares, so Claude sessions the user starts themselves ask as before, and a deny rule
+  of the user's still wins. The Paseo bridge is given the same names (`--allow-tools`) and answers them itself for the
+  Agents it created (`docs/integrations/paseo.md`); an agent made in Paseo's own app still asks.
+- **Still asked**: the phone's tools (`phone_*`) and the connectors' (mail and others), which act outside Persona, and
+  `dispatch_start` / `dispatch_read`, which start an Agent on another computer on its model and read that computer's
+  work: their effects reach past the calling Agent's own task, so they keep the card by default. Every other tool and
+  MCP server is unchanged. Codex Agents have none of these tools.
+- **The card's title**: whenever a card is shown for one of Persona's own MCP tools (the ones still asked, or any in a
+  session started elsewhere), the manager titles it with the tool's name for people in the user's language
+  (`tool_title`, `assistant-tool_titles`: "Report to supervisor · Done", "Note a decision"; the phone's tools as the
+  chat's rows name them, "iPhone · contacts search"), never the raw `mcp__persona__…` name, and names the tool alone
+  for the "Always allow" line (`tool_name_title`: every report, not only this "Done"; `docs/protocol/protocol.md`
+  "Always allow"). The title is in the hub's language, like other text the hub writes. Agents already running pick
+  the rule up when they are next started or resumed.
 
 ## Independent ultracode switch (#3427)
 
@@ -209,7 +237,7 @@ below; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibil
 | `runtime.sock` | File exists and connects | Missing: warn (ignore if runtimes unused); unreachable: fail |
 | `claude-settings.json`, `claude-hooks` (with `claude-live-replies/`), `assistant-settings.json`, `assistant-hooks`, `mcp.json`, `agent-plugin` | Byte-for-byte compare with **what this binary would generate now**: current / stale (different or plugin files missing, identified in items) / missing | stale: warn; missing hooks / settings / MCP: fail; missing `agent-plugin`: warn (only persona-office skill absent) |
 | `command-paths` | Hook / MCP commands in those files (first word parsed following `shellQuote` syntax) point to existing executable programs | Unusable: fail |
-| `claude-version` | Local Claude version ≥ `pluginMinVersion`, supporting `--plugin-dir` | Unreadable / too old: warn (`--settings` fallback still works) |
+| `claude-version` | Local Claude version ≥ `pluginMinVersion`, supporting `--plugin-dir` | Unreadable / too old: warn (`--settings` fallback still works); read nothing although the shell found claude: warn with state `unanswered`, which readiness treats as unknown rather than missing |
 | `herdr` | Herdr API socket connects | Unreachable: warn; engine selected by hub on connection, not stored locally; ignore for other engines |
 | `global-permission-hooks` | Count and commands, truncated to 80 characters, of synchronous non-async `PermissionRequest` hooks in user's `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude`) | Present: warn; other approval hooks block requests alongside phone approvals; **inspect only, never modify** |
 | `agent-sandbox` | Whether the agent sandbox is on, whether this machine can run it, each kind of start's last status (`docs/server/agent-sandbox.md`) | On but unusable / skipped: warn |

@@ -47,6 +47,7 @@ import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
 import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
@@ -710,7 +711,7 @@ function Models() {
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!list || !q) return list ?? [];
-    return list.filter((l) => [l.name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
+    return list.filter((l) => [l.name, l.display_name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
   }, [list, query, machines, sync]);
   const managed = shown.filter((l) => managedProvider(l.source));
   const builtin = builtinRows(shown);
@@ -753,6 +754,12 @@ function Models() {
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("settings.search_placeholder")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" aria-label={t("settings.search_providers")} />
           {query && <IconButton icon="x" label={t("settings.clear")} size={22} iconSize={12} onClick={() => setQuery("")} />}
         </label>
+        {list && (
+          // for people who already run claude from aliases on a computer: turns them into providers (the dialog explains when there is no computer)
+          <Button tone="secondary" icon="download" title={t("settings-providerimport.title")} onClick={() => setImporting(true)}>
+            <span className="max-sm:sr-only">{t("settings-providerimport.import")}</span>
+          </Button>
+        )}
         <Button tone="accent" icon="plus" onClick={() => setEditing("new")}>
           <span className="max-sm:hidden">{t("settings.add_provider")}</span>
           <span className="sm:hidden">{t("settings.add_provider_short")}</span>
@@ -799,16 +806,6 @@ function Models() {
       {hidden.length > 0 && (
         <Group title={t("settings.hidden_title", { count: hidden.length })} footer={t("settings.hidden_footer")}>
           {hidden.map(row)}
-        </Group>
-      )}
-      {list && !query && (
-        // "Import from ~/.zshrc" reads a computer's ~/.zshrc, so it is for people who already run claude there, and needs a computer
-        <Group title={t("settings.providers_advanced")} footer={machines.length ? t("settings.zshrc_import_hint") : t("settings.zshrc_import_no_machines")}>
-          <Row label={t("settings-providerimport.title")} icon="terminal">
-            <Button tone="secondary" icon="download" disabled={machines.length === 0} onClick={() => setImporting(true)}>
-              {t("settings-providerimport.import")}
-            </Button>
-          </Row>
         </Group>
       )}
       {list && !query && sync.length > 0 && (
@@ -908,7 +905,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     if (!l) return;
     try {
       await api(enLauncher(l.name), { method: "DELETE" });
-      toast(managedProvider(l.source) ? t("settings.deleted", { name: l.name }) : t("settings.hid", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(managedProvider(l.source) ? t("settings.deleted", { name: providerTitle(l) }) : t("settings.hid", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -919,7 +917,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     if (!l) return;
     try {
       await api(`${enLauncher(l.name)}/restore`, { method: "POST" });
-      toast(t("settings.restored", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(t("settings.restored", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -932,7 +931,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
       open={name !== null}
       onClose={onClose}
       width={620}
-      title={<span className="font-mono">{name}</span>}
+      // a provider's display name with its startup ID after it (#5029); an rc alias, or one not read yet, by its ID
+      title={l && providerIdNote(l) ? <>{providerTitle(l)} <span className="font-mono text-[11.5px] font-normal text-ink-3">{providerIdNote(l)}</span></> : <span className="font-mono">{name}</span>}
       footer={
         l && (
           <>
