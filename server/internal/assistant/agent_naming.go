@@ -49,6 +49,9 @@ type agentNamingBook struct {
 	pending   map[string][]proto.Session
 	running   bool
 	scanAfter time.Time
+	interval  time.Duration // zero is the production pass interval; tests use a shorter queue delay
+	timer     *time.Timer
+	timerSeq  uint64
 }
 
 func agentNameKey(machine, session string) string {
@@ -164,50 +167,101 @@ func (s *Service) putAgentNameLocked(ctx context.Context, key string, rec agentN
 }
 
 // List delivery only wakes one coalescing worker; it never waits for disk or a model.
-// New lists are the periodic signal. No timer or polling is installed on the machine.
+// Queue-local one-shot timers drain existing bad names even without another node event.
+// They stop once no candidate is due; periodic refresh still requires new node output.
 func (s *Service) agentNamesChanged(d DeviceSessions) {
+	if s.runCtx().Err() != nil {
+		return
+	}
 	b := &s.agentNames
 	b.mu.Lock()
 	if b.pending == nil {
 		b.pending = map[string][]proto.Session{}
 	}
-	b.pending[d.MachineID] = d.Sessions
-	if b.running || time.Now().Before(b.scanAfter) {
+	if d.MachineID != "" {
+		b.pending[d.MachineID] = d.Sessions
+	}
+	if b.running {
 		b.mu.Unlock()
 		return
 	}
+	if time.Now().Before(b.scanAfter) {
+		s.armAgentNamesLocked()
+		b.mu.Unlock()
+		return
+	}
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+		b.timerSeq++
+	}
 	b.running = true
+	pending := b.pending
+	b.pending = map[string][]proto.Session{}
+	interval := b.interval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	b.scanAfter = time.Now().Add(interval)
 	b.mu.Unlock()
 	go func() {
-		defer func() { b.mu.Lock(); b.running = false; b.mu.Unlock() }()
+		attempted := false
+		defer func() {
+			b.mu.Lock()
+			if attempted {
+				for mid, list := range pending {
+					if _, newer := b.pending[mid]; !newer {
+						b.pending[mid] = list
+					}
+				}
+			}
+			b.running = false
+			s.armAgentNamesLocked()
+			b.mu.Unlock()
+		}()
 		ctx, cancel := context.WithTimeout(s.runCtx(), 2*time.Minute)
 		defer cancel()
 		prefs, ok := s.savedSettings(ctx)
 		if !ok || !quietOn(prefs.AgentAutoNaming) {
 			return
 		}
-		b.mu.Lock()
-		pending := b.pending
-		b.pending = map[string][]proto.Session{}
-		b.scanAfter = time.Now().Add(30 * time.Second)
-		b.mu.Unlock()
 		machines := make([]string, 0, len(pending))
 		for mid := range pending {
 			machines = append(machines, mid)
 		}
 		sort.Strings(machines)
-		// One model call per pass, including failures; subsequent node lists fairly retry remaining candidates.
 		for _, mid := range machines {
 			for _, c := range pending[mid] {
 				if c.Assistant || c.Archived || !knownAgentTitle(c) {
 					continue
 				}
 				if s.tryAgentName(ctx, mid, c, time.Now()) {
+					attempted = true
 					return
 				}
 			}
 		}
 	}()
+}
+
+// b.mu is held. A generation retires an already-firing timer when a newer list starts the pass.
+func (s *Service) armAgentNamesLocked() {
+	b := &s.agentNames
+	if b.timer != nil || len(b.pending) == 0 || s.runCtx().Err() != nil {
+		return
+	}
+	b.timerSeq++
+	generation := b.timerSeq
+	b.timer = time.AfterFunc(max(time.Until(b.scanAfter), 0), func() {
+		b.mu.Lock()
+		if generation != b.timerSeq {
+			b.mu.Unlock()
+			return
+		}
+		b.timer = nil
+		b.mu.Unlock()
+		s.agentNamesChanged(DeviceSessions{})
+	})
 }
 
 func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Session, now time.Time) bool {
@@ -354,9 +408,14 @@ func (s *Service) agentNameDialogue(ctx context.Context, machine, id string) (st
 		if it.Kind != proto.KindText || it.Queued || (it.Role != "user" && it.Role != "assistant") || strings.TrimSpace(it.Text) == "" {
 			continue
 		}
-		text := cutRunes(it.Text, min(budget, 1500))
-		lines = append(lines, it.Role+": "+text)
-		budget -= utf8.RuneCountInString(text) + 16
+		prefix := it.Role + ": "
+		room := budget - utf8.RuneCountInString(prefix) - 1 // include the joining newline
+		if room <= 0 {
+			break
+		}
+		text := cutRunes(it.Text, min(room, 1500))
+		lines = append(lines, prefix+text)
+		budget -= utf8.RuneCountInString(prefix) + utf8.RuneCountInString(text) + 1
 	}
 	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
 		lines[i], lines[j] = lines[j], lines[i]

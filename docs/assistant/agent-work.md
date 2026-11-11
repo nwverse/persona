@@ -42,6 +42,9 @@ Changing the maximum does not erase the ledger. A native or app rename stops aut
 for that session; app/API rename intent is persisted before contacting the node, even when its reply is uncertain.
 
 Cost controls: list events coalesce into one worker, dispatching at most one candidate per 30-second pass.
+Queue-local one-shot wakes drain existing matches even without another list event, then stop; they do not
+install a timer on any node. A successful check that keeps the name advances its interval baseline without
+counting another name change, so a daily choice does not retry hourly.
 Input keeps at most 2000 characters of the first user message and 4000 of recent dialogue; images and tool
 payloads are excluded. Calls time out after 45 seconds and request at most 256 output tokens on every protocol.
 Responses relays that refuse the output bound fail closed, without retrying unbounded. A persisted ten-minute

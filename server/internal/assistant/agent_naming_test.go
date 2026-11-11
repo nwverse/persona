@@ -313,10 +313,49 @@ func TestAgentNameUnchangedResultKeepsConfiguredInterval(t *testing.T) {
 	}
 }
 
+func TestAgentNamesDrainAnIdleInventoryWithoutAnotherEvent(t *testing.T) {
+	s, f, calls := namingFixture(t, func(w http.ResponseWriter, r *http.Request) { namingReply(w, "修复导出") })
+	ctx, cancel := context.WithCancel(context.Background())
+	s.running.Store(&ctx)
+	t.Cleanup(cancel)
+	s.agentNames.interval = 5 * time.Millisecond
+	list := []proto.Session{}
+	for _, id := range []string{"s1", "s2", "s3"} {
+		list = append(list, proto.Session{SessionID: id, Title: "Claude Code", TitleSource: proto.TitleSourcePrompt, Status: proto.StatusIdle})
+	}
+	f.setSessions("server", list...)
+	s.agentNamesChanged(DeviceSessions{MachineID: "server", Sessions: list})
+	deadline := time.NewTimer(5 * time.Second)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer deadline.Stop()
+	defer tick.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatal("one initial list did not drain all eligible idle names")
+		case <-tick.C:
+			s.agentNames.mu.Lock()
+			complete := !s.agentNames.running && s.agentNames.timer == nil
+			for _, c := range list {
+				complete = complete && s.agentNames.records[agentNameKey("server", c.SessionID)].Changes == 1
+			}
+			s.agentNames.mu.Unlock()
+			if complete {
+				if calls.Load() != 3 {
+					t.Fatalf("one-shot inventory calls=%d", calls.Load())
+				}
+				return
+			}
+		}
+	}
+}
+
 func TestAgentNameContextBoundsAndGolden(t *testing.T) {
 	s, f, _ := namingFixture(t, func(w http.ResponseWriter, r *http.Request) { namingReply(w, "修复导出") })
 	f.items[0].Text = strings.Repeat("首条请求", 3000)
-	f.items = append(f.items, proto.Item{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: strings.Repeat("最近回复", 3000)})
+	for seq := 4; seq <= 7; seq++ {
+		f.items = append(f.items, proto.Item{Seq: seq, Role: "assistant", Kind: proto.KindText, Text: strings.Repeat("最近回复", 3000)})
+	}
 	first, recent, err := s.agentNameDialogue(context.Background(), "server", "s1")
 	if err != nil || !utf8.ValidString(first) || !utf8.ValidString(recent) || utf8.RuneCountInString(first) > agentNamingFirstRunes || utf8.RuneCountInString(recent) > agentNamingRecentRunes {
 		t.Fatalf("bounds: %v first=%d recent=%d", err, utf8.RuneCountInString(first), utf8.RuneCountInString(recent))
