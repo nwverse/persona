@@ -132,4 +132,9 @@ class AgentsListInfoTest {
         assertEquals("支持 HEIC\n1. 用 sips 转成 JPEG\n加粗说明", markdownPreview("## 支持 HEIC\n\n1. 用 `sips` 转成 JPEG\n**加粗**说明\n"))
         assertEquals("普通文字", markdownPreview("普通文字"))
     }
+
+    @Test fun byToDoIsOfferedOnlyWhileTheHubHasToDos() {
+        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo), offeredGroupings(true))
+        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State), offeredGroupings(false))
+    }
 }

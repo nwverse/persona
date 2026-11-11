@@ -85,7 +85,7 @@
     <string name="agents_grouping_repo">By repository</string>
     <string name="agents_grouping_state">By status</string>
     <string name="agents_grouping_todo">By to-do</string>
-    <string name="agents_grouping_machine_space">By computer and space</string>
+    <string name="agents_grouping_project">By project</string>
     <string name="agents_menu_compact">Compact list</string>
     <string name="agents_menu_detailed">Detailed list</string>
     <string name="agents_menu_collapse_all">Collapse all</string>

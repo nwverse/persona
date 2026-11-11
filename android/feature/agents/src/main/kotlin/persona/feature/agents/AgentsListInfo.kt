@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.*
 import java.time.Instant
 import java.time.ZoneId
 
+/** The groupings the list offers: By To-do only while the hub has to-dos, as iOS's `DevGrouping.offered` (#4338 A5). */
+internal fun offeredGroupings(todosSupported: Boolean): List<AgentGrouping> =
+    if (todosSupported) AgentGrouping.selectable else AgentGrouping.selectable - AgentGrouping.Todo
+
 /** Implement with the shared DraftStore for the active hub scope; never create a second draft store. */
 fun interface AgentsDraftSource {
     fun observe(session: SessionKey): Flow<AgentDraft>
