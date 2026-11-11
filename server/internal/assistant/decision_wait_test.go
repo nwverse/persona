@@ -254,3 +254,18 @@ func TestWaitOver(t *testing.T) {
 		}
 	}
 }
+
+// The run itself ends the wait: once a routine's run went into its conversation, the decisions it listed are not held.
+func TestBriefingRunEndsTheWait(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	briefingOn(s, true)
+	waitsForReview(t, s, f, todo.ID, "两种走法。")
+	reviewTask(t, s, todo.ID, waitingDecision())
+	s.brief.mu.Lock()
+	s.brief.byTask = map[string]*briefRun{"morning": {facts: s.briefFactsAt(context.Background(), time.Now(), "morning"), label: "morning"}}
+	s.brief.mu.Unlock()
+	s.briefSent("morning", "conv-briefing", true)
+	if a := askOf(s, todo.ID); a.ForBriefing || !a.AcceptedAt.IsZero() {
+		t.Fatalf("after the run: %+v", a)
+	}
+}
