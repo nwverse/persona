@@ -1,4 +1,4 @@
-# Area: the Agents page (issue to come)
+# Area: the Agents page (#4338)
 
 Part of the [Android alignment plan](README.md) (#4194). Status: plan, 2026-11-11. Found by reading both apps' code and by screenshots of both on the same mock hub data (iPhone 17 Pro simulator, Pixel 9 emulator, Glass, light and dark).
 

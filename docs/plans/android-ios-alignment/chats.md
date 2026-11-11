@@ -1,4 +1,4 @@
-# Area: the Agent chat and the assistant chat (issue to come)
+# Area: the Agent chat and the assistant chat (#4339)
 
 Part of the [Android alignment plan](README.md) (#4194). Status: plan, 2026-11-11. Found by reading both apps' code and by screenshots of both on the same mock hub data (iPhone 17 Pro simulator, Pixel 9 emulator, Glass, light and dark).
 
@@ -16,7 +16,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 
 **C2. Subagents.** iOS draws a subagent as a card with its status, run time, prompt, reports, latest steps and View Subagent; parallel subagents share a grid ("Running 3 agents"), and a running card stays visible under a folded work line. The header's third line says what running subagents do, and a tap swaps the transcript in place with a way back. Android draws an ordinary tool row with a "View sub-agent" button that opens a separate read-only page. Requirement: as on iOS.
 
-**C3. Model and effort in the composer.** iOS shows a text button such as "Opus High ✦" in the composer's row; its menu holds the model (with Other Model…), the effort, ultracode and the permission mode. Android has an icon-only Mode button opening a sheet with a fixed model list and no typed model, a chip above the field when the setting isn't the default, and a permission-mode icon in the header. Requirement: the iOS button and menu (the header icon waits for Q11).
+**C3. Model and effort in the composer.** iOS shows a text button such as "Opus High ✦" in the composer's row; its menu holds the model (with Other Model…), the effort, ultracode and the permission mode. Android has an icon-only Mode button opening a sheet with a fixed model list and no typed model, a chip above the field when the setting isn't the default, and a permission-mode icon in the header. Requirement: the iOS button and menu; the header's mode icon goes (Q11).
 
 **C4. The header.** iOS folds the header into a slim capsule while scrolling and after 3 s without a touch, and the title opens Session Info; its second line reads "Working 22 min · machine · space › tab". Android's header never folds, the title opens a status sheet, and the second line shows the source, the machine and the raw working directory, which section 5.6 keeps off primary screens. Requirement: as on iOS.
 
@@ -24,7 +24,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 
 **C6. Queued messages.** iOS folds the queue, and each message offers Send Now (with a confirmation) and Move Up / Down. Android always shows the queue open with Pull Back, Copy and Delete. Requirement: as on iOS.
 
-**C7. The terminal.** iOS opens it as a full-screen cover dragged down to close, from ⋯ or a terminal mark on the live work line. Android pushes a separate page from a header icon. Requirement: as on iOS (the header icon waits for Q11).
+**C7. The terminal.** iOS opens it as a full-screen cover dragged down to close, from ⋯ or a terminal mark on the live work line. Android pushes a separate page from a header icon. Requirement: as on iOS; the header's terminal icon goes (Q11).
 
 **C8. Loops and background work.** iOS shows them as a pill on the header's second line; its sheet stops the loop and opens the output. Android shows chips above the composer that open the status sheet, with no Stop Loop. Requirement: as on iOS.
 
@@ -48,7 +48,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 
 **C10. Requests answered above the composer.** On iOS the conversation's own cards and the oldest question of its tasks show above the composer and are answered there. On Android they stay hidden until the user opens the Needs You tray and taps Review. Requirement: as on iOS; with phase 2 Q4 the Agent chat takes the same place.
 
-**C11. One blank page.** iOS has no home page: a blank page comes only from New Chat, and its first message starts a new conversation. On Android, Back from any conversation (or Home in the menu) opens a home page whose messages go to the main conversation, and New Chat opens a nearly identical page that starts a new one. Waits for Q10.
+**C11. One blank page.** iOS has no home page: a blank page comes only from New Chat, and its first message starts a new conversation. On Android, Back from any conversation (or Home in the menu) opens a home page whose messages go to the main conversation, and New Chat opens a nearly identical page that starts a new one. Requirement (Q10): drop the home page; Back from a conversation goes to the main conversation, and New Chat is the only blank page.
 
 **C12. Conversation history.** iOS swipes a row left to archive; its menu has Pin, Rename…, Archive, Copy ID, Copy Diagnostics and End…; a long press previews the last message; "Archived (N)" opens the archived conversations. Android's sheet has Pin, Copy ID, Archive and End: no rename, no swipe, no preview and no archive list, so a replaced main conversation can't be reached. Requirement: as on iOS. This takes over "archived chats" from phase 3 F9.
 
@@ -72,11 +72,11 @@ An Agent's session and a conversation with the assistant read the same on Androi
 - The user's bubble and "Persona is getting ready…" while the conversation starts, and a failed start kept as a failed bubble with Resend / Delete.
 - The sidebar's Meeting Recording and Health rows, with phase 3 F9.
 
-### Waiting for the owner
+### Owner decisions (2026-11-11, #4208)
 
-**Q10. Android's assistant home page.** Proposal: drop it, as on iOS; Back from a conversation goes to the main conversation, and New Chat is the only blank page. The home's cards (sort the Inbox, Agent progress, the knowledge base) and its online devices are already reachable from the sidebar and the Agents page.
+**Q10. Android's assistant home page: drop it, as on iOS.** Back from a conversation goes to the main conversation, and New Chat is the only blank page. The home's cards (sort the Inbox, Agent progress, the knowledge base) and its online devices stay reachable from the sidebar and the Agents page.
 
-**Q11. The Agent chat header's terminal and permission-mode buttons.** iOS has Back, the title and ⋯ only; the terminal opens from ⋯ and the work line, and the mode sits in the composer's model menu. `docs/android/android.md` says Android's mode button follows iOS (#3719), but the iOS code has no header mode button. Proposal: follow iOS and correct that doc.
+**Q11. The Agent chat header's terminal and permission-mode buttons: drop both, as on iOS.** iOS has Back, the title and ⋯ only; the terminal opens from ⋯ and the work line, and the mode sits in the composer's model menu. `docs/android/android.md` says Android's mode button follows iOS (#3719), but the iOS code has no header mode button; that doc is corrected with C3.
 
 ### iOS behind, or Android only
 
@@ -121,7 +121,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 - **C4.** The header folds on scroll and on a 3 s idle timer (off when animations are off); the title opens `ChatSessionInfoSheet`. The second line takes the state word and "machine · space › tab" from the session, never `cwd`.
 - **C5.** Redraw the work summary in `Chat.kt` for Glass only: caption text, spinner, chevron and a rail; the words come from one function with tests.
 - **C10 and phase 2 Q4.** Show the assistant conversation's cards in the same stack above the composer that phase 2 T6 builds for the Agent chat; the tray keeps its Review for older items.
-- **C11.** If Q10 is yes: Back from a conversation opens the main conversation; the home page and its `newChat` twin in `AssistantScreen.kt` become one New Chat page.
+- **C11.** Back from a conversation opens the main conversation; the home page and its `newChat` twin in `AssistantScreen.kt` become one New Chat page.
 - **C12.** Rename through `POST /api/v1/sessions/{mid}/{sid}/rename` with `title`, which records a user-given title for assistant conversations (`docs/protocol/protocol.md`); a swipe on the history row; an Archived page reusing `android/feature/agents/src/main/kotlin/persona/feature/agents/AgentArchivesScreen.kt`'s list.
 - **C13.** `AssistantTaskCards.kt` stops filtering the record kinds iOS draws; each kind gets a renderer next to the interruption record's.
 - **C14.** A connection pill in the shared chrome, fed by the connection state the red tint already reads.
@@ -133,7 +133,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 2. C10 with phase 2 T6, and C17 with the Agents page's A1.
 3. C3 and C5.
 4. C2, C12 and C13.
-5. C11 and C7 after the owner answers Q10 and Q11.
+5. C11 and C7.
 6. The rest of C9 and C18.
 
 ### Verification

@@ -17,8 +17,6 @@ Before phases 1 to 3 change code, everyone works from the same decisions and the
 
 - Question 4, where pending requests sit in a chat. Proposal: as the iOS code does, the request cards stack above the composer, which stays usable, and each folds to a one-line preview. `DESIGN_SYSTEM.md` section 4.8 describes paging instead and is corrected with the change ([phase 2](phase-2-interactions.md), Q4).
 - Question 6, an in-app text size on Android. Proposal: Small, Standard and Large, as on iOS, one step below or above the system's size.
-- Question 10, Android's assistant home page. Proposal: drop it, as on iOS ([chats](chats.md), C11).
-- Question 11, the Agent chat header's terminal and permission-mode buttons. Proposal: follow iOS ([chats](chats.md), C3 and C7).
 - The owner answers in #4208. The answers join the README's table and are recorded as in R1. Nothing that depends on a question is built before its answer.
 
 ### R3. A living parity list
@@ -41,7 +39,7 @@ Before phases 1 to 3 change code, everyone works from the same decisions and the
 ### Acceptance criteria
 
 - Every owner decision has an entry in `docs/design/DECISIONS.md` with its date and what it replaced.
-- Questions 4, 6, 10 and 11 are answered and recorded.
+- Questions 4 and 6 are answered and recorded.
 - The parity list covers every primary screen and every item in #4194; each row has a status and an issue or a reason (principle 4).
 - The audit lists findings by severity with file and line, and every P1 finding has an issue (principle 6).
 
@@ -62,6 +60,8 @@ DECISIONS.md fixes the format: `- **MM-DD Title** (#issue): decision. Rejected: 
 - **11-11 The Inbox swipes as on iOS** (#4194): swipe left for Done, and Move Back in the done list. Rejected: Android's swipe right for Done and left to hand off; Android has no platform convention to keep. Where: 4.2.
 - **11-11 One feedback layer on Android** (#4194): one toast, modeled on iOS, for all in-app feedback. Rejected: a Snackbar, per-page hosts and system toasts side by side. Where: 4.3.
 - **11-11 Android aligns Glass only** (#4194): Brief and Board get no new alignment work, and the iOS-only styles are not ported. Rejected: porting every style. Where: 2.9, 7.
+- **11-11 One blank page on the Android assistant page** (#4208): New Chat is the only blank page, and Back from a conversation goes to the main conversation. Rejected: Android's home page, whose messages went to the main conversation. Where: 4.1.
+- **11-11 The Agent chat header as on iOS** (#4208): Back, the title and ⋯; the terminal opens from ⋯ and the work line, the permission mode from the composer's model menu. Rejected: Android's header buttons for the terminal and the permission mode. Where: 3.1, 3.5.
 ```
 
 Which PR lands each entry:
@@ -74,6 +74,8 @@ Which PR lands each entry:
 | 5, Inbox swipe | Phase 2, the Inbox PR |
 | 7, one feedback layer | Phase 1, the feedback PR |
 | 8, Glass only | Phase 4, the intentional-differences PR |
+| 10, one blank page | The chats PR for C11 |
+| 11, the chat header | The chats PR for C3 and C7 |
 
 ### Parity list
 
@@ -101,7 +103,7 @@ Which PR lands each entry:
 ### Order of work
 
 1. This document and the README (this branch).
-2. The owner answers questions 4, 6, 10 and 11 in #4208.
+2. The owner answers questions 4 and 6 in #4208.
 3. The parity list PR.
 4. The audit PR; its P1 findings become issues.
 5. The decision entries, each with the PR named above.
