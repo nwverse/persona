@@ -4069,7 +4069,8 @@ def photo_withdraw(rid, x):
     if not x.get("forwarded") or r.get("state") != "ready" or not r.get("session_id"): return
     rec = RECORDINGS.get(rid) or {}
     conv_append(r["machine_id"], r["session_id"], [conv_item("user", meeting_source_text(rec,
-        f"Photo {x['n']} was withdrawn: do not describe or use it again. Write nothing in reply."), source={"kind": "meeting", "title": meeting_name(rec)})])
+        f"Photo {x['n']} was withdrawn: do not describe or use it again. Write nothing in reply."), source={"kind": "meeting", "title": meeting_name(rec)},
+        client_msg_id="photo-withdrawn-" + x["id"])])
 
 
 def photos_minutes_again(rid):

@@ -238,6 +238,7 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
         last = self.items(room["session_id"])[-1]
         self.assertEqual(last["source"]["kind"], "meeting")
         self.assertIn("Photo 1 was withdrawn", last["text"])
+        self.assertEqual(last["client_msg_id"], "photo-withdrawn-" + body["id"])
 
     def test_a_photo_taken_while_the_room_comes_up_goes_once_it_is_ready(self):
         self.call("POST", "/mock/meeting_conversation", {"room": "slow", "room_seconds": 1})
