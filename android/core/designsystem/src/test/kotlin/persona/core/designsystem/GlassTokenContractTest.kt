@@ -83,6 +83,24 @@ class GlassTokenContractTest {
         assertEquals(20.dp, Tokens.Radius.bubble)
     }
 
+    @Test fun glassMovesWithTheIPhoneSprings() {
+        val glass = Motions.of(AppStyle.Glass)
+        // Theme.Motion.state is .snappy(duration: 0.25), bounce 0.15; .layout is .smooth(duration: 0.3), no bounce.
+        assertEquals(250, glass.quick)
+        assertEquals(300, glass.standard)
+        assertEquals(0.85f, glass.state!!.dampingRatio, 1e-6f)
+        assertEquals(631.65f, glass.state!!.stiffness, 0.01f)
+        assertEquals(1f, glass.layout!!.dampingRatio, 1e-6f)
+        assertEquals(438.65f, glass.layout!!.stiffness, 0.01f)
+        // Brief and Board keep their tweens.
+        for ((style, quick, standard) in listOf(Triple(AppStyle.Brief, 140, 240), Triple(AppStyle.Board, 100, 160))) {
+            val m = Motions.of(style)
+            assertEquals(listOf(quick, standard), listOf(m.quick, m.standard))
+            assertEquals(null, m.state)
+            assertEquals(null, m.layout)
+        }
+    }
+
     @Test fun spacingIsTheIPhoneScale() {
         val t = Tokens.Space
         assertEquals(listOf(0, 2, 4, 6, 8, 12, 16, 24, 32).map { it.dp }, listOf(t.flush, t.xxs, t.xs, t.sm, t.s, t.m, t.l, t.xl, t.xxl))
