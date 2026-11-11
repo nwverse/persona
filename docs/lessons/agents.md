@@ -2,6 +2,17 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+## A queued AGY turn cannot own the executing prompt's text (#4564)
+
+The pending-turn record can change before the previous ACP prompt finishes. Keep the executing prompt's stream
+owner separately, clear its text at completion, and publish an empty boundary before the next prompt starts. Text
+chunks separated by a tool call are distinct messages. Accumulating them across the whole turn makes progress and
+final replies appear concatenated in the next exchange. Runtime wire tests cover queued and consecutive prompts.
+
+The web hook must also forget raw live text once its transcript item replaces it. Hiding the derived visible text
+alone retains a copy that can return when a new user message changes the matching transcript tail. A fresh delta
+may legitimately repeat an earlier answer, so retirement follows the landed stream's lifetime.
+
 - A source-search query containing a colon is not necessarily a URL: Go's `url.Parse` treats `bug: login` and `is:open login` as schemes.
   In `server/internal/node/worktree_composer.go`, only an explicit HTTP(S) prefix selects URL validation; other text remains a repository-scoped
   search, even when it contains a URL later in the query. Regress through `worktree.source` and check the exact query sent to `github.listWorkItems`,
