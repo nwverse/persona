@@ -207,16 +207,18 @@ internal class AgentsViewModel(
     }
 
     private val todosFlow = tasks?.todos ?: MutableStateFlow(emptyList())
+    private val todosSupportedFlow = tasks?.todosSupported ?: MutableStateFlow(false)
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         preferences.snapshots(pairingScope).combine(repository.listStatus) { prefs, status -> prefs to status },
-        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, ::Pair)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos) ->
+        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos, todosSupported) ->
         // The current assistant's (the hub's lists are every manager's, each row with its own).
         val everySession = if (assistant == null) hubSessions else hubSessions.filter { assistant.ownsOn(it.machineId, it.manager) }
         val everyMachine = if (assistant == null) hubMachines else hubMachines.filter { assistant.ownsOn(it.id, it.manager) }
         val source = if (group == null) everySession else everySession.filter { group.admits(it.machineId) }
         val machines = if (group == null) everyMachine else everyMachine.filter { group.admits(it.id) }
         val sessions = ops.project(source)
-        val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes)
+        val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
+            grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
         val rows = sessions.map { it.listSession(prefs) }
         // A partial machine snapshot must not hide sessions in machine grouping.
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
@@ -264,8 +266,13 @@ internal class AgentsViewModel(
             val counts = status.counts
             val machineCounts = status.machineCounts
             val quickCounts = AgentQuickFilter.entries.associateWith { filter ->
-                filter.state?.let { counts.state[it.wire] ?: 0 }
-                    ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
+                when (filter) {
+                    // The hub counts them among working and apart too (#6045): Working leaves them out, as iOS.
+                    AgentQuickFilter.BackgroundWaiting -> counts.backgroundWaiting
+                    AgentQuickFilter.Working -> ((counts.state[AgentState.Working.wire] ?: 0) - counts.backgroundWaiting).coerceAtLeast(0)
+                    else -> filter.state?.let { counts.state[it.wire] ?: 0 }
+                        ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
+                }
             }
             fun count(id: String): SessionListCounts? = metadata[id]?.takeIf {
                 it.revision == status.counts.revision && it.filter.query == projected.settings.query.take(256) &&
@@ -515,6 +522,9 @@ internal class AgentsViewModel(
         ?.let { it.isLive && it.canTerminal } ?: page.value.sessions.isEmpty()
     /** "Join live": join a Codex app-server thread live; the list refreshes after it. */
     fun attach(session: Session) = change(session.machineId, R.string.agents_notice_attached) { it.attach(session) }
+    /** Stop its turn from the list (iOS's row menu Interrupt): felt once it went through. */
+    fun interrupt(session: Session) = change(session.machineId, R.string.agents_notice_interrupted,
+        onDone = { _haptics.tryEmit(Haptic.Tap) }) { it.interrupt(session) }
     fun stopLoop(session: Session) = sendOperation("loop:${session.key.path}") {
         if (hubGroups.groups.value.stateFor(session.machineId, connection.state.value) != ConnectionState.Online) { _notice.value = AgentText(R.string.agents_notice_stop_loop_offline); return@sendOperation }
         sendOnce("loop:${session.key.path}", session.key, STOP_LOOP_PROMPT)
@@ -625,6 +635,10 @@ internal class AgentsViewModel(
                 folded = current.folded - group.id + if (group.folded) emptySet() else setOf(group.id),
                 expandedIdle = if (group.folded) current.expandedIdle + TodoNoneOpened else current.expandedIdle - TodoNoneOpened,
             )
+            // By Status's Seen starts folded: opening it is kept ([StateSeenOpened]), folding it again forgets that.
+            else if (group.id == StateSeenGroup) current.copy(
+                folded = current.folded - group.id - StateSeenOpened + if (group.folded) setOf(StateSeenOpened) else emptySet(),
+            )
             else current.copy(folded = if (group.folded) current.folded - group.id else current.folded + group.id)
         }
         saveFolds()
@@ -636,7 +650,8 @@ internal class AgentsViewModel(
     fun foldAll(fold: Boolean) {
         previous = null
         settings.update { it.copy(
-            folded = if (fold) (page.value.list.groups.map { group -> group.id } + page.value.list.machines.map { machine -> machine.id }).toSet() else emptySet(),
+            folded = if (fold) (page.value.list.groups.map { group -> group.id } + page.value.list.machines.map { machine -> machine.id }).toSet()
+                else if (page.value.settings.grouping == AgentGrouping.State) setOf(StateSeenOpened) else emptySet(),
             expandedQuiet = if (fold) emptySet() else page.value.list.groups.filter { group -> group.parent == "quiet" }.map { group -> group.id }.toSet(),
         ) }
         saveFolds()
@@ -644,7 +659,6 @@ internal class AgentsViewModel(
     }
     fun showIdle(group: AgentListGroup) {
         val key = when {
-            group.id == "state/idle" -> "state-idle"
             group.id.startsWith("machine/") -> "machine-${group.id.removePrefix("machine/")}"
             else -> group.id
         }

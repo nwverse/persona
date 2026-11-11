@@ -23,7 +23,7 @@ func writeGitFile(t *testing.T, path, body string) {
 // them in their own folders), a submodule and a detached HEAD.
 func TestReadGitPlace(t *testing.T) {
 	home := t.TempDir()
-	// readGitPlace walks the filesystem itself, so GIT_CEILING_DIRECTORIES does not apply. A .git file
+	// readGitPlace walks the filesystem itself, so GIT_CEILING_DIRECTORIES does not apply. An empty .git file
 	// stops discovery at the fixture boundary even when the temporary directory's parent is a repository.
 	writeGitFile(t, filepath.Join(home, ".git"), "")
 	repo := filepath.Join(home, "Code", "app")
@@ -78,19 +78,19 @@ func TestReadGitPlace(t *testing.T) {
 		name, cwd string
 		want      gitPlace
 	}{
-		{"main checkout", repo, gitPlace{root: repo, worktree: repo, branch: "main"}},
-		{"folder inside the main checkout", filepath.Join(repo, "web", "src"), gitPlace{root: repo, worktree: repo, branch: "main"}},
-		{"trailing slash", repo + "/", gitPlace{root: repo, worktree: repo, branch: "main"}},
-		{"linked worktree elsewhere", tree, gitPlace{root: repo, worktree: tree, branch: "fix/login"}},
-		{"detached worktree inside the repo", inner, gitPlace{root: repo, worktree: inner, branch: ""}},
-		{"submodule", sub, gitPlace{root: sub, worktree: sub, branch: "trunk"}},
-		{"submodule's linked worktree", subTree, gitPlace{root: sub, worktree: subTree, branch: "linked"}},
-		{"bare repository's worktree", bareTree, gitPlace{root: bare, worktree: bareTree, branch: "main"}},
+		{"main checkout", repo, gitPlace{repo, repo, "main"}},
+		{"folder inside the main checkout", filepath.Join(repo, "web", "src"), gitPlace{repo, repo, "main"}},
+		{"trailing slash", repo + "/", gitPlace{repo, repo, "main"}},
+		{"linked worktree elsewhere", tree, gitPlace{repo, tree, "fix/login"}},
+		{"detached worktree inside the repo", inner, gitPlace{repo, inner, ""}},
+		{"submodule", sub, gitPlace{sub, sub, "trunk"}},
+		{"submodule's linked worktree", subTree, gitPlace{sub, subTree, "linked"}},
+		{"bare repository's worktree", bareTree, gitPlace{bare, bareTree, "main"}},
 		{"not a repository", plain, gitPlace{}},
 		{"relative path", "Code/app", gitPlace{}},
 		{"empty", "", gitPlace{}},
 	} {
-		if got := readGitPlace(c.cwd); legacyGitPlace(got) != c.want {
+		if got := readGitPlace(c.cwd); got != c.want {
 			t.Errorf("%s: readGitPlace(%q) = %+v, want %+v", c.name, c.cwd, got, c.want)
 		}
 	}
@@ -163,7 +163,6 @@ func TestPhysicalGitPlaceResolvesSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	same := readGitPlace(repo).project // the repository's identity, read at its physical directory
 	for _, c := range []struct {
 		name, cwd string
 		want      gitPlace
@@ -179,12 +178,8 @@ func TestPhysicalGitPlaceResolvesSymlinks(t *testing.T) {
 		{"a relative path", "projects/app", gitPlace{}},
 	} {
 		got := physicalGitPlace(c.cwd)
-		if legacyGitPlace(got) != c.want {
+		if got != c.want {
 			t.Errorf("%s: physicalGitPlace(%q) = %+v, want %+v", c.name, c.cwd, got, c.want)
-		}
-		// Whichever way it is reached, a session in the repository has the repository's identity (#4637).
-		if c.want.root != "" && (got.project == nil || same == nil || *got.project != *same) {
-			t.Errorf("%s: project %+v, want %+v", c.name, got.project, same)
 		}
 	}
 	// As written, the same repository is two projects: what the sessions' records do not agree on.
@@ -247,5 +242,3 @@ func awaitGitPlace(t *testing.T, cache *gitPlaceCache, cwd string) gitPlace {
 	}
 	return cache.lookup(cwd)
 }
-
-func legacyGitPlace(p gitPlace) gitPlace { p.project = nil; return p }

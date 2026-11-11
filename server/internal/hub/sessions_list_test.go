@@ -812,3 +812,72 @@ func TestSessionsOfOneManagerSeveralComputersExtension(t *testing.T) {
 		t.Errorf("B's counts through its extension: %d %s %v", code, out, err)
 	}
 }
+
+// with_counts=1 (#4858): the page is what it is without the key, and its counts are what ?counts=1 with the same
+// filters answers, ignoring since, cursor and limit, so one read replaces a refresh's two.
+func TestRuntimePageWithCounts(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	for n := range 60 {
+		state := "idle"
+		if n%3 == 0 {
+			state = "working"
+		}
+		m.sessions = append(m.sessions, proto.Session{MachineID: "demo", SessionID: fmt.Sprintf("s%02d", n), State: state})
+	}
+	read := func(query string) (int, []byte) {
+		w := httptest.NewRecorder()
+		h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?"+query, nil))
+		return w.Code, w.Body.Bytes()
+	}
+	counts := func(query string) sessionlist.Counts {
+		t.Helper()
+		code, body := read("counts=1" + query)
+		var c sessionlist.Counts
+		if err := json.Unmarshal(body, &c); code != 200 || err != nil {
+			t.Fatalf("counts%s: %d %s %v", query, code, body, err)
+		}
+		return c
+	}
+	first := runtimePage(t, h, "summary=1&limit=50")
+	for _, tc := range []struct{ page, filters string }{
+		{"summary=1&limit=50", ""},
+		{"summary=1&limit=10", "&state=working"},
+		{"summary=1&limit=50&since=" + neturl.QueryEscape(first.Revision), ""},
+		{"summary=1&limit=50&cursor=" + neturl.QueryEscape(first.Cursor), ""},
+	} {
+		code, body := read(tc.page + tc.filters + "&with_counts=1")
+		var got struct {
+			listTestPage
+			Counts *sessionlist.Counts `json:"counts"`
+		}
+		if err := json.Unmarshal(body, &got); code != 200 || err != nil || got.Counts == nil {
+			t.Fatalf("%s: %d %s %v", tc.page, code, body, err)
+		}
+		want := runtimePage(t, h, tc.page+tc.filters)
+		if (got.Cursor == "") != (want.Cursor == "") {
+			t.Errorf("%s: cursor %q, want one like %q", tc.page, got.Cursor, want.Cursor)
+		}
+		got.Cursor, want.Cursor = "", "" // every read freezes its own view, under a new token
+		if !reflect.DeepEqual(got.listTestPage, want) {
+			t.Errorf("%s: the page changed with with_counts:\n got %+v\nwant %+v", tc.page, got.listTestPage, want)
+		}
+		if want := counts(tc.filters); !reflect.DeepEqual(*got.Counts, want) {
+			t.Errorf("%s: counts %+v, want %+v", tc.page, *got.Counts, want)
+		}
+	}
+	if c := counts("&state=working"); c.Total != 20 {
+		t.Fatalf("fixture: %+v", c)
+	}
+	// Without the key nothing is added; a malformed value is refused like any other boolean.
+	if _, body := read("summary=1&limit=50"); strings.Contains(string(body), `"counts"`) {
+		t.Errorf("counts without with_counts: %s", body)
+	}
+	if code, _ := read("summary=1&limit=50&with_counts=yes"); code != 400 {
+		t.Errorf("with_counts=yes: %d, want 400", code)
+	}
+	if !slices.Contains(h.features(), featureSessionsPageCounts) || slices.Contains(proto.Features, featureSessionsPageCounts) {
+		t.Error("sessions_page_counts must be advertised by the hub")
+	}
+}
