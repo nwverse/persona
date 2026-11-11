@@ -139,6 +139,8 @@
     <string name="designsystem_core_compact_before">%1$s tokens before</string>
     <string name="designsystem_core_compact_unit">1000</string>
     <string name="designsystem_core_compact_count">%1$sK</string>
+    <!-- Only a language whose compact unit is 1000 steps up to millions (persona.core.contracts.compactCount); Chinese and Japanese count in ten-thousands. -->
+    <string name="designsystem_core_compact_millions" translatable="false">%1$sM</string>
     <plurals name="designsystem_core_work_tools">
         <item quantity="one">%1$d tool</item>
         <item quantity="other">%1$d tools</item>

@@ -225,3 +225,10 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   docs promise ("Timed out, see the app"); a run with no card gets that line as a card of its own. Plugin channels, which
   send a note as plain text, stop being silent the same way. When a step ends a run without an answer, give it a note, or
   check what the sink does with a quiet end and no card.
+
+- **A quiet ending still needs a card to land on** (#4101). `channel.Run.Decide` ends a held run whose background work
+  reported back in a turn without words as `Quiet`, and the Feishu sink answered a quiet end only by rewriting the run's
+  card — but a held run gave its card back with its message, so the owner was told "N background tasks are still running"
+  and then heard nothing when they finished. The sink now builds the ending line for every quiet end and, with no card,
+  posts it as a card of its own (the same rule #3930's timeout relies on). The result stays quiet: the line is
+  "Done · took X", not an empty answer.
