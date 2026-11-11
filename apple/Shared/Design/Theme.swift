@@ -269,6 +269,10 @@ nonisolated enum Theme {
         static let scrim = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor.black.withAlphaComponent(0.3) : UIColor.black.withAlphaComponent(0.08) })
         /// The bar of actions next to it: light in light mode, the dark bar it always was in dark mode.
         static let bar = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.17, alpha: 1) : UIColor.white })
+        /// A selection handle dragged this close to a long lifted message's top or bottom edge, or past it, scrolls the
+        /// message on that way, faster the closer it gets: up to `edgeScrollSpeed` points a second (#3188).
+        static let edgeScroll: CGFloat = 44
+        static let edgeScrollSpeed: CGFloat = 900
     }
     #endif
 
@@ -516,6 +520,9 @@ nonisolated enum Theme {
         static let iconS: CGFloat = 22
         static let icon: CGFloat = 24
         static let iconL: CGFloat = 26
+        /// The least height the Mac's pointer is drawn at over its picture in the app's VNC (VNCPointerArt, #3075):
+        /// about the size macOS draws it on its own screen, so it reads however small the picture is.
+        static let pointer: CGFloat = 22
         static let wellXS: CGFloat = 28
         static let wellS: CGFloat = 30
         static let well: CGFloat = 32
@@ -852,6 +859,18 @@ nonisolated enum Theme {
         static let pink = Color(light: 0xD62E5C, dark: 0xFF6B8B)
         /// A quiet mark: a list row's tile that is information, not a place to go.
         static let gray = Color(light: 0x8E8E93, dark: 0x636366)
+    }
+
+    /// A permission mode's tone where the Agents header shows it (#3719), by how much the agent does without asking.
+    /// None is an agent state's color (blue, amber, green), which the same header uses for the state. Asks first is the
+    /// quiet ink (`.secondary`), drawn by the header itself.
+    enum ModeTone {
+        /// Plan Only: it reads and plans, and acts only once the plan is approved.
+        static let plans = Color(light: 0x0E7C86, dark: 0x4FD1C5)
+        /// Auto-Edit and Auto: it acts by itself within limits.
+        static var acts: Color { Hue.purple }
+        /// Allow Everything: nothing is asked, in the warning the new-agent form gives it.
+        static var allowsAll: Color { Theme.danger }
     }
 
     /// The user's own messages.

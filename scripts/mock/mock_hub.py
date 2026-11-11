@@ -1106,6 +1106,15 @@ if os.environ.get("MOCK_ORCA_CHILDREN"):
              "legacy-provider", 8, "codex", 1, 60, "Saved workspace history", space_kind="codex_app", space_id="provider-project",
              pane_id=None, workspace_id=None, capabilities={"read": True, "send": False}),
     ]
+# MOCK_STOPPED_AGENTS=1 (with MOCK_TERMINAL_PANES): a stopped Agent (#4754: read-only, its terminal stays) on the server,
+# whose tab is still open in the notes workspace (agent_session on its pane), and the plain panes name what runs in front.
+STOPPED_AGENT = "5d000000-0000-4000-8000-000000004754"
+if os.environ.get("MOCK_STOPPED_AGENTS"):
+    SESSIONS += [
+        sess("server", STOPPED_AGENT, "Fix the notes index", "/home/me/notes", "offline", "offline", "notes", 2, "fix-notes", 2, 45,
+             "Rebuilt the index and pushed the branch.", pane_id=None,
+             capabilities={"read": True, "terminal": True}, read_only_reason="Agent stopped"),
+    ]
 # MOCK_MANUAL_HERDR=1: two agents opened by hand in herdr (started_by_persona false) on no todo: Agents' "By to-do" lists them
 # in "Opened manually" (#2608 web, #2917 iOS / Mac).
 if os.environ.get("MOCK_MANUAL_HERDR"):
@@ -1715,8 +1724,8 @@ WEEKDAYS = [1, 2, 3, 4, 5]
 
 
 # MOCK_ASSISTANT_SIDEBAR=1: the Persona sidebar's "Recent" holds more than the 30 it shows before "View all"
-# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (red dot), unread
-# (blue dot), working (spinner).
+# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (blue dot), unread
+# (green dot), working (spinner).
 if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
     for _n, _state in enumerate(["needs_you", "unread", "working"] + ["idle"] * 33):
         _s = assistant_sess("b2e4d6f8-0000-4000-8000-%012d" % (100 + _n), "整理第 %d 周的周报" % (_n + 1),
@@ -1742,11 +1751,19 @@ if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
              ("task", "idle", "1104 | 定时 | 晨间简报", 60 * 27),
              ("lark_agent", "idle", "1105 | 整理 | 群里的需求", 60 * 2),
              ("spawned", "idle", "1103 | 研究 | 竞品的定价", 60 * 50)]
+    # MOCK_EXTERNAL=1 (#3758): one more, opened by an extension that isn't Lark /agent; with the Lark /agent one, the
+    # conversations the apps mark as external (their items are below, after ITEMS).
+    if os.environ.get("MOCK_EXTERNAL") == "1":
+        _AUTO[8] = ("lark_agent", "idle", "1105 | 研究 | 群里的需求汇总", 60 * 2)
+        _AUTO.append(("extension", "idle", "1104 | 文档 | 周报草稿", 60 * 26))
     for _n, (_origin, _state, _title, _min) in enumerate(_AUTO):
         _s = assistant_sess("b2e4d6f8-0000-4000-8000-%012d" % (300 + _n), _title, _min,
                             "这是收件箱里的一件事，你作为我的 AI 分身先处理它……" if _origin == "inbox" else "处理好了。")
         _s.update(origin=_origin, state=_state, status=STATUS_OF_STATE[_state],
                   pending_interactions=1 if _state == "needs_you" else 0)
+        if _origin in ("lark_agent", "extension"):
+            _s.update(origin_ref="example-ext" if _origin == "extension" else "larkext",
+                      opened_by="example-ext" if _origin == "extension" else "larkext")
         ASSISTANT.append(_s)
 
 def next_at(hhmm, weekdays):
@@ -2021,6 +2038,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
+                    "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
@@ -2047,7 +2066,7 @@ def assistant_state(space="", archived=False):
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
-                   kb_topics=cfg["kb_topics"])
+                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -2782,9 +2801,44 @@ RECORDINGS_TRIMMED = {}
 # recording (`kind: meeting`) as soon as it is stored, from its own sentences; pending leaves them being written; failed says
 # writing them failed; POST /mock/recording_minutes {"mode": …} switches it and forgets the recordings stored so far (a UI
 # test's fresh start on a shared mock).
-# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked").
+# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked"); as the hub, the minutes
+# shown stay while new ones are written (pending), and in `ready` mode the next version comes 3 s later.
+# POST /api/v1/recordings/{id}/minutes/todos {version, actions} confirms action items as to-dos (#4062): each gets a to-do and
+# its todo_id; an old version is 409 minutes_stale. POST /mock/recording_minutes_rewrite {"id"} writes the next version at once
+# (what the user sees is then stale).
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
 RECORDING_MINUTES_ASKED = []
+
+
+def recording_minutes_next(rid):
+    """The next version of a stored recording's minutes, written: what regenerating them ends in."""
+    with PHOTO_LOCK:
+        detail = KB_DETAIL.get(("recordings", rid))
+        if not detail or rid not in RECORDINGS: return
+        cited = photos_cited(rid)
+        version = (detail.get("minutes") or {}).get("version", 0) + 1
+        detail["minutes"] = {**recording_minutes(RECORDINGS[rid], rid), "version": version}
+        detail.setdefault("meta", {})["minutes_state"] = "ready"
+        moved = photos_of(rid) is not None and photos_cited(rid) != cited
+    if moved and meeting_conversation_on(): meeting_changed(rid, ["photos"])  # each photo's `cited` follows the minutes
+
+
+def minutes_span(body):
+    """`when`, `start` and `end` as the hub writes them (server/internal/kb/minutes.go `minutesWhen`, #4713): the recording's
+    own start to its end (`duration`, or `ended_at` when later; at least a minute) in the local zone. `when` adds the end's
+    date when it is another day; `start` / `end` are RFC 3339 with the offset, whole seconds, for the apps to format."""
+    def at(v):
+        try: return datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone().replace(microsecond=0)
+        except (TypeError, ValueError): return None
+    start = at(body.get("started_at"))
+    if not start: return {"when": None}
+    end = start + timedelta(seconds=int(float(body.get("duration") or 0)))
+    ended = at(body.get("ended_at"))
+    if ended and ended > end: end = ended
+    end = max(end, start + timedelta(minutes=1))
+    same = start.date() == end.date()
+    return {"when": start.strftime("%Y-%m-%d %H:%M") + "–" + end.strftime("%H:%M" if same else "%Y-%m-%d %H:%M"),
+            "start": start.isoformat(timespec="seconds"), "end": end.isoformat(timespec="seconds")}
 
 
 def recording_minutes(body, rid=None):
@@ -2795,17 +2849,21 @@ def recording_minutes(body, rid=None):
     segs = [x for x in body.get("segments", []) if x.get("text")]
     cal = body.get("calendar") or {}
     item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
+    acts = [x for x in segs if "负责" in x["text"]]
     out = {
+        "version": 1,
         "title": cal.get("title") or body.get("title") or None,
-        "when": "2027-01-15 16:00–17:00",
-        "start": "2027-01-15T16:00:00+08:00", "end": "2027-01-15T17:00:00+08:00",  # the same span, for the apps to format (#4713)
+        **minutes_span(body),  # `when`, and the same span as `start` / `end` for the apps to format (#4713)
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
         "points": [item(x) for x in segs[:2]] + [
             {"text": (x.get("caption") or (x.get("text") or x.get("note") or "").split("\n")[0])[:200], "at": x["at"], "photo": x["n"]}
             for x in (photos_listed(rid) if rid else []) if x.get("caption") or x.get("text") or x.get("note")],
         "decisions": [item(x) for x in segs if "决定" in x["text"]],
-        "actions": [{"who": "张三", "what": x["text"].rstrip("。"), "by": "周五前", "at": x["start"]} for x in segs if "负责" in x["text"]],
+        # Who is named before 负责 ("does"), and a deadline when one is said ("周五前").
+        "actions": [{k: v for k, v in {"id": "a%d" % (i + 1), "who": x["text"].split("负责")[0][-3:] or None, "what": x["text"].rstrip("。"),
+                                      "by": "周五前" if "周五前" in x["text"] else None, "at": x["start"], "todo_id": ""}.items() if v is not None}
+                    for i, x in enumerate(acts)],
         "open": [item(x) for x in segs if "没定" in x["text"]],
     }
     return {k: v for k, v in out.items() if v}
@@ -4378,6 +4436,12 @@ def recordings_route(h, method, p):
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True
+    if p == "/mock/recording_minutes_rewrite" and method == "POST":
+        rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
+        if not (KB_DETAIL.get(("recordings", rid)) or {}).get("minutes"):
+            return h.send_json({"error": "no stored recording with minutes"}, 404) or True
+        recording_minutes_next(rid)
+        return h.send_json({"id": rid, "version": KB_DETAIL[("recordings", rid)]["minutes"]["version"]}) or True
     if p == "/mock/recording_trim" and method == "POST":
         rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
         detail = KB_DETAIL.get(("recordings", rid))
@@ -4404,6 +4468,27 @@ def recordings_route(h, method, p):
     if not re.fullmatch(UUID_RE, rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
     if p.endswith("/live") or p.endswith("/ask"): return meeting_route(h, method, p, rid)
+    if p.endswith("/minutes/todos") and method == "POST":
+        detail = KB_DETAIL.get(("recordings", rid)) or {}
+        minutes = detail.get("minutes")
+        if rid not in RECORDINGS or not minutes: return h.send_json({"error": "没有这条录音的纪要"}, 404) or True
+        body = json.loads(h.last_body or b"{}")
+        if body.get("version") != minutes.get("version"):
+            return h.send_json({"error": "纪要已更新", "code": "minutes_stale"}, 409) or True
+        ids = body.get("actions") or []
+        if not ids: return h.send_json({"error": "actions 不能为空"}, 400) or True
+        acts = {a.get("id"): a for a in minutes.get("actions", [])}
+        if any(i not in acts for i in ids): return h.send_json({"error": "没有这个行动项"}, 404) or True
+        made = []
+        for i in ids:
+            a = acts[i]
+            if a.get("todo_id"): continue  # confirmed before: not again
+            now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            todo = {"id": "todo_" + uuid.uuid4().hex[:8], "title": (a["who"] + ": " if a.get("who") else "") + a["what"],
+                    "notes": "", "done_at": None, "created_at": now_str, "updated_at": now_str, "agents": []}
+            TODOS.insert(0, todo); made.append(todo); a["todo_id"] = todo["id"]
+        if made: push_todos()
+        return h.send_json({"todos": made, "minutes": minutes}) or True
     if p.endswith("/minutes") and method == "POST":
         if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音"}, 404) or True
         if rid in RECORDINGS_TRIMMED:
@@ -4411,10 +4496,10 @@ def recordings_route(h, method, p):
         if not RECORDINGS[rid].get("complete"): return h.send_json({"error": "转写还没完成"}, 409) or True
         RECORDING_MINUTES_ASKED.append(rid)
         with PHOTO_LOCK:
-            cited = photos_cited(rid)
             detail = KB_DETAIL.setdefault(("recordings", rid), {})
-            detail.pop("minutes", None); detail.setdefault("meta", {})["minutes_state"] = "pending"
-        if cited and meeting_conversation_on(): meeting_changed(rid, ["photos"])  # `cited` follows the minutes
+            detail.setdefault("meta", {})["minutes_state"] = "pending"  # the minutes shown stay meanwhile, as the hub's
+        if RECORDING_MINUTES[0] == "ready":  # the next version; each photo's `cited` follows it then
+            threading.Timer(3, recording_minutes_next, args=(rid,)).start()
         return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
     if p.rstrip("/") != "/api/v1/recordings/" + p.split("/")[4]:  # a path below a recording that no route took
@@ -6001,28 +6086,43 @@ if MAIN_ACTIONS and os.environ.get("MOCK_COMPACTION") in ("running", "done", "fa
 
 ITEMS[ASK2] = [it("user", "text", 60 * 5, text="⏰ 早报")] + [it("assistant", "text", 60 * 5, text="早上好！今天 2 个会议，3 封邮件需要回复。")]
 ITEMS[ASK3] = [it("user", "text", 60 * 29, text="帮我约周五和韩梅梅吃饭")] + [it("assistant", "text", 60 * 28, text="已经在日历里加好了。")]
-# MOCK_LARK_AGENT=1: the Friday scheduling request is a Feishu /agent conversation instead (prompts/lark/chat_agent.md): the
-# instructions and context in <persona-context> blocks, only the request outside them (the apps fold the blocks, #876).
-if os.environ.get("MOCK_LARK_AGENT") == "1":
-    _lark_ctx = [
-        ("instructions", "给 Agent 的说明", "", "示例用户在飞书「发布群」里用 /agent 叫你。这不是在电脑上开的会话，你只知道下面给出的上下文。\n\n"
-         "他的请求是这条消息最后、所有 <persona-context> 标签外面的那段文字；其余标签里是 hub 收集好的上下文。\n\n## 怎么做\n\n"
-         "- 能做的直接做掉：查资料、读代码、看日志、跑命令。\n- 做完用 lark_agent_reply 回复一次。"),
-        ("context", "请求的位置", "", "位置：群聊「发布群」（feed_id 7000000000000000001）；请求消息 id 7000000000000000002，2026-11-03 16:48 发出。"),
-        ("context", "前面的聊天", "", "\n".join(f"11-03 16:{10 + n:02d} {'韩梅梅' if n % 2 else '李雷'}：第 {n + 1} 条讨论构建失败的消息" for n in range(30))),
-        ("context", "请求引用的消息", "", "韩梅梅：构建在 lint 那一步挂了，帮忙看下是哪里被拦截了"),
-        ("doc", "文档 · 发布手册", "https://example.feishu.cn/docx/AbC123", "# 发布手册\n\n1. 冻结提交\n2. 跑全部测试\n3. 上传构建"),
-        ("context", "会话档案 · 发布群", "", "# 发布群\n\n## 这是什么\n\n每周五发版的协调群。"),
-        ("context", "项目 · 周五发版", "", ""),
-    ]
-    _lark_text = "".join(
+def lark_agent_request(request):
+    """A Feishu /agent conversation's first message (prompts/lark/chat_agent.md): the instructions and context in
+    <persona-context> blocks, only the request outside them (the apps fold the blocks, #876)."""
+    return "".join(
         f'<persona-context kind="{k}" title="{t}"' + (f' url="{u}"' if u else "") + f">\n{b}\n</persona-context>\n"
-        for k, t, u, b in _lark_ctx) + "看看哪里被拦截了"
-    ITEMS[ASK3] = [it("user", "text", 60 * 29, text=_lark_text),
+        for k, t, u, b in _LARK_CTX) + request
+
+
+_LARK_CTX = [
+    ("instructions", "给 Agent 的说明", "", "示例用户在飞书「发布群」里用 /agent 叫你。这不是在电脑上开的会话，你只知道下面给出的上下文。\n\n"
+     "他的请求是这条消息最后、所有 <persona-context> 标签外面的那段文字；其余标签里是 hub 收集好的上下文。\n\n## 怎么做\n\n"
+     "- 能做的直接做掉：查资料、读代码、看日志、跑命令。\n- 做完用 lark_agent_reply 回复一次。"),
+    ("context", "请求的位置", "", "位置：群聊「发布群」（feed_id 7000000000000000001）；请求消息 id 7000000000000000002，2026-11-03 16:48 发出。"),
+    ("context", "前面的聊天", "", "\n".join(f"11-03 16:{10 + n:02d} {'韩梅梅' if n % 2 else '李雷'}：第 {n + 1} 条讨论构建失败的消息" for n in range(30))),
+    ("context", "请求引用的消息", "", "韩梅梅：构建在 lint 那一步挂了，帮忙看下是哪里被拦截了"),
+    ("doc", "文档 · 发布手册", "https://example.feishu.cn/docx/AbC123", "# 发布手册\n\n1. 冻结提交\n2. 跑全部测试\n3. 上传构建"),
+    ("context", "会话档案 · 发布群", "", "# 发布群\n\n## 这是什么\n\n每周五发版的协调群。"),
+    ("context", "项目 · 周五发版", "", ""),
+]
+# MOCK_LARK_AGENT=1: the Friday scheduling request is a Feishu /agent conversation instead.
+if os.environ.get("MOCK_LARK_AGENT") == "1":
+    ITEMS[ASK3] = [it("user", "text", 60 * 29, text=lark_agent_request("看看哪里被拦截了")),
                    it("assistant", "text", 60 * 28, text="lint 那一步被新加的隐私扫描拦下了：`site/` 里有一张截图带了内网地址。已经换成占位图，重跑通过。")]
 ITEMS[ASK4] = [x for n in range(1, 31) for x in (
     it("user", "text", 60 * 50 + 61 - 2 * n, text=f"第 {n} 本也整理一下"),
     it("assistant", "text", 60 * 50 + 60 - 2 * n, text=f"第 {n} 本整理好了：\n\n- 三个主要观点\n- 两段摘抄\n- 一条和上一本的联系\n\n要接着整理第 {n + 1} 本吗？"))]
+
+# MOCK_EXTERNAL=1 (with MOCK_AUTO_CONVERSATIONS=1, #3758): what the two conversations extensions opened say. The Lark /agent
+# one opens with the request and its context blocks; the other extension's with plain text. The apps write where each
+# came from under its first message.
+if os.environ.get("MOCK_EXTERNAL") == "1":
+    ITEMS["b2e4d6f8-0000-4000-8000-000000000308"] = [
+        it("user", "text", 60 * 2 + 1, text=lark_agent_request("把群里这周提的需求汇总一下")),
+        it("assistant", "text", 60 * 2, text="汇总好了，已经回复到群里：这周一共 5 条需求，2 条和发布有关，1 条要你拍板。")]
+    ITEMS["b2e4d6f8-0000-4000-8000-000000000310"] = [
+        it("user", "text", 60 * 26 + 1, text="把这周的工作记录整理成周报草稿"),
+        it("assistant", "text", 60 * 26, text="周报草稿写好了：完成 4 件，进行中 2 件，下周计划 3 件。")]
 
 INTERACTION_HISTORY = [  # GET /api/v1/interactions/history: requests already answered
     {"id": "ix_blog_done", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
@@ -6366,8 +6466,10 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
 
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
+# /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
+SCREEN_MULTI_INTERACTIONS = []
 if os.environ.get("MOCK_SCREEN_MULTI"):
-    INTERACTIONS.append(
+    SCREEN_MULTI_INTERACTIONS.append(
         {"id": "scr_macbook_review_5c1d2e3f4a5b", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
          "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
          "screen": "←  ☒ 环境  ☐ 平台  ☐ 通知  ✔ Submit  →\n哪些平台要一起发？\n❯ 1. [✔] 手机\n     iPhone 版本。\n"
@@ -6382,6 +6484,7 @@ if os.environ.get("MOCK_SCREEN_MULTI"):
                         {"key": "4", "label": "Type something", "kind": "type_something", "keys": ["4"], "checked": True,
                          "text": "平板也看一眼"},
                         {"key": "5", "label": "Chat about this", "kind": "chat", "keys": ["5"]}]}})
+    INTERACTIONS.extend(copy.deepcopy(SCREEN_MULTI_INTERACTIONS))
 # MOCK_SCREEN_STEPS=1: a terminal AskUserQuestion of three questions read off the screen (Claude Code 2.1.316) that
 # answers as the terminal does (#2970): ← and → move between the tabs, an answer moves on to the next one, and after an
 # answer that names its option the node submits the review tab once every question has one (keys alone never do).
@@ -6987,6 +7090,13 @@ def mock_panes(mid):
             tabs.append({"id": extra["tab_id"], "workspace_id": wid, "label": "shell-2", "number": 3})
     for pane in SPLIT_PANES.get(mid, []):
         panes.append(pane)
+    if os.environ.get("MOCK_STOPPED_AGENTS") and mid == "server":
+        for p in panes:
+            if not p.get("agent"):
+                p["foreground"] = "npm" if "npm" in (p.get("title") or "") else "zsh"
+        tabs.append({"id": "w2:t2", "workspace_id": "w2", "label": "fix-notes", "number": 2})
+        panes.append({"pane": "w2:p4", "terminal": "pane:w2:p4", "tab_id": "w2:t2", "workspace_id": "w2", "title": "zsh",
+                      "cwd": "/home/me/notes", "foreground": "zsh", "agent_session": STOPPED_AGENT})
     panes = [p for p in panes if p["pane"] not in CLOSED_PANES and p["tab_id"] not in CLOSED_TABS]
     tabs = [dict(t, label=TAB_NAMES.get(t["id"], t["label"])) for t in tabs if t["id"] not in CLOSED_TABS]
     if MARKS_AGENTS and mid == "server":  # MOCK_AGENT_MARKS: a workspace of its own, one tab per agent
@@ -7051,6 +7161,16 @@ def node_action(h, p, body):
     """POST /api/v1/machines/{mid}/{panes,tabs}/{close,split,agent,git,rename}: what the menus ask of a computer."""
     mid, area, verb = p.split("/")[4], p.split("/")[5], p.split("/")[6]
     NODE_ACTIONS.append({"machine": mid, "route": area + "/" + verb, **body})
+    if area == "panes" and verb == "close_finished":  # #4754: the stopped Agents' terminals, those confirmed
+        hosts = mock_panes(mid).get("hosts") or []
+        done = [{"pane": x["pane"], "session_id": x["agent_session"], "tab_id": x["tab_id"], "workspace_id": x["workspace_id"]}
+                for x in (hosts[0]["panes"] if hosts else []) if x.get("agent_session")]
+        want = [x for x in str(body.get("panes") or "").split(",") if x]
+        if want:
+            done = [x for x in done if x["pane"] in want]
+        if not body.get("preview"):
+            CLOSED_PANES.update(x["pane"] for x in done)
+        return h.send_json({"closed": done, "kept": [], "preview": bool(body.get("preview"))})
     if area == "panes" and verb == "close":
         CLOSED_PANES.add(body.get("pane"))
     elif area == "tabs" and verb == "close":
@@ -10059,7 +10179,7 @@ LAUNCHER_PRESETS = [
 # "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
 # too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
-PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "import": None}
+PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
@@ -10108,10 +10228,55 @@ def _provider_apply(l, b):
         else: l.pop("has_headers", None)
 
 
+# POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
+# hub embeds. Exact rows only (the hub also lets an unlisted newer generation inherit; the mock does not).
+MODEL_CATALOG_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "internal", "assistant",
+                                  "models_catalog.json")
+_MODEL_CATALOG = {}
+
+
+def _catalog_key(model_id, dated=True):
+    """normalizeCatalogID (lower case, nothing up to the last /, no trailing [1m]), and without dated a trailing
+    -YYYYMMDD too (catalogGenerationKey)."""
+    key = model_id.strip().lower().rsplit("/", 1)[-1].removesuffix("[1m]")
+    if dated: return key
+    while True:
+        prev, key = key, re.sub(r"-\d{8}$", "", key.removesuffix("[1m]")).removesuffix("[1m]")
+        if key == prev: return key
+
+
+def _catalog_route(h, body):
+    if not _MODEL_CATALOG:
+        with open(MODEL_CATALOG_JSON, encoding="utf-8") as f:
+            for m in json.load(f)["models"]:
+                _MODEL_CATALOG[m["id"].lower()] = m
+    try:
+        ids = json.loads(body or b"{}").get("ids")
+        ids = [] if ids is None else ids
+        if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids): raise ValueError
+    except (ValueError, AttributeError):
+        h.send_json({"error": "请求格式不对：ids 要是模型 ID 的列表"}, 400); return
+    if len(ids) > 100:
+        h.send_json({"error": "一次最多查 100 个模型 ID"}, 400); return
+    if any(len(x.strip().encode()) > 200 for x in ids):
+        h.send_json({"error": "模型 ID 最长 200 字节"}, 400); return
+    PROVIDER_LOG["catalog"].append(ids)
+    out, seen = [], set()
+    for model_id in (x.strip() for x in ids):
+        if not model_id or model_id in seen: continue
+        seen.add(model_id)
+        row = _MODEL_CATALOG.get(_catalog_key(model_id)) or _MODEL_CATALOG.get(_catalog_key(model_id, dated=False))
+        if row: out.append({"id": model_id, **{k: v for k, v in row.items() if k != "id"}})
+    h.send_json({"models": out})
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
     "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route)."""
+    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
+    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    if p == "/api/v1/launchers/catalog" and method == "POST":
+        _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
@@ -10686,9 +10851,32 @@ def subagent_step():
 
 
 # MOCK_MESSAGE_LIFT=1: chats for the lifted message of a long press (#603): short messages, the newest one just above the
-# composer, and a long answer with a heading, a list, a code block and a table, taller than any screen. Synthetic text.
+# composer, and a long answer with a heading, a list, a code block and a table, taller than any screen, in an Agents chat
+# and in a Persona conversation (#3188: the lifted copy scrolls to its first line); in another Persona conversation, an
+# answer a little shorter than a small phone's screen, which lifts whole, under where Persona's top bar floats. And a long
+# message of yours with paths that are there on the machine (underlined links), and an answer with inline code, a list,
+# a code block and a quote (#3188: the words stay where they are, lifted and selected). Synthetic text.
 LIFT_SHORT = "a1f3c2d4-0000-4000-8000-0000000c1e08"
 LIFT_LONG = "a1f3c2d4-0000-4000-8000-0000000c1e09"
+LIFT_ASK = "b2e4d6f8-0000-4000-8000-0000000c1e09"
+LIFT_ASK_MID = "b2e4d6f8-0000-4000-8000-0000000c1e0a"
+LIFT_MIX = "a1f3c2d4-0000-4000-8000-0000000c1e0b"
+# The case a tester reported (#3188): an answer with inline code in its sentences, a long path in inline code that
+# wraps, a list, a code block, a quote and a link, after a message of yours with a path; in an Agents chat and in a
+# Persona conversation. Every style's position test lifts and selects both.
+LIFT_KEY = "a1f3c2d4-0000-4000-8000-0000000c1e0c"
+# An answer with a quote long enough to fold (#2984), between two paragraphs, the second with a path there in code:
+# lifted and selected, the quote stays folded (or open, as it was in the chat) and its hidden lines are not selected.
+LIFT_FOLD = "a1f3c2d4-0000-4000-8000-0000000c1e0d"
+LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
+LIFT_KEY_MINE = "你先把管理密钥存到本机文件，我跑命令读一下。放在 ~/.config/example-gateway/management.key，权限设成 600，别打印到日志里。"
+LIFT_KEY_ANSWER = ("管理 Key 已经存到本机（hub）了：\n`/home/me/.config/example-gateway/management.key`\n\n"
+                   "- 文件权限 600，内容 64 位，没有换行，以 `cb3b` 开头、`047f` 结尾。\n"
+                   "- 我用这个文件里的 Key 请求了网关的 `/api/admin/accounts`，返回 200，Key 是对的。\n\n"
+                   "在 hub 上运行下面这条就能看到明文：\n\n```sh\ncat ~/.config/example-gateway/management.key; echo\n```\n\n"
+                   "> 这个文件只有你的账号能读，备份里也不会带上。\n\n"
+                   "复制后粘贴到 设置 › 扩展 › 网关 的 Key 框里，再点保存，步骤见[扩展设置说明](https://example.com/docs/extensions)。"
+                   "存好之后要删掉这个文件就跟我说一声。")
 
 
 def mock_message_lift():
@@ -10722,6 +10910,43 @@ def mock_message_lift():
                         it("assistant", "text", 5, text=long)]
     SESSIONS.append(sess("macbook", LIFT_SHORT, "登录页文案", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 1, 2, "收到，都提交了。"))
     SESSIONS.append(sess("macbook", LIFT_LONG, "改动整理", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 2, 5, "有问题的话告诉我具体哪一页。"))
+    ITEMS[LIFT_ASK] = [it("user", "text", 15, text="把这次登录和注册页的改动整理一下，带上测试结果"),
+                       it("assistant", "text", 5, text=long)]
+    ASSISTANT.append(assistant_sess(LIFT_ASK, "改动整理", 5, "有问题的话告诉我具体哪一页。"))
+    mid = ("## 接手前要知道的\n\n"
+           "这个仓库分成三块：服务端、网页端和手机端，各自有自己的测试脚本，改哪块就跑哪块的测试，跑完再提交。\n\n"
+           "服务端的配置都在一个文件里，本地开发用示例配置就能起来，不需要连真实的数据库，测试会自己起一个临时的。\n\n"
+           "网页端改样式之前先看设计规范，颜色、间距和字号都有现成的变量，不要在页面里直接写数字。\n\n"
+           "手机端的截图测试比较慢，一次大概要十分钟，可以先只跑你改到的那几页，合并之前再跑一遍完整的。\n\n"
+           "提交说明用英文写，一个改动一个提交，标题说清楚改了什么，正文写为什么这么改。\n\n"
+           "要我先带你看哪一块？")
+    ITEMS[LIFT_ASK_MID] = [it("user", "text", 12, text="我刚接手这个仓库，有什么要先知道的"),
+                           it("assistant", "text", 4, text=mid)]
+    ASSISTANT.append(assistant_sess(LIFT_ASK_MID, "接手须知", 4, "要我先带你看哪一块？"))
+    repo = "/Users/me/code/shop-app"
+    mine = ("定时检查：读取 docs/review-queue.md 中没处理的条目、notes/status.md 和最新的截图。按 docs/brief.md 做一轮核对，"
+            "更新日报和待办；发现新问题就在 30 分钟内给出影响、证据和建议。没有新问题就只更新 status 里的核对时间。"
+            "页面保持只读，不要另起新的循环。本批：[{\"at\": \"2026-11-10T16:54:04+00:00\", \"reason\": \"每小时核对；异常数=0\", "
+            "\"evidence\": \"notes/runs/20261110T165351Z/snapshot.json\"}]")
+    mix = ("### 这次核对的结果\n\n没有新问题，只更新了 `notes/status.md` 里的核对时间。\n\n"
+           "- **报错**：只有整点对账时的 6 条，都是已知的夜间噪音。\n- **页面**：首页和设置页的截图和上一批一致。\n\n"
+           "核对用的命令：\n\n```sh\nscripts/check.sh --since 1h --quiet\n```\n\n"
+           "> 日报的模板改过一次，标题里的日期现在按北京时间写。\n\n下一次核对在整点之后五分钟。")
+    ITEMS[LIFT_MIX] = [it("user", "text", 9, text=mine), it("assistant", "text", 7, text=mix)]
+    fold = ("评审意见原文如下，我按模块标了要改的地方：\n\n"
+            "> 登录页：按钮文字太长，小屏上换行；倒计时期间没有读屏提示。\n"
+            "> 注册页：日语下「获取验证码」被截短，手机号输错时只变红，没有说明原因。\n"
+            "> 设置页：深色模式下说明文字的对比度不够，大字号下开关和标题挤在一起。\n"
+            "> 共用组件：按钮标签要单行，放不下时先缩小字号，最小到 0.8 倍。\n"
+            "> 测试：截图基准图等确认后再更新，失败的两张和这次改动无关。\n\n"
+            "改动记在 `notes/status.md` 里，改完我跑一遍截图测试，再把结果发你。")
+    ITEMS[LIFT_FOLD] = [it("user", "text", 8, text="把上周评审的意见贴给我看看"), it("assistant", "text", 6, text=fold)]
+    SESSIONS.append(sess("macbook", LIFT_FOLD, "评审意见", repo, "done", "done", "shop-app", 17, "lift", 5, 6, "改完我跑一遍截图测试，再把结果发你。"))
+    ITEMS[LIFT_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
+    SESSIONS.append(sess("macbook", LIFT_KEY, "保存管理密钥", repo, "done", "done", "shop-app", 17, "lift", 4, 5, "存好之后要删掉这个文件就跟我说一声。"))
+    ITEMS[LIFT_ASK_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
+    ASSISTANT.append(assistant_sess(LIFT_ASK_KEY, "保存管理密钥", 5, "存好之后要删掉这个文件就跟我说一声。"))
+    SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
@@ -11998,6 +12223,10 @@ GAP = os.environ.get("MOCK_GAP") == "1"
 # one small file per language for screenshots, and a last message in the widget conversation that names some of them
 # and two that are not there (another machine's path, a deleted file).
 FILES = {}
+if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long message of yours are there (#3188)
+    for _f in ("docs/review-queue.md", "notes/status.md", "docs/brief.md", "notes/runs/20261110T165351Z/snapshot.json"):
+        FILES["/Users/me/code/shop-app/" + _f] = b"# placeholder\n"
+    FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
@@ -14263,7 +14492,8 @@ def png(w, h, rgb):
 # …&slow=S: it answers S seconds late (the small window's "Connecting…"); …&down=1: it hangs up on everyone, now and on
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
-               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False}
+               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False,
+               "events": []}  # clipboard writes (node / rfb) and keys, in the order they came (#3075: ⌘V after the write)
 # MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
 # numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
 # with "2:node" it sends none, as macOS's does, and MacBook's computer status carries them as the node reads them
@@ -14274,6 +14504,69 @@ FAKE_EXTENDED = FAKE_DISPLAYS > 1 and "node" not in _displays[1:]
 FAKE_W, FAKE_H = 480 * FAKE_DISPLAYS, 300
 FAKE_NODE_DISPLAYS = [{"id": i + 1, "x": 240 * i, "y": 0, "width": 240, "height": 150, **({"main": True} if i == 0 else {})}
                       for i in range(FAKE_DISPLAYS)] if FAKE_DISPLAYS > 1 and not FAKE_EXTENDED else []
+# MOCK_SCREEN_BG=black|white|gray|terminal (#3075): the mock Mac is 1920×1080 as a real one is, one plain color (a
+# terminal: near black with lines of light-gray text), and like macOS's its Screen Sharing sends no pointer (the app
+# draws its own); MOCK_SCREEN_CURSOR=1 sends macOS's arrow when asked, as other servers do (the Cursor pseudo-encoding:
+# its 1× pixels, black with a white outline, and its mask). GET /mock/screen-password?bg=… changes the background on
+# the screens connected (the pointer's look over each, VNCTests.testThePointerReads).
+FAKE_BG = {"kind": os.environ.get("MOCK_SCREEN_BG", "")}
+FAKE_BG_COLORS = {"black": (0, 0, 0), "white": (255, 255, 255), "gray": (128, 128, 128), "terminal": (30, 30, 32)}
+FAKE_TEXT = (204, 204, 204)
+if FAKE_BG["kind"]:
+    FAKE_W, FAKE_H = 1920, 1080
+# macOS's arrow at 1× as its Screen Sharing sends it ("#" black, "o" white), its hot spot at its tip.
+FAKE_ARROW = ["oo........", "o#o.......", "o##o......", "o###o.....", "o####o....", "o#####o...", "o######o..", "o#######o.",
+              "o########o", "o########o", "o#####oooo", "o##o##+o..", "o+ooo##o..", ".o+.o##+o.", "....o+##o.", ".....o++o.",
+              "......oo.."]
+FAKE_ARROW_HOT = (1, 1)
+
+
+def fake_cursor_rect():
+    """The Cursor pseudo-encoding of FAKE_ARROW: x, y the hot spot; its pixels in the client's format (B G R and a
+    byte of padding); then its mask, a bit a pixel, rows padded to a byte."""
+    w, h = len(FAKE_ARROW[0]), len(FAKE_ARROW)
+    shade = {"#": 0, "o": 255, "+": 128}
+    px, mask = b"", b""
+    for row in FAKE_ARROW:
+        bits = 0
+        for i, ch in enumerate(row):
+            v = shade.get(ch, 0)
+            px += bytes([v, v, v, 0])
+            if ch in shade: bits |= 1 << (((w + 7) // 8) * 8 - 1 - i)
+        mask += bits.to_bytes((w + 7) // 8, "big")
+    return struct.pack(">HHHHi", FAKE_ARROW_HOT[0], FAKE_ARROW_HOT[1], w, h, -239) + px + mask
+
+
+def fake_text(x, y):
+    """1 where a terminal's text is: lines 36 pixels apart, characters 16 wide, of lengths that vary, with spaces."""
+    if not (40 <= x < 1400 and 40 <= y < 760): return 0
+    line, ly = divmod(y - 40, 36)
+    col, lx = divmod(x - 40, 16)
+    return 1 if ly < 18 and lx < 11 and col < (line * 37) % 70 + 8 and (col * 7 + line) % 11 else 0
+
+
+def fake_bg_rect(z):
+    """The whole of a plain background in ZRLE: solid tiles, and two-color ones where a terminal has text."""
+    base = FAKE_BG_COLORS.get(FAKE_BG["kind"], (0, 0, 0))
+    cp = lambda c: bytes([c[2], c[1], c[0]])
+    out = bytearray()
+    for ty in range(0, FAKE_H, 64):
+        for tx in range(0, FAKE_W, 64):
+            tw, th = min(64, FAKE_W - tx), min(64, FAKE_H - ty)
+            if FAKE_BG["kind"] != "terminal" or not (tx < 1400 and ty < 760 and tx + tw > 40 and ty + th > 40):
+                out += b"\x01" + cp(base)
+                continue
+            out += bytes([2]) + cp(base) + cp(FAKE_TEXT)
+            for j in range(th):
+                acc = n = 0
+                for i in range(tw):
+                    acc = acc << 1 | fake_text(tx + i, ty + j); n += 1
+                    if n == 8: out.append(acc); acc = n = 0
+                if n: out.append(acc << (8 - n))
+    comp = z.compress(bytes(out)) + z.flush(zlib.Z_SYNC_FLUSH)
+    return struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, 16) + struct.pack(">I", len(comp)) + comp
+
+
 # The displays' numbers, 3×5 cells each, drawn 12 pixels a cell.
 FAKE_DIGITS = {1: [".#.", "##.", ".#.", ".#.", "###"], 2: ["###", "..#", "###", "#..", "###"],
                3: ["###", "..#", "###", "..#", "###"], 4: ["#.#", "#.#", "###", "..#", "..#"]}
@@ -14381,9 +14674,22 @@ def fake_screen_sharing():
             c.sendall(struct.pack(">HH", FAKE_W, FAKE_H) + fmt + struct.pack(">I", len(name)) + name)
             FAKE_SCREEN["conns"].append(conn)
             encodings, z, t, sent = [], zlib.compressobj(6), 0, False
-            frame = fake_frame()
+            frame = [] if FAKE_BG["kind"] else fake_frame()
+
+            def redraw():  # a plain background again (?bg=…), on the update request the client left waiting
+                if 16 not in encodings: return
+                with lock:
+                    c.sendall(struct.pack(">BxH", 0, 1) + fake_bg_rect(z))
+                FAKE_SCREEN["frames"] += 1
+            conn["redraw"] = redraw
 
             def update(rects, extended=False):
+                if FAKE_BG["kind"]:
+                    cursor = -239 in encodings and os.environ.get("MOCK_SCREEN_CURSOR") == "1"
+                    with lock:
+                        c.sendall(struct.pack(">BxH", 0, 1 + cursor) + (fake_cursor_rect() if cursor else b"") + fake_bg_rect(z))
+                    FAKE_SCREEN["frames"] += 1
+                    return
                 body = b""
                 if extended:  # ExtendedDesktopSize: reason 0, status 0, the framebuffer's size, then each display
                     body += struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, -308) + struct.pack(">B3x", FAKE_DISPLAYS)
@@ -14406,10 +14712,11 @@ def fake_screen_sharing():
                     encodings = list(struct.unpack(">%di" % n, exact(c, 4 * n)))
                 elif kind == 3:
                     exact(c, 9)
+                    conn["waiting"] = sent
                     if not sent:
                         sent = True
                         update([(0, 0, FAKE_W, FAKE_H)], extended=FAKE_EXTENDED and -308 in encodings)
-                    elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1":  # a box moving at ~30 frames a second
+                    elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1" and not FAKE_BG["kind"]:  # a box moving at ~30 frames a second
                         time.sleep(1 / 30)
                         old = (80 + (t * 7) % 300, 120 + (t * 3) % 120)
                         t += 1
@@ -14421,6 +14728,7 @@ def fake_screen_sharing():
                         update([(0, 0, 2, 1), (x0, y0, min(FAKE_W - x0, abs(new[0] - old[0]) + 40), min(FAKE_H - y0, abs(new[1] - old[1]) + 40))])
                 elif kind == 4:  # a key: what is typed on the lock screen ("Unlock", #1507 a-2), Return as \n
                     down, _, key = struct.unpack(">BHI", exact(c, 7))
+                    FAKE_SCREEN["events"].append({"key": key, "down": bool(down)})
                     if down and key == 0xff0d: FAKE_SCREEN["typed"] += "\n"
                     elif down and (0x20 <= key <= 0xff): FAKE_SCREEN["typed"] += chr(key)
                     elif down and key >= 0x01000000: FAKE_SCREEN["typed"] += chr(key - 0x01000000)
@@ -14438,6 +14746,7 @@ def fake_screen_sharing():
                 elif kind == 6:  # the client's clipboard
                     exact(c, 3); n = struct.unpack(">I", exact(c, 4))[0]
                     FAKE_SCREEN["clipboard"] = exact(c, n).decode("latin-1")
+                    FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "rfb"})
                 else: return
         except OSError:
             pass
@@ -17445,8 +17754,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(GIT_PULL_STATE)
         if p == "/mock/screen-password":  # MOCK_SCREEN=fake: the Mac's password changed; who signed in how; what was typed
             if "p" in q: FAKE_SCREEN["password"] = q["p"][0]
-            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="")
+            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[])
             if "clip" in q: fake_screen_clip(q["clip"][0])  # the Mac copied this
+            if "bg" in q and q["bg"][0] in FAKE_BG_COLORS and FAKE_BG["kind"]:  # another background (MOCK_SCREEN_BG)
+                FAKE_BG["kind"] = q["bg"][0]
+                for conn in list(FAKE_SCREEN["conns"]):
+                    if conn.pop("waiting", False):
+                        try: conn["redraw"]()
+                        except OSError: pass
             if "slow" in q: FAKE_SCREEN["slow"] = float(q["slow"][0])
             if "down" in q:
                 FAKE_SCREEN["down"] = q["down"][0] == "1"
@@ -17454,7 +17769,8 @@ class H(BaseHTTPRequestHandler):
                     try: conn["sock"].shutdown(socket.SHUT_RDWR)
                     except OSError: pass
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
-                                   "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"]})
+                                   "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
+                                   "events": FAKE_SCREEN["events"][-200:]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -17731,10 +18047,11 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT)
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            codex = {x["id"] for x in CODEX_INTERACTIONS}
-            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in codex] + copy.deepcopy(CODEX_INTERACTIONS)
-            RESOLVED[:] = [r for r in RESOLVED if r["id"] not in codex]
-            INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in codex]
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS  # the cards back, unanswered
+            ids = {x["id"] for x in again}
+            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
+            RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
+            INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in ids]
             return self.send_json({"ok": True})
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
@@ -18431,7 +18748,7 @@ class H(BaseHTTPRequestHandler):
         if doctor_route(self, p, "POST"): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
         if plugins_route(self, p, self.last_body): return
-        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|split|agent|git)|tabs/(close|rename))", p):
+        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
             return node_action(self, p, json.loads(self.last_body or b"{}"))
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
             return worktree_route(self, p, json.loads(self.last_body or b"{}"))
@@ -18449,6 +18766,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"pane": pane["pane"], "terminal": pane["terminal"], "tab_id": pane["tab_id"]})
         if p.startswith("/api/v1/machines/") and p.endswith("/computer/clipboard") and os.environ.get("MOCK_SCREEN") == "fake":
             FAKE_SCREEN["clipboard"] = json.loads(self.last_body or b"{}").get("text", "")  # pbcopy on the Mac (#1343)
+            FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "node"})
             return self.send_json({"ok": True})
         if p == "/test/lark-pins/state" and os.environ.get("MOCK_LARK_PINS"):
             req = json.loads(self.last_body or b"{}")
@@ -19539,6 +19857,11 @@ class H(BaseHTTPRequestHandler):
             for key, (low, high) in RETENTION_BOUNDS.items():
                 if key in body and (type(body[key]) is not int or not low <= body[key] <= high):
                     return self.send_json({"error": "%s must be %d–%d" % (key, low, high), "code": "bad_request"}, 400)
+            if "idle_close_hours" in body:  # 0–8760, as the hub checks it (#4754)
+                hours = body["idle_close_hours"]
+                if not isinstance(hours, int) or isinstance(hours, bool) or not 0 <= hours <= 8760:
+                    return self.send_json({"error": "idle_close_hours must be 0–8760"}, 400)
+                ASSISTANT_CONFIG["idle_close_hours"] = hours
             if "archive_closed_days" in body:  # 0–3650, as the hub checks it (#3618)
                 days = body["archive_closed_days"]
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
@@ -20472,6 +20795,7 @@ MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Per
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 
 
 

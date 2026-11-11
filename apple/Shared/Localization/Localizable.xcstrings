@@ -19645,6 +19645,28 @@
       },
       "extractionState": "manual"
     },
+    "Answer Question %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answer Question %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問 %lld に回答"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答第 %lld 题"
+          }
+        }
+      }
+    },
     "Answer for You": {
       "localizations": {
         "en": {
@@ -56257,6 +56279,30 @@
       },
       "extractionState": "manual"
     },
+    "From an extension": {
+      "comment": "Under the message an extension opened an assistant conversation with, and its row's VoiceOver label (#3758).",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From an extension"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拡張機能から"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来自扩展"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "From conversation “%@” [Message Source]": {
       "extractionState": "manual",
       "localizations": {
@@ -67121,6 +67167,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Leave Allow Everything?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave Allow Everything?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて許可をやめますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "离开全部放行？"
+          }
+        }
+      }
     },
     "Leave Worktree": {
       "localizations": {
@@ -130938,6 +131006,29 @@
       },
       "extractionState": "manual"
     },
+    "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「閉じる」の隣の「ピクチャ・イン・ピクチャ」ボタンで画面を小さなウインドウにして、ほかのAppやホーム画面の上に表示し続けます。タップするとここに戻ります。表示のみで、閉じると切断されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭按钮旁边的「小窗」把画面放进画中画，切到别的 App 或回到桌面也浮着；点小窗回到这里。小窗只能看，关掉小窗就断开。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "The pinned list is incomplete. Reload it.": {
       "localizations": {
         "en": {
@@ -133673,6 +133764,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "This agent wasn't started with Allow Everything, so it can't be switched back to it from here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This agent wasn't started with Allow Everything, so it can't be switched back to it from here."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このエージェントはすべて許可で起動していないため、切り替えるとここからは戻せません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 Agent 不是以全部放行启动的，切走后在这里切不回来。"
+          }
+        }
+      }
     },
     "This agent can't be stopped and closed from the phone": {
       "localizations": {
@@ -152181,6 +152294,29 @@
         }
       }
     },
+    "Couldn't read this iPhone's clipboard: tap Allow Paste when asked, or allow Paste from Other Apps for this app in Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read this iPhone's clipboard: tap Allow Paste when asked, or allow Paste from Other Apps for this app in Settings"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneのクリップボードを読み取れませんでした。確認が出たら「ペーストを許可」をタップするか、設定でこのAppの「ほかのAppからペースト」を許可してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读不到这台 iPhone 的剪贴板：弹出提示时点「允许粘贴」，或在设置里允许本 App「从其他 App 粘贴」"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Works In": {
       "localizations": {
         "en": {
@@ -161424,6 +161560,673 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Handle Notification": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handle Notification"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知を処理"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理通知"
+          }
+        }
+      }
+    },
+    "Hands a notification, or anything else you pass in, to Persona as an item of this device's Shortcuts source in Settings › Subscriptions. Only what you pass in is sent: nothing reads other apps' notifications.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hands a notification, or anything else you pass in, to Persona as an item of this device's Shortcuts source in Settings › Subscriptions. Only what you pass in is sent: nothing reads other apps' notifications."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知や渡したほかの内容を、「設定 › 購読」にあるこのデバイスのショートカットソースの項目として Persona に渡します。渡した内容だけを送り、ほかのアプリの通知は読み取りません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把通知或你传进来的其他内容交给 Persona，作为这台设备在「设置 › 订阅」里的快捷指令来源的一条。只发送你传进来的内容，不会读取其他 App 的通知。"
+          }
+        }
+      }
+    },
+    "Subscriptions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscriptions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "購読"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "订阅"
+          }
+        }
+      }
+    },
+    "Notification": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知"
+          }
+        }
+      }
+    },
+    "Subscription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscription"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "購読"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "订阅"
+          }
+        }
+      }
+    },
+    "Body": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Body"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本文"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正文"
+          }
+        }
+      }
+    },
+    "App": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アプリ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App"
+          }
+        }
+      }
+    },
+    "Link": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リンク"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "链接"
+          }
+        }
+      }
+    },
+    "Where it came from, such as Messages or Mail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Where it came from, such as Messages or Mail"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "どこから来たか（「メッセージ」や「メール」など）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来自哪里，比如“信息”或“邮件”"
+          }
+        }
+      }
+    },
+    "When it happened; now when empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When it happened; now when empty"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "起きた時刻。空なら現在"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发生的时间；留空就是现在"
+          }
+        }
+      }
+    },
+    "Send ${heading} from ${app} to Persona": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send ${heading} from ${app} to Persona"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "${app} の ${heading} を Persona に送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把来自 ${app} 的 ${heading} 发给 Persona"
+          }
+        }
+      }
+    },
+    "Sent to Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent to Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona に送信しました。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已发给 Persona。"
+          }
+        }
+      }
+    },
+    "Sent. To see it, turn on a destination for %@ in Persona's Settings › Subscriptions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent. To see it, turn on a destination for %@ in Persona's Settings › Subscriptions."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信しました。表示するには、Persona の「設定 › 購読」で「%@」の送信先をオンにしてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已发送。要看到它，请在 Persona 的「设置 › 订阅」里为「%@」打开一个去处。"
+          }
+        }
+      }
+    },
+    "The hub can't be reached now, so Persona will send it when it can.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub can't be reached now, so Persona will send it when it can."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今は hub に接続できないため、接続できたときに Persona が送信します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在连不上 hub，Persona 会在能连上时再发。"
+          }
+        }
+      }
+    },
+    "Nothing to send: pass a title or a body.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to send: pass a title or a body."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送る内容がありません。タイトルか本文を渡してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有可发送的内容：请传入标题或正文。"
+          }
+        }
+      }
+    },
+    "Your hub doesn't take items from Shortcuts yet. Update it, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your hub doesn't take items from Shortcuts yet. Update it, then try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "お使いの hub はまだショートカットからの項目を受け取れません。hub を更新してからもう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的 hub 还不接收快捷指令发来的内容。请先更新 hub 再试。"
+          }
+        }
+      }
+    },
+    "This device can only view on your hub, so it can't send items.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device can only view on your hub, so it can't send items."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスは hub で閲覧のみのため、項目を送れません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台设备在你的 hub 上只能查看，不能发送内容。"
+          }
+        }
+      }
+    },
+    "Too many items from this device in the last hour. Try again later.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many items from this device in the last hour. Try again later."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスから直近 1 時間に送った項目が多すぎます。しばらくしてからお試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台设备过去一小时发送的内容太多了，请稍后再试。"
+          }
+        }
+      }
+    },
+    "Add All": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add All"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部加入"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて追加"
+          }
+        }
+      }
+    },
+    "Add to To-Dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to To-Dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "加入待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加"
+          }
+        }
+      }
+    },
+    "Add to To-Dos: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to To-Dos: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "加入待办：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加：%1$@"
+          }
+        }
+      }
+    },
+    "Added %lld to To-Dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added %lld to To-Dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加入 %lld 条待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件をToDoに追加しました"
+          }
+        }
+      }
+    },
+    "Added [Recording Minutes a4062d]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加入"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "追加済み"
+          }
+        }
+      }
+    },
+    "Added to To-Dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added to To-Dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加入待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加しました"
+          }
+        }
+      }
+    },
+    "Couldn't add to To-Dos: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't add to To-Dos: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能加入待办：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加できませんでした：%1$@"
+          }
+        }
+      }
+    },
+    "The minutes changed. Showing the latest version; review the action items before adding them.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The minutes changed. Showing the latest version; review the action items before adding them."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "纪要已更新，下面是最新版本；请确认行动项后再加入待办。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議事録が変更されました。最新版を表示しています。追加する前にアクション項目を確認してください。"
+          }
+        }
+      }
+    },
+    "The new minutes couldn't be written. These are the earlier ones.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The new minutes couldn't be written. These are the earlier ones."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新纪要没整理成功，下面是之前的这份。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しい議事録を作成できませんでした。以前のものを表示しています。"
+          }
+        }
+      }
+    },
+    "The transcript has expired. Only these minutes are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transcript has expired. Only these minutes are kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "转写已过保留期，只留下了这份纪要。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字起こしは保存期間を過ぎました。この議事録だけが残っています。"
+          }
+        }
+      }
+    },
+    "Updating the minutes…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating the minutes…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在更新纪要…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議事録を更新中…"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -39,8 +39,8 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 **A9. Row content.** The work-item row in section 3.4, as iOS's default Avatar style draws it:
 
 - Leading: the agent mark in a round well with the state on its corner. Android puts the agent mark and the state mark side by side.
-- Line 2: up to two lines of the latest words, a state word only for Needs You, Awaiting Reply and Waiting in the background. Android writes a state word for every state but Seen.
-- Line 3: source · tab · space › tab · computer (the computer only when the list mixes computers), the model's short name, a to-do chip and the muted bell. Android shows "computer / space" only outside the tree and never the model.
+- Line 2: up to two lines of the latest words, a state word only for Needs You, Awaiting Reply and Waiting in the background. Android writes a state word for every state but Seen. Done (11-12, owner review): the state word only for those three (`rowStatusText`); TalkBack still hears every row's state.
+- Line 3: source · tab · space › tab · computer (the computer only when the list mixes computers), the model's short name, a to-do chip and the muted bell. Android shows "computer / space" only outside the tree and never the model. The model is now among the row's facts (11-12); the rest of line 3 is still to do.
 - Row styles: Avatar, Two Lines, State Cards and Compact List in ⋯ › Display and in Settings. Android has Compact and Detailed only.
 
 **A10. Search.** iOS matches every word across twelve fields (path, repository root, question, model, agent and errors among them) and takes `machine:`, `project:`, `agent:`, `model:`, `state:`, `is:pinned`, `is:error` and `since:`. Android matches the whole query as one substring in five fields. Requirement: as on iOS.
@@ -110,6 +110,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 
 - The grouping pill: `AgentHomeComponents.kt` takes the grouping's icon; the picker is a `JMenu` with the groupings only. Done (11-11) in `AgentsScreen.kt`: the pill shows the grouping's own icon and name with a chevron and opens a Group By sheet with the groupings only; with the home chrome the rest of the list's settings sit behind a ⋯ button until they move under the Agents switch (A4's second half). By Status has no generated glyph for iOS's two dots and shows a board of columns.
 - Computers, hub, range and sort move to a menu under the Agents switch, as `AgentsMenus.swift` does; display options into ⋯ › Display.
+  Checked (11-12): on Glass a tap on the selected Agents switch opens the list settings (computers, range, sort, display, Collapse and Expand All, Machines), as iOS's switch opens `ListMenu`'s items, and ⋯ opens the same; Brief and Board keep their segmented switch (decision 8). Collapse all's check mark now reads the sections only (`allCollapsed`), since Collapse All leaves the computers open.
 - The "Only <computer>" chip clears `machineFilter`. Done (11-11): with the home chrome, a chosen computer shows as a selected "Only <computer>" chip above the grouping pill (`AgentsHomeAffordancesTest`); the computers and range menu (A4) is still to move.
 
 ### A5
