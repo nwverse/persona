@@ -318,7 +318,8 @@ final class AppModel {
     #if DEBUG
     @ObservationIgnored var inboxHandOffDoneForTests: ((PendingMessage.InboxHandOff) -> Void)?
     #endif
-    /// Per group: the task asking a member-connected group's center whether it answers again (HubLinks.watchCenter).
+    /// Per group: the task asking whether a preferred candidate (the center, a hub's earlier address) answers again
+    /// while the socket is on a fallback (HubLinks.watchCenter).
     @ObservationIgnored var centerWatch: [String: Task<Void, Never>] = [:]
     @ObservationIgnored let outboxWriter = Debouncer(.milliseconds(300))
     /// By group and machine.
@@ -383,6 +384,7 @@ final class AppModel {
             assistantCurrent = SessionKey(path: v)
         }
         connection.lives = { [weak self] in self?.links.map(\.live) ?? [] }
+        connection.onPathChange = { [weak self] in self?.recheckRoutes() }
         buildLinks()
         if registry.hubs.isEmpty, !registryUnreadable, UserDefaults.standard.bool(forKey: Self.demoKey) {
             links = [makeLink("", .demo)]
@@ -541,6 +543,9 @@ final class AppModel {
             let parts = s.split(separator: ":", maxSplits: 1).map(String.init)
             r.hubs[0].config.access = parts.count == 2 ? HubAccess(clientID: parts[0], clientSecret: parts[1]) : nil
         }
+        // `-seedHubAddresses <base64 of a [HubAddress] JSON>`: the first hub's added addresses (screenshots, #4670).
+        if let s = UserDefaults.standard.string(forKey: "seedHubAddresses"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
+           let list = try? JSONDecoder().decode([HubAddress].self, from: json) { r.hubs[0].addresses = list.isEmpty ? nil : list }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()
@@ -579,7 +584,7 @@ final class AppModel {
         var new = new
         if new.access == nil { new.access = registry.hubs.first { $0.config.url == new.url }?.config.access }
         if let ssh, ssh.isUsable {
-            let direct = ssh.always ? false : await HubRoute.healthProbe(new)
+            let direct = ssh.always ? false : await HubRoute.healthProbe(.init(config: new))
             if !direct { try await tunnels.open(SSHTunnels.pairingID, route: ssh, hub: new.url) }
         }
         let client = APIClient(config: new)
