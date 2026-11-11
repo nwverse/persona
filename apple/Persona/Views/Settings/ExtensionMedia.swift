@@ -23,25 +23,25 @@ struct ExtensionPicture: View {
     @State private var image: Image?
     @State private var failed = false
 
+    /// The plain fill takes the frame it is given; the picture lies over it, clipped, so a cropped one never makes the
+    /// frame bigger.
     var body: some View {
-        ZStack {
-            if let image {
-                if fill { image.resizable().scaledToFill() } else { image.resizable().scaledToFit() }
-            } else if failed {
-                VStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(Theme.Icon.brokenImage).font(Theme.Font.heading).foregroundStyle(.tertiary)
-                    if let alt, !alt.isEmpty {
-                        Text(alt).font(Theme.Font.label).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(3)
+        Rectangle().fill(Theme.Fill.well)
+            .overlay {
+                if let image {
+                    if fill { image.resizable().scaledToFill() } else { image.resizable().scaledToFit() }
+                } else if failed {
+                    VStack(spacing: Theme.Space.xs) {
+                        ThemedIcon(Theme.Icon.brokenImage).font(Theme.Font.heading).foregroundStyle(.tertiary)
+                        if let alt, !alt.isEmpty {
+                            Text(alt).font(Theme.Font.label).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(3)
+                        }
                     }
+                    .padding(Theme.Space.s)
                 }
-                .padding(Theme.Space.s)
-            } else {
-                Rectangle().fill(Theme.Fill.well)
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.Fill.well)
-        .task(id: src) { await load() }
+            .clipped()
+            .task(id: src) { await load() }
     }
 
     private func load() async {
