@@ -194,6 +194,10 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual(room, {"state": "unavailable", "problem": "node_too_old"})
         ask = self.call("POST", f"/api/v1/recordings/{rid}/ask", {"id": str(uuid.uuid4()), "question": "x"})[1]["ask"]
         self.assertEqual((ask["state"], ask["via"]), ("answered", "material"))
+        self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 0, "segments": LINES})
+        heard = self.call("POST", f"/api/v1/recordings/{rid}/ask", {"id": str(uuid.uuid4()), "at": 1810})[1]["ask"]
+        # meeting.answer says the question it understood, as for #2981 meetings; the room's would keep "".
+        self.assertEqual((heard["via"], heard["question"], heard["heard"]), ("material", LINES[1]["text"], [LINES[1]]))
 
     def test_the_meetings_end(self):
         rid = str(uuid.uuid4())

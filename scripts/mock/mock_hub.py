@@ -3201,6 +3201,7 @@ def meeting_ask(h, st, body, rec):
         if lines and not question: a["heard"] = [dict(x) for x in lines]
         if room.get("state") == "unavailable" or a.get("via") == "material":
             a["via"] = "material"
+            if not question: a["question"] = heard  # meeting.answer says the question it understood, as in #2981
         elif room.get("state") != "ready":
             asks_changed(st)
             return h.send_json({"ask": meeting_ask_now(st, a)}, 202) or True  # waits for its room (room_ready)
@@ -3566,6 +3567,7 @@ def asks_to_material(rid):
         for a in st["asks"]:
             if a["state"] == "pending" and not a.get("via"):
                 a["via"] = "material"
+                if a["question_source"] == "heard": a["question"] = " ".join(x["text"] for x in a.get("heard") or [])
                 ask_answer(st, a)
 
 
