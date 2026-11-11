@@ -66,9 +66,10 @@ struct MachinesView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var phase
     @Environment(\.tabIsActive) private var inFront
-    @State private var metrics: [MachineRef: MachineMetrics] = [:]
+    @State private var metricsStore = MachineMetricsStore()
+    private var metrics: [MachineRef: MachineMetrics] { metricsStore.metrics }
     /// The groups whose hub keeps no metrics (404: before machine monitoring): their cards have no CPU / memory / network.
-    @State private var unmonitoredGroups = Set<String>()
+    private var unmonitoredGroups: Set<String> { metricsStore.unmonitoredGroups }
     /// Add Computer is up.
     @State private var adding: AddComputerRequest?
     private var unmonitored: Bool { !unmonitoredGroups.isEmpty && unmonitoredGroups.count >= model.groupIDs.count }
@@ -247,19 +248,7 @@ struct MachinesView: View {
         // requests' 30 s every round (#4705). One that is not asked keeps its last numbers.
         let apis = Dictionary(model.groupIDs.compactMap { g in model.api(g).map { (g, $0) } }, uniquingKeysWith: { a, _ in a })
         let asked = HubFanOut.asked(model.groupIDs.filter { apis[$0] != nil }) { model.socket($0)?.looksConnected == true }
-        await HubFanOut.run(asked, fetch: { g in try await apis[g]!.metricsOverview() }) { g, result in
-            switch result {
-            case .success(let fresh):
-                var all = metrics.filter { $0.key.group != g }
-                for m in fresh where all[MachineRef(group: g, id: m.machineID)] == nil { all[MachineRef(group: g, id: m.machineID)] = m }
-                metrics = all
-                unmonitoredGroups.remove(g)
-            case .failure(let error):
-                // A hub before machine monitoring: the cards go without numbers. Other errors keep the last numbers (the
-                // title says when the hub is out of reach).
-                if let e = error as? APIError, e.status == 404 { unmonitoredGroups.insert(g) }
-            }
-        }
+        await metricsStore.load(groups: asked, apis: apis, rosters: model.managerRosters)
     }
 
 }

@@ -1,5 +1,14 @@
 # Lessons: Android
 
+## Manager metrics snapshots belong to the pairing (#4031)
+
+The merged Machines service recreates its HTTP adapter on each poll. Keep each manager's last successful dashboard in
+the pairing's `GroupStack`, so a failed manager retains its samples across adapter and route replacement. Read the roster
+before requesting each online manager, replace successful empty snapshots, and merge by machine ID in roster order.
+Commit a batch to that cache only after checking the captured pairing and route; a cancelled route must leave no partial samples.
+When another hub succeeds, the merged dashboard also retains a failed hub's last complete snapshot from its current pairing.
+An entirely failed poll still reports its error, and an unsupported monitoring response does not restore old numbers.
+
 ## A design-system signature change compiles every caller (#4145)
 
 #4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
