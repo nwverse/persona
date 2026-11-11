@@ -26,6 +26,7 @@
   "show_all": "すべて表示",
   "pinned_section": "ピン留め",
   "directions": "常駐",
+  "direction_tasks": "{name}のタスク",
   "launching": "起動中",
   "launch_untitled": "新しいエージェント",
   "launch_failed": "起動に失敗",
