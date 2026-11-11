@@ -82,6 +82,8 @@ import SwiftUI
     var contentHeight: CGFloat? { list?.documentView?.frame.height }
     /// What is held, for `ScrollTrace`: its key, and whether it is kept.
     var traceHeld: String { held.map { "\($0.key)\($0.until == .distantFuture ? "+kept" : "")" } ?? "-" }
+    /// The iPhone's trace says where its scroll view is; the Mac's says nothing more.
+    var traceFrame: String { "-" }
     #endif
 
     func moved(_ key: String, to spot: Spot) {

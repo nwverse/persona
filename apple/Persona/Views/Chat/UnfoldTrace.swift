@@ -6,7 +6,7 @@ import AppKit
 #endif
 
 /// `-unfoldTrace YES`: every row opened or folded in the chat (`toggleInPlace`, a work line's `toggleWork`) is
-/// measured for 1.6 s from the tap (#1123): the frames drawn, the late ones (over 1.5 frames), the longest, and how far
+/// measured for `window` from the tap (#1123): the frames drawn, the late ones (over 1.5 frames), the longest, and how far
 /// the tapped row moved on screen, frame by frame, by its own report (`ChatPin`: a row's own geometry is current, a
 /// wrapper's can lag, docs/lessons/ios.md), with `-perfCounts YES` the view bodies drawn meanwhile. The results go out
 /// as `probe.unfold` (`-probes YES`) for the UI tests (`UnfoldTests`) and to the console as `UNFOLD …` lines.
@@ -14,6 +14,9 @@ import AppKit
 final class UnfoldTrace: NSObject {
     static let enabled = UserDefaults.standard.bool(forKey: "unfoldTrace")
     static let shared = UnfoldTrace()
+    /// How long after the tap: what a tap opens may come from the hub a second later (a folded work line's steps), and
+    /// the row went from under the finger only then (#3757).
+    static let window: CFTimeInterval = 3
 
     struct Result: Codable, Equatable {
         var what: String
@@ -94,7 +97,7 @@ final class UnfoldTrace: NSObject {
         last = link.timestamp
         ys.append(y())
         heights.append(height())
-        if CACurrentMediaTime() - start > 1.6 { finish() }
+        if CACurrentMediaTime() - start > Self.window { finish() }
     }
 
     private func finish() {

@@ -55,7 +55,7 @@ final class UnfoldTests: XCTestCase {
         let before = seq()
         e.tap()
         // Nothing asked of the app while it measures: every query of its accessibility tree costs it frames.
-        Thread.sleep(forTimeInterval: 2.2)
+        Thread.sleep(forTimeInterval: 3.6) // `UnfoldTrace.window`
         guard seq() != before, let r = results().last else { print("UNFOLD \(label): the tap measured nothing"); return nil }
         print("UNFOLD \(label) \(r.what) at \(String(format: "%.3f", r.at ?? 0)): moved \(r.moved) end \(r.end) step \(r.step ?? -1) hitches \(r.hitches)/\(r.frames) worst \(r.worstMS) ms bodies \((r.bodies ?? []).joined(separator: ", ")) ys "
               + r.ys.map { $0.map(String.init) ?? "-" }.joined(separator: " "))

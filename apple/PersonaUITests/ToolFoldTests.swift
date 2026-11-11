@@ -5,6 +5,7 @@ import XCTest
 /// closes at once, leaving no blank space and no fading copy of what it showed.
 ///   PORT=18951 MOCK_TOOL_TURN=1 python3 scripts/mock/mock_hub.py
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18951 xcodebuild test … -only-testing:PersonaUITests/ToolFoldTests
+/// `PERSONA_TOOL_TURN_HUB` comes first, so one run can take these tests and others with a mock of their own.
 final class ToolFoldTests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
@@ -19,7 +20,8 @@ final class ToolFoldTests: XCTestCase {
     }
 
     override func setUpWithError() throws {
-        guard let url = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs MOCK_TOOL_TURN=1 (PERSONA_MOCK_HUB)") }
+        let env = ProcessInfo.processInfo.environment
+        guard let url = env["PERSONA_TOOL_TURN_HUB"] ?? env["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs MOCK_TOOL_TURN=1 (PERSONA_MOCK_HUB)") }
         hub = url
         continueAfterFailure = true
         mock("reset")
@@ -80,11 +82,11 @@ final class ToolFoldTests: XCTestCase {
 
     private func foldSeq() -> Int { app.probeSeq("unfold", page: "agents") ?? app.probeSeq("unfold") ?? 0 }
 
-    /// Taps a row's head and waits out its measurement (1.6 s), asking the app nothing meanwhile.
+    /// Taps a row's head and waits out its measurement (`UnfoldTrace.window`, 3 s), asking the app nothing meanwhile.
     private func tap(_ e: XCUIElement) -> Fold? {
         let before = foldSeq()
         e.tap()
-        Thread.sleep(forTimeInterval: 2.0)
+        Thread.sleep(forTimeInterval: 3.2)
         return fold(after: before)
     }
 

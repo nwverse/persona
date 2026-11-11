@@ -87,8 +87,11 @@ import SwiftUI
         }
         held = Held(key: key, at: at, base: list.contentOffset.y, until: keep ? .distantFuture : .now.addingTimeInterval(Self.holdTime),
                     slow: slow || keep, rise: max(rise, 0), height: list.contentSize.height)
+        lastHeld = key
         want = nil
         reach = 0
+        stopGlide()
+        gliding = nil
         letGo()
         if slow || keep { watch() }
     }
@@ -119,21 +122,23 @@ import SwiftUI
     /// Lets go of what is held (a kept hold: ↓, sending, the user's scrolling).
     func release() {
         held = nil
+        stopGlide()
         gliding = nil
         want = nil
         resume = nil
     }
 
-    /// The list got taller or shorter by `by` at its bottom edge (what sits under it came or went: the queue strip, a
-    /// card, the mode bar). Drawn upside down from that edge, everything on it moved by as much; a held header is put back
-    /// where it was. The queued message taken as the next turn started moved the rows the user had open 60 pt down (#3005).
+    /// The list's bottom edge moved down by `by` on screen (up if negative): what sits under it came or went (the queue
+    /// strip, a card, the mode bar). Drawn upside down from that edge, everything on it moved by as much; a held header
+    /// is put back where it was. The queued message taken as the next turn started moved the rows the user had open
+    /// 60 pt down (#3005).
     func resized(by d: CGFloat) {
         guard var h = held, Date.now <= h.until, abs(d) >= 0.5, let list, !list.isTracking, !list.isDecelerating,
               let spot = last[h.key] else { return }
         h.base -= d
         held = h
         want = wanted(h, grown: spot.content - h.at.content)
-        put(list)
+        if glideTicker == nil { put(list) } // gliding: it goes there once the glide ends
     }
 
     /// The kept hold is no longer kept (the line folded, another one opened): it lasts the usual time from now, so what
@@ -154,16 +159,32 @@ import SwiftUI
         if !list.isTracking, !list.isDecelerating { hold(key, slow: true, keep: true) }
     }
 
-    /// A header moved (layout or scrolling).
     #if DEBUG
     /// Where `key` last reported itself on screen (`UnfoldTrace`).
     func screenY(_ key: String) -> CGFloat? { last[key]?.y }
     /// How tall the list's content is (`UnfoldTrace`).
     var contentHeight: CGFloat? { list?.contentSize.height }
-    /// What is held, for `ScrollTrace`: its key, and whether it is kept.
-    var traceHeld: String { held.map { "\($0.key)\($0.until == .distantFuture ? "+kept" : "")" } ?? "-" }
+    /// What is held, for `ScrollTrace`: its key, whether it is kept, where it is (screen y / content), where it was when
+    /// held, the offset it was held at and the one wanted; held no more, where the last one held is.
+    var traceHeld: String {
+        func spot(_ s: Spot?) -> String { s.map { "\(Int($0.y.rounded()))/\(Int($0.content.rounded()))" } ?? "-" }
+        guard let h = held else { return "- last \(traced.map { spot(last[$0]) } ?? "-")" }
+        return "\(h.key.suffix(6))\(h.until == .distantFuture ? "+kept" : "") at \(spot(last[h.key])) from \(spot(h.at)) base \(Int(h.base.rounded()))"
+            + " want \(want.map { "\(Int($0.rounded()))" } ?? "-")\(gliding != nil ? " glide" : "")"
+    }
+    private var traced: String? { held?.key ?? lastHeld }
+    /// Where the scroll view itself is in the window, and its height: the frame SwiftUI reports for the list is the
+    /// view around it.
+    var traceFrame: String {
+        guard let list else { return "-" }
+        let f = list.convert(list.bounds, to: nil)
+        return "\(Int(f.minY.rounded()))-\(Int(f.maxY.rounded())) h \(Int(list.bounds.height.rounded()))"
+    }
     #endif
+    /// The key last held (`traceHeld`).
+    private var lastHeld: String?
 
+    /// A header moved (layout or scrolling).
     func moved(_ key: String, to spot: Spot) {
         last[key] = spot
         guard var h = held, h.key == key, let list else { return }
@@ -242,19 +263,57 @@ import SwiftUI
     /// The rise's time constant (`rising`).
     nonisolated static let riseTau: Double = 0.1
 
-    /// The list from `from` (where it keeps the header still, beyond its ends if need be) to `to`, as UIKit glides a
-    /// scroll view (`setContentOffset(_:animated:)`, about 0.3 s): offset by offset, so the lazy list draws the rows
-    /// each one shows. Then anything that came meanwhile.
+    /// The list from `from` (where it keeps the header still, beyond its ends if need be) to `to`, eased out over
+    /// `glideTime`, so the lazy list draws the rows each offset shows. Then anything that came meanwhile. Set offset by
+    /// offset every frame, and held there: the pass that folded the steps away moved an offset set beyond the list's
+    /// end on its own afterwards (SwiftUI, by about the height folded), and UIKit's own animated scroll
+    /// (`setContentOffset(_:animated:)`, which this used) then ran its distance from there, past where the header
+    /// goes and off the screen, and the header came back up in one frame at the end: 209 → 619 → 1013 → 591 pt (#3005).
     private func glide(_ list: UIScrollView, from: CGFloat, to: CGFloat) {
-        list.contentOffset.y = from
-        list.setContentOffset(CGPoint(x: list.contentOffset.x, y: to), animated: true)
+        stopGlide()
+        let start = CACurrentMediaTime()
         gliding = .now.addingTimeInterval(Self.glideTime)
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(Self.glideTime))
-            guard let self, let list = self.list else { return }
-            self.gliding = nil
-            if self.want != nil, !list.isTracking { self.put(list) }
+        glideSet = from
+        list.contentOffset.y = from
+        // Anything else moving the list meanwhile (but the user's finger) is put back at once, in the same pass.
+        glideWatch = list.observe(\.contentOffset, options: [.new]) { @Sendable [weak self] _, _ in
+            MainActor.assumeIsolated { self?.keepGlide() }
         }
+        glideTicker = FrameTicker { [weak self] now in
+            guard let self, let list = self.list, !list.isTracking, !list.isDecelerating else { self?.endGlide(); return false }
+            let u = min(max((now - start) / Self.glideTime, 0), 1)
+            let y = from + (to - from) * CGFloat(1 - pow(1 - u, 3)) // ease out
+            self.glideSet = y
+            if abs(list.contentOffset.y - y) >= 0.25 { list.contentOffset.y = y }
+            if u >= 1 { self.endGlide(); return false }
+            return true
+        }
+    }
+
+    /// Where the glide has the list now, and what keeps it there (`glide`).
+    private var glideSet: CGFloat?
+    private var glideWatch: NSKeyValueObservation?
+    private var glideTicker: FrameTicker?
+
+    private func keepGlide() {
+        guard let y = glideSet, let list, !list.isTracking, !list.isDecelerating,
+              abs(list.contentOffset.y - y) >= 0.25 else { return }
+        list.contentOffset.y = y
+    }
+
+    private func stopGlide() {
+        glideWatch?.invalidate()
+        glideWatch = nil
+        glideTicker?.stop()
+        glideTicker = nil
+        glideSet = nil
+    }
+
+    /// The glide is over: the list goes where the header is wanted now (what came meanwhile).
+    private func endGlide() {
+        stopGlide()
+        gliding = nil
+        if want != nil, let list, !list.isTracking { put(list) }
     }
 
     /// How long UIKit's animated scroll takes.
@@ -268,6 +327,8 @@ import SwiftUI
         guard let list, let top = last[key]?.y, !list.isTracking, !list.isDecelerating else { return }
         held = nil
         want = nil
+        stopGlide()
+        gliding = nil
         // The list is upside down: its content top inset is the composer side on screen, its bottom inset the far side.
         let frame = list.convert(list.bounds, to: nil)
         let inset = list.adjustedContentInset
@@ -342,6 +403,31 @@ import SwiftUI
                 if let list = v as? UIScrollView { pin?.list = list }
             }
         }
+    }
+}
+
+/// Calls `tick` with the time of each display frame until it returns false, or `stop()` (`ChatPin`'s glide).
+private final class FrameTicker: NSObject {
+    private var link: CADisplayLink?
+    private let tick: (CFTimeInterval) -> Bool
+
+    init(_ tick: @escaping (CFTimeInterval) -> Bool) {
+        self.tick = tick
+        super.init()
+        let link = CADisplayLink(target: self, selector: #selector(frame(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        // Ending the glide in `tick` lets go of this ticker: kept until the call is over.
+        withExtendedLifetime(self) { if !tick(link.targetTimestamp) { stop() } }
+    }
+
+    /// The display link holds its target: stopped, both go.
+    func stop() {
+        link?.invalidate()
+        link = nil
     }
 }
 

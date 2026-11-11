@@ -2382,7 +2382,16 @@ struct ChatView: View {
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
         .scrollEdgeEffectHidden(true, for: .all)
         .scrollPosition($position)
-        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { scratch.listFrame = $0 }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { rect in
+            let old = scratch.listFrame
+            scratch.listFrame = rect
+            // Drawn upside down from its bottom edge, the list moves everything on it when that edge moves: what sits
+            // under it came or went (the queue strip taken as the next turn started moved the rows the user had open
+            // 60 pt down, #3005). The pin puts a held row back. Only that edge: its top edge moving moves nothing on
+            // it, and going by the list's height the pin moved a work line's header 40 pt by itself (`UnfoldTests`).
+            // Not for the keyboard: the newest stays above it, as it always has.
+            if old.height > 0, !KeyboardState.shared.isUp { pin.resized(by: rect.maxY - old.maxY) }
+        }
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { menu.dismiss(); Keyboard.dismiss() })
         // Only the user's own scrolling closes the bar; content streaming in also moves the offset (.animating).
@@ -2406,19 +2415,17 @@ struct ChatView: View {
             scratch.newestGap = new.offset + new.top
             setFollow { $0.scrolled(gap: scratch.newestGap) }
             chrome.offset = new.offset
-            // A height change (keyboard) moves the offset too: that is not the user scrolling. One from what sits under
-            // the list (the queue strip, a card) moves a held row with the list's bottom edge: the pin puts it back. Not
-            // for the keyboard: the newest stays above it, as it always has.
-            if old.height != new.height {
-                if !KeyboardState.shared.isUp { pin.resized(by: new.height - old.height) }
-                return
-            }
+            // A height change (keyboard) moves the offset too: that is not the user scrolling.
+            if old.height != new.height { return }
             scrolled(by: new.offset - old.offset)
         }
         .onScrollPhaseChange { old, phase in
             // The user's own scrolling: a drag, and the glide after a flick. Deceleration alone is not proof — landing
             // on the entry line produced it with no finger down and folded the chrome on open.
             if phase != .idle { scratch.lastActivity = .now }
+            #if DEBUG
+            scratch.phase = "\(old)>\(phase)"
+            #endif
             let flick = phase == .decelerating && (old == .tracking || old == .interacting || scratch.userDragging)
             scratch.userDragging = phase == .tracking || phase == .interacting || flick
             if phase == .idle, old != .idle, old != .animating {
@@ -2472,7 +2479,7 @@ struct ChatView: View {
         .onAppear {
             guard ScrollTrace.enabled else { return }
             ScrollTrace.shared.start(list: { [pin] in pin.list }) { [store, scratch, pin, follow = $follow, frozen = $frozen] in
-                Self.traceLine(follow: follow.wrappedValue, frozen: frozen.wrappedValue, scratch: scratch, store: store) + " pin \(pin.traceHeld)"
+                Self.traceLine(follow: follow.wrappedValue, frozen: frozen.wrappedValue, scratch: scratch, store: store) + " sv \(pin.traceFrame) pin \(pin.traceHeld)"
             }
         }
         #endif
@@ -2549,6 +2556,7 @@ struct ChatView: View {
         let mode = "\(follow.mode)\(follow.anchored ? "+anchored" : "") near \(follow.near ? 1 : 0) touch \(follow.touching ? 1 : 0) drag \(scratch.userDragging ? 1 : 0)"
         let held = "frozen \(frozen == nil ? 0 : 1) ftext \(frozen?.text.count ?? -1)"
         return "\(mode) \(held) live \(store.liveText.count) items \(store.items.count) gap \(Int(scratch.newestGap))"
+            + " list \(Int(scratch.listFrame.minY))-\(Int(scratch.listFrame.maxY)) ph \(scratch.phase)"
     }
     #endif
 
@@ -6134,6 +6142,8 @@ final class ChatScratch {
     /// Where the list is and how tall its content is (`probe.chat-rows`).
     var scrollY: CGFloat = 0
     var contentHeight: CGFloat = 0
+    /// The scroll phase's last change, from and to (`ScrollTrace`).
+    var phase = ""
     #endif
     /// The finger is on the list (or it is gliding after a flick): only then does the chrome follow it.
     var userDragging = false
