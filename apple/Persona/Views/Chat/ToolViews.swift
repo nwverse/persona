@@ -840,6 +840,22 @@ struct ToolDetail: View {
     }
 }
 
+/// The Raw Input switch under a tool's detail in words, showing or hiding the JSON the tool was called with.
+struct RawInputToggle: View {
+    @Binding var raw: Bool
+
+    var body: some View {
+        Button {
+            withAnimation(Theme.Motion.state) { raw.toggle() }
+        } label: {
+            Label(raw ? String(localized: "Hide Raw Input") : String(localized: "Raw Input"), systemImage: raw ? Theme.Icon.collapse : Theme.Icon.expand)
+                .font(Theme.Font.label).lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+    }
+}
+
 /// A tool no table knows (another server's MCP tool, a new one), its input as a key/value list (`ToolNaming.arguments`)
 /// rather than a JSON dump (#2986); the JSON itself under Raw Input, as a computer tool keeps it (`ComputerToolDetail`).
 struct ToolArgumentsDetail: View {
@@ -869,15 +885,7 @@ struct ToolArgumentsDetail: View {
                     }
                 }
                 .accessibilityIdentifier("tool-arguments")
-                Button {
-                    withAnimation(Theme.Motion.state) { raw.toggle() }
-                } label: {
-                    Label(raw ? String(localized: "Hide Raw Input") : String(localized: "Raw Input"), systemImage: raw ? Theme.Icon.collapse : Theme.Icon.expand)
-                        .font(Theme.Font.label).lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("tool-raw")
+                RawInputToggle(raw: $raw).accessibilityIdentifier("tool-raw")
                 if raw { CodeBlock(text: ToolTextMemo.input(item, scope: scope), maxLines: 14) }
             }
         }
@@ -1626,15 +1634,7 @@ struct ComputerToolDetail: View {
             }
             ForEach(Array(call.images.enumerated()), id: \.offset) { i, img in Base64Image(payload: img, gallery: call.images, index: i) }
             ScreenEntry(call: call)
-            Button {
-                withAnimation(Theme.Motion.state) { raw.toggle() }
-            } label: {
-                Label(raw ? String(localized: "Hide Raw Input") : String(localized: "Raw Input"), systemImage: raw ? Theme.Icon.collapse : Theme.Icon.expand)
-                    .font(Theme.Font.label).lineLimit(1)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityIdentifier("computer-raw")
+            RawInputToggle(raw: $raw).accessibilityIdentifier("computer-raw")
             if raw {
                 CodeBlock(text: input, maxLines: 14)
                 if let result = call.result {
