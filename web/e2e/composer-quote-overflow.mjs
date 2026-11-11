@@ -82,10 +82,18 @@ try {
     if (phase === "after") {
       assert.ok(initial.quotes.height <= height / 4 + 1, `${name}: quote stack exceeded one quarter of the viewport`);
       assert.ok(initial.quotes.top > 0 && initial.input.bottom <= height && initial.inputVisible, `${name}: composer input is off screen or covered`);
+      run.laterMessageVisible = await page.getByText(ITEMS[3].text, { exact: true }).evaluate((el) => {
+        const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return r.top >= 0 && Boolean(hit && el.contains(hit));
+      });
+      assert.ok(run.laterMessageVisible, `${name}: the message after the quoted passage is covered`);
       assert.equal(initial.cards, scenarios[scenario].length);
       if (scenario !== "short") {
         assert.ok(initial.scrollHeight > initial.clientHeight, `${name}: content was clipped instead of scrollable`);
         assert.equal(initial.overflow, "auto");
+        await page.locator("[data-quotes]").hover();
+        await page.mouse.wheel(0, 400);
+        await page.waitForFunction(() => document.querySelector("[data-quotes]").scrollTop > 0);
         await page.locator("[data-quotes]").evaluate((el) => { el.scrollTop = el.scrollHeight; });
         const last = page.locator("[data-comment-card]").last();
         // The complete bottom note remains reachable without scrolling the whole chat.
