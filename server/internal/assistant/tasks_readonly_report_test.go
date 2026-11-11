@@ -60,6 +60,8 @@ func TestReadonlyTaskReportDoesNotAskUser(t *testing.T) {
 			ix.Resumable = resumable
 			assertReadonlyReportAllowed(t, s, ix)
 		}
+		ix.ToolName = "mcp__jarvis__report_to_supervisor"
+		assertReadonlyReportAllowed(t, s, ix)
 		res := s.mcpCall(ctx, agent.MachineID, agent.SessionID, "report_to_supervisor", args, false)
 		if res.IsError {
 			t.Fatalf("completion report failed: %+v", res)

@@ -52,6 +52,7 @@ class AssistantSettingsStateTest {
                 notesEffective = update.notes ?: config.notesEffective,
                 main = if (update.main == AssistantConfigUpdate.CLEAR_MAIN) null else update.main ?: config.main,
                 mainTasksQuiet = update.mainTasksQuiet ?: config.mainTasksQuiet,
+                mainBackgroundFolded = update.mainBackgroundFolded ?: config.mainBackgroundFolded,
                 defaultPermissionMode = update.defaultPermissionMode ?: config.defaultPermissionMode,
             )
             return config
@@ -119,6 +120,26 @@ class AssistantSettingsStateTest {
         api.fail = true
         state.setMainTasksQuiet(true)
         assertEquals(false, state.state.value.config?.mainTasksQuiet)
+        assertTrue(state.state.value.notice?.error == true)
+    }
+
+    @Test fun backgroundFoldSwitchSavesAndComesBackOnFailure() = runTest {
+        val api = FakeApi()
+        val state = AssistantSettingsState(api, Zone())
+        state.load()
+        // A hub without the setting: nothing to switch (the chat folds as if it were on).
+        state.setMainBackgroundFolded(false)
+        assertTrue(api.updates.isEmpty())
+        assertTrue(state.state.value.config?.backgroundFolded == true)
+        api.config = api.config.copy(mainBackgroundFolded = true)
+        state.load()
+        state.setMainBackgroundFolded(false)
+        assertEquals(false, api.updates.single().mainBackgroundFolded)
+        assertEquals(null, api.updates.single().mainTasksQuiet)
+        assertEquals(false, state.state.value.config?.mainBackgroundFolded)
+        api.fail = true
+        state.setMainBackgroundFolded(true)
+        assertEquals(false, state.state.value.config?.mainBackgroundFolded)
         assertTrue(state.state.value.notice?.error == true)
     }
 

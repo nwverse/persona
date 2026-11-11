@@ -67,9 +67,16 @@ struct ChatLines {
     /// The sources whose rounds are background rounds: a supervising conversation's message, a follow-up, a scheduled run.
     static let backgroundKinds: Set<String> = ["conversation", "followup", "patrol"]
 
-    /// The input's source when it starts a background round.
+    /// The input's source when it starts a background round. A `followup` is one only as a scheduled follow-up (the hub
+    /// titles those): Persona continuing the user's own work after a usage limit reset (`limit_continue`) or waking the
+    /// chat for what it waits on (`wake`) carries the same source, and folding it would hide the answer to the user.
     static func backgroundSource(_ item: Item) -> MessageSource? {
         guard let source = MessageSource.of(item), backgroundKinds.contains(source.kind) else { return nil }
+        if source.kind == "followup" {
+            let state = Injected.of(item)?.state
+            if state == "limit_continue" || state == "wake" { return nil }
+            if (source.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        }
         return source
     }
 

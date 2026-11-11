@@ -105,6 +105,22 @@ import Testing
         #expect(folded(build([relayed()] + failed + [item(4)])) != nil)
     }
 
+    /// Persona continuing the user's own work keeps the answer shown: a usage-limit continuation, a wake-up, an
+    /// untitled follow-up.
+    @Test(arguments: ["limit_continue", "wake", "untitled"])
+    func continuationOfTheUsersWorkStaysShown(state: String) {
+        var question = item(1, role: "user", text: "Synthetic question")
+        question.clientMsgID = "synthetic-client"
+        var continued = item(3, role: "user", text: "Synthetic continuation")
+        if state == "untitled" {
+            continued.source = .object(["kind": .string("followup")])
+        } else {
+            continued.injected = Injected(kind: "followup", state: state, title: state == "wake" ? "Synthetic build" : nil,
+                                          line: "Synthetic one-line notice")
+        }
+        #expect(folded(build([question, item(2), continued, item(4, text: "Synthetic final answer")])) == nil)
+    }
+
     @Test func queuedUserMessageNeverJoinsTheRound() throws {
         var next = item(3, role: "user", text: "A genuine queued message")
         next.queued = true

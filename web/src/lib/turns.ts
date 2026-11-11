@@ -704,11 +704,16 @@ export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string,
  *  (docs/assistant/assistant.md "Background rounds"): another conversation's message, a scheduled task, a follow-up. */
 const BACKGROUND_SOURCES: ReadonlySet<string> = new Set(["conversation", "followup", "patrol"]);
 
-/** The input's source when it starts a background round. */
+/** The input's source when it starts a background round. A `followup` is one only as a scheduled follow-up (the hub
+ *  titles those): Persona continuing the user's own work after a usage limit reset (`limit_continue`) or waking the chat
+ *  for what it said it waits on (`wake`) carries the same source, and folding it would hide the answer to the user. */
 export function backgroundSource(it: Item): MessageSource | undefined {
   if (!isUserInput(it) || it.kind !== "text") return undefined;
-  const source = sourceOf(it, injectedOf(it));
-  return source && BACKGROUND_SOURCES.has(source.kind) ? source : undefined;
+  const injected = injectedOf(it);
+  const source = sourceOf(it, injected);
+  if (!source || !BACKGROUND_SOURCES.has(source.kind)) return undefined;
+  if (source.kind === "followup" && (injected?.state === "limit_continue" || injected?.state === "wake" || !source.title?.trim())) return undefined;
+  return source;
 }
 
 /** `background`: background rounds are separate rounds like supervision ones (a queued real message never joins them). */
