@@ -66,9 +66,9 @@ struct WorkingIndicator: View {
     }
 }
 
-/// A dense row's state at its end (the Assistant sidebar's conversations and groups, the automatic conversations,
-/// #4538): Needs You a still blue dot, Working the amber spinner, Unread a green dot, nothing for the rest. Still in a
-/// dense list, so only the spinner turns; the row's own label says the state in words.
+/// A dense row's state at its end (the Assistant sidebar's main chat and Directions, All Chats, #4538): Needs You a
+/// still blue dot, Working the amber spinner, Unread a green dot, nothing for the rest. Still in a dense list, so only
+/// the spinner turns; the row's own label says the state in words.
 struct RowStateMark: View {
     var state: AgentState
 

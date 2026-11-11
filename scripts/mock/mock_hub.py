@@ -1651,11 +1651,26 @@ if os.environ.get("MOCK_LEADERS") == "1":
         MOCK_DIRECTION_NAMES[c["session_id"]] = name
 
 
+# Each leader's open tasks by state, as the direction tree counts them (#4352, assistant/direction_tree.go), synthetic.
+MOCK_LEADER_COUNTS = [{"working": 2, "needs_you": 1, "stuck": 0, "review": 0}, {"working": 1, "needs_you": 0, "stuck": 0, "review": 1},
+                      {"working": 0, "needs_you": 0, "stuck": 0, "review": 0}, {"working": 0, "needs_you": 2, "stuck": 1, "review": 0}]
+
+
 def mock_leaders_list():
     """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
     titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
     return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
                          "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
+
+
+def mock_direction_tree():
+    """GET /api/v1/assistant/directions/tree (#4352): the leaders in order with their names and counts (no tasks listed
+    here), then the secretary group."""
+    dirs = [{"id": sid, "name": MOCK_DIRECTION_NAMES.get(sid, ""), "counts": MOCK_LEADER_COUNTS[i % len(MOCK_LEADER_COUNTS)],
+             "tasks": []} for i, sid in enumerate(MOCK_LEADERS)]
+    main = next((c["session_id"] for c in ASSISTANT if c.get("title") == "Persona"), "")
+    return {"directions": dirs + [{"id": main, "name": "", "secretary": True,
+                                   "counts": {"working": 1, "needs_you": 1, "stuck": 0, "review": 0}, "tasks": []}]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -17562,6 +17577,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
         if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
+        if p == "/api/v1/assistant/directions/tree": return self.send_json(mock_direction_tree())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
@@ -19269,6 +19285,18 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and p.endswith("/seen"):
             mark_seen(p.split("/")[5])
             return self.send_json({"ok": True})
+        # 设为常驻 / 取消常驻 (#4331, assistant/route.go makeDirection / endDirection): the leaders list changes
+        if p.startswith("/api/v1/assistant/directions/") and p.split("/")[-1] in ("make", "end") and self.command == "POST":
+            lead, op = p.split("/")[5], p.split("/")[6]
+            if lead not in {c["session_id"] for c in ASSISTANT}: return self.send_json({"error": "not a Persona conversation"}, 409)
+            if op == "make":
+                if lead not in MOCK_LEADERS:
+                    MOCK_LEADERS.append(lead)
+                    MOCK_DIRECTION_NAMES.setdefault(lead, next((c.get("title", "") for c in ASSISTANT if c["session_id"] == lead), ""))
+                return self.send_json({"leader": {"id": lead, "name": MOCK_DIRECTION_NAMES.get(lead, "")}})
+            ended = lead in MOCK_LEADERS
+            if ended: MOCK_LEADERS.remove(lead)
+            return self.send_json({"ended": ended})
         if p == "/api/v1/pins" and self.command == "PUT":  # the hub keeps them (the reply is what it kept)
             body = json.loads(self.last_body or b"{}")
             PINS.update(spaces=list(body.get("spaces") or []), sessions=list(body.get("sessions") or []))
