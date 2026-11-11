@@ -101,7 +101,7 @@ import { useVoiceEntry, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
 import { usageLimitLabel } from "../../lib/usage-limit";
-import { displayLines, getFeedState, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
+import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark } from "../../ui/AgentMark";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
@@ -697,6 +697,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     };
   }, [follow, scrollEl]);
 
+  const loadEarlierNearTop = () => {
+    const el = scroller.current;
+    if (!el || el.scrollTop >= 300 || !tr.hasMore || tr.loadingEarlier || first.current) return;
+    before.current = { h: el.scrollHeight, top: el.scrollTop };
+    void tr.loadEarlier().finally(() => {
+      // nothing came: forget the anchor
+      requestAnimationFrame(() => (before.current = null));
+    });
+  };
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
@@ -707,14 +717,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
-    if (el.scrollTop < 300 && tr.hasMore && !tr.loadingEarlier && !first.current) {
-      before.current = { h: el.scrollHeight, top: el.scrollTop };
-      void tr.loadEarlier().finally(() => {
-        // nothing came: forget the anchor
-        requestAnimationFrame(() => (before.current = null));
-      });
-    }
+    loadEarlierNearTop();
   };
+
+  // Reaching the top only loads older pages through a scroll event, and a view that cannot scroll (a page shorter than
+  // it: the main conversation's newest rounds are often two folded background rounds) or a page that landed without
+  // moving it sends none. Each change asks again, so older pages load until the top is out of reach.
+  useEffect(() => {
+    loadEarlierNearTop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tr.items, tr.hasMore, tr.loadingEarlier]);
 
   const toEnd = () => {
     const el = scroller.current;
@@ -1353,7 +1365,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             <ChatContext.Provider value={ctx}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {assistant
-                ? displayLines(lines, feed).flatMap((d) => [
+                ? displayLines(lines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined).flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
                       <FeedLineView key={d.id} item={d.item} simplified />
