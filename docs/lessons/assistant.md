@@ -231,7 +231,12 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   card — but a held run gave its card back with its message, so the owner was told "N background tasks are still running"
   and then heard nothing when they finished. The sink now builds the ending line for every quiet end and, with no card,
   posts it as a card of its own (the same rule #3930's timeout relies on). The result stays quiet: the line is
-  "Done · took X", not an empty answer.
+  "Done · took X", not an empty answer. With no card left it is posted for every ending except a message the owner
+  recalled, which gets no card of its own (that one only gets the card the run still has rewritten), and the line says
+  how the wait ended (#4228); and the quiet branch must not swallow errors the way it first did (#4229): a card update
+  refused for anything but a rate limit falls back to that card of its own, and an unreachable failure is returned so
+  `finishChannelRun` keeps the run and tries again — posting under an idempotency key made from the run id (`endKey`),
+  because the first attempt may have landed before its answer was lost.
 
 - **A card nests a list by four spaces per level, not by the Markdown rule** (#4180). Lark's Markdown component documents
   one nesting level as four leading spaces (a list's sub-items are indented four spaces per level), while CommonMark — and
