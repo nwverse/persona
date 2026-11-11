@@ -196,7 +196,8 @@ import UIKit
 
 /// Any page, measured (`-showPagePerf YES`, docs/operations/testing.md「Whole App」): 10 s after launch, 8 s on the page as it is
 /// (a script pushes hub updates meanwhile), then the page's main scroll view (the largest one on screen) glides
-/// down for 3 s and back up for 3 s at 2000 pt/s. Writes Documents/frames-page-idle.json and frames-page-glide.json.
+/// down for 3 s and back up for 3 s at 2000 pt/s. Writes Documents/frames-page-open.json (the first 10 s),
+/// frames-page-idle.json and frames-page-glide.json.
 /// `-showPagePerfSpeed <pt/s>` and `-showPagePerfSeconds <s>` change the glide (a slow read through a long reply, a fling);
 /// `-showPagePerfRepeat <n>` glides n times, each its own file after the first (frames-page-glide-2.json, …): the first
 /// pass lays rows out for the first time, the later ones show what scrolling back over them costs.
@@ -207,8 +208,11 @@ import UIKit
         let speed = d.double(forKey: "showPagePerfSpeed") > 0 ? d.double(forKey: "showPagePerfSpeed") : 2000
         let seconds = d.double(forKey: "showPagePerfSeconds") > 0 ? d.double(forKey: "showPagePerfSeconds") : 3
         let repeats = max(1, d.integer(forKey: "showPagePerfRepeat"))
+        // The first 10 s too (frames-page-open.json): launch, the page opening and its first layout.
+        FrameStats.shared.start()
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(10))
+            FrameStats.shared.stop(label: "page-open")
             FrameStats.shared.start()
             // For the script: push now (Documents/page-idle-started).
             if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
@@ -225,6 +229,22 @@ import UIKit
                 await ListGlide.run(list, seconds: seconds, speed: CGFloat(speed))
                 await ListGlide.run(list, seconds: seconds, speed: CGFloat(-speed))
                 FrameStats.shared.stop(label: n == 1 ? "page-glide" : "page-glide-\(n)")
+            }
+        }
+    }
+
+    /// `-showListOffset <pt>`: 8 s after launch the page's main scroll view sits that far from its start, and
+    /// Documents/list-offset-set says so: screenshots of the same place in two builds or two switches.
+    static func offsetIfAsked() {
+        let y = UserDefaults.standard.double(forKey: "showListOffset")
+        guard y > 0 else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(8))
+            guard let list = mainScrollView() else { return }
+            list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top + y), animated: false)
+            try? await Task.sleep(for: .seconds(2))
+            if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                try? Data().write(to: dir.appending(path: "list-offset-set"))
             }
         }
     }

@@ -613,7 +613,7 @@ struct AssistantText: View, Equatable {
 
     /// Links in a fresh answer open instantly: their pages load in the background. Only for recent answers — every
     /// old one scrolling past used to create web views on the main thread, and those were the long freezes.
-    private static func preloadLinks(_ item: Item) async {
+    static func preloadLinks(_ item: Item) async {
         guard let ts = item.ts, Date.now.timeIntervalSince(ts) < 15 * 60, let text = item.text else { return }
         // Not a machine's localhost (it is opened through the hub, docs/operations/ports.md).
         let links = await Task.detached(priority: .utility) { WebLinks.find(in: text).filter { PortLinks.link($0) == nil } }.value
@@ -1216,7 +1216,13 @@ nonisolated enum RowMemo {
             if it.kind == .toolUse || it.kind == .toolResult { ToolTextMemo.prewarm(it, scope: scope) }
             guard it.kind == .text else { continue }
             guard let text = it.text, !text.isEmpty else { continue }
-            if it.role == "assistant" { _ = assistant(key(scope, it.id)) { _ in AssistantRowText(text) } }
+            if it.role == "assistant" {
+                _ = assistant(key(scope, it.id)) { _ in AssistantRowText(text) }
+                // A long answer's parts, as their rows draw them (`AssistantTextPart`).
+                for (n, part) in AnswerPartMemo.parts(text).enumerated() {
+                    _ = assistant(AnswerPartMemo.key(key(scope, it.id), n)) { _ in AssistantRowText(part.text) }
+                }
+            }
             if it.role == "user" { _ = user(key(scope, it.id)) { _ in UserRowText(text) } }
         }
     }
