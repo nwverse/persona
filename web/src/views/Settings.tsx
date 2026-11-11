@@ -47,6 +47,7 @@ import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
 import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
@@ -710,7 +711,7 @@ function Models() {
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!list || !q) return list ?? [];
-    return list.filter((l) => [l.name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
+    return list.filter((l) => [l.name, l.display_name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
   }, [list, query, machines, sync]);
   const managed = shown.filter((l) => managedProvider(l.source));
   const builtin = builtinRows(shown);
@@ -904,7 +905,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     if (!l) return;
     try {
       await api(enLauncher(l.name), { method: "DELETE" });
-      toast(managedProvider(l.source) ? t("settings.deleted", { name: l.name }) : t("settings.hid", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(managedProvider(l.source) ? t("settings.deleted", { name: providerTitle(l) }) : t("settings.hid", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -915,7 +917,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     if (!l) return;
     try {
       await api(`${enLauncher(l.name)}/restore`, { method: "POST" });
-      toast(t("settings.restored", { name: l.name }), "ok");
+      forgetProviderNames();
+      toast(t("settings.restored", { name: providerTitle(l) }), "ok");
       onChanged();
       onClose();
     } catch (e) {
@@ -928,7 +931,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
       open={name !== null}
       onClose={onClose}
       width={620}
-      title={<span className="font-mono">{name}</span>}
+      // a provider's display name with its startup ID after it (#5029); an rc alias, or one not read yet, by its ID
+      title={l && providerIdNote(l) ? <>{providerTitle(l)} <span className="font-mono text-[11.5px] font-normal text-ink-3">{providerIdNote(l)}</span></> : <span className="font-mono">{name}</span>}
       footer={
         l && (
           <>

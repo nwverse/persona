@@ -720,6 +720,9 @@ export interface Delegate {
 
 export interface Launcher {
   name: string;
+  /** A Persona-managed provider's name for people, any language (#5029); absent for an rc alias or from an older hub.
+   *  Show it through lib/provider-names.ts. */
+  display_name?: string;
   model?: string;
   /** What it starts when not Claude Code ("codex"); agent_type: what the hub's machine config says it runs. */
   agent?: string;

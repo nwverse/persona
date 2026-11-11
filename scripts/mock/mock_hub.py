@@ -10569,6 +10569,8 @@ LAUNCHER_PRESETS = [
 # a 404): 4 providers on macbook (one merging into gw_full when it is there, one whose aliases differ in more than the model, one
 # from ~/.bashrc with variables carried over and left out), its hide checks recomputed against the launchers each time; studio's
 # node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
+# With the feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
+# launchers list the managed providers with their display names (gw_full has one, anthropic_main shows its ID).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
@@ -10617,7 +10619,7 @@ PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_w
                        {"id": "example-haiku", "context_window": 200000}]
 if MOCK_PROVIDERS:
     LAUNCHERS[:0] = [
-        {"name": "gw_full", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
+        {"name": "gw_full", "display_name": "Team gateway", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
          "auth": "bearer", "has_headers": True, "models": [{"id": "example-opus", "context_window": 1000000, "efforts": ["high", "max"], "default_effort": "high"},
                                                            {"id": "example-sonnet", "context_window": 200000}],
          "opus_model": "example-opus", "sonnet_model": "example-sonnet", "haiku_model": "example-haiku", "fable_model": "example-opus",
@@ -10634,6 +10636,53 @@ if MOCK_PROVIDERS:
         {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
         {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
     ]
+    _features_without_auto_name = features
+
+    def features():
+        return _features_without_auto_name() + ["launcher_auto_name"]
+
+
+# The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
+# names its routes keep, -2, -3… while taken.
+RESERVED_LAUNCHER_NAMES = ("claude", "presets", "test", "discover", "import", "health")
+
+
+def launcher_slug(s):
+    """launcherSlug: lower case, each run of other characters one -, none at either end, at most 40 bytes, p- before a
+    leading digit; "" when nothing is left."""
+    slug = re.sub(r"[^a-z0-9_]+", "-", s.lower()).strip("-")[:40].rstrip("-")
+    return "p-" + slug if slug[:1].isdigit() else slug
+
+
+def launcher_name_for(base):
+    """freeLauncherName: (name, n), n 1 for base itself, else the number after it."""
+    name, n = base, 1
+    while name in RESERVED_LAUNCHER_NAMES or any(l["name"] == name for l in LAUNCHERS):
+        n += 1
+        name = "%s-%d" % (base, n)
+    return name, n
+
+
+def auto_named(b):
+    """launcher_auto_name: the name a provider added with neither a name nor a preset gets, after its display name, else
+    after its gateway's host, which then is its display name too (with the name's number). (name, the body with it)."""
+    display = (b.get("display_name") or "").strip()
+    host = urlparse((b.get("base_url") or "").strip()).hostname or ""
+    name, n = launcher_name_for(launcher_slug(display) or launcher_slug(host) or "provider")
+    if not display and host:
+        b = dict(b, display_name=host + ("" if n == 1 else " %d" % n))
+    return name, b
+
+
+def machine_launchers():
+    """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"), and under
+    MOCK_PROVIDERS the managed providers Agents can start, each with its display name."""
+    out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+           {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+    if MOCK_PROVIDERS:
+        out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
+                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+    return launcher_health_list(out)
 
 
 def _import_hide(src):
@@ -10698,6 +10747,18 @@ def _provider_apply(l, b):
     if "headers" in b:
         if b["headers"]: l["has_headers"] = True
         else: l.pop("has_headers", None)
+    if b.get("display_name") is not None:  # null or left out keeps it, "" clears it
+        if b["display_name"].strip(): l["display_name"] = b["display_name"].strip()
+        else: l.pop("display_name", None)
+
+
+def _display_name_refused(h, b):
+    """The hub's display-name check (at most 64 characters, no line breaks or other control characters): True when it
+    answered 400."""
+    d = (b.get("display_name") or "").strip()
+    if len(d) <= 64 and not any(unicodedata.category(c) == "Cc" for c in d): return False
+    h.send_json({"error": "显示名最多 64 个字，不能有换行等控制字符"}, 400)
+    return True
 
 
 def import_route(h, method, q, body):
@@ -10831,6 +10892,8 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
         name = (b.get("name") or "").strip()
+        if _display_name_refused(h, b): return True
+        if not b.get("name"): name, b = auto_named(b)
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", name):
             h.send_json({"error": "名字只能用字母、数字、_ 和 -，以字母或 _ 开头（不能叫 claude）"}, 400); return True
         if any(l["name"] == name for l in LAUNCHERS):
@@ -10844,6 +10907,7 @@ def providers_route(h, method, p, q, body):
         l = next((x for x in LAUNCHERS if x["name"] == unquote(p.split("/")[4]) and x["source"] == "persona"), None)
         if l is None:
             h.send_json({"error": "只能改 Persona 里加的启动器；~/.zshrc 里的请在那台电脑上改"}, 404); return True
+        if _display_name_refused(h, b): return True
         _provider_apply(l, b)
         h.send_json({"launcher": l}); return True
     return False
@@ -18064,8 +18128,7 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    out = {"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                              {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default}
+    out = {"launchers": machine_launchers(), "default": default}
     if pid == "agent.new":
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
@@ -18999,8 +19062,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                                                      {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}])})  # Codex: "Create from the phone"
+            return self.send_json({"launchers": machine_launchers()})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -20228,6 +20290,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/launchers" and self.command == "POST":  # "Add provider" (from a plugin's preset: the rest filled in)
             b = json.loads(self.last_body or b"{}")
             name = (b.get("name") or "").strip()
+            if not b.get("name") and not b.get("preset"): name, b = auto_named(b)
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", name) or name in ("claude", "presets"):
                 return self.send_json({"error": "名字只能用字母、数字、_ 和 -，以字母或 _ 开头（不能叫 claude）"}, 400)
             if any(l["name"] == name for l in LAUNCHERS): return self.send_json({"error": "已经有叫 %s 的启动器" % name}, 409)
@@ -20240,6 +20303,7 @@ class H(BaseHTTPRequestHandler):
             l = {"name": name, "source": "persona", "base_url": b["base_url"], "model": b["model"], "has_key": bool(b.get("api_key"))}
             for k in ("kind", "api", "small_model", "args"):
                 if b.get(k): l[k] = b[k]
+            if (b.get("display_name") or "").strip(): l["display_name"] = b["display_name"].strip()
             LAUNCHERS.insert(0, l)
             return self.send_json({"launcher": l})
         if p.startswith("/api/v1/launchers/") and (self.command == "DELETE" or p.endswith("/restore")):  # hide / bring back
@@ -22376,7 +22440,7 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
 # the states the setup card shows, in the hub's shapes and words (its own catalogs, by Accept-Language): the features
-# assistant_readiness, machines_add, machine_trust and builtin_presets; GET /api/v1/assistant/readiness[?probe=1],
+# assistant_readiness, machines_add, machine_trust, builtin_presets and launcher_auto_name; GET /api/v1/assistant/readiness[?probe=1],
 # POST …/readiness/dismiss, POST /api/v1/assistant/warm with readiness; POST /api/v1/assistant/conversations refused
 # with the scenario's code (409 no_machine / machine_pending / claude_missing / launcher_missing, 503 node_unreachable); POST
 # /api/v1/sessions on a pending computer 409 machine_pending; GET /api/v1/launchers/presets with the built-in providers
@@ -22385,7 +22449,7 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
 # readiness follows the machines: zero → add → it joins → confirm → the computer step is ok.
 # MOCK_START_ERROR=<code> refuses every conversation start with that code whatever the scenario (no_machine,
 # machine_pending, claude_missing, launcher_missing, node_unreachable, assistant_offline). MOCK_BUILTIN_PRESETS=1 serves
-# the built-in providers and the feature builtin_presets without a scenario.
+# the built-in providers and the features builtin_presets and launcher_auto_name without a scenario.
 READINESS = os.environ.get("MOCK_READINESS", "")
 BUILTIN_PRESETS = bool(READINESS) or os.environ.get("MOCK_BUILTIN_PRESETS") == "1"
 if READINESS or BUILTIN_PRESETS:
@@ -22400,8 +22464,8 @@ if READINESS or BUILTIN_PRESETS:
 
     def features():
         f = _features_without_readiness()
-        extra = ("assistant_readiness", "machines_add", "machine_trust", "builtin_presets") if READINESS else ("builtin_presets",)
-        return f + [x for x in extra if x not in f]
+        extra = ("assistant_readiness", "machines_add", "machine_trust") if READINESS else ()
+        return f + [x for x in extra + ("builtin_presets", "launcher_auto_name") if x not in f]
 
 READY = {"sc": readiness_mock.SCENARIOS.get(READINESS, {}) if READINESS else {}, "dismissed": False}
 # Optional probe boundaries for #1892: exceed Apple's old 30 s timeout, or refuse the try with an HTTP error.
@@ -22505,11 +22569,7 @@ def _builtin_preset_route(handler, p, body):
     PROVIDER_LOG["post"] = _provider_redacted(b)
     name, n = (b.get("name") or "").strip(), 1
     if not name:
-        slug = re.sub(r"[^A-Za-z0-9_-]", "-", pr["id"].split("/", 1)[1])
-        name = slug
-        while any(l["name"] == name for l in LAUNCHERS):
-            n += 1
-            name = "%s-%d" % (slug, n)
+        name, n = launcher_name_for(launcher_slug(pr["id"].split("/", 1)[1]) or "provider")
     if any(l["name"] == name for l in LAUNCHERS):
         handler.send_json({"error": "已经有叫 %s 的启动器了" % name}, 409)
         return True
@@ -22606,7 +22666,7 @@ if READINESS or BUILTIN_PRESETS:
 
 MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|bad_key|full|demo|unverified|launcher_missing|model_route|rate_limited|node_outdated|assistant_offline  "
                  "主对话就绪度的场景（#287，docs/operations/testing.md「Readiness scenarios」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
-                 "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
+                 "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets / launcher_auto_name；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
                  "MOCK_BUILTIN_PRESETS=1 只加内置供应商预设")
 MOCK_HELP.append("MOCK_READINESS_PROBE_DELAY=<秒> / MOCK_READINESS_PROBE_ERROR=<HTTP 状态>  延迟或拒绝 ?probe=1（#1892，超过旧 30 秒客户端超时 / 显示失败）")
 

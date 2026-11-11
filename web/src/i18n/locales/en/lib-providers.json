@@ -6,7 +6,7 @@
   "env_line": "Environment line {line} must look like NAME=value (letters, digits and _ in the name)",
   "env_limit": "At most 50 environment variables",
   "proxy_scheme": "The proxy must start with http(s):// or socks5://",
-  "name_required": "Enter a name",
+  "name_required": "Enter a startup ID",
   "key_required": "Enter an API Key",
   "model_no_id": "A model has no ID",
   "model_duplicate": "Model {id} is listed twice",
