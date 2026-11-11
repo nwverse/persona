@@ -90,7 +90,7 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 			if err != nil {
 				return sw, false, err
 			}
-			if config.API != "responses" {
+			if !messagesAPI(config.API) && config.API != "responses" {
 				return sw, false, i18n.Err("assistant-models.err_api_effort")
 			}
 		}
