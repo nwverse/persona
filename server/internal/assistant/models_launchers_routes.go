@@ -413,9 +413,16 @@ func (s *Service) machineLauncherRoutes() {
 			apierr.Call(w, err)
 			return
 		}
-		out := map[string]any{"launchers": s.withHealth(ctx, mid, list), "default": s.pickerDefault(ctx, r)}
+		// A launcher whose latest check failed is left out of the pickers and of the presets that name it; `list` stays
+		// whole for the starts, which are validated on their own (launcher_fit.go).
+		shown := s.withHealth(ctx, mid, list)
+		out := map[string]any{"launchers": shown, "default": s.pickerDefault(ctx, r)}
 		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
-			if p, tiers := s.pickerTiers(ctx, list); len(tiers) > 0 {
+			usable := make([]ConfiguredLauncher, 0, len(shown))
+			for _, l := range shown {
+				usable = append(usable, l.ConfiguredLauncher)
+			}
+			if p, tiers := s.pickerTiers(ctx, usable); len(tiers) > 0 {
 				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
 			}
 		}

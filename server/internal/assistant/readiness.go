@@ -780,6 +780,12 @@ func (s *Service) readinessLauncher(ctx context.Context, machine, launcher strin
 	}
 	i := slices.IndexFunc(list, func(l proto.Launcher) bool { return l.Name == launcher })
 	if i < 0 {
+		if _, known := s.storedLaunchersKnown(ctx); !known {
+			// machineLaunchers adds the managed providers from that same read: with the read failed the list only has
+			// what the node found in its shell, and a missing name says nothing about a configured launcher. Refusing
+			// the message as launcher_missing here would tell the user their provider was deleted when it was not.
+			return "", launcherUnknownHere
+		}
 		return "", launcherGone
 	}
 	if list[i].Assistant {

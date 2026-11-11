@@ -158,13 +158,9 @@ func TestLauncherHealthUsageLimitWaitsForTheReset(t *testing.T) {
 	if alt, note, moved := s.healthDetour(ctx, Device{ID: "l4"}, "work"); !moved || alt.ID != "server" || !strings.Contains(note, resets) {
 		t.Fatalf("detour: %s %q %v", alt.ID, note, moved)
 	}
-	var route struct {
-		Launchers []launcherWithHealth `json:"launchers"`
-	}
-	body := getJSON(t, s, "/api/v1/machines/l4/launchers")
-	if err := json.Unmarshal(body, &route); err != nil || len(route.Launchers) == 0 || route.Launchers[0].Health == nil ||
-		route.Launchers[0].Health.ResetsAt == nil || !route.Launchers[0].Health.ResetsAt.Equal(reset) {
-		t.Fatalf("picker: %s", body)
+	// At the limit it is hidden from the pickers, like any launcher whose latest check failed...
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); slices.Contains(names, "work") {
+		t.Fatalf("picker offers a launcher at its usage limit: %v", names)
 	}
 
 	// Asked for by hand, it runs.
@@ -197,6 +193,10 @@ func TestLauncherHealthUsageLimitWaitsForTheReset(t *testing.T) {
 	r = healthState(s, "l4", "work")
 	if checkedCount(f, "l4/work") != n+2 || r.State != healthOK || r.Kind != "" || r.ResetsAt != nil || r.Fails != 0 {
 		t.Fatalf("after the reset: %d checks, %+v", checkedCount(f, "l4/work"), r)
+	}
+	// ...and offered again once the reset passed and the check answered.
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
+		t.Fatalf("picker still hides a launcher that works again: %v", names)
 	}
 	if len(f.pushes) != 0 {
 		t.Fatalf("pushed: %+v", f.pushes)

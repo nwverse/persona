@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,10 @@ func TestLauncherHealthNotInTerminal(t *testing.T) {
 	ctx := context.Background()
 
 	s.recordStartFailure(ctx, "l4", "work", terminalRefusal(proto.CodeLauncherMissing, "work"))
+	// It stays pickable: only a real start clears this record, so hiding it would leave no way to make that start.
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
+		t.Fatalf("the picker hid a launcher only a start can clear: %v", names)
+	}
 	r := healthState(s, "l4", "work")
 	if r.State != healthBlocked || r.Kind != errKindNotInTerminal || r.Source != healthSourceStart ||
 		!strings.Contains(r.BlockedReason, "terminal") || !strings.Contains(r.Error, "has no command work") {
