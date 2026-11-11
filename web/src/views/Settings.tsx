@@ -304,8 +304,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <Models />
                 </section>
                 <section id="settings-model-config" className="scroll-mt-4">
-           {/* no section: the row is on the page in view, which stays where it is (#4282) */}
-           <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
+                  {/* no section: the row is on the page in view, which stays where it is (#4282) */}
+                  <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
                 </section>
               </>}
               {tab === "agents" && <AgentSections section={at.section} />}
