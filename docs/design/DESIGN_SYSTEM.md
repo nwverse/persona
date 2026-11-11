@@ -75,7 +75,7 @@ Relationship to other docs:
 | `apple/PersonaTests/ContinuousMotionTests.swift` | Every unending animation lists where Reduce Motion stops it. |
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
-| `scripts/app/android_token_baseline.py` | Hard-coded counts in `android/feature` only. It does not scan the design system module. |
+| `scripts/app/android_token_baseline.py` | Per-file counts of hard-coded colors, font sizes and dp in every Android module, the design system included (not the generated `Tokens.kt`), and of Material 3 components that pages may not use. Counts may only go down; a wildcard `material3` import outside the design system fails. |
 | `scripts/app/android_slot_order.py` | An Android design-system component with a composable slot ends with a function-typed parameter (trailing lambdas keep working); the existing exceptions in `android/core/designsystem/tools/slot-order-baseline.json` may only shrink (#4146). |
 
 Not enforced anywhere: hit-area size, accessibility labels, shadows (inline literals), `.font(.system(size:))` in some Lark and Feishu views, numeric `listRowInsets`, `Spacer(minLength:)` and `lineWidth`.
@@ -778,7 +778,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | DS-32 | `SecureField` still used for secrets on iOS; `HubTag` and `StatusLabel` dead | `apple/Persona/Views/Settings/ConnectorSignInViews.swift:553`; `apple/Persona/Views/Settings/ExtensionAuthViews.swift:206`; `apple/Persona/DesignSystem/HubComponents.swift:16`; `apple/Persona/DesignSystem/Components.swift:348` | Breaks a written rule; dead code | Use `SecretField`; delete the dead views |
 | DS-33 | Pages read `AppStyle.current.usesBeautifulUI` and duplicate BeautifulUI forms (about 330 lines) | `apple/Persona/Views/Interactions/InteractionViews.swift:1323`; `apple/Persona/Views/Voice/VoiceBar.swift:135` | Two renderings to test | Move branches into design-system components |
 | DS-34 | Reduce Motion not honored by navigation, toast, press and symbol effects | `apple/Persona/Views/Shell/ShellPager.swift:158`; `apple/Persona/DesignSystem/Toasts.swift:74`; `apple/Persona/DesignSystem/Styling.swift:187` | Accessibility | Gate through `Theme.Motion.reduced` |
-| DS-35 | Android ratchet skips its own design system module (329 color and 1168 dp literals); doc says no literal colors | `scripts/app/android_token_baseline.py`; `docs/android/android-design.md:130` | Rule not enforced where it matters most | Extend the scan or amend the doc |
+| DS-35 | Resolved 11-11 (#4209): the Android ratchet scans the design system module too (331 color and 1193 dp literals at the start), so its literals can only go down | `scripts/app/android_token_baseline.py`; `android/core/designsystem/tools/token-baseline.json` | None left; moving the literals to tokens is phase 1's T2 to T4 | Keep lowering the baseline |
 
 ## 9. Recommended next steps
 
