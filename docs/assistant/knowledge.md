@@ -190,6 +190,12 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    Topic groups read only the newest topic page. Every 6 minutes, read each email account's Inbox messages with UID above the last one (40 per page, at most 5 pages per round; with multiple pages, take the newest first, then fill the middle page by page and continue next time if unfinished),
    reading at most 10 full bodies per round (summaries for the rest), into `mail-<account>-<other address>` chats. Cursors are in `cursors/mail.json` (per-account UIDs, plus `<account>#v` for UIDVALIDITY,
    `#t` for the latest archived message time, `#f` / `#h` for unfilled gaps; on UIDVALIDITY change, restart from the newest page and only take messages later than `#t`; before 2026-11-03 it was `mail-cursors.json`, used as fallback when the new file is absent).
+   The existing decimal receipt IDs remain in use until a change between two known, nonzero validity values is observed.
+   After that, `<account>#e` records an identity epoch, and IDs include the epoch, last known validity and UID.
+   A retry keeps the same identity if ingestion succeeded before checkpoint publication; a further known change before publication gets a different identity.
+   Each account's inbox has its own cursor and epoch. An absent prior validity or a zero response cannot establish that a change occurred, so it does not start an epoch or reset the cursor.
+   A cursor already advanced by an older version cannot reconstruct mail previously skipped by a UID collision. A rollback to an older writer is not identity-safe: it ignores the epoch and emits decimal IDs, and may advance the validity without recording the change. Do not run mixed-version archive writers against the same data.
+   The existing later-than-`#t` filter and newest-page restart still limit recovery: same-second or older messages and an oversized renumbered tail are not guaranteed to be archived.
    Connectors (`docs/plans/plan-connectors.md`, implementing `connector.Archive`) read chats with new messages "since last time" by cursor every 10 minutes,
    with cursor `cursors/<connector>.json` and chat id `<connector>-<chat>`. Older history comes in separately ("History import", step 5).
    Source subscriptions (#2039) are read the same way, one archive per subscription with "Add to knowledge base" on (`connectors.changes` with the subscription's id, a cursor on its held items; [subscriptions.md](../extensions/subscriptions.md) "Destinations").

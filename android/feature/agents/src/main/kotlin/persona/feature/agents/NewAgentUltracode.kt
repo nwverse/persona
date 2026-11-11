@@ -20,3 +20,10 @@ internal object NewAgentUltracode {
         return false
     }
 }
+
+/**
+ * The workflow mark beside a list row's title (iOS `Ultracode.rowMark`): the node saw ultracode on for a Claude Code agent
+ * of the user's, and the row is not offline (the node keeps the last value it saw; a resume starts it off).
+ */
+internal fun ultracodeMark(session: persona.core.contracts.Session): Boolean =
+    session.ultracode == true && !session.assistant && session.isClaude && session.agentState != persona.core.contracts.AgentState.Offline
