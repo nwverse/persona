@@ -197,6 +197,7 @@ Lives at the root of the extension package. Example (a connector for a fictional
 | `permissions` | No | See "Permissions" |
 | `tools` | No | Command-line programs it needs (#4507); the hub installs them in the extension's own directory and puts them on its `PATH`, see "Command-line programs (tools)"; requires `runtime` |
 | `auth` | No | `{title, description?, page?}`: the extension needs a sign-in (#4507); the program implements `auth.*`, see "Sign-in (auth)"; requires a `runtime` that speaks the protocol |
+| `host_integrations` | No | `[{id, version}]`: a configured host CLI integration, by its closed ID and a semantic-version range. At most one; requires an RPC runtime. The program calls `cli.call`, see "Host CLI integrations". This grants no shell, arbitrary command, write or credential access |
 
 Manifests are at most 256 KB and are read strictly: an unknown field at any level means it can't be installed (a misspelled `permission` is not silently ignored).
 
@@ -850,6 +851,29 @@ Exactly one of `archive` and `npm`; if this hub's platform has no `archive` entr
   Child processes the extension runs inherit `PATH` as usual. This applies only to extensions installed from a package: nothing is installed for `dir:` during development (`extension dev`), manager.json or built-in ones.
 - **No sudo, nothing global**: it writes only the hub's state directory; anything else the program needs (credentials, caches) goes in the extension's data directory, e.g. by pointing its config directory there with an env var.
 - `tools` in the list and details are the programs this version uses: `[{name, title?, version, reused}]`.
+
+### Host CLI integrations
+
+`tools` installs a program for an extension. `host_integrations` instead names a command-line integration that the owner has already configured on the manager. It is not an alternative way to write an executable or a shell command: the closed integration ID is resolved by the manager, and the extension gets no binary path, profile, configuration or credential.
+
+```json
+"host_integrations": [{"id": "lark-cli", "version": ">=1.0.72 <2.0.0"}]
+```
+
+The supported integration is `lark-cli`, configured by the manager's `lark.cli` section. The owner must additionally set `lark.cli.extensions: true`; without it every request is refused. A configured binary and the manager's effective profile stay in the manager. Installing or upgrading an extension with a newly declared integration requires consent. The integration is optional: a connector can continue serving its own transport when the CLI is unavailable, but must not pretend its auxiliary reads succeeded.
+
+An RPC-speaking program calls the hub with `cli.call`. It must name exactly one declared integration in its manifest; a missing declaration, disabled integration or incompatible installed version fails closed. Input is an object with one `operation` and the bounded fields below. The answer is `{integration, result}`.
+
+| Operation | Input | Result |
+| --- | --- | --- |
+| `auth_status` | None | `{logged_in, expired, user_name?}`; no app binding, tokens or profile configuration |
+| `chats` | `limit?` (0–50; 0 uses the adapter default) | The adapter's bounded chat list |
+| `messages` | `chat_id` or `thread`, `before?`, `limit?` (0–50) | A page of messages |
+| `search` | `query`, `kind`: `messages` / `chats` / `docs` / `people`, `limit?` | `{data}`: the adapter's read-only normalized result; at most 1 MiB |
+
+`query`, chat and thread identifiers and cursors have input bounds. Unknown operations, unsupported search kinds and extra input beyond these contracts are refused. Every invocation has the adapter's bounded timeout. Errors carry only a generic code and category (`permission_denied`, `unsupported`, `rate_limited`, `timeout`, `unavailable` or `invalid_params`): raw command lines, stderr, paths and configuration never enter logs or replies.
+
+This RPC is **read-only**. Message sends and other writes remain connector actions or gated assistant commands, with their existing confirmations. Go SDK programs can call `hub.Call(ctx, "cli.call", params, &result)`.
 
 ### Sign-in (auth)
 
