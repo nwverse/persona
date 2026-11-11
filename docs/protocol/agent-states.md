@@ -97,6 +97,13 @@ Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
   in a herdr pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
+- **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
+  hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
+  the session as `blocked` with the dialog's first line as `attention_reason`, so the manager makes its screen card. The pane is read again every
+  3 s while the dialog stays, until it is gone (or after 3 minutes); keys pressed into the pane drop what was read at once.
+  Why: Claude Code 2.1.322 runs the PermissionRequest hooks for its own safety checks ("Dangerous rm operation …", asked in bypass mode too)
+  but ignores an allow for them. The phone's Always Allow closed the card, herdr kept saying working, and the dialog held the terminal with
+  nothing on the phone to answer it: every message was refused as `dialog_open`.
 
 - **Has hooks and `prompts > completed`**: Working, overriding herdr's `done`.
 - **Has hooks, `prompts == completed`, and a `Stop` was seen**: not working; a leftover spinner glyph in the terminal title doesn't count. Exception: if the transcript has a turn written after the `Stop` (with a 5-second grace for the closing lines) that hasn't ended,

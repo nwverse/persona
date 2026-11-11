@@ -1581,7 +1581,8 @@ def health_sess(sid, title, minutes, last):
     return {**assistant_sess(sid, title, minutes, last), "cwd": "/home/me/.persona/health", "space": "health"}
 
 
-ASSISTANT += [
+# MOCK_HEALTH_EMPTY=1: the health space has no conversations yet (entering Health opens its new conversation page, #4329).
+ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
     health_sess("hlth0001-0000-4000-8000-000000000001", "这周的睡眠", 40, "这周平均每晚睡 6 小时 42 分，比上周少 18 分钟。"),
     health_sess("hlth0002-0000-4000-8000-000000000002", "体检报告：血脂", 60 * 26, "LDL 3.6 mmol/L，略高于参考范围，建议三个月后复查。"),
     health_sess("hlth0003-0000-4000-8000-000000000003", "步数目标", 60 * 70, "最近 7 天平均 7,860 步，离每天 8,000 步差一点。"),
@@ -18149,8 +18150,9 @@ class H(BaseHTTPRequestHandler):
             if body.get("clear_draft"):
                 return self.send_json({"ok": True})
             if os.environ["MOCK_SEND_REFUSE"] == "dialog_open":
-                return self.send_json({"error": "电脑上的终端正开着一个对话框（确认、选择列表等），这条消息没有发出去：先回答或关掉它再发。",
-                                       "code": "dialog_open", "delivered": "none"}, 409)
+                # As the hub words a node's refusal: its own sentence, the dialog's first line flat beside it (#3752).
+                return self.send_json({"error": "终端正在等待选择，请先到终端处理。", "code": "dialog_open", "delivered": "none",
+                                       "retryable": False, "notice": False, "dialog": "Bash command"}, 409)
             return self.send_json({"error": "电脑上的输入框里有没发出去的内容：「顺便把 README 也更新一下」。这条消息没有发出去，免得拼在一起。",
                                    "code": "input_draft", "delivered": "none", "draft": "顺便把 README 也更新一下",
                                    "clearable": "顺便把 README 也更新一下"}, 409)

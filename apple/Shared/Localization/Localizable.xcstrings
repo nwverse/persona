@@ -129901,6 +129901,29 @@
       },
       "extractionState": "manual"
     },
+    "The terminal is waiting on “%@”.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The terminal is waiting on “%1$@”."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルは「%1$@」への応答を待っています。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "终端正在等你回答「%1$@」。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "The text is cut at %@ characters here. The message itself may be longer.": {
       "localizations": {
         "en": {

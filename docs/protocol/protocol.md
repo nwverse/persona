@@ -1556,6 +1556,8 @@ When an Agent is blocked without a hook interaction, the hub reads the screen on
 
 - When it's built: for Claude Code without Persona hooks (started from the user's own profile), it reads the screen and builds the card as soon as it's blocked; for sessions with hooks (that sent a hook event since this hub started,
   or that Persona started), it first waits 1.5 s so the hook's own card arrives first (3 s for Codex / compatible forks). If the hook's card arrives late, it still replaces the screen card.
+  A hook card answered with an allow that Claude doesn't take (its own safety checks, #3752) leaves the dialog on screen: node then lists the
+  session as blocked by it (`docs/protocol/agent-states.md`, "An allow Claude did not take"), and the screen card follows the same way.
 - After a screen card is answered, the hub looks at the screen again every 250 ms for up to 2 s: when the Agent asks again right away (the next AskUserQuestion question, the next permission), herdr may stay blocked
   with no state change, and this check is what builds a card for the new dialog; if it still sees the one just answered (the keys haven't landed yet) or no dialog, it keeps looking, and stops once the Agent is no longer blocked or another card exists.
 - Measurements of the whole path and the no-rate-limit convention are in `docs/server/server.md` ("Card fast lane (#751)").

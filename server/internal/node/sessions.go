@@ -126,6 +126,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Status, s.AttentionReason = proto.StatusBlocked, head
 			}
 		}
+		// An allow its Claude did not take: the dialog it left holds the terminal, whatever herdr says (allowwatch.go).
+		if head := n.allowDialog(id); head != "" && !onList[id] && !n.isDriving(id) {
+			s.Status, s.AttentionReason = proto.StatusBlocked, head
+		}
 		if !onList[id] { // the list's prompt is no suggestion of its
 			s.Suggestion = n.noteStatus(id, a.Agent, a.PaneID, s.Status) // suggestion.go
 		}
