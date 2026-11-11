@@ -81,6 +81,9 @@ final class MeetingAsk {
         var speak: (_ text: String, _ exchange: UUID, _ recording: UUID, _ lang: String?, _ locale: String) -> Void
         var stopSpeaking: () -> Void
         var clock: () -> Date
+        /// An older manager took this room meeting with Persona off: its last upload's `200` had no `room`
+        /// (`RecordingSync.roomMissing`, #3862).
+        var roomMissing: (UUID) -> Bool = { _ in false }
     }
 
     enum Failure: Error, Equatable {
@@ -108,11 +111,17 @@ final class MeetingAsk {
     func latest(for recording: UUID) -> Exchange? { exchanges.last { $0.recordingID == recording } }
     var busy: Bool { exchanges.contains { $0.state == .asking } }
 
-    /// Asks about `entry`'s meeting: `text` typed, or nil to ask about what was just said. Nothing when Persona doesn't
-    /// attend it.
+    /// Persona can be asked about `entry`'s meeting now: it attends, and the hub holds the meeting as one it attends.
+    /// `roomMissing`: an older manager took the room meeting with Persona off (`RecordingSync.roomMissing`), so an ask
+    /// would only force a whole upload and fail; it can be asked again once a `200` carries `room`. The one rule for the
+    /// meeting page, its bar, the Live Activity and `ask` / `retry` (#3862).
+    nonisolated static func canAsk(_ entry: RecordingEntry, roomMissing: Bool) -> Bool { entry.attended && !roomMissing }
+
+    /// Asks about `entry`'s meeting: `text` typed, or nil to ask about what was just said. Nothing when Persona can't be
+    /// asked about it (`canAsk`).
     @discardableResult
     func ask(_ entry: RecordingEntry, text: String? = nil) -> UUID? {
-        guard entry.attended else { return nil }
+        guard Self.canAsk(entry, roomMissing: deps.roomMissing(entry.id)) else { return nil }
         let typed = text.map { String(String.UnicodeScalarView($0.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.prefix(Self.maxQuestion))) }
         if let typed, !Self.hasWords(typed) { return nil }
         let exchange = Exchange(recordingID: entry.id, at: max(0, deps.now()), question: typed, typed: typed != nil, state: .asking,
@@ -125,7 +134,7 @@ final class MeetingAsk {
     /// Asks a failed one again: the same id, the same moment. A room ask the hub failed with `room_unavailable` goes as a
     /// new question (a new id): the hub fails that id again at once, while a new one is answered from the meeting so far.
     func retry(_ id: UUID, entry: RecordingEntry) {
-        guard entry.attended, let index = exchanges.firstIndex(where: { $0.id == id }), case .failed = exchanges[index].state else { return }
+        guard Self.canAsk(entry, roomMissing: deps.roomMissing(entry.id)), let index = exchanges.firstIndex(where: { $0.id == id }), case .failed = exchanges[index].state else { return }
         var exchange = exchanges[index]
         if exchange.failure == Self.roomUnavailable { exchange.id = UUID() }
         exchange.state = .asking
@@ -181,6 +190,9 @@ final class MeetingAsk {
                     state = .failed(Self.message(error))
                     failure = Self.code(error)
                 }
+            } else if deps.roomMissing(start.recordingID) {
+                // The hub answered the upload without `room` meanwhile: not the connection, an older manager.
+                state = .failed(String(localized: "This hub can't take part in meetings right now. The recording goes on as usual."))
             } else {
                 state = .failed(Self.message(nil))
             }
@@ -272,7 +284,8 @@ extension MeetingAsk.Deps {
                  MeetingSpeaker.shared.speak(text, id: exchange, recording: recording, lang: lang, locale: locale)
              },
              stopSpeaking: { MeetingSpeaker.shared.stop() },
-             clock: { .now })
+             clock: { .now },
+             roomMissing: { RecordingSync.shared.roomMissing.contains($0) })
     }
 }
 

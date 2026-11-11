@@ -1,6 +1,29 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld lines": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld lines"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 句"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 件"
+          }
+        }
+      }
+    },
     "%lld lines from the meeting": {
       "extractionState": "manual",
       "localizations": {
@@ -20,6 +43,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "会議の発言 %1$lld 件"
+          }
+        }
+      }
+    },
+    "1 line": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 line"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 句"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 件"
           }
         }
       }
@@ -66,6 +112,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "約 %1$lld 秒遅れ"
+          }
+        }
+      }
+    },
+    "Add [Meeting Composer]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to the conversation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加到对话"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話に追加"
           }
         }
       }
@@ -277,6 +346,29 @@
         }
       }
     },
+    "Couldn't change Private Meeting. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't change Private Meeting. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能更改私密会议设置。请再试一次。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非公開の会議を切り替えられませんでした。もう一度お試しください。"
+          }
+        }
+      }
+    },
     "Couldn't reach the hub. Check the connection and retry.": {
       "extractionState": "manual",
       "localizations": {
@@ -484,25 +576,25 @@
         }
       }
     },
-    "More [Meeting Composer]": {
+    "Meeting options": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "More"
+            "value": "Meeting options"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "更多"
+            "value": "会议选项"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "その他"
+            "value": "会議のオプション"
           }
         }
       }
@@ -664,6 +756,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Persona は今、この会議に参加できません。"
+          }
+        }
+      }
+    },
+    "Persona can't take part right now": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona can't take part right now"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 现在无法参会"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona は今参加できません"
           }
         }
       }
@@ -47023,6 +47138,29 @@
         }
       }
     },
+    "This hub can't take questions about this meeting right now.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This hub can't take questions about this meeting right now."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 hub 现在无法接受关于这场会议的提问。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このハブは今、この会議についての質問を受け付けられません。"
+          }
+        }
+      }
+    },
     "This meeting has no transcript or minutes to talk about yet.": {
       "extractionState": "manual",
       "localizations": {
@@ -47065,6 +47203,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "この録音は会議ではありません。"
+          }
+        }
+      }
+    },
+    "Too long to send. Shorten it to %@ characters.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too long to send. Shorten it to %1$@ characters."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "内容太长，发不出去。请缩短到 %1$@ 个字以内。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "長すぎて送れません。%1$@ 文字以内に短くしてください。"
           }
         }
       }

@@ -170,6 +170,110 @@ nonisolated enum MeetingThread {
         return out
     }
 
+    /// A Just me question's answer in the main chat, as the meeting page shows it.
+    nonisolated struct JustMeAnswer: Equatable, Sendable {
+        /// The assistant's texts of its turn, joined (`justMeReplies`); nil before the first.
+        var text: String?
+        /// When its message was written (the hub's `ts`): a card raised before it belongs to another turn.
+        var at: Date?
+        /// Its turn is the chat's newest: no user text came after it, the owner's or one the hub put in (a task's notice, a
+        /// scheduled run). Only then is the chat's live text this answer being written, and its cards this turn's.
+        var latest: Bool
+    }
+
+    /// The answer to the Just me message whose `clientMsgID` is `clientMsgID`, up to the end of its turn: the next user
+    /// text of any kind, injected ones included, ends it. Nil while the message isn't in the items (queued behind another
+    /// turn, or not loaded): then nothing of the chat is its answer yet.
+    static func justMeAnswer(_ items: [Item], after clientMsgID: String) -> JustMeAnswer? {
+        let wanted = clientMsgID.lowercased()
+        guard !wanted.isEmpty,
+              let start = items.firstIndex(where: { $0.clientMsgID?.lowercased() == wanted }) else { return nil }
+        let texts = justMeReplies(items, after: clientMsgID).compactMap { entry -> String? in
+            if case .answer(_, _, let text) = entry { return text }
+            return nil
+        }
+        let later = items[items.index(after: start)...].contains { item in
+            item.role == "user" && item.kind == .text && item.clientMsgID?.lowercased() != wanted
+        }
+        return JustMeAnswer(text: texts.isEmpty ? nil : texts.joined(separator: "\n\n"), at: items[start].ts, latest: !later)
+    }
+
+    // MARK: - Asks answered apart from the room
+
+    /// One of the hub's answered asks (`GET …/live` `asks`) the room's thread doesn't hold: answered from the meeting's
+    /// material beside a room, or any answered one of a meeting whose room never came up.
+    nonisolated struct AskPair: Identifiable, Hashable, Sendable {
+        var id: String
+        /// The ask's id, lowercase (empty when the hub gave none).
+        var ask: String
+        var question: String?
+        var answer: String
+    }
+
+    /// A row of the room's part of the thread: one of its entries, or an ask answered apart from it.
+    nonisolated enum RoomRow: Identifiable, Hashable, Sendable {
+        case entry(Entry)
+        case ask(AskPair)
+
+        var id: String {
+            switch self {
+            case .entry(let entry): entry.id
+            case .ask(let pair): pair.id
+            }
+        }
+    }
+
+    /// The answered asks as pairs, oldest first: only those answered from the meeting's material (`materialOnly`, beside
+    /// a room thread), or all of them.
+    static func pairs(_ asks: [MeetingAskWire.Ask], materialOnly: Bool) -> [AskPair] {
+        placedPairs(asks, materialOnly: materialOnly).map(\.pair)
+    }
+
+    /// The room's entries with the asks answered from the material where they were asked, so the one thread stays oldest
+    /// first: each before the first question or heard question of an ask the hub lists after it (`asks`, oldest first),
+    /// and any left before the meeting's end, never after it. Ordered by the asks' order, not by clocks: the phone's and
+    /// the hub's may differ, and a batch's words say nothing a phone should parse.
+    static func merged(_ entries: [Entry], asks: [MeetingAskWire.Ask]) -> [RoomRow] {
+        var waiting = placedPairs(asks, materialOnly: true)[...]
+        guard !waiting.isEmpty else { return entries.map { .entry($0) } }
+        var place: [String: Int] = [:]
+        for (index, ask) in asks.enumerated() {
+            if let id = ask.id?.lowercased(), !id.isEmpty, place[id] == nil { place[id] = index }
+        }
+        var out: [RoomRow] = []
+        out.reserveCapacity(entries.count + waiting.count)
+        /// The pairs asked before the ask at `limit` (all of them: nil).
+        func flush(before limit: Int?) {
+            while let next = waiting.first, limit.map({ next.place < $0 }) ?? true {
+                out.append(.ask(next.pair))
+                waiting.removeFirst()
+            }
+        }
+        for entry in entries {
+            switch entry {
+            case .question(_, _, _, _, let ask?), .heard(_, _, _, _, let ask?):
+                if let at = place[ask] { flush(before: at) }
+            case .ended:
+                flush(before: nil)
+            default:
+                break
+            }
+            out.append(.entry(entry))
+        }
+        flush(before: nil)
+        return out
+    }
+
+    /// The pairs with their place in `asks`.
+    private static func placedPairs(_ asks: [MeetingAskWire.Ask], materialOnly: Bool) -> [(place: Int, pair: AskPair)] {
+        asks.enumerated().compactMap { index, ask in
+            guard ask.state == "answered", let answer = ask.answer, !answer.isEmpty else { return nil }
+            if materialOnly, ask.via != "material" { return nil }
+            let id = ask.id?.lowercased() ?? ""
+            return (place: index, pair: AskPair(id: "ask-" + (id.isEmpty ? String(index) : id), ask: id, question: ask.question, answer: answer))
+        }
+    }
+
     /// Whether a message sent with one of `clientMsgIDs` is in the transcript (any case: the hub lowercases ids). The
     /// newest items are looked at first, where a message just sent lands.
     static func delivered(_ items: [Item], clientMsgIDs: [String]) -> Bool {

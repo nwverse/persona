@@ -69,7 +69,7 @@ import OSLog
         let phase: Content.Phase = recording ? .recording : interrupted ? .interrupted : .paused
         let keep = recording && previous?.phase == .recording
         let since = recording ? (keep ? previous?.runningSince : nil) ?? now.timeIntervalSince1970 - elapsed : nil
-        let attended = entry.attended && !roomMissing
+        let attended = MeetingAsk.canAsk(entry, roomMissing: roomMissing)
         return Content(phase: phase, runningSince: since, elapsed: keep ? previous?.elapsed ?? elapsed : elapsed,
                        title: entry.displayTitle, meeting: entry.isMeeting, marks: entry.marks.count,
                        persona: attended ? entry.attendance?.role.rawValue : nil,

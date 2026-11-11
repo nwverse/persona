@@ -189,6 +189,17 @@ nonisolated enum MeetingAttendanceDefaults {
         if store.object(forKey: conversationKey) == nil || store.bool(forKey: conversationKey) != conversation { store.set(conversation, forKey: conversationKey) }
         if store.object(forKey: photosKey) == nil || store.bool(forKey: photosKey) != photos { store.set(photos, forKey: photosKey) }
     }
+
+    /// Keeps every meeting flag of a hub's `hello` as it arrives (`features`, not empty: an empty list says nothing), so a
+    /// start without the app in front (Siri, a Control, the Action button) goes by the last hub it heard, not by the last
+    /// one whose Recordings page was open: a stale `meeting_conversation` would start a room meeting an older manager
+    /// takes as off. `role`: the hub's default role, when its settings are in.
+    static func remember(hello features: Set<String>, role: MeetingAttendance?, _ store: UserDefaults = .standard) {
+        let offered = features.contains(feature)
+        remember(offered: offered, role: role, store)
+        let conversation = offered && features.contains(conversationFeature)
+        remember(conversation: conversation, photos: conversation && features.contains(photosFeature), store)
+    }
 }
 
 /// The room conversation's state as the hub reports it (`room` on the upload's 200, `GET/POST …/live`, `detail.meta`;

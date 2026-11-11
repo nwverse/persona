@@ -4,11 +4,15 @@ import SwiftUI
 
 /// The meeting page's bottom bar (#3862, docs/assistant/meeting-minutes.md「The meeting card」), pinned under the thumb:
 /// the Just Me switch, the composer, and Pause, Bookmark and Stop while the meeting records; the composer alone after it.
-/// The composer is the shell composer's skin as #4486's typed question is (`ComposerSurface`, `ComposerRoundButton`, its
-/// own vertical field), with a [+] menu, not `ShellComposerBar`: that one's dictation would take the microphone the
-/// recording holds. Its words go to the room (`…/ask`), to the main chat with Just Me (`…/just-me`), or after the meeting
-/// to the follow-up (`…/followup`, then the conversation's messages). While the field has the keyboard, Pause, Bookmark
-/// and Stop step aside so the thread stays in view; at accessibility sizes they are icons and a More menu.
+/// The composer is #4486's typed question (`MeetingQuestionField`: the shell composer's field and round send button) with
+/// a [+] menu before it, not `ShellComposerBar`: that one's dictation would take the microphone the recording holds. Its
+/// words go to the room (`…/ask`), to the main chat with Just Me (`…/just-me`), or after the meeting to the follow-up
+/// (`…/followup`, then the conversation's messages). While the field has the keyboard, Pause, Bookmark and Stop step
+/// aside so the thread stays in view.
+///
+/// At accessibility sizes the bar is at most two rows, the field and one row of icons: Pause or Continue, Stop, a More
+/// menu (Bookmark, Just Me, What Was Just Said) and send. Why the field takes no words then shows among what the page
+/// scrolls (`notice`), and with the field as its spoken hint.
 ///
 /// Stop asks first, as the live sheet's bar does: a stopped recording cannot be continued.
 struct MeetingPageBar: View {
@@ -16,6 +20,10 @@ struct MeetingPageBar: View {
     var mode: MeetingPage.Mode
     var paused = false
     @Binding var justMe: Bool
+    /// The field has the keyboard: the page steps aside as the bar does (`MeetingPage`).
+    var focus: FocusState<Bool>.Binding
+    /// At accessibility sizes, why the field takes no words now, for the page to show (nil at other sizes: the bar says it).
+    @Binding var notice: String?
 
     @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -23,42 +31,61 @@ struct MeetingPageBar: View {
     @State private var capture = RecordingCapture.shared
     @State private var ask = MeetingAsk.shared
     @State private var conversation = MeetingConversation.shared
+    @State private var sync = RecordingSync.shared
     @State private var draft = ""
-    @FocusState private var focused: Bool
     @State private var confirmingStop = false
 
     private enum Target { case room, justMe, followup }
 
     private var target: Target { mode == .after ? .followup : justMe ? .justMe : .room }
     private var role: MeetingAttendance { entry.attendance?.role ?? .off }
+    /// The last upload's `200` had no `room`: an older manager took the meeting with Persona off (`RecordingSync`).
+    private var roomMissing: Bool { sync.roomMissing.contains(entry.id) }
     /// Persona is off and Just Me is off: there is nobody to ask.
     private var silenced: Bool { target == .room && !role.attends }
-    /// The hub would still answer the follow-up `409 meeting_running`.
-    private var finishing: Bool { target == .followup && conversation.running(entry) }
+    /// Persona's role attends but it can't be asked now (`MeetingAsk.canAsk`): the hub took the meeting without its room.
+    /// Just Me still goes (it needs only a meeting that records).
+    private var unreachable: Bool { target == .room && role.attends && !MeetingAsk.canAsk(entry, roomMissing: roomMissing) }
+    /// Why the follow-up can't be written now (after the meeting).
+    private var hold: MeetingConversation.FollowupHold? { target == .followup ? conversation.followupHold(entry) : nil }
+    /// More words than the route takes (`MeetingConversation.maxText`): Send stays off and the caption says so, rather
+    /// than the end of the owner's words being dropped.
+    private var overLong: Bool {
+        switch target {
+        case .room: false
+        case .justMe: MeetingConversation.tooLong(draft)
+        case .followup: conversation.followupLimited(entry.id) && MeetingConversation.tooLong(draft)
+        }
+    }
     /// The keyboard is up: the controls under the composer step aside (#4486's rule).
-    private var writing: Bool { focused }
+    private var writing: Bool { focus.wrappedValue }
 
     private var canSend: Bool {
-        guard MeetingAsk.hasWords(draft) else { return false }
+        guard MeetingAsk.hasWords(draft), !overLong else { return false }
         switch target {
         // One question at a time, deliberately stricter than the hub's two: an answer sits next to its question.
-        case .room: return entry.attended && !ask.busy
+        case .room: return MeetingAsk.canAsk(entry, roomMissing: roomMissing) && !ask.busy
         // Just Me needs only a meeting that records; it never waits on the room's question.
         case .justMe: return entry.active
-        case .followup: return !finishing
+        case .followup: return hold == nil
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if mode == .live, !(writing && size.isAccessibilitySize) { justMeRow }
-            composer
+            if mode == .live, !size.isAccessibilitySize { justMeRow }
+            MeetingQuestionField(text: $draft, focus: focus, placeholder: placeholder, sendLabel: String(localized: "Send"),
+                                 canSend: canSend, disabled: fieldDisabled, largeTypeHint: blocked ?? "", send: send) {
+                plus
+            } under: {
+                if mode == .live, !writing { largeControls }
+            }
             if let caption {
                 Text(caption).font(Theme.Font.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("meeting-ask-caption")
             }
-            if mode == .live, !writing { controls }
+            if mode == .live, !writing, !size.isAccessibilitySize { controls }
         }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
@@ -66,7 +93,10 @@ struct MeetingPageBar: View {
         .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
         .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
         .onChange(of: fieldDisabled) { _, disabled in
-            if disabled { focused = false }
+            if disabled { focus.wrappedValue = false }
+        }
+        .onChange(of: size.isAccessibilitySize ? blocked : nil, initial: true) { _, now in
+            if notice != now { notice = now }
         }
         .confirmationDialog("Stop Recording?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop Recording", role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
@@ -90,138 +120,117 @@ struct MeetingPageBar: View {
 
     // MARK: The composer
 
-    @ViewBuilder private var composer: some View {
-        if size.isAccessibilitySize {
-            // The field takes the whole width; [+] and send go under it, send at the trailing edge.
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                field
-                HStack(spacing: Theme.Space.m) {
-                    plus
-                    Spacer(minLength: Theme.Space.s)
-                    sendButton
-                }
-            }
-        } else {
-            HStack(alignment: .bottom, spacing: Theme.Space.s) {
-                plus
-                field
-                sendButton
-            }
-        }
-    }
-
     private var placeholder: String {
         switch target {
-        case .room: role.attends ? String(localized: "Ask Persona…") : String(localized: "Persona is off")
+        case .room:
+            silenced ? String(localized: "Persona is off")
+                : unreachable ? String(localized: "Persona can't take part right now") : String(localized: "Ask Persona…")
         case .justMe: String(localized: "Ask privately…")
         case .followup: String(localized: "Ask about this meeting…")
         }
     }
 
-    private var fieldDisabled: Bool { silenced || finishing }
+    private var fieldDisabled: Bool { silenced || unreachable || hold != nil }
 
-    /// Why the field can't take words now, and the way out.
-    private var caption: String? {
+    /// Why the field can't take words now, and the way out when there is one here (an older manager has none: the role
+    /// is on, and nothing on the phone changes it).
+    private var blocked: String? {
         if silenced { return String(localized: "Turn Persona on in the menu to ask, or use Just Me.") }
-        if finishing { return String(localized: "Persona is finishing the meeting. You can ask about it in a moment.") }
-        return nil
+        if unreachable { return String(localized: "Persona can't take part in this meeting right now.") }
+        switch hold {
+        case .finishing?: return String(localized: "Persona is finishing the meeting. You can ask about it in a moment.")
+        // Not "in a moment": the hub has no end of the meeting until a later upload lands, or 12 hours after the last.
+        case .endRefused?:
+            return sync.problem ?? String(localized: "Recording sync couldn't finish. Try again after checking the hub's diagnostics.")
+        case .noFollowup?: return String(localized: "This hub can't take questions about this meeting right now.")
+        case nil: return nil
+        }
     }
 
-    private var field: some View {
-        TextField(placeholder, text: $draft, axis: .vertical)
-            .font(Theme.Font.body)
-            .lineLimit(1...(size.isAccessibilitySize ? Theme.Recording.askLinesLargeType : Theme.Recording.askLines))
-            .focused($focused)
-            .submitLabel(.send)
-            .onSubmit { send() }
-            // A vertical field takes Return as a new line: one typed at the end sends instead (#4486). A pasted text
-            // with new lines in it is not one keystroke, so it stays.
-            .onChange(of: draft) { old, new in
-                guard new == old + "\n" else { return }
-                draft = old
-                send()
-            }
-            .padding(.horizontal, Theme.Space.l)
-            .padding(.vertical, Theme.Space.s)
-            .scaledFrame(minHeight: Theme.Size.tapTarget)
-            .modifier(ComposerSurface())
-            .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
-            .onTapGesture { if !fieldDisabled { focused = true } }
-            .disabled(fieldDisabled)
-            .accessibilityIdentifier("meeting-ask-field")
-    }
-
-    /// Send stays in its place when there is nothing to send, dimmed, so the row does not jump.
-    private var sendButton: some View {
-        ComposerRoundButton(symbol: Theme.Icon.send, label: String(localized: "Send"), id: "meeting-ask-send", pressScales: true) { send() }
-            .disabled(!canSend)
-            .opacity(canSend ? 1 : Theme.Recording.askSendIdle)
+    /// The caption under the field: why it takes no words (at accessibility sizes the page shows that), or that the words
+    /// are too many to send.
+    private var caption: String? {
+        if !size.isAccessibilitySize, let blocked { return blocked }
+        guard overLong else { return nil }
+        return String(localized: "Too long to send. Shorten it to \(MeetingConversation.maxText.formatted()) characters.")
     }
 
     /// [+]: what else the composer can send. Phase 1 has one item, the question about what was just said, asked of the
-    /// room; with nothing to offer (Just Me, after the meeting, Persona off) the button is not there.
+    /// room; with nothing to offer (Just Me, after the meeting, Persona off or not reachable) the button is not there. At
+    /// accessibility sizes its items are in More.
     @ViewBuilder private var plus: some View {
-        if mode == .live, target == .room, entry.attended {
+        if canAskHeard {
             Menu {
-                Button { askHeard() } label: { Label("What Was Just Said", systemImage: Theme.Icon.question) }
-                    .disabled(ask.busy)
-                    .accessibilityIdentifier("meeting-heard")
+                heardButton
             } label: {
                 plusFace
             }
             .menuStyle(.button)
             .buttonStyle(.plain)
-            .accessibilityLabel(Text("More [Meeting Composer]"))
+            .accessibilityLabel(Text("Add [Meeting Composer]"))
             .accessibilityIdentifier("meeting-plus")
             .shellScaled()
         }
     }
 
-    /// The round button's face (`ComposerRoundButton`), drawn here because a menu can't hold that button: the add symbol
-    /// in an ink circle, or the style's ink in BeautifulUI.
+    private var canAskHeard: Bool { mode == .live && target == .room && MeetingAsk.canAsk(entry, roomMissing: roomMissing) }
+
+    private var heardButton: some View {
+        Button { askHeard() } label: { Label("What Was Just Said", systemImage: Theme.Icon.question) }
+            .disabled(ask.busy)
+            .accessibilityIdentifier("meeting-heard")
+    }
+
+    /// The shell composer's [+] (`ShellComposerBar.plusFace`): the add symbol in the composer's ink, no circle, so send
+    /// stays the row's one solid button.
     private var plusFace: some View {
         ThemedIcon(Theme.Icon.add)
-            .font(Theme.Font.bodyHeavy)
-            .foregroundStyle(AppStyle.current.usesBeautifulUI ? theme.colors.canvas : Theme.Shell.inkText)
-            .scaledFrame(width: Theme.Size.wellL, height: Theme.Size.wellL)
-            .background(AppStyle.current.usesBeautifulUI ? theme.colors.ink : Theme.Shell.ink, in: .circle)
+            .font(Theme.Font.title)
+            .fontWeight(.regular)
+            .foregroundStyle(ComposerInk.icon(theme))
             .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
             .contentShape(.circle)
     }
 
     // MARK: Pause, Bookmark, Stop
 
-    @ViewBuilder private var controls: some View {
-        if size.isAccessibilitySize {
-            // Pause or Continue, Stop and More side by side as icons (their names are their accessibility labels), so the
-            // row stays one row tall whatever the text size and Pause stays one tap away.
-            HStack(spacing: Theme.Space.m) {
-                iconButton(pauseTitle, paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
-                    .accessibilityIdentifier("recording-pause")
-                iconButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
-                    .accessibilityIdentifier("recording-stop")
-                Menu {
-                    Button { addBookmark() } label: { Label("Bookmark", systemImage: Theme.Icon.pin) }
-                        .accessibilityIdentifier("recording-bookmark")
-                } label: {
-                    ThemedIcon(Theme.Icon.moreMenu).font(Theme.Font.heading)
-                        .frame(maxWidth: .infinity)
-                        .scaledFrame(minHeight: Theme.Size.tapTarget)
-                }
-                .themedButton()
-                .accessibilityLabel(Text("More"))
-                .accessibilityIdentifier("recording-more")
-            }
-        } else {
-            HStack(spacing: Theme.Space.m) {
-                barButton(pauseTitle, paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
-                    .accessibilityIdentifier("recording-pause")
-                barButton(String(localized: "Bookmark"), Theme.Icon.pin) { addBookmark() }
-                    .accessibilityIdentifier("recording-bookmark")
-                barButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
-                    .accessibilityIdentifier("recording-stop")
-            }
+    private var controls: some View {
+        HStack(spacing: Theme.Space.m) {
+            barButton(pauseTitle, paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
+                .accessibilityIdentifier("recording-pause")
+            barButton(String(localized: "Bookmark"), Theme.Icon.pin) { addBookmark() }
+                .accessibilityIdentifier("recording-bookmark")
+            barButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
+                .accessibilityIdentifier("recording-stop")
         }
+    }
+
+    /// Accessibility sizes, in the row under the field before send: Pause or Continue, Stop and More side by side as icons
+    /// (their names are their accessibility labels), so the bar stays two rows tall whatever the text size and Pause stays
+    /// one tap away. More holds Bookmark, the Just Me switch and the [+] menu's question.
+    @ViewBuilder private var largeControls: some View {
+        iconButton(pauseTitle, paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
+            .accessibilityIdentifier("recording-pause")
+        iconButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
+            .accessibilityIdentifier("recording-stop")
+        Menu {
+            Button { addBookmark() } label: { Label("Bookmark", systemImage: Theme.Icon.pin) }
+                .accessibilityIdentifier("recording-bookmark")
+            Toggle(isOn: $justMe) {
+                Label("Just Me", systemImage: Theme.Icon.justMe)
+                Text("Only you see it, in the main chat")
+            }
+            .disabled(!entry.active)
+            .accessibilityIdentifier("meeting-just-me")
+            if canAskHeard { heardButton }
+        } label: {
+            ThemedIcon(Theme.Icon.moreMenu).font(Theme.Font.heading)
+                .frame(maxWidth: .infinity)
+                .scaledFrame(minHeight: Theme.Size.tapTarget)
+        }
+        .themedButton()
+        .accessibilityLabel(Text("More"))
+        .accessibilityIdentifier("recording-more")
     }
 
     private var pauseTitle: String { paused ? String(localized: "Continue") : String(localized: "Pause") }
@@ -263,7 +272,7 @@ struct MeetingPageBar: View {
         }
         guard sent else { return }
         draft = ""
-        focused = false
+        focus.wrappedValue = false
         Haptics.tap()
     }
 

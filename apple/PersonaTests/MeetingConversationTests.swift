@@ -119,6 +119,21 @@ import Testing
         MeetingAttendanceDefaults.remember(conversation: false, photos: true, store)
         #expect(!store.bool(forKey: MeetingAttendanceDefaults.conversationKey))
         #expect(store.bool(forKey: MeetingAttendanceDefaults.photosKey))
+
+        // Every hub hello keeps them (`AppModel.handle`), not only the Recordings page: a hub gone back to a manager without
+        // the conversation leaves a cold one-tap start a #3746 meeting.
+        MeetingAttendanceDefaults.remember(conversation: true, photos: true, store)
+        MeetingAttendanceDefaults.remember(hello: ["meeting_attendance"], role: .listener, store)
+        #expect(store.bool(forKey: MeetingAttendanceDefaults.offeredKey))
+        #expect(MeetingAttendanceDefaults.cachedRole(store) == .listener)
+        #expect(!store.bool(forKey: MeetingAttendanceDefaults.conversationKey))
+        #expect(!store.bool(forKey: MeetingAttendanceDefaults.photosKey))
+        MeetingAttendanceDefaults.remember(hello: ["meeting_attendance", "meeting_conversation"], role: nil, store)
+        #expect(store.bool(forKey: MeetingAttendanceDefaults.conversationKey))
+        #expect(!store.bool(forKey: MeetingAttendanceDefaults.photosKey))
+        MeetingAttendanceDefaults.remember(hello: ["meeting_conversation", "meeting_photos"], role: nil, store)
+        #expect(!store.bool(forKey: MeetingAttendanceDefaults.offeredKey))
+        #expect(!store.bool(forKey: MeetingAttendanceDefaults.conversationKey), "only beside meeting_attendance")
     }
 
     /// One tap (the drawer, Siri, the Control) on a hub with the conversation starts a room meeting with the default role,
@@ -365,7 +380,136 @@ import Testing
         #expect(c.running(stopped), "its ended_at not uploaded yet")
     }
 
+    /// A library with one stopped room meeting, and a sync whose record (`sync.json`) says what the hub stored of it:
+    /// `stored` hours before now (nil: nothing), and whether its latest revision was refused.
+    private func stoppedMeeting(stored hoursAgo: Double?, refused: Bool = false, synced: Bool = false)
+        throws -> (RecordingEntry, RecordingLibrary, RecordingSync) {
+        let root = FileManager.default.temporaryDirectory.appending(path: "meeting-running-\(UUID())")
+        let lib = RecordingLibrary(root: root)
+        let made = meeting(room(.listener), active: false, lines: [RecordingSentence(start: 1, end: 4, text: "line")])
+        try lib.save(made)
+        let e = try #require(lib.entry(made.id))
+        var store = RecordingSync.Store()
+        if let hoursAgo { store.synced[e.id] = synced ? e.revision : Int64((Date.now.timeIntervalSince1970 - hoursAgo * 3600) * 1000) }
+        if refused { store.rejected[e.id] = e.revision }
+        try JSONEncoder().encode(store).write(to: root.appendingPathComponent("sync.json"))
+        return (e, lib, RecordingSync(library: lib, api: { nil }))
+    }
+
+    private func conversation(_ hub: FakeHub, _ lib: RecordingLibrary, _ sync: RecordingSync) -> MeetingConversation {
+        let client = hub.client
+        return MeetingConversation(deps: MeetingConversation.Deps(api: { client }, group: { "" }, now: { .now }, wait: { _ in }),
+                                   library: lib, sync: sync)
+    }
+
+    /// The hub's whole read of a recording whose room is `none` (Persona off from the start): nothing of the room to wait
+    /// for, so what the follow-up waits for is the upload alone.
+    private func readWithoutARoom(_ e: RecordingEntry, _ lib: RecordingLibrary, _ sync: RecordingSync) async -> MeetingConversation {
+        let hub = FakeHub()
+        hub.on("GET", path(e.id, "live"), json: #"{"room":{"state":"none"},"asks":[]}"#)
+        let c = conversation(hub, lib, sync)
+        await c.refresh(e.id)
+        return c
+    }
+
+    /// Only an upload on its way keeps the follow-up waiting, and only within the hub's 12 hours of the last upload it
+    /// stored: a refused end doesn't wait for good, it says why instead, until those 12 hours are over.
+    @Test func onlyAnUploadOnItsWayKeepsTheFollowUpWaiting() async throws {
+        let (pending, lib, sync) = try stoppedMeeting(stored: 1)
+        #expect(sync.status(pending) == .pending)
+        let c = await readWithoutARoom(pending, lib, sync)
+        #expect(c.running(pending), "the upload with ended_at is on its way")
+        #expect(c.followupHold(pending) == .finishing)
+
+        let (stale, staleLib, staleSync) = try stoppedMeeting(stored: 13)
+        let old = await readWithoutARoom(stale, staleLib, staleSync)
+        #expect(!old.running(stale), "the hub counts it as ended 12 hours after its last stored upload")
+        #expect(old.followupHold(stale) == nil)
+
+        let (refused, refusedLib, refusedSync) = try stoppedMeeting(stored: 1, refused: true)
+        #expect(refusedSync.status(refused) == .rejected)
+        let r = await readWithoutARoom(refused, refusedLib, refusedSync)
+        #expect(!r.running(refused), "a refused upload isn't on its way: nothing to wait for")
+        #expect(r.followupHold(refused) == .endRefused, "the hub has no end yet: the page says why instead of 'in a moment'")
+
+        let (refusedLong, longLib, longSync) = try stoppedMeeting(stored: 13, refused: true)
+        #expect(await readWithoutARoom(refusedLong, longLib, longSync).followupHold(refusedLong) == nil,
+                "past the 12 hours the hub has ended it")
+    }
+
+    /// The hub's word goes first: a room it reports `ended` (or `deleted`) has passed the meeting's end, whatever is still
+    /// on its way. A full read without a room has none to wait for; before any read a room meeting waits for it.
+    @Test func theHubsRoomSaysWhenTheMeetingEnded() async throws {
+        let (pending, lib, sync) = try stoppedMeeting(stored: 1)
+        let hub = FakeHub()
+        hub.on("GET", path(pending.id, "live"), json: #"{"room":{"state":"ended","machine_id":"server","session_id":"room-1"}}"#)
+        let c = conversation(hub, lib, sync)
+        #expect(c.running(pending))
+        await c.refresh(pending.id)
+        #expect(!c.running(pending), "ended: the hub has the meeting's end")
+        #expect(c.followupHold(pending) == nil)
+
+        let (stored, storedLib, storedSync) = try stoppedMeeting(stored: 0, synced: true)
+        #expect(storedSync.status(stored) == .synced)
+        let empty = FakeHub()
+        empty.on("GET", path(stored.id, "live"), json: #"{"asks":[]}"#)
+        let d = conversation(empty, storedLib, storedSync)
+        #expect(d.running(stored), "a room meeting whose room isn't read yet waits for it")
+        await d.refresh(stored.id)
+        #expect(d.meeting(stored.id).loaded)
+        #expect(!d.running(stored), "read whole and no room: nothing to wait for (an older manager, a lost meeting.json)")
+    }
+
+    /// An older manager answered the upload without `room`: no follow-up to wait for, and none to write to (it has no
+    /// such route); the page says so.
+    @Test func anOlderManagerHasNoFollowUp() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "meeting-older-\(UUID())")
+        let lib = RecordingLibrary(root: root)
+        let e = meeting(room(.participant), active: false, lines: [RecordingSentence(start: 1, end: 4, text: "line")])
+        try lib.save(e)
+        let hub = recordingHub(e) { body in
+            let revision = (body["revision"] as? NSNumber)?.int64Value ?? 0
+            return #"{"id":"x","revision":\#(revision),"status":"stored","attendance":"off"}"#
+        }
+        let client = hub.client
+        let sync = RecordingSync(library: lib, api: { client })
+        await sync.syncNow()
+        let stopped = try #require(lib.entry(e.id))
+        #expect(sync.roomMissing.contains(e.id))
+        let c = conversation(hub, lib, sync)
+        #expect(!c.running(stopped))
+        #expect(c.followupHold(stopped) == .noFollowup)
+    }
+
     // MARK: The private mark
+
+    /// The start's choice stands in for the mark only until the hub has said anything: once a read (whole, or of
+    /// `private`) or a change came back, an absent mark is the hub's, and counts as private.
+    @Test func theStartsChoiceStandsInOnlyUntilTheHubSays() async throws {
+        let hub = FakeHub()
+        let e = meeting(room(.listener, private: false), active: false)
+        hub.on("GET", path(e.id, "live")) { req in
+            if req.query["parts"] == nil { return Data(#"{"room":{"state":"none"}}"#.utf8) }
+            return Data(#"{"private":false,"revs":{"private":2}}"#.utf8)
+        }
+        let c = conversation(hub)
+        #expect(!MeetingPage.isPrivate(e, c.meeting(e.id)), "nothing read yet: the start's choice")
+        await c.refresh(e.id)
+        #expect(c.meeting(e.id).privateRead && c.meeting(e.id).privateMark == nil)
+        #expect(MeetingPage.isPrivate(e, c.meeting(e.id)), "the hub has no mark: private, whatever the start said")
+        await c.refresh(e.id, parts: ["private"])
+        #expect(!MeetingPage.isPrivate(e, c.meeting(e.id)))
+        #expect(hub.sent("GET", path(e.id, "live")).count == 2)
+
+        let gone = FakeHub()
+        gone.on("GET", path(e.id, "live")) { _ in throw APIError(status: 404, message: "no", fields: ["code": "recording_not_found"]) }
+        let missing = conversation(gone)
+        await missing.refresh(e.id)
+        #expect(!missing.meeting(e.id).privateRead, "a recording the hub doesn't have said nothing about its mark")
+        #expect(!MeetingPage.isPrivate(e, missing.meeting(e.id)))
+        missing.uploaded(e.id, room: try decodeRoom(#"{"state":"none"}"#), privateMark: nil)
+        #expect(!missing.meeting(e.id).privateRead, "an upload's 200 without private isn't a read of it")
+    }
 
     @Test func thePrivateSwitchStoresWhatTheHubSays() async throws {
         let hub = FakeHub(), id = UUID()
@@ -379,6 +523,7 @@ import Testing
         #expect(try body(hub.sent("PUT", path(id, "private")).first)["private"] as? Bool == true)
         #expect(try await c.setPrivate(id, false) == false)
         #expect(c.meeting(id).privateMark == false)
+        #expect(c.meeting(id).privateRead)
 
         hub.on("PUT", path(id, "private")) { _ in throw APIError(status: 403, message: "read only", fields: ["code": "kb_read_only"]) }
         await #expect(throws: APIError.self) { try await c.setPrivate(id, true) }
@@ -416,6 +561,33 @@ import Testing
         #expect(c.justMe(for: e.id).last?.state == .sent(conversation: SessionKey(machineID: "server", sessionID: "main-1"),
                                                           clientMsgID: "just-me-\(id.uuidString.lowercased())"))
         #expect(MeetingAsk.shared.exchanges(for: e.id).isEmpty, "Just me is never one of the room's asks")
+    }
+
+    /// Words over the contract's 8000 characters never go, and are never cut: the bar keeps Send off and says why. The
+    /// limit counts what is left once trimmed, as the hub counts it (Unicode scalars).
+    @Test func wordsOverTheLimitAreRefusedNotCut() async throws {
+        let hub = FakeHub()
+        let e = meeting(room(.listener))
+        hub.on("POST", path(e.id, "just-me")) { req in try self.justMeAnswer(req) }
+        let c = conversation(hub)
+        let most = String(repeating: "字", count: MeetingConversation.maxText)
+        #expect(!MeetingConversation.tooLong("  \n" + most + "\n  "))
+        #expect(MeetingConversation.tooLong(most + "a"))
+        #expect(!MeetingConversation.tooLong(String(repeating: "e\u{301}", count: MeetingConversation.maxText / 2)),
+                "two scalars a character: 8000 in all")
+        #expect(c.sendJustMe(e, text: most + "a") == nil)
+        #expect(c.justMe(for: e.id).isEmpty)
+        _ = try #require(c.sendJustMe(e, text: " " + most + " "))
+        await until("sent") { sent(c, e.id) }
+        #expect(try body(hub.sent("POST", path(e.id, "just-me")).first)["text"] as? String == most, "trimmed, whole")
+
+        let id = UUID()
+        #expect(c.followupLimited(id))
+        #expect(c.sendFollowup(id, text: most + "a") == nil, "…/followup takes 8000 at most")
+        c.applyLive(id, room: nil, privateMark: nil, followup: RecordingUpload.SessionRef(machineID: "server", sessionID: "f1"))
+        #expect(!c.followupLimited(id), "the follow-up's own messages have no such limit")
+        hub.on("POST", "/api/v1/sessions/server/f1/messages", json: #"{"ok":true}"#)
+        #expect(c.sendFollowup(id, text: most + "a") != nil)
     }
 
     /// Any answer the hub gave ends that id (the hub replays it under the same one): no second try on its own, and Retry
@@ -549,16 +721,52 @@ import Testing
         }
     }
 
-    private func asker(_ asked: Asked) -> MeetingAsk {
+    private func asker(_ asked: Asked, settled: @escaping (UUID) -> Bool = { _ in true },
+                       roomMissing: @escaping (UUID) -> Bool = { _ in false }) -> MeetingAsk {
         MeetingAsk(deps: MeetingAsk.Deps(
             ask: { q in asked.questions.append(q); return try asked.next() },
             now: { 312 },
             heard: { _ in 7 },
-            settled: { _ in true },
+            settled: { settled($0) },
             maySpeak: { _ in false },
             speak: { _, _, _, _, _ in },
             stopSpeaking: {},
-            clock: { Date(timeIntervalSince1970: 1_800_000_000) }))
+            clock: { Date(timeIntervalSince1970: 1_800_000_000) },
+            roomMissing: roomMissing))
+    }
+
+    /// The switch a case turns while its asker runs.
+    private final class Flag { var on = false }
+
+    /// While an older manager holds the room meeting with Persona off (`roomMissing`), nothing is asked: no exchange, so
+    /// no whole upload forced and no 10 s wait; Retry does nothing either. One that went before says why it failed, not
+    /// that the connection did.
+    @Test func noAskGoesWhileTheHubHasNoRoom() async throws {
+        let e = meeting(room(.participant))
+        #expect(MeetingAsk.canAsk(e, roomMissing: false))
+        #expect(!MeetingAsk.canAsk(e, roomMissing: true))
+        #expect(!MeetingAsk.canAsk(meeting(room(.off)), roomMissing: false))
+
+        let missing = Flag()
+        let asked = Asked([.failure(MeetingAsk.Failure.hub("model_error"))])
+        let ask = asker(asked, roomMissing: { _ in missing.on })
+        _ = try #require(ask.ask(e, text: "Who owns it?"))
+        await until("failed") { !ask.busy }
+        let failed = try #require(ask.latest(for: e.id))
+        missing.on = true
+        #expect(ask.ask(e, text: "And the test?") == nil)
+        #expect(ask.ask(e) == nil, "nor what was just said")
+        ask.retry(failed.id, entry: e)
+        #expect(!ask.busy)
+        #expect(asked.questions.count == 1)
+        #expect(ask.exchanges(for: e.id).count == 1)
+
+        let late = Flag()
+        let unsettled = asker(Asked([]), settled: { _ in late.on = true; return false }, roomMissing: { _ in late.on })
+        _ = try #require(unsettled.ask(e, text: "Who owns it?"))
+        await until("failed") { !unsettled.busy }
+        #expect(unsettled.latest(for: e.id)?.state == .failed(MeetingPage.roomProblem(nil, missing: true) ?? ""),
+                "the page's words for it, not the connection's")
     }
 
     private var unavailable: MeetingAsk.Failure { .hub("room_unavailable") }
@@ -642,6 +850,16 @@ import Testing
         #expect(Set(said).count == said.count, "each its own")
         #expect(MeetingConversation.message(URLError(.timedOut)) == MeetingConversation.message(URLError(.notConnectedToInternet)))
         #expect(MeetingConversation.message(refused(409, "op_id_reused")) == fallback, "Retry sends it again")
+
+        // The private switch: nothing was sent and there is no Retry, so its own fallback; the reasons the hub names keep
+        // their words.
+        let privateFallback = MeetingConversation.privateMessage(refused(500))
+        #expect(privateFallback != fallback)
+        #expect(MeetingConversation.privateMessage(refused(404, "recording_not_found")) == privateFallback)
+        #expect(MeetingConversation.privateMessage(refused(409, "op_id_reused")) == privateFallback)
+        for error: Error in [refused(403, "kb_read_only"), refused(409, "not_meeting"), refused(503), URLError(.notConnectedToInternet)] {
+            #expect(MeetingConversation.privateMessage(error) == MeetingConversation.message(error))
+        }
     }
 
     // MARK: The event

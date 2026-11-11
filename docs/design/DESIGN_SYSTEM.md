@@ -554,7 +554,7 @@ Severity ladder to adopt:
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
 4. `.alert` for short prompts and text entry, except where the text needs what the alert would cover (below).
 
-In-meeting typed questions (#4486) are the exception to rung 4: they use an inline input row in the live recording sheet's bottom bar (`apple/Persona/Recording/RecordingLiveBar.swift`), not a system text-entry alert. The question usually refers to what was just said, and a modal alert hid the live lines and the earlier answers while the user typed. It also allowed only one line and no reference back. The keyboard button beside Ask Persona opens the row (at accessibility sizes, More › Type a Question opens it). The row shows a hint, then a field and send button that reuse the composer's `ComposerSurface` and `ComposerRoundButton` (3.1). The field grows to `Theme.Recording.askLines` lines (`askLinesLargeType` at accessibility sizes, where the hint also steps aside while the keyboard is up and the field's spoken hint carries it). Send stays in place but is dimmed and disabled until there is non-whitespace text, and Return sends too. While the row is open, the keyboard button becomes Cancel, which drops the draft as the alert's Cancel did. While the field has the keyboard, Pause, Stop and Bookmark step aside so the timeline keeps the room. Sending goes through the same `MeetingAsk.ask(_:text:)`, then clears the field and closes the row. It is not a fifth composer (DS-19): it has no attachments, dictation (the microphone is recording), model menu or full-page editor.
+In-meeting typed questions (#4486) are the exception to rung 4: they use an inline input row in the live recording sheet's bottom bar (`apple/Persona/Recording/RecordingLiveBar.swift`), not a system text-entry alert. The question usually refers to what was just said, and a modal alert hid the live lines and the earlier answers while the user typed. It also allowed only one line and no reference back. The keyboard button beside Ask Persona opens the row (at accessibility sizes, More › Type a Question opens it). The row shows a hint, then a field and send button that reuse the composer's `ComposerSurface` and `ComposerRoundButton` (3.1); the two are one view, `MeetingQuestionField` (`apple/Persona/Recording/MeetingQuestionField.swift`), which the meeting page's composer reuses ("Meeting page (#3862)" below), so the two stay alike. The field grows to `Theme.Recording.askLines` lines (`askLinesLargeType` at accessibility sizes, where the hint also steps aside while the keyboard is up and the field's spoken hint carries it). Send stays in place but is dimmed and disabled until there is non-whitespace text, and Return sends too. While the row is open, the keyboard button becomes Cancel, which drops the draft as the alert's Cancel did. While the field has the keyboard, Pause, Stop and Bookmark step aside so the timeline keeps the room. Sending goes through the same `MeetingAsk.ask(_:text:)`, then clears the field and closes the row. It is not a fifth composer (DS-19): it has no attachments, dictation (the microphone is recording), model menu or full-page editor.
 
 The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
 
@@ -895,22 +895,37 @@ page the user watches during the meeting is the page they keep writing in after 
 - **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
   the system-ticked clock, the state word), a subtitle (the role, "On this iPhone", "Private" when marked), a problem as a
   caution `NoticeBanner` when the room can't take part, the **Live** box, the thread's section header, the thread, and the
-  bar pinned through `safeAreaInset`. At accessibility sizes a one-line header (dot, time, menu, Hide) stays fixed, the
-  rest scrolls as one, and the bar stays pinned.
+  bar pinned through `safeAreaInset`. While the field has the keyboard the top of the page steps aside as the bar's
+  controls do: the subtitle hides and the Live box keeps only its newest line, so the thread keeps its height (the
+  structure stays the same, so the thread's scroll position holds). At accessibility sizes a one-line header (dot, time,
+  menu, Hide) stays fixed, the rest scrolls as one, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
-  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action), the
-  room's thread, the **After the Meeting** divider, the follow-up's thread, and the composer alone in the bar. While the
-  hub would still answer `409 meeting_running` the composer is disabled with a caption that says why. When pushed it has
-  the navigation bar's back and no Open button (the recording's page is behind it).
-- **One composer, from the shell composer's parts**: the field (`ComposerSurface`, a vertical `TextField` that grows to
-  `Theme.Recording.askLines` lines, `askLinesLargeType` at accessibility sizes), the round send button
-  (`ComposerRoundButton`, dimmed with `Theme.Recording.askSendIdle` while there is nothing to send) and a `[+]` menu built
-  as `ShellComposerBar`'s, with the round button's face. Return sends; the keyboard goes down after a send. It writes to
-  the room (an ask), to Just me, or after the meeting to the follow-up. Why not `ShellComposerBar` itself: its dictation
-  button would take the microphone the recording holds, and its model and attachment rows don't apply. The page has no
-  second composer.
+  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action) kept
+  above the thread rather than scrolled away with it (the thread follows its end), the room's thread, the **After the
+  Meeting** divider, the follow-up's thread, and the composer alone in the bar. At accessibility sizes and while the
+  keyboard is up the card is one fixed line (the minutes' state, Open as an icon with its name as the label), and the
+  title scrolls with the thread. While the hub would still answer `409 meeting_running` the composer is disabled with a
+  caption that says why: the end still on its way ("in a moment"), the end refused or the sync paused (the sync's own
+  problem; the hub ends such a meeting 12 hours after its last stored upload), or an older manager without the follow-up.
+  When pushed it has the navigation bar's back and no Open button (the recording's page is behind it).
+- **One composer, #4486's field**: the in-meeting typed question's `MeetingQuestionField` (section 4, "In-meeting typed
+  questions (#4486)"): the field (`ComposerSurface`, a vertical `TextField` that grows to `Theme.Recording.askLines`
+  lines, `askLinesLargeType` at accessibility sizes) and the round send button (`ComposerRoundButton`, dimmed with
+  `Theme.Recording.askSendIdle` while there is nothing to send), with a `[+]` menu before them built as
+  `ShellComposerBar`'s, with its plain [+] face (the row's one solid button is send). Return sends; the keyboard goes down
+  after a send. It writes to the room (an ask), to Just me, or after the meeting to the follow-up. Words over the
+  contract's 8000 characters (Just me, and the follow-up's first message, which goes through `…/followup`) keep Send off
+  with a caption saying so; nothing is cut. Why not `ShellComposerBar` itself: its dictation button would take the
+  microphone the recording holds, and its model and attachment rows don't apply. The page has no second composer.
 - **Control row** (live only): Pause / Continue, Bookmark and Stop, with the live bar's looks, identifiers, Stop
-  confirmation and announcements; hidden while the field has focus; icons plus a More menu at accessibility sizes.
+  confirmation and announcements; hidden while the field has focus. At accessibility sizes the bar is at most two rows,
+  the field and one row of icons: Pause or Continue, Stop, a More menu (Bookmark, the Just Me switch, **What Was Just
+  Said**) and send. Why the field takes no words then shows at the end of what scrolls (a neutral `NoticeBanner`) and as
+  the field's spoken hint, not in the bar.
+- **When Persona can't take part**: an older manager took the room meeting with Persona off (the last upload's `200` had
+  no `room`): the subtitle and the thread's header say "Persona can't take part right now", the field asks nothing of the
+  room and [+] goes, with a caption that says so; Just me stays. The same rule (`MeetingAsk.canAsk`) decides the asks
+  themselves and the Live Activity.
 - **Live box**: a `.surface` card with the radius `Theme.Radius.card`: "Live" and, on the right, how far the transcript
   is behind ("About N s behind", or "Listening…" before any line), then the last `Theme.Recording.liveLines` sentences
   (time in monospaced digits, secondary; two lines of text at most) and **Full Transcript**, which pushes the whole
@@ -919,7 +934,11 @@ page the user watches during the meeting is the page they keep writing in after 
   meeting"); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
   lines; a heard question is a capsule "What was just said (m:ss)"; the owner's questions are labelled **You**, answers
   **Persona** in `Theme.ai`, plain text in the room and Markdown in the follow-up; the end is a quiet "The meeting ended";
-  the follow-up's seed is a collapsed capsule "The meeting's material". A reply being written shows as a pending answer.
+  the follow-up's seed is a collapsed capsule "The meeting's material", another context block one named "Context", its
+  title heading what opens. A capsule is a button, so its words stay on one line: shorter at accessibility sizes ("N
+  lines", "What was just said"), spoken whole. After the meeting, asks answered from the meeting's material stand where
+  they were asked (by the hub's order of asks), before the meeting's end. A reply being written shows as a pending answer,
+  a row of its own that alone redraws as the reply streams.
   The thread follows its end unless the reader scrolled up, then **Jump to Latest** shows with the count of unseen
   entries. Asks the room's thread doesn't hold (still asking, failed, answered from material) keep the existing
   `MeetingExchangeRow` look.
@@ -928,17 +947,24 @@ page the user watches during the meeting is the page they keep writing in after 
 - **Just me**: a switch row in the bar (live only) with its caption ("Only you see it, in the main chat"). With it on the
   section header reads **Just Me** ("Only on this screen, never said aloud"), the field's placeholder "Ask privately…",
   and the thread shows only the owner's private questions and the main chat's answers to them, in the same You / Persona
-  rows, with Sending…, a failure's words and **Retry** under a question. Its answers are never spoken, announced to
-  VoiceOver, put in the Live Activity or pushed; a card the turn raises is answered in the main chat, which the thread
+  rows, with Sending…, a failure's words and **Retry** under a question. An answer is its turn's: the next user text in
+  the main chat, the owner's or one the hub puts in (a task's notice, a scheduled run), ends it, and the main chat's live
+  text shows only while the question's turn is the chat's newest, so nothing of another turn reaches a screen that may
+  face the room. Its answers are never spoken, announced to VoiceOver, put in the Live Activity or pushed; a card the turn
+  raises (one raised since its question, while its turn is the newest) is answered in the main chat, which the thread
   says in one line.
 - **Page menu**: the **Persona** role picker and the **Private Meeting** switch (`PUT …/private`; a refusal shows its
-  words). The start shows the same switch under the role, off by default, and no Who Attends.
+  words, "Couldn't change Private Meeting. Try again." when the hub names no reason). The mark shows as the hub has it
+  once it said anything (absent: private); the start's choice stands in only until then. The start shows the same switch
+  under the role, off by default, and no Who Attends. VoiceOver names the three menus apart: the page menu "Meeting
+  options", [+] "Add to the conversation", the control row's "More".
 - Haptics: only `tap`, on send, Pause and Bookmark, while the microphone is open (section 4.3); new room answers are
   announced to VoiceOver as the live view's are.
 - Identifiers for tests: `meeting-page-menu`, `meeting-role`, `meeting-private`, `meeting-page-subtitle`,
   `meeting-room-problem`, `meeting-live`, `meeting-transcript`, `meeting-thread-header`, `meeting-thread-earlier`,
   one `meeting-thread-<kind>` per row kind (`lines`, `heard`, `question`, `answer` and the others),
-  `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-ask-field`, `meeting-ask-send`,
+  `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-ask-field`, `meeting-ask-send`
+  (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
   `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
   `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,

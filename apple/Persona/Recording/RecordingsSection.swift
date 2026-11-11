@@ -696,7 +696,8 @@ struct RecordingDetailView: View {
                 }
                 if showsThread {
                     NavigationLink { MeetingPage(id: id, mode: .after) } label: {
-                        Label("Meeting Conversation", systemImage: Theme.Icon.meeting).lineLimit(1)
+                        // Drawn as the Private Meeting row beside it: in the style's icon language.
+                        Label { Text("Meeting Conversation").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.meeting) }
                     }
                     .accessibilityIdentifier("recording-meeting-conversation")
                 }
@@ -726,7 +727,7 @@ struct RecordingDetailView: View {
             } catch let error as APIError where error.status == 409 && error.code == "not_meeting" {
                 notMeeting = true
             } catch {
-                failure = MeetingConversation.message(error)
+                failure = MeetingConversation.privateMessage(error)
             }
             pendingPrivate = nil
         }

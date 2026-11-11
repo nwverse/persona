@@ -4,10 +4,11 @@ import SwiftUI
 /// The meeting page's one thread (#3862, docs/assistant/meeting-minutes.md「One thread」). While the meeting records: the
 /// room conversation (Persona joining, the lines it was fed folded to "N lines from the meeting", the questions and its
 /// answers) with this phone's own questions the room does not hold yet, failed or answered from the meeting's material;
-/// with Just Me on, the owner's private questions and the main chat's answers to them instead. After the meeting: the room,
-/// **After the Meeting**, then the follow-up conversation (its first message's material folded) and the messages on their
-/// way to it. It subscribes to the conversations it shows while it is on screen and derives its rows from their items
-/// only when those change (`MeetingThread`).
+/// with Just Me on, the owner's private questions and the main chat's answers to them instead. After the meeting: the room
+/// (with the asks answered from the meeting's material where they were asked), **After the Meeting**, then the follow-up
+/// conversation (its first message's material folded) and the messages on their way to it. It subscribes to the
+/// conversations it shows while it is on screen and derives its rows from their items only when those change
+/// (`MeetingThread`); a reply being written redraws only its own row (`MeetingLiveAnswer`).
 struct MeetingThreadView: View {
     /// What the thread shows, for the page around it: its rows' ids in order (Jump to Latest counts the new ones), and the
     /// exchanges it draws as `MeetingExchangeRow` cards, which carry their own Stop Speaking.
@@ -40,9 +41,12 @@ struct MeetingThreadView: View {
     @State private var visible = false
     @State private var subscribed: Set<SessionKey> = []
     @State private var roomEntries: [MeetingThread.Entry] = []
+    /// What the room's part of the thread draws: its entries, and after the meeting the asks answered from the
+    /// meeting's material where they were asked (or every answered ask when the room never came up).
+    @State private var roomRows: [MeetingThread.RoomRow] = []
     @State private var followupEntries: [MeetingThread.Entry] = []
     /// Each Just Me question's answer in the main chat, read from its items when they change.
-    @State private var replies: [UUID: Reply] = [:]
+    @State private var replies: [UUID: MeetingThread.JustMeAnswer] = [:]
     /// The folded rows opened, and the material shown whole.
     @State private var open: Set<String> = []
     @State private var whole: Set<String> = []
@@ -56,13 +60,13 @@ struct MeetingThreadView: View {
         let local = localExchanges(hasRoom: roomKey != nil)
         let mine = showsJustMe ? conversation.justMe(for: entry.id) : []
         let sends = mode == .after ? conversation.followups(for: entry.id) : []
-        let report = Shown(ids: rowIDs(roomKey: roomKey, meeting: meeting, local: local, mine: mine, sends: sends),
+        let report = Shown(ids: rowIDs(local: local, mine: mine, sends: sends),
                            exchangeRows: showsJustMe ? [] : Set(local.map(\.id)))
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             if showsJustMe {
                 justMeRows(mine)
             } else {
-                roomRows(roomKey: roomKey, meeting: meeting, local: local)
+                roomPart(roomKey: roomKey, meeting: meeting, local: local)
                 if mode == .after { followupRows(followupKey, sends: sends) }
             }
         }
@@ -77,7 +81,7 @@ struct MeetingThreadView: View {
             resubscribe()
         })
         .onChange(of: wanted) { resubscribe() }
-        .onChange(of: "\(signature(roomKey))#\(meeting.asks.count)", initial: true) { rebuildRoom() }
+        .onChange(of: RoomInput(items: signature(roomKey), asks: meeting.asks), initial: true) { rebuildRoom() }
         .onChange(of: signature(followupKey), initial: true) { rebuildFollowup() }
         .onChange(of: sends) { markDelivered() }
         .onChange(of: JustMeInput(asks: mine, chats: chatKeys(mine).map { signature($0) }), initial: true) { rebuildReplies() }
@@ -101,7 +105,7 @@ struct MeetingThreadView: View {
     /// Subscribes to what is wanted while on screen and lets go of the rest (all of it once the page is gone), so the
     /// app's reconnect catch-up never carries a conversation nobody looks at.
     private func resubscribe() {
-        let want = visible ? wanted : []
+        let want: Set<SessionKey> = visible ? wanted : []
         for key in subscribed.subtracting(want) { model.unsubscribe(key, by: owner) }
         for key in want.subtracting(subscribed) { model.subscribe(key, by: owner) }
         subscribed = want
@@ -125,14 +129,14 @@ struct MeetingThreadView: View {
     // MARK: Deriving rows
 
     private func rebuildRoom() {
+        let asks = conversation.meeting(entry.id).asks
         guard let key = conversation.roomKey(entry.id) else {
             roomEntries = []
+            roomRows = mode == .after ? MeetingThread.pairs(asks, materialOnly: false).map { .ask($0) } : []
             return
         }
-        let asks = conversation.meeting(entry.id).asks.map {
-            MeetingThread.AskInfo(id: $0.id?.lowercased() ?? "", spoken: $0.questionSource == "spoken", at: $0.at)
-        }
-        roomEntries = MeetingThread.room(model.chat(key).items, recordingID: entry.id, asks: asks)
+        roomEntries = MeetingThread.room(model.chat(key).items, recordingID: entry.id, asks: asks.map { MeetingThread.AskInfo($0) })
+        roomRows = mode == .after ? MeetingThread.merged(roomEntries, asks: asks) : roomEntries.map { .entry($0) }
     }
 
     private func rebuildFollowup() {
@@ -170,25 +174,14 @@ struct MeetingThreadView: View {
         }
     }
 
-    /// Each sent Just Me question's answer: the main chat's assistant text after its message, up to the owner's next one.
+    /// Each sent Just Me question's answer: the main chat's assistant text after its message, up to the end of its turn
+    /// (the next user text of any kind: what the hub puts in, a task's notice or a scheduled run, is another turn).
     private func rebuildReplies() {
-        var out: [UUID: Reply] = [:]
+        var out: [UUID: MeetingThread.JustMeAnswer] = [:]
         for ask in conversation.justMe(for: entry.id) {
-            guard case .sent(let key, let clientMsgID) = ask.state else { continue }
-            let items = model.chat(key).items
-            let wanted = clientMsgID.lowercased()
-            guard let start = items.lastIndex(where: { $0.clientMsgID?.lowercased() == wanted }) else { continue }
-            var reply = Reply()
-            var texts: [String] = []
-            for item in items[(start + 1)...] {
-                if item.role == "user", item.kind == .text, item.injected == nil, item.clientMsgID?.lowercased() != wanted {
-                    reply.latest = false
-                    break
-                }
-                if item.role == "assistant", item.kind == .text, let text = item.text, !text.isEmpty { texts.append(text) }
-            }
-            reply.answer = texts.isEmpty ? nil : texts.joined(separator: "\n\n")
-            out[ask.id] = reply
+            guard case .sent(let key, let clientMsgID) = ask.state,
+                  let answer = MeetingThread.justMeAnswer(model.chat(key).items, after: clientMsgID) else { continue }
+            out[ask.id] = answer
         }
         replies = out
     }
@@ -207,27 +200,16 @@ struct MeetingThreadView: View {
     }
 
     /// The rows' ids in order, for Jump to Latest's count.
-    private func rowIDs(roomKey: SessionKey?, meeting: MeetingConversation.Meeting, local: [MeetingAsk.Exchange],
-                        mine: [MeetingConversation.JustMe], sends: [MeetingConversation.FollowupSend]) -> [String] {
+    private func rowIDs(local: [MeetingAsk.Exchange], mine: [MeetingConversation.JustMe],
+                        sends: [MeetingConversation.FollowupSend]) -> [String] {
         if showsJustMe {
-            return mine.flatMap { ask in replies[ask.id]?.answer == nil ? ["me-\(ask.id)"] : ["me-\(ask.id)", "me-\(ask.id)-answer"] }
+            return mine.flatMap { ask in replies[ask.id]?.text == nil ? ["me-\(ask.id)"] : ["me-\(ask.id)", "me-\(ask.id)-answer"] }
         }
-        var ids = roomKey == nil ? (mode == .after ? Self.pairs(meeting.asks, materialOnly: false).map(\.id) : []) : roomEntries.map(\.id)
-        if roomKey != nil, mode == .after { ids += Self.pairs(meeting.asks, materialOnly: true).map(\.id) }
+        var ids = roomRows.map(\.id)
         ids += local.map { "exchange-\($0.id)" }
         ids += followupEntries.map(\.id)
         ids += sends.map { "send-\($0.id)" }
         return ids
-    }
-
-    /// The hub's answered questions as pairs: all of them for a meeting whose room never came up, or those answered from
-    /// the meeting's material beside a room thread.
-    private static func pairs(_ asks: [MeetingAskWire.Ask], materialOnly: Bool) -> [AskPair] {
-        asks.enumerated().compactMap { index, ask in
-            guard ask.state == "answered", let answer = ask.answer, !answer.isEmpty else { return nil }
-            if materialOnly, ask.via != "material" { return nil }
-            return AskPair(id: "ask-\(ask.id?.lowercased() ?? String(index))", question: ask.question, answer: answer)
-        }
     }
 
     /// Whether the room thread holds a question or an answer yet (its header and fed lines don't count).
@@ -242,21 +224,16 @@ struct MeetingThreadView: View {
 
     // MARK: The room
 
-    @ViewBuilder private func roomRows(roomKey: SessionKey?, meeting: MeetingConversation.Meeting,
+    @ViewBuilder private func roomPart(roomKey: SessionKey?, meeting: MeetingConversation.Meeting,
                                        local: [MeetingAsk.Exchange]) -> some View {
         let role = entry.attendance?.role ?? .off
         if let roomKey {
             let store = model.chat(roomKey)
             if store.hasMore { earlier(roomKey, identifier: "meeting-thread-earlier") }
-            ForEach(roomEntries) { item in row(item, markdown: false) }
-            if !store.liveText.isEmpty {
-                answer(store.liveText, markdown: false, identifier: "meeting-thread-answer-live")
-            }
-            if mode == .after {
-                ForEach(Self.pairs(meeting.asks, materialOnly: true)) { askRows($0) }
-            }
+            ForEach(roomRows) { item in roomRow(item) }
+            MeetingLiveAnswer(store: store, markdown: false, identifier: "meeting-thread-answer-live")
         } else if mode == .after {
-            ForEach(Self.pairs(meeting.asks, materialOnly: false)) { askRows($0) }
+            ForEach(roomRows) { item in roomRow(item) }
         }
         if mode == .live {
             if roomKey == nil, role.attends, meeting.room?.known == .starting {
@@ -283,9 +260,16 @@ struct MeetingThreadView: View {
         }
     }
 
+    @ViewBuilder private func roomRow(_ item: MeetingThread.RoomRow) -> some View {
+        switch item {
+        case .entry(let entry): row(entry, markdown: false)
+        case .ask(let pair): askRows(pair)
+        }
+    }
+
     /// One answered question of the hub's `asks`, as the thread draws a room question and its answer.
-    @ViewBuilder private func askRows(_ asked: AskPair) -> some View {
-        question(asked.question ?? String(localized: "What was just said"), spoken: false)
+    @ViewBuilder private func askRows(_ asked: MeetingThread.AskPair) -> some View {
+        question(asked.question.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "What was just said"), spoken: false)
         answer(asked.answer, markdown: false)
     }
 
@@ -297,9 +281,7 @@ struct MeetingThreadView: View {
             let store = model.chat(key)
             if store.hasMore { earlier(key, identifier: "meeting-followup-earlier") }
             ForEach(followupEntries) { item in row(item, markdown: true) }
-            if !store.liveText.isEmpty {
-                answer(store.liveText, markdown: true, identifier: "meeting-thread-answer-live")
-            }
+            MeetingLiveAnswer(store: store, markdown: true, identifier: "meeting-thread-answer-live")
         }
         ForEach(sends) { send in
             VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -353,7 +335,7 @@ struct MeetingThreadView: View {
         }
         ForEach(mine) { ask in justMeRow(ask, last: ask.id == mine.last?.id) }
         // The turn's cards are answered in the main chat (their one home); here only that it waits.
-        if chatKeys(mine).contains(where: { !model.interactions(for: $0).isEmpty }) {
+        if waitsOnACard(mine) {
             Label { Text("Persona is waiting for your answer in the main chat.") } icon: {
                 ThemedIcon(Theme.Icon.question).foregroundStyle(Theme.caution)
             }
@@ -361,6 +343,15 @@ struct MeetingThreadView: View {
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("meeting-just-me-waiting")
+        }
+    }
+
+    /// A Just Me turn that is still the main chat's newest raised a card: one raised since its message (not one another
+    /// turn of the main chat raised before it).
+    private func waitsOnACard(_ mine: [MeetingConversation.JustMe]) -> Bool {
+        mine.contains { ask in
+            guard case .sent(let key, _) = ask.state, let reply = replies[ask.id], reply.latest, let at = reply.at else { return false }
+            return model.interactions(for: key).contains { ($0.createdAt ?? .distantPast) >= at }
         }
     }
 
@@ -376,19 +367,13 @@ struct MeetingThreadView: View {
                 failure(message, identifier: "meeting-just-me-retry") { conversation.retryJustMe(ask.id) }
             case .sent(let key, _):
                 let reply = replies[ask.id]
-                let live = last && reply?.latest != false ? model.chat(key).liveText : ""
-                if let text = reply?.answer {
+                if let text = reply?.text {
                     answer(text, markdown: true, identifier: "meeting-just-me-answer")
                 }
-                if !live.isEmpty {
-                    answer(live, markdown: true, identifier: "meeting-just-me-answer-live")
-                } else if reply?.answer == nil {
-                    HStack(spacing: Theme.Space.s) {
-                        ProgressView()
-                        Text("Persona is looking…").font(Theme.Font.secondary).foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
+                // The chat's live text is this answer only while its message is in the chat and its turn the newest: a
+                // message still queued behind another turn would show that turn's words.
+                MeetingLiveAnswer(store: model.chat(key), markdown: true, identifier: "meeting-just-me-answer-live",
+                                  shown: last && reply?.latest == true, looking: reply?.text == nil)
             }
         }
         .accessibilityElement(children: .contain)
@@ -405,14 +390,17 @@ struct MeetingThreadView: View {
             quiet(String(localized: "The meeting ended"))
                 .accessibilityIdentifier("meeting-thread-ended")
         case .lines(let id, _, let lines):
-            fold(id, title: lines.count == 1 ? String(localized: "1 line from the meeting")
-                 : String(localized: "\(lines.count) lines from the meeting"), symbol: Theme.Icon.quote) {
+            let full = lines.count == 1 ? String(localized: "1 line from the meeting") : String(localized: "\(lines.count) lines from the meeting")
+            let short = lines.count == 1 ? String(localized: "1 line") : String(localized: "\(lines.count) lines")
+            fold(id, title: size.isAccessibilitySize ? short : full, spoken: full, symbol: Theme.Icon.quote) {
                 linesList(lines)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("meeting-thread-lines")
         case .heard(let id, _, let clock, let lines, _):
-            fold(id, title: clock.isEmpty ? String(localized: "What was just said") : String(localized: "What was just said (\(clock))"),
+            let full = clock.isEmpty ? String(localized: "What was just said") : String(localized: "What was just said (\(clock))")
+            // At accessibility sizes the time steps aside (its lines carry theirs): the capsule stays one line.
+            fold(id, title: size.isAccessibilitySize ? String(localized: "What was just said") : full, spoken: full,
                  symbol: Theme.Icon.voiceListening) {
                 linesList(lines)
             }
@@ -426,9 +414,11 @@ struct MeetingThreadView: View {
             photo(image)
                 .accessibilityIdentifier("meeting-thread-image")
         case .material(let id, _, let title, let text, let seed):
-            fold(id, title: seed ? String(localized: "The meeting's material") : (title.isEmpty ? String(localized: "Context") : title),
-                 symbol: Theme.Icon.minutes) {
-                material(id, text)
+            // A fixed name on the capsule: the block's title is the hub's or the owner's words, of any length, so it heads
+            // what opens instead, where it may wrap.
+            let name = seed ? String(localized: "The meeting's material") : String(localized: "Context")
+            fold(id, title: name, spoken: name, symbol: Theme.Icon.minutes) {
+                material(id, title: title, text)
             }
             // Its Show All is a control of its own.
             .accessibilityElement(children: .contain)
@@ -454,14 +444,7 @@ struct MeetingThreadView: View {
     /// Persona's answer, in the AI's color: plain in the room (its replies are plain sentences), Markdown in the
     /// follow-up and the main chat.
     private func answer(_ text: String, markdown: Bool, identifier: String = "meeting-thread-answer") -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            Label { Text("Persona") } icon: { ThemedIcon(Theme.Icon.persona).accessibilityHidden(true) }
-                .font(Theme.Font.captionStrong).foregroundStyle(Theme.ai)
-            MeetingAnswerText(text: text, markdown: markdown)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(identifier)
+        MeetingAnswerRow(text: text, markdown: markdown, identifier: identifier)
     }
 
     /// A quiet line across the thread: Persona joined, the meeting ended.
@@ -507,16 +490,18 @@ struct MeetingThreadView: View {
         }
     }
 
-    /// A folded row: one line in a capsule, a tap opens what it holds under it.
-    private func fold<Content: View>(_ id: String, title: String, symbol: String, @ViewBuilder content: () -> Content) -> some View {
+    /// A folded row: one line in a capsule, a tap opens what it holds under it. The capsule is a button, so its words
+    /// stay on one line at every size (shorter ones at accessibility sizes, `spoken` saying them whole).
+    private func fold<Content: View>(_ id: String, title: String, spoken: String, symbol: String,
+                                     @ViewBuilder content: () -> Content) -> some View {
         let isOpen = open.contains(id)
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Button { toggle(id) } label: {
                 HStack(spacing: Theme.Space.s) {
                     ThemedIcon(symbol).accessibilityHidden(true)
                     Text(title)
-                        .lineLimit(size.isAccessibilitySize ? nil : 1)
-                        .multilineTextAlignment(.leading)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     ThemedIcon(isOpen ? Theme.Icon.collapse : Theme.Icon.expand).accessibilityHidden(true)
                 }
                 .font(Theme.Font.caption)
@@ -528,6 +513,7 @@ struct MeetingThreadView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(Text(spoken))
             .accessibilityValue(isOpen ? Text("Expanded") : Text("Collapsed"))
             if isOpen {
                 content()
@@ -562,13 +548,18 @@ struct MeetingThreadView: View {
         }
     }
 
-    /// The meeting's material (the follow-up's first message): a few lines, then Show All, so a long transcript does not
-    /// push the thread away.
-    private func material(_ id: String, _ text: String) -> some View {
+    /// The meeting's material (the follow-up's first message) or a context block the owner picked: its title, then a few
+    /// lines and Show All, so a long transcript does not push the thread away.
+    private func material(_ id: String, title: String, _ text: String) -> some View {
         let all = whole.contains(id)
         let long = text.count > Theme.Recording.materialPreview
             || text.split(separator: "\n", omittingEmptySubsequences: false).count > Theme.Recording.materialLines
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            if !title.isEmpty {
+                Text(title).font(Theme.Font.secondaryStrong)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+            }
             Text(text).font(Theme.Font.secondary).foregroundStyle(.secondary)
                 .lineLimit(all ? nil : Theme.Recording.materialLines)
                 .textSelection(.enabled)
@@ -597,12 +588,11 @@ struct MeetingThreadView: View {
     }
 }
 
-/// A Just Me question's answer in the main chat.
-private struct Reply: Equatable {
-    var answer: String?
-    /// No later message of the owner's follows it: its turn is the chat's newest, so the chat's live text is its answer
-    /// being written.
-    var latest = true
+/// What the room's rows are derived from: its items as they are now (`signature`), and the hub's asks (an ask answered
+/// from the material, or answered at all, changes what shows without a new item).
+private struct RoomInput: Equatable {
+    var items: String
+    var asks: [MeetingAskWire.Ask]
 }
 
 /// What the Just Me rows are derived from: the questions and the state of the chats they went to.
@@ -611,11 +601,48 @@ private struct JustMeInput: Equatable {
     var chats: [String]
 }
 
-/// One of the hub's answered questions (`GET …/live` `asks`).
-private struct AskPair: Identifiable {
-    var id: String
-    var question: String?
-    var answer: String
+/// Persona's answer, in the AI's color: plain in the room (its replies are plain sentences), Markdown in the follow-up
+/// and the main chat.
+private struct MeetingAnswerRow: View {
+    var text: String
+    var markdown: Bool
+    var identifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Label { Text("Persona") } icon: { ThemedIcon(Theme.Icon.persona).accessibilityHidden(true) }
+                .font(Theme.Font.captionStrong).foregroundStyle(Theme.ai)
+            MeetingAnswerText(text: text, markdown: markdown)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// A reply being written in a conversation (`ChatStore.liveText`), as a pending answer. Its own view, so each streamed
+/// piece redraws only this row, never the thread around it (P5). `shown`: the live text is this row's to show (a Just Me
+/// answer's only while its turn is the chat's newest). `looking`: with no live text, "Persona is looking…" holds its
+/// place (a Just Me question with no answer yet).
+private struct MeetingLiveAnswer: View {
+    let store: ChatStore
+    var markdown: Bool
+    var identifier: String
+    var shown = true
+    var looking = false
+
+    var body: some View {
+        let live = shown ? store.liveText : ""
+        if !live.isEmpty {
+            MeetingAnswerRow(text: live, markdown: markdown, identifier: identifier)
+        } else if looking {
+            HStack(spacing: Theme.Space.s) {
+                ProgressView()
+                Text("Persona is looking…").font(Theme.Font.secondary).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
 }
 
 /// An answer's text: Markdown's inline styles where the conversation writes them, else as it is. Its own view, so a row

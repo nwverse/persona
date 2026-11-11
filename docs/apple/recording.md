@@ -126,7 +126,8 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
 [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting page (#3862)".
 
 - **A room meeting**: a phone meeting recording started while the hub listed the feature (`MeetingAttendees.conversation`,
-  from the last `hello`, kept in `MeetingAttendanceDefaults` for a start without the app in front). The recording keeps
+  from the last `hello`; every hub `hello` keeps the meeting flags in `MeetingAttendanceDefaults` for a start without the
+  app in front, so a cold one-tap start goes by the last hub it heard). The recording keeps
   what it started with (`RecordingAttendance.room`, `photos`, `privateMark`; `RecordingEntry.roomMeeting`), whatever the
   hub lists later.
 - **Starting**: the Recordings page shows the role and **Private Meeting** (off; "Its minutes are never used when Persona
@@ -139,7 +140,10 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
   that the hub stored is noted (`RecordingSync.endedStored`).
 - **An older manager after a rollback**: a `200` without `room` is not permanent. The recording goes on uploading `room`,
   no `…/live` or `…/ask` goes, the page says the hub can't take part right now (`RecordingSync.roomMissing`), and the
-  Live Activity shows Persona as not attending, until a `200` carries `room` again.
+  Live Activity shows Persona as not attending, until a `200` carries `room` again. One rule decides whether Persona can
+  be asked (`MeetingAsk.canAsk`: it attends and the room isn't missing): the page's subtitle and header, the bar (the field
+  asks nothing of the room, [+] goes), `MeetingAsk.ask` and `retry` (no exchange, so no forced upload) and the Live
+  Activity follow it. Just me stays. After the meeting such a hub has no follow-up: the composer says so.
 - **The hub's state of the meeting** (`MeetingConversation`): the room (`MeetingRoom`: state, ids, problem; a state the
   app doesn't know reads as `starting`), the private mark, the follow-up and the asks, from the upload's `200`, the `200`
   of `POST …/live` and `GET …/live`. A page on screen watches its recording (one watch per page) and reads it whole once;
@@ -164,33 +168,46 @@ hub that lists `meeting_conversation` beside `meeting_attendance`. The page's de
   which the hub answers from the meeting's material; `meeting_ended`, `room_unavailable` and `no_answer` have their own
   words.
 - **Just me**: with the switch on, the composer sends `POST …/just-me` (id, text, images) and the thread shows those
-  questions and the main chat's answers after each one (by its `client_msg_id`) until the next question, and the main
-  chat's reply while its turn runs; a card the turn raises is answered in the main chat. Just me lives only in
+  questions and the main chat's answers after each one (by its `client_msg_id`) until the end of its turn: the next user
+  text of any kind, one the hub puts in (a task's notice, a scheduled run) included (`MeetingThread.justMeAnswer`). The
+  main chat's reply being written shows only while the question is in the chat and its turn the newest; a card the turn
+  raises (since the question, while its turn is the newest) is answered in the main chat, which the thread says. Just me lives only in
   `MeetingConversation`: never in `MeetingAsk`, the Live Activity, `MeetingSpeaker`, VoiceOver announcements or the room.
   Retries follow the hub's receipts: the same id only when no answer came, on `503 assistant_offline` or a pending
   receipt; any other answer ends that id and **Retry** sends the words under a new one. A `404 recording_not_found`
   uploads the recording first and sends once more.
-- **The private mark**: the page menu's **Private Meeting** (`PUT …/private`); shown as the hub has it, absent counting as
-  private. The recording's page has the same switch for every meeting on such a hub (hidden after `409 not_meeting`).
+- **The private mark**: the page menu's **Private Meeting** (`PUT …/private`); shown as the hub has it once it said
+  anything (a read of `private`, a change, an answer carrying it: `Meeting.privateRead`), absent counting as private; the
+  start's choice stands in only until then. The recording's page has the same switch for every meeting on such a hub
+  (hidden after `409 not_meeting`). A refused change says "Couldn't change Private Meeting. Try again." unless the hub
+  names a reason (`MeetingConversation.privateMessage`).
 - **After the meeting**: the after page shows the status card (when, the minutes' state, **Open Minutes** / **Open
-  Recording** in the sheet), the room's thread (or the hub's `asks` when the room never came up), **After the Meeting**,
-  then the follow-up. Its composer waits while the hub would answer `409 meeting_running` (the recording runs, its
-  `ended_at` isn't stored yet, the room is still starting, ready or unavailable, or not read yet). The first message goes
+  Recording** in the sheet, kept above the thread), the room's thread with the asks answered from material where they
+  were asked (or the hub's `asks` when the room never came up), **After the Meeting**, then the follow-up. Its composer
+  waits while the hub would answer `409 meeting_running` (`MeetingConversation.running`): the recording runs, an upload
+  on its way may carry the `ended_at` the hub doesn't have yet (within 12 hours of the last upload it stored, after which
+  the hub ends the meeting itself), the room is still starting, ready or unavailable, or a room meeting's room isn't read
+  yet. The hub's word goes first: a room `ended` or `deleted` has passed the end, and a whole read without a room, like
+  an older manager, has no room to wait for. A refused upload or a paused sync isn't on its way: the composer says the
+  sync's problem instead of "in a moment" until those 12 hours are over (`followupHold`). The first message goes
   to `POST …/followup` (it makes the follow-up with that message), the next ones to the follow-up's
   `POST /api/v1/sessions/{mid}/{sid}/messages` with the message's id as `client_msg_id` and op id; a send keeps the route
   it started on. A `400` / `409` / `413` ends that id (Retry sends the words under a new one); no answer, a pending
   receipt, a 5xx or a `404` keep it. A sent message leaves the pending list once the follow-up's items hold its
-  `client_msg_id` (`followup-<id>` or the id).
+  `client_msg_id` (`followup-<id>` or the id). Just me and `…/followup` take at most 8000 characters: over that Send
+  stays off with a caption saying so, and nothing is cut (the follow-up's own messages have no such limit).
 - **The recording's page**: for a meeting on such a hub a **Private Meeting** row, and for a room meeting (or one the hub
   has a follow-up for) **Meeting Conversation**, which pushes the after page.
 - **Screenshots and tests**: `-showMeetingSample room-listening|room-taking-part` (the made-up meeting as a room meeting,
   listening in or taking part). The mock hub serves the phase (`POST /mock/meeting_conversation {"on", "room",
-  "end_seconds"}`, `GET` reads back each meeting's room, mark and follow-up). UI tests: `MeetingConversationUITests` (the
+  "end_seconds"}`, `GET` reads back each meeting's room, mark and follow-up; the fresh start `POST /mock/recording_minutes`
+  also takes Just me's messages and their replies back out of the main chat). UI tests: `MeetingConversationUITests` (the
   start's choices on a hub with and without the feature, a typed question answered in the room's thread, Just me reaching
   only the main chat, the private switch, the follow-up after Stop); `MeetingAttendanceUITests` turns the feature off to
   keep covering #3746. Unit tests: `MeetingConversationTests` (the upload and its `200`, the hub's state and events, the
-  private mark, Just me and the follow-up with their retries, `room_unavailable`, the words) and `MeetingThreadTests` (the
-  web's cases and the mock's items).
+  private mark and when the hub's word replaces the start's, Just me and the follow-up with their retries and the 8000
+  limit, when the follow-up waits, asks while the room is missing, `room_unavailable`, the words) and `MeetingThreadTests`
+  (the web's cases, the mock's items, where a Just me answer ends, asks answered from material in place).
 
 ## Entry points
 

@@ -216,6 +216,10 @@ final class RecordingSync {
         return entry.sentences.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
+    /// The revision of `id` the hub last stored (ms, the entry's `revision` when it went), or nil when none was. The meeting
+    /// page counts the hub's 12 hours from it: a meeting whose `ended_at` never landed ends then (#3862).
+    func storedRevision(_ id: UUID) -> Int64? { store.synced[id] }
+
     /// The hub has stored the attendance `entry` carries now.
     func attendanceSettled(_ entry: RecordingEntry) -> Bool {
         guard let mark = RecordingUpload.attendanceMark(entry) else { return false }

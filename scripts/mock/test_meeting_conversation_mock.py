@@ -365,6 +365,28 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual(self.call("POST", path, {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "meeting_ended")
         self.assertEqual(self.call("POST", path, {"id": cid, "text": "Should I push back on the vendor?"}), (200, out))  # the receipt first
 
+    def test_a_fresh_start_takes_just_me_out_of_the_main_chat(self):
+        # A UI test's Just me question and the main chat's reply must not show in a later test's main chat.
+        rid = str(uuid.uuid4())
+        self.upload(rid, room={"attendance": "listener"})
+        main = self.call("GET", "/api/v1/assistant")[1]["main"]
+        kept = [x["id"] for x in self.items(main)] if main else []
+        cid = str(uuid.uuid4())
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/just-me", {"id": cid, "text": "Who writes the notes?"})[0], 200)
+        main = self.call("GET", "/api/v1/assistant")[1]["main"]
+        self.wait(lambda: any(x["role"] == "assistant" and x["id"] not in kept for x in self.items(main)), "the reply")
+        self.call("POST", "/mock/recording_minutes", {"mode": "pending"})
+        after = self.call("GET", "/api/v1/assistant")[1]["main"]
+        left = [x["id"] for x in self.items(after)] if after else []
+        self.assertEqual(left, kept)  # the question and its reply are gone, everything before stays
+        # A reply still on its timer when the fresh start comes is never written.
+        self.upload(rid, room={"attendance": "listener"})
+        self.call("POST", f"/api/v1/recordings/{rid}/just-me", {"id": str(uuid.uuid4()), "text": "And the slides?"})
+        self.call("POST", "/mock/recording_minutes", {"mode": "pending"})
+        time.sleep(1.5)
+        after = self.call("GET", "/api/v1/assistant")[1]["main"]
+        self.assertEqual([x["id"] for x in self.items(after)] if after else [], kept)
+
     def test_meeting_live_events_are_content_free(self):
         next_of = self.websocket()
         rid = str(uuid.uuid4())

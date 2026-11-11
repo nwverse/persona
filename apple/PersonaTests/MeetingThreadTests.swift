@@ -261,6 +261,76 @@ import Testing
         #expect(uniqueIDs(entries))
     }
 
+    // MARK: Just me
+
+    /// A Just me answer is its turn's: the next user text of any kind ends it, a task's notice the hub put in included
+    /// (its reply is another turn's, never shown under the private question), and then the chat's live text isn't its.
+    @Test func aJustMeAnswerEndsWithItsTurn() throws {
+        let id = "just-me-33333333-3333-4333-8333-333333333333"
+        let question = try item(text: "Should I push back on the vendor?", clientMsgID: id)
+        let first = try item(role: "assistant", text: "Yes: the cap was agreed last week.")
+        let more = try item(role: "assistant", text: "Bo can back you up.")
+        let notice = try item(text: "The build finished.", injected: ["kind": "task_notice", "line": "The build finished."])
+        let other = try item(role: "assistant", text: "The build finished, 3 tests failed.")
+
+        let running = try #require(MeetingThread.justMeAnswer([question, first], after: id.uppercased()))
+        #expect(running.text == "Yes: the cap was agreed last week.")
+        #expect(running.latest, "its turn is the chat's newest: the live text is its answer")
+        #expect(running.at == question.ts)
+
+        let ended = try #require(MeetingThread.justMeAnswer([question, first, more, notice, other], after: id))
+        #expect(ended.text == "Yes: the cap was agreed last week.\n\nBo can back you up.")
+        #expect(!ended.latest, "a notice the hub put in starts another turn")
+
+        let owner = try item(text: "Thanks", clientMsgID: "web-2")
+        #expect(MeetingThread.justMeAnswer([question, owner, other], after: id) == MeetingThread.JustMeAnswer(text: nil, at: question.ts, latest: false))
+        #expect(MeetingThread.justMeAnswer([first, other], after: id) == nil, "its message isn't in the chat yet: nothing is its answer")
+        let copy = try item(text: "Should I push back on the vendor?", clientMsgID: id)
+        #expect(MeetingThread.justMeAnswer([question, copy, first], after: id)?.latest == true, "its own copy doesn't end it")
+    }
+
+    // MARK: Asks answered from the material
+
+    private func wireAsk(_ id: String, via: String?, answer: String? = "A", state: String = "answered") -> MeetingAskWire.Ask {
+        MeetingAskWire.Ask(id: id, question: "Q " + id, state: state, answer: answer, via: via)
+    }
+
+    private func rowIDs(_ rows: [MeetingThread.RoomRow]) -> [String] { rows.map(\.id) }
+
+    /// After the meeting the asks answered from the material (the room was unavailable) stand where they were asked, by
+    /// the hub's order of asks: before the next room question, and never after "The meeting ended".
+    @Test func asksAnsweredFromTheMaterialStandWhereTheyWereAsked() throws {
+        let a = "aaaaaaaa-0000-4000-8000-000000000001", b = "aaaaaaaa-0000-4000-8000-000000000002"
+        let c = "aaaaaaaa-0000-4000-8000-000000000003", d = "aaaaaaaa-0000-4000-8000-000000000004"
+        let entries: [MeetingThread.Entry] = [
+            .joined(id: "h", at: nil),
+            .lines(id: "l1", at: nil, lines: [line("0:05", "Ada: hello")]),
+            .question(id: "qa", at: nil, text: "Q a", via: .typed, ask: a),
+            .answer(id: "aa", at: nil, text: "A a"),
+            .heard(id: "qc", at: nil, clock: "20:00", lines: [], ask: c),
+            .answer(id: "ac", at: nil, text: "A c"),
+            .lines(id: "l2", at: nil, lines: [line("40:00", "Bo: bye")]),
+            .ended(id: "l2#end", at: nil),
+        ]
+        let asks = [wireAsk(a.uppercased(), via: "room"), wireAsk(b, via: "material"), wireAsk(c, via: "room"),
+                    wireAsk(d, via: "material"), wireAsk("e", via: "material", answer: nil, state: "pending")]
+        let rows = MeetingThread.merged(entries, asks: asks)
+        #expect(rowIDs(rows) == ["h", "l1", "qa", "aa", "ask-\(b)", "qc", "ac", "l2", "ask-\(d)", "l2#end"])
+        if case .ask(let pair) = rows[4] {
+            #expect(pair.question == "Q \(b)" && pair.answer == "A" && pair.ask == b)
+        } else {
+            Issue.record("not the ask: \(rows[4])")
+        }
+        #expect(Set(rowIDs(rows)).count == rows.count)
+
+        // No material answer: the room's entries as they are; no room question after it: before the end, or last.
+        #expect(rowIDs(MeetingThread.merged(entries, asks: [wireAsk(a, via: "room")])) == entries.map(\.id))
+        let open = Array(entries.dropLast())
+        #expect(rowIDs(MeetingThread.merged(open, asks: [wireAsk(c, via: "room"), wireAsk(d, via: "material")])).last == "ask-\(d)")
+        // A room that never came up: every answered ask, in order.
+        #expect(MeetingThread.pairs(asks, materialOnly: false).map(\.ask) == [a, b, c, d])
+    }
+
     // MARK: Clocks, lines and ask ids
 
     @Test func theMeetingClockAndItsTimedLines() {

@@ -1825,6 +1825,10 @@ final class AppModel {
             #if os(iOS)
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
+            // The meeting flags a start without the app in front reads follow every hello, not only the Recordings page.
+            if isHub, !hello.features.isEmpty {
+                MeetingAttendanceDefaults.remember(hello: Set(hello.features), role: MeetingAttendees.hubDefault(self))
+            }
             #endif
             Task { await refreshInAppTunnel(group) }
             Task { await refreshManagerRoster(group) }

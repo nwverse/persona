@@ -15,6 +15,9 @@ final class MeetingConversation {
         var room: MeetingRoom?
         /// Absent until chosen (counts as private for material).
         var privateMark: Bool?
+        /// The hub said what the mark is (a read of `private`, a change, an answer carrying it): from then on an absent mark
+        /// is the hub's word (private), and the start's choice no longer stands in for it.
+        var privateRead = false
         var followup: RecordingUpload.SessionRef?
         /// `asks` of `GET …/live`, oldest first (the thread uses them to tell spoken/typed and to show asks answered from material).
         var asks: [MeetingAskWire.Ask] = []
@@ -65,8 +68,8 @@ final class MeetingConversation {
         var reupload: (UUID) async -> Bool = { _ in false }
     }
 
-    /// Longest Just me or follow-up text (the contract's limit, in characters).
-    static let maxText = 8000
+    /// Longest Just me or `…/followup` text (the contract's limit, in characters).
+    nonisolated static let maxText = 8000
     /// The parts of `GET …/live` phase 1 reads; a later phase's (`lines`, `topics`, `photos`, …) are left to it.
     static let readParts = ["room", "asks", "private", "followup"]
     /// How long after its end a room meeting recorded here still follows `meeting_live` unwatched (the hub's 12 hours).
@@ -129,7 +132,10 @@ final class MeetingConversation {
         // Answers to separate requests arrive in any order: a late one never takes the room back to an earlier state (a
         // read of `…/live` is the hub's word and always replaces it).
         if let room, m.room.map({ Self.rank(room.known) >= Self.rank($0.known) }) ?? true { m.room = room }
-        if let privateMark { m.privateMark = privateMark }
+        if let privateMark {
+            m.privateMark = privateMark
+            m.privateRead = true
+        }
         if let followup { m.followup = followup }
         m.missing = false
         if meetings[id] != m { meetings[id] = m }
@@ -192,16 +198,19 @@ final class MeetingConversation {
         let stored = (try? JSON.decoder.decode(PrivateMark.self, from: data))?.privateMark ?? value
         var m = meetings[id] ?? Meeting()
         m.privateMark = stored
+        m.privateRead = true
         if meetings[id] != m { meetings[id] = m }
         return stored
     }
 
     // MARK: Just me
 
-    /// `POST …/just-me`: the owner's private question to the main chat; nil when there are no words or images.
+    /// `POST …/just-me`: the owner's private question to the main chat; nil when there are no words or images, or more
+    /// words than the hub takes (`tooLong`: the bar says so before, nothing is cut).
     @discardableResult
     func sendJustMe(_ entry: RecordingEntry, text: String, images: [ImagePayload] = []) -> UUID? {
-        let words = Self.cut(text)
+        guard !Self.tooLong(text) else { return nil }
+        let words = Self.trimmed(text)
         guard !words.isEmpty || !images.isEmpty else { return nil }
         let send = JustMe(id: UUID(), recordingID: entry.id, text: words, images: images, at: deps.now(), state: .sending)
         justMe.append(send)
@@ -224,12 +233,13 @@ final class MeetingConversation {
     // MARK: The follow-up
 
     /// Writes into the meeting's follow-up: `POST …/followup` until it exists, then the session's messages. Nil when there
-    /// were no words or images.
+    /// were no words or images, or more words than `…/followup` takes on its way there (`followupLimited`).
     @discardableResult
     func sendFollowup(_ recording: UUID, text: String, images: [ImagePayload] = []) -> UUID? {
-        let words = Self.cut(text)
-        guard !words.isEmpty || !images.isEmpty else { return nil }
         let route = followupKey(recording).map { FollowupSend.Route.messages($0) } ?? FollowupSend.Route.followup
+        if route == .followup, Self.tooLong(text) { return nil }
+        let words = Self.trimmed(text)
+        guard !words.isEmpty || !images.isEmpty else { return nil }
         let send = FollowupSend(id: UUID(), recordingID: recording, text: words, images: images, state: .sending, route: route)
         followups.append(send)
         Task { await deliverFollowup(send.id) }
@@ -263,20 +273,63 @@ final class MeetingConversation {
         }
     }
 
-    /// Whether the hub would still answer the follow-up `409 meeting_running` for this recording: it records here, the hub
-    /// has no upload with `ended_at` yet, its room is starting, ready or unavailable, or a room meeting's room isn't read yet.
+    /// The follow-up's first message goes through `…/followup`, which takes at most `maxText` characters; later ones go to
+    /// the session's messages, which have no such limit.
+    func followupLimited(_ recording: UUID) -> Bool { followupKey(recording) == nil }
+
+    /// Whether the hub would still answer the follow-up `409 meeting_running` while things here go their way: the
+    /// recording runs; an upload on its way may carry the `ended_at` the hub doesn't have yet (within the hub's 12 hours
+    /// of the last upload it stored); the room is starting, ready or unavailable; or a room meeting's room isn't read yet.
+    /// The hub's own word goes first: a room `ended` or `deleted` has passed the meeting's end, the 12 hours included.
+    /// An older manager that answered without `room` (`roomMissing`) and a full read without one have no room to wait
+    /// for. A refused upload or a paused sync isn't on its way: `followupHold` says so instead of waiting for it.
     func running(_ entry: RecordingEntry) -> Bool {
         if entry.active { return true }
-        // Stored with `ended_at`: an upload of this run said so, or the hub holds the latest revision (which has it).
-        if !sync.endedStored.contains(entry.id), sync.status(entry) != .synced { return true }
         let m = meeting(entry.id)
+        if Self.hubEnded(m) || sync.roomMissing.contains(entry.id) { return false }
+        if !sync.endedStored.contains(entry.id), !sync.automaticRetryPaused,
+           [.pending, .uploading].contains(sync.status(entry)), recentlyStored(entry.id) { return true }
         if let room = m.room {
             switch room.known {
             case .starting, .ready, .unavailable: return true
             case .none, .ended, .deleted: return false
             }
         }
-        return entry.roomMeeting && !m.missing
+        return entry.roomMeeting && !m.missing && !m.loaded
+    }
+
+    /// Why the after page's composer can't write to the follow-up now; nil when it can.
+    enum FollowupHold: Equatable {
+        /// The hub would answer `409 meeting_running` until what is on its way lands (`running`).
+        case finishing
+        /// The hub stored no upload with `ended_at` and none is on its way (refused, or the sync paused on a refusal):
+        /// it counts the meeting as running until 12 hours after the last upload it stored.
+        case endRefused
+        /// The last upload's `200` had no `room`: an older manager, which has no follow-up either.
+        case noFollowup
+    }
+
+    func followupHold(_ entry: RecordingEntry) -> FollowupHold? {
+        if sync.roomMissing.contains(entry.id) { return .noFollowup }
+        if running(entry) { return .finishing }
+        guard !entry.active, !sync.endedStored.contains(entry.id), !Self.hubEnded(meeting(entry.id)) else { return nil }
+        let status = sync.status(entry)
+        let held = status == .rejected || (sync.automaticRetryPaused && [.pending, .uploading].contains(status))
+        return held && recentlyStored(entry.id) ? .endRefused : nil
+    }
+
+    /// The hub has passed the meeting's end: its room is `ended`, or `deleted` (trimmed or deleted counts as ended).
+    private static func hubEnded(_ m: Meeting) -> Bool {
+        guard let room = m.room else { return false }
+        return room.known == .ended || room.known == .deleted
+    }
+
+    /// The hub's last stored upload of `id` is under 12 hours old, or it has none: a hub without `ended_at` still counts
+    /// the meeting as running. The revision is the entry's time when it went, a little before the hub's own: the phone
+    /// may open a moment early, and then the hub's `409 meeting_running` says so.
+    private func recentlyStored(_ id: UUID) -> Bool {
+        guard let stored = sync.storedRevision(id) else { return true }
+        return deps.now() < Date(timeIntervalSince1970: Double(stored) / 1000).addingTimeInterval(Self.followsEnded)
     }
 
     // MARK: Pure
@@ -294,7 +347,7 @@ final class MeetingConversation {
         return out
     }
 
-    /// What a failed Just me / follow-up / private change says, in plain words.
+    /// What a failed Just me or follow-up says, in plain words (a private change: `privateMessage`).
     static func message(_ error: Error) -> String {
         if let api = error as? APIError {
             switch api.code {
@@ -312,6 +365,14 @@ final class MeetingConversation {
         }
         if error.isOffline || error.isTimeout { return String(localized: "Couldn't reach the hub. Check the connection and retry.") }
         return String(localized: "Couldn't send. Retry.")
+    }
+
+    /// What a failed change of the private mark says: the reasons the hub names as `message` has them, else that the
+    /// switch didn't change (nothing was sent, and the switch itself is the way to try again).
+    static func privateMessage(_ error: Error) -> String {
+        if let api = error as? APIError, ["kb_read_only", "not_meeting"].contains(api.code) || api.status == 503 { return message(error) }
+        if error.isOffline || error.isTimeout { return message(error) }
+        return String(localized: "Couldn't change Private Meeting. Try again.")
     }
 
     // MARK: Reading
@@ -340,13 +401,17 @@ final class MeetingConversation {
         case .all:
             m.room = answer.room
             m.privateMark = answer.privateMark
+            m.privateRead = true
             m.followup = answer.followup
             m.asks = answer.asks ?? []
             m.loaded = true
         case .parts(let parts):
             // A part asked for and absent is one the hub has no value for (`private` not chosen, no follow-up yet).
             if parts.contains("room") { m.room = answer.room }
-            if parts.contains("private") { m.privateMark = answer.privateMark }
+            if parts.contains("private") {
+                m.privateMark = answer.privateMark
+                m.privateRead = true
+            }
             if parts.contains("followup") { m.followup = answer.followup }
             if parts.contains("asks") { m.asks = answer.asks ?? [] }
         }
@@ -555,9 +620,15 @@ final class MeetingConversation {
 
     private static func path(_ id: UUID, _ route: String) -> String { "/api/v1/recordings/\(id.uuidString.lowercased())/\(route)" }
 
-    /// Trimmed, and at most `maxText` characters (Unicode scalars, as the hub counts).
-    private static func cut(_ text: String) -> String {
-        String(String.UnicodeScalarView(text.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.prefix(maxText)))
+    /// The words as they go: trimmed, never cut (`tooLong` keeps an over-long text from going at all).
+    private nonisolated static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// More than `maxText` characters once trimmed (Unicode scalars, as the hub counts): the hub would refuse it, and the
+    /// bar keeps Send off with a caption rather than drop the end of the owner's words.
+    nonisolated static func tooLong(_ text: String) -> Bool {
+        // A scalar takes at least one UTF-8 byte: a text of fewer bytes is short enough without counting (each keystroke).
+        guard text.utf8.count > maxText else { return false }
+        return trimmed(text).unicodeScalars.count > maxText
     }
 
     private static func wire(_ id: UUID, _ text: String, _ images: [ImagePayload]) -> WireMessage {
