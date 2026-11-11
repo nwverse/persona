@@ -147,6 +147,31 @@ describe("To-dos grouped by 常驻", () => {
     expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
   });
 
+  it("narrows each section by the due-date filter (#3740) and keeps the tree's order under any sort", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    localStorage.setItem("persona.todos.sort", "priority");
+    // by priority Card (high) would lead Ask (low); the section keeps the tree's order, which the hub sets by state
+    seed({ todos: [todo("t-card", "Card", { due_date: "2026-11-20", priority: "high" }), todo("t-ask", "Ask", { priority: "low" }), todo("t-infra", "Infra"), todo("t-own", "Own")] });
+    await render();
+    const product = sections()[1].textContent ?? "";
+    expect(product.indexOf("Ask")).toBeGreaterThan(-1);
+    expect(product.indexOf("Ask")).toBeLessThan(product.indexOf("Card"));
+    // No due date leaves Card out of its section
+    await act(async () => root.unmount());
+    localStorage.setItem("persona.todos.filter", "no_due");
+    root = createRoot(host);
+    await render();
+    expect(sections().map((s) => s.dataset.group)).toEqual(["direction:lead-b", "direction:lead-a", "direction:secretary"]);
+    expect(sections()[1].textContent).toContain("Ask");
+    expect(sections()[1].textContent).not.toContain("Card");
+    // a filter that empties a direction drops its section, as an empty direction is skipped (Card, due or overdue, is in This month)
+    await act(async () => root.unmount());
+    localStorage.setItem("persona.todos.filter", "month");
+    root = createRoot(host);
+    await render();
+    expect(sections().map((s) => s.dataset.group)).toEqual(["direction:lead-a"]);
+  });
+
   it("is not offered with no leader, and a saved choice shows by status", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     tree.current = { directions: [{ id: "main", name: "", secretary: true, counts: counts(1), tasks: [{ id: "t-own", title: "Own", state: "working" }] }] };
