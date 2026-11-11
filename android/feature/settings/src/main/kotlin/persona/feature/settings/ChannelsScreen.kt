@@ -28,6 +28,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation3.runtime.NavKey
 import persona.core.contracts.api.BindPrompt
 import persona.core.contracts.api.ChannelDetail
@@ -135,9 +136,13 @@ internal fun ChannelPage(channels: ChannelManagement?, channelId: String, onBack
     var picking by remember { mutableStateOf(false) }
     var unbinding by remember { mutableStateOf(false) }
     LaunchedEffect(model) { model.load() }
-    // A code on screen: ask the hub again on its own until it is scanned or sent (and the page is open).
+    // A code on screen: ask the hub again on its own until it is scanned or sent, while the page is shown and for a
+    // while after (the user scans with another app); back in front, ask at once (`pollWhileShown`).
     val polled = state.bind.prompt?.takeIf { state.bind.polled }
-    LaunchedEffect(model, polled?.step, polled?.kind, polled?.userCode, polled?.url) { if (polled != null) model.poll() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(model, lifecycle, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
+        if (polled != null) pollWhileShown(lifecycle.startedFlow(), catchUp = { model.catchUp() }, poll = { model.poll() })
+    }
     LaunchedEffect(state.boundAs) {
         val who = state.boundAs ?: return@LaunchedEffect
         feedback?.notice(if (who.isBlank()) res.getString(R.string.settings_src_channel_bound) else res.getString(R.string.settings_src_channel_bound_as, who))

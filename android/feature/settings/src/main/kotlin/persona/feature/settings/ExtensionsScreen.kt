@@ -16,6 +16,7 @@ import android.content.res.Resources
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -201,7 +202,11 @@ fun ExtensionPage(
     var signOutError by remember { mutableStateOf<String?>(null) }
     var confirmingSignOut by remember { mutableStateOf(false) }
     val polled = signInState.bind.prompt?.takeIf { signInState.bind.polled }
-    LaunchedEffect(signIn, polled?.step, polled?.kind, polled?.userCode, polled?.url) { if (polled != null) signIn.poll() }
+    // While shown and for a while after (the user signs in in another app); back in front, ask at once (`pollWhileShown`).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(signIn, lifecycle, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
+        if (polled != null) pollWhileShown(lifecycle.startedFlow(), catchUp = { signIn.catchUp() }, poll = { signIn.poll() })
+    }
     LaunchedEffect(signInState.signedInAs) {
         val who = signInState.signedInAs ?: return@LaunchedEffect
         feedback?.notice(if (who.isBlank()) res.getString(R.string.settings_ext_auth_signed_in) else res.getString(R.string.settings_ext_auth_signed_in_as, who))
