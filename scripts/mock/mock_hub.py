@@ -10059,7 +10059,7 @@ LAUNCHER_PRESETS = [
 # "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
 # too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
-PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "import": None}
+PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
@@ -10108,10 +10108,55 @@ def _provider_apply(l, b):
         else: l.pop("has_headers", None)
 
 
+# POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
+# hub embeds. Exact rows only (the hub also lets an unlisted newer generation inherit; the mock does not).
+MODEL_CATALOG_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "internal", "assistant",
+                                  "models_catalog.json")
+_MODEL_CATALOG = {}
+
+
+def _catalog_key(model_id, dated=True):
+    """normalizeCatalogID (lower case, nothing up to the last /, no trailing [1m]), and without dated a trailing
+    -YYYYMMDD too (catalogGenerationKey)."""
+    key = model_id.strip().lower().rsplit("/", 1)[-1].removesuffix("[1m]")
+    if dated: return key
+    while True:
+        prev, key = key, re.sub(r"-\d{8}$", "", key.removesuffix("[1m]")).removesuffix("[1m]")
+        if key == prev: return key
+
+
+def _catalog_route(h, body):
+    if not _MODEL_CATALOG:
+        with open(MODEL_CATALOG_JSON, encoding="utf-8") as f:
+            for m in json.load(f)["models"]:
+                _MODEL_CATALOG[m["id"].lower()] = m
+    try:
+        ids = json.loads(body or b"{}").get("ids")
+        ids = [] if ids is None else ids
+        if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids): raise ValueError
+    except (ValueError, AttributeError):
+        h.send_json({"error": "请求格式不对：ids 要是模型 ID 的列表"}, 400); return
+    if len(ids) > 100:
+        h.send_json({"error": "一次最多查 100 个模型 ID"}, 400); return
+    if any(len(x.strip().encode()) > 200 for x in ids):
+        h.send_json({"error": "模型 ID 最长 200 字节"}, 400); return
+    PROVIDER_LOG["catalog"].append(ids)
+    out, seen = [], set()
+    for model_id in (x.strip() for x in ids):
+        if not model_id or model_id in seen: continue
+        seen.add(model_id)
+        row = _MODEL_CATALOG.get(_catalog_key(model_id)) or _MODEL_CATALOG.get(_catalog_key(model_id, dated=False))
+        if row: out.append({"id": model_id, **{k: v for k, v in row.items() if k != "id"}})
+    h.send_json({"models": out})
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
     "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route)."""
+    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
+    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    if p == "/api/v1/launchers/catalog" and method == "POST":
+        _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":

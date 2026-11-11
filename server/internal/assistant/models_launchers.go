@@ -153,7 +153,7 @@ func launcherView(l storedLauncher) LauncherView {
 var managedLauncherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 // reservedLauncherNames are taken by claude itself and the /api/v1/launchers/<word> routes.
-var reservedLauncherNames = []string{"claude", "presets", "test", "discover", "import", "health"}
+var reservedLauncherNames = []string{"claude", "presets", "test", "discover", "catalog", "import", "health"}
 
 // ---- the key ----
 
