@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // endHub is the Feishu fake with a run that already shows its progress card, and the fake hub to set its
@@ -175,6 +176,58 @@ func TestFeishuHeldRunQuietEndWithoutItsCard(t *testing.T) {
 	card, _ := post["card"].(string)
 	if post["update"] == true || post["reply_to"] != "om_m1" || !strings.Contains(card, "完成 · Persona · 用时") {
 		t.Fatalf("post %v", post)
+	}
+}
+
+// heldRunWithoutCard is a run answered once (held) whose card went back with its message, and whose background wait is
+// older than HeldIdleMost: its next end is a quiet one.
+func heldRunWithoutCard(t *testing.T) (*Service, *fakeHub, *channel.Run, *[]map[string]any) {
+	t.Helper()
+	s, f, r, posts := endHub(t)
+	s.finishChannelRun(r, &channel.Result{Answer: "先答一部分", Held: true})
+	s.chans.mu.Lock()
+	left := r.Ext["card"]
+	r.Started = time.Now().Add(-channel.HeldIdleMost - time.Minute)
+	s.chans.mu.Unlock()
+	if left != "" {
+		t.Fatalf("the held run kept its card: %q", left)
+	}
+	*posts = nil
+	return s, f, r, posts
+}
+
+// A held run's quiet ending says how it ended. Its background work's turn can be interrupted, hit a model API error or
+// lose its computer: the chat hears that instead of "Done", as a card of its own (the run has none left) (#4228).
+func TestFeishuHeldRunQuietEndSaysHowItEnded(t *testing.T) {
+	interrupted := []proto.Item{{Seq: 5, Kind: proto.KindNotice, Role: "system", Text: transcript.InterruptedNotice}}
+	for _, tc := range []struct {
+		name  string
+		sess  proto.Session
+		items []proto.Item
+		want  string
+	}{
+		{"stopped", proto.Session{Status: proto.StatusDone, State: proto.StateIdle}, interrupted, "已中断"},
+		{"failed", proto.Session{Status: proto.StatusDone, State: proto.StateIdle, TurnError: "unexpected status 503"}, nil, "出错了"},
+		{"offline", proto.Session{Status: proto.StatusOffline, State: proto.StateIdle}, nil, "电脑离线"},
+	} {
+		s, f, r, posts := heldRunWithoutCard(t)
+		sess := tc.sess
+		sess.MachineID, sess.SessionID = "server", "c1"
+		f.setSessions("server", sess)
+		f.setItems(tc.items...)
+		s.checkChannelRun(r.ID)
+		if run, _ := s.channelRunByID(r.ID); run != nil {
+			t.Fatalf("%s: the run did not end", tc.name)
+		}
+		if len(*posts) != 1 {
+			t.Fatalf("%s: the run ended without telling the owner: %v", tc.name, *posts)
+		}
+		post := (*posts)[0]
+		card, _ := post["card"].(string)
+		if post["update"] == true || !strings.Contains(card, tc.want) || !strings.Contains(card, "· Persona · 用时") ||
+			strings.Contains(card, "完成 ·") {
+			t.Fatalf("%s: post %v", tc.name, post)
+		}
 	}
 }
 
