@@ -39,6 +39,7 @@ def features():
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
+                ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
@@ -1529,6 +1530,23 @@ ASSISTANT = [
     assistant_sess(ASK4, "整理这个季度的读书笔记", 60 * 50, "第 30 本整理好了。"),
 ]
 
+
+def mock_png(w=96, h=64):
+    """A made-up picture (a two-tone gradient) as base64 PNG, for photos the mock hands back."""
+    rows = b"".join(b"\x00" + bytes(v for x in range(w) for v in (40 + x, 120 + y, 200 - x // 2)) for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+    return base64.b64encode(png).decode()
+
+
+# MOCK_PERSONA_QUEUE=1 (#4342): the first Persona chat is at work with two of the user's messages queued (the second
+# went with a photo, so its words are the apps' stand-in) and one from another conversation, which the assistant holds
+# until the turn ends (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
+QUEUED_PHOTOS = {"请看图片": [{"mime": "image/png", "data": mock_png()}]}
+if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
+    ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
+                         "queued": ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」：会议纪要整理好了，要不要发给参会的人？"]})
+
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
 # waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
@@ -1712,7 +1730,69 @@ SCHEDULE = [
      "prompt": "周五发周报前，把这周的数据再核对一遍，有对不上的列出来。", "enabled": True, "created_by": "assistant",
      "machine_id": "macbook", "created_at": ago(hours=5)},
 ]
-TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "enabled", "launcher", "permission_mode", "effort", "push")
+TASK_FIELDS = ("title", "prompt", "repeat", "at", "time", "weekdays", "every_minutes", "cron", "enabled", "launcher", "permission_mode", "effort", "push")
+
+# MOCK_CRON=1 (#4399, docs/assistant/assistant.md "Scheduled tasks"): the hub runs cron tasks (feature task_cron) and has
+# one, every 30 minutes in work hours on weekdays. GET /api/v1/assistant/tasks/cron answers the web editor's examples as
+# the hub does (lnquy/cron's words, the next runs in UTC+8) and refuses anything else with the hub's kind of message.
+CRON_PREVIEWS = {
+    "*/30 9-18 * * 1-5": ({"en": "Every 30 minutes, between 09:00 and 18:59, Monday through Friday",
+                           "zh-Hans": "每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五",
+                           "ja": "30 分ごと, 09:00 と 18:59 の間、月曜日 から 金曜日 まで"},
+                          lambda d: d.minute in (0, 30) and 9 <= d.hour <= 18 and d.isoweekday() <= 5),
+    "0 9 * * 1-5": ({"en": "At 09:00, Monday through Friday", "zh-Hans": "在09:00, 星期一至星期五",
+                     "ja": "次において実施09:00、月曜日 から 金曜日 まで"},
+                    lambda d: d.minute == 0 and d.hour == 9 and d.isoweekday() <= 5),
+    "0 10 1 * *": ({"en": "At 10:00, on day 1 of the month", "zh-Hans": "在10:00, 限每月 1 号", "ja": "次において実施10:00、月の 1 日目"},
+                   lambda d: d.minute == 0 and d.hour == 10 and d.day == 1),
+}
+
+
+def cron_lang(header):
+    """The hub's language for the words: the request's Accept-Language, else Chinese."""
+    first = (header or "").split(",")[0].strip().lower()
+    return "en" if first.startswith("en") else "ja" if first.startswith("ja") else "zh-Hans"
+
+
+def cron_runs(expr, n=5):
+    """The next n runs of a known expression after NOW, on the UTC+8 wall clock (each match is on a half hour)."""
+    match = CRON_PREVIEWS[expr][1]
+    d = NOW.astimezone(SCHEDULE_TZ).replace(second=0, microsecond=0)
+    d += timedelta(minutes=30 - d.minute % 30)
+    out = []
+    while len(out) < n:
+        if match(d): out.append(d.isoformat())
+        d += timedelta(minutes=30)
+    return out
+
+
+def cron_view(t, lang):
+    """A task as GET /api/v1/assistant/tasks has it: a cron task gains its words and next runs."""
+    if t.get("repeat") != "cron" or t.get("cron") not in CRON_PREVIEWS: return t
+    v = dict(t, cron_text=CRON_PREVIEWS[t["cron"]][0][lang])
+    if t.get("enabled"):
+        runs = cron_runs(t["cron"])
+        v.update(next_runs=runs, next_run=runs[0])
+    return v
+
+
+def cron_refusal(expr, lang):
+    """The hub's message for an expression the mock does not know."""
+    n = len(expr.split())
+    if n != 5:
+        return {"en": f'"{expr}" has {n} fields. A cron expression has 5: minute hour day-of-month month day-of-week (like 0 9 * * 1-5; seconds aren’t supported).',
+                "zh-Hans": f'"{expr}" 有 {n} 段。cron 表达式是 5 段：分 时 日 月 周（比如 0 9 * * 1-5，不支持秒）。',
+                "ja": f'"{expr}" のフィールドは {n} 個です。cron 式は 5 個です：分 時 日 月 曜日（例：0 9 * * 1-5。秒は使えません）。'}[lang]
+    v = expr.split()[0]
+    return {"en": f'In "{expr}", the minute (0–59) can’t be "{v}". Use a number in its range, *, a list (1,15), a range (9-18) or a step (*/30).',
+            "zh-Hans": f'"{expr}" 里的分钟（0–59）不能是 "{v}"。请写范围内的数字、*、列表（1,15）、区间（9-18）或步长（*/30）。',
+            "ja": f'"{expr}" の分（0–59）に "{v}" は使えません。範囲内の数字、*、リスト（1,15）、範囲（9-18）、ステップ（*/30）を使ってください。'}[lang]
+
+
+if os.environ.get("MOCK_CRON") == "1":
+    SCHEDULE.insert(2, {"id": "rt_cron", "title": "工作时间巡检", "prompt": "工作时间里每半小时看一眼 CI 和各台电脑上的 Agent，有卡住的告诉我。",
+                        "repeat": "cron", "cron": "*/30 9-18 * * 1-5", "enabled": True, "created_by": "assistant",
+                        "last_run": ago(minutes=20), "last_status": "ok", "created_at": ago(days=1)})
 
 
 def save_task(old, new):
@@ -1731,6 +1811,9 @@ def save_task(old, new):
         t["until"] = new["until"]
     if t.get("repeat") == "daily":
         t["next_run"] = next_at(t.get("time", "09:00"), t.get("weekdays") or [])
+    elif t.get("repeat") == "cron":
+        t.pop("at", None)
+        t["next_run"] = cron_runs(t["cron"])[0] if t.get("cron") in CRON_PREVIEWS else None
     elif t.get("repeat") == "interval":
         if old.get("every_minutes") != t.get("every_minutes") or not t.get("at"):
             t["at"] = later(minutes=t.get("every_minutes") or 30)
@@ -1855,9 +1938,10 @@ SCHEDULE_RAN = []  # what "Run now" started (UI tests read it back at /mock/sche
 ASSISTANT_HUB_NOTES = "代码都在 ~/code 下，平时用 MacBook 开发。\n周报每周五下班前先给我草稿，不要直接发。\n服务器上的 /srv 目录不要动。"
 ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "Asia/Shanghai", "notes": None, "main": ASK1,
                     "main_tasks_quiet": True,  # Notify tasks dispatched from the main chat only in that chat (#1731), on by default
-                    # Every agent Persona starts is a supervised task (#3617), off by default; closed sessions archive
-                    # themselves after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
-                    "agent_tasks": False, "archive_closed_days": 3,
+                    # Every agent Persona starts is a supervised task (#3617), off by default; new Inbox messages on a
+                    # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
+                    # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
+                    "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
@@ -1883,7 +1967,8 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"], kb_topics=cfg["kb_topics"])
+        out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
+                   kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -16260,7 +16345,12 @@ class H(BaseHTTPRequestHandler):
             purpose = next((x for x in catalog["purposes"] if x["id"] == unquote(p.rsplit("/", 1)[1])), None)
             if not purpose: return self.send_json({"error": "模型用途不存在"}, 404)
             return self.send_json({"purpose": purpose, "providers": catalog["providers"]})
-        if p == "/api/v1/assistant/tasks": return self.send_json({"tasks": SCHEDULE})
+        if p == "/api/v1/assistant/tasks":
+            return self.send_json({"tasks": [cron_view(t, cron_lang(self.headers.get("Accept-Language"))) for t in SCHEDULE]})
+        if p == "/api/v1/assistant/tasks/cron":  # the web editor checks an expression as it is typed (MOCK_CRON)
+            expr, lang = " ".join(q.get("cron", [""])[0].split()), cron_lang(self.headers.get("Accept-Language"))
+            if expr not in CRON_PREVIEWS: return self.send_json({"error": cron_refusal(expr, lang)}, 400)
+            return self.send_json({"cron": expr, "text": CRON_PREVIEWS[expr][0][lang], "timezone": "Asia/Taipei", "next_runs": cron_runs(expr)})
         if p == "/api/v1/assistant/routines": return self.send_json({"routines": schedule_routines()})
         if p == "/api/v1/assistant/followups": return self.send_json({"followups": schedule_followups()})
         if p.startswith("/api/v1/machines/") and p.endswith("/stat"):
@@ -16399,6 +16489,10 @@ class H(BaseHTTPRequestHandler):
             del SCHEDULE_RAN[:]
             return self.send_json({"ok": True})
         if p == "/mock/renamed": return self.send_json({"renamed": RENAMED})
+        if p == "/mock/model-fallback/reset" and MODEL_FALLBACK:  # #2528: back to before "Back to configured model"
+            for _s in SESSIONS + ASSISTANT:
+                if _s.pop("model_restore", None): push_machine(_s["machine_id"])
+            return self.send_json({"ok": True})
         if p == "/mock/modes": return self.send_json({"modes": MODES_LOG})
         if p == "/mock/node_actions": return self.send_json({"actions": NODE_ACTIONS})
         if p == "/mock/served": return self.send_json({"served": SERVED})
@@ -16674,6 +16768,9 @@ class H(BaseHTTPRequestHandler):
                 after, _, back = fail.partition(":")
                 if t > float(after) and not (back and t > float(after) + float(back)):
                     return self.send_json({"error": "node macbook: not connected"}, 503)
+            row = next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
+            if row is not None and row.get("status") == "offline":  # no pane runs it (node/panescreen.go)
+                return self.send_json({"text": "", "status": "offline"})
             return self.send_json({"text": TERMINAL, "status": "idle"})
         if p.startswith("/api/v1/kb/"):  # the knowledge base (Persona › Knowledge base)
             parts = p.split("/")[4:]
@@ -17625,6 +17722,15 @@ class H(BaseHTTPRequestHandler):
                 if len(parts) >= 7:
                     SENT_TO.append({"machine_id": parts[4], "session_id": parts[5],
                                     "client_msg_id": body.get("client_msg_id"), "text": body.get("text")})
+                    # MOCK_PERSONA_QUEUE=1 (#4342): a working Persona chat queues it after the user's own, photos kept
+                    q = next((x for x in ASSISTANT if x["session_id"] == parts[5] and x.get("state") == "working"), None)
+                    if q is not None and os.environ.get("MOCK_PERSONA_QUEUE") == "1":
+                        held = q.get("queued_relayed") or 0
+                        own = (q.get("queued") or [])[:len(q.get("queued") or []) - held]
+                        q["queued"] = own + [body.get("text") or ""] + (q.get("queued") or [])[len(own):]
+                        if body.get("images"):
+                            QUEUED_PHOTOS[body.get("text") or ""] = [{"mime": i.get("mime"), "data": i.get("data")} for i in body["images"]]
+                        push_machine(q["machine_id"])
             return self.send_json({"ok": True})
         if p == "/api/v1/inbox/refresh": return self.send_json(inbox_list(parse_qs(urlparse(self.path).query)))
         if p == "/api/v1/inbox/done" and self.command == "POST":  # "Mark all as handled" / "Undo"
@@ -17775,7 +17881,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant/tasks" and self.command == "POST":
             t = save_task({"id": "task_" + uuid.uuid4().hex[:8], "created_at": ago()}, json.loads(self.last_body or b"{}"))
             SCHEDULE.append(t)
-            return self.send_json({"task": t})
+            return self.send_json({"task": cron_view(t, cron_lang(self.headers.get("Accept-Language")))})
         if p == "/api/v1/assistant/routines" and self.command == "PUT":  # the Android app saves all its routines at once
             saved, error = put_routines(json.loads(self.last_body or b"{}"))
             if error: return self.send_json({"error": error}, 400)
@@ -17842,7 +17948,7 @@ class H(BaseHTTPRequestHandler):
                 del SCHEDULE[i]
                 return self.send_json({"ok": True})
             SCHEDULE[i] = save_task(SCHEDULE[i], json.loads(self.last_body or b"{}"))
-            return self.send_json({"task": SCHEDULE[i]})
+            return self.send_json({"task": cron_view(SCHEDULE[i], cron_lang(self.headers.get("Accept-Language")))})
         if p.startswith("/api/v1/sessions/") and self.command == "DELETE" and len(p.split("/")) == 6:
             # Delete conversation (docs/protocol/protocol.md): out of the lists; refused while it runs, as the hub's deleted_sessions.go.
             if is_read_only(self): return self.send_json({"error": "read-only role cannot delete conversations"}, 403)
@@ -17959,6 +18065,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["archive_closed_days"] = days
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("inbox_signals"), bool):
+                ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
@@ -18036,6 +18144,14 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "machine is offline"}, 503)
             if body.get("cwd", "").endswith("/broken"):  # a launcher that never gets ready
                 return self.send_json({"error": "claude did not become ready within 1m0s\nzsh: command not found: claude"}, 502)
+            # Resume Session (#4328): a session that isn't running comes back in a new tab under the same id, answered
+            # once it is up (a resume is never async). MOCK_RESUME_ERROR=<why>: the node refuses it.
+            resume = next((x for x in SESSIONS if body.get("resume_session_id") and x["session_id"] == body["resume_session_id"]), None)  # the row itself (all_sessions() decorates copies)
+            if resume is not None:
+                if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
+                resume.update(status="idle", state="idle")
+                push_machine(resume["machine_id"])
+                return self.send_json({"session": decorated_session(resume)})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
             if codex and (body.get("async") or not (body.get("prompt") or "").strip()):
                 return self.send_json({"error": "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", "code": "codex_needs_prompt"}, 400)
@@ -18189,27 +18305,43 @@ class H(BaseHTTPRequestHandler):
                     return self.send_json({"ok": True})
             return self.send_json({"error": "session not found"}, 404)
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue/send-now"):  # node session.queue.send_now (#6088)
-            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None)
+            s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
             refuse = os.environ.get("MOCK_SEND_NOW")  # refuses with that code, to see the app's words for it
             if refuse:
                 return self.send_json({"error": "refused (%s)" % refuse, "code": refuse,
                                        **({"delivered": "unknown"} if refuse == "send_now_in_doubt" else {})}, 409)
-            s["queued"] = []
+            relayed = s.get("queued_relayed") or 0  # a Persona chat's from other conversations stay (#4342)
+            s["queued"] = s["queued"][len(s["queued"]) - relayed:] if relayed else []
             push_machine(s["machine_id"])
             return self.send_json({"sent": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue"):  # node editQueue: pull every queued message back, re-queue `keep`
             body = json.loads(self.last_body or b"{}")
             QUEUE_EDITS.append(body)
             # The stored session (all_sessions() hands out copies): the new order is what the next list says (#6088).
-            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None) \
+            s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None) \
                 or next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
-            pulled = list((s or {}).get("queued") or [])
+            queued = list((s or {}).get("queued") or [])
+            relayed = (s or {}).get("queued_relayed") or 0  # a Persona chat: keep indexes the user's own (#4342)
+            pulled, held = queued[:len(queued) - relayed], queued[len(queued) - relayed:]
             if not pulled: return self.send_json({"error": "nothing is queued"}, 502)
-            s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)]
+            s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)] + held
             push_machine(s["machine_id"])
+            if s.get("assistant"):
+                return self.send_json({"queue": pulled, "images": [QUEUED_PHOTOS.get(q, []) for q in pulled]})
             return self.send_json({"queue": pulled})
+        if MODEL_FALLBACK and p.startswith("/api/v1/sessions/") and p.endswith("/restore-model"):  # #2528, as the node answers
+            s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None)
+            if not s:
+                return self.send_json({"error": "this session is gone", "code": "restore_gone"}, 409)
+            if not s.get("assistant"):
+                return self.send_json({"error": "use /model in the session's terminal", "code": "restore_unsupported"}, 409)
+            if not s.get("model_fallback") or s.get("model_restore"):
+                return self.send_json({"error": "no fallback to go back from", "code": "restore_nothing"}, 409)
+            s["model_restore"] = {"state": "next_start", "to": MODEL_FALLBACK_TO, "at": ago(minutes=0)}
+            push_machine(s["machine_id"])
+            return self.send_json({"restore": "next_start", "restore_to": MODEL_FALLBACK_TO, "closed": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/modes"):  # permission mode / effort chips
             body = json.loads(self.last_body or b"{}")
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
@@ -18535,6 +18667,12 @@ class H(BaseHTTPRequestHandler):
                         elif ch >= " ": drive["typed"] += ch
                     if ctl: drive.update(cols=ctl["cols"], rows=ctl["rows"])
                     drive["send"](full=bool(ctl))
+                    continue
+                if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and any(
+                        x["session_id"] == msg.get("session_id") and x.get("status") == "offline" for x in all_sessions()):
+                    # Nothing runs it (#4328): the stream ends with the node's words (node/send.go paneFor), watched or driven.
+                    send({"type": "terminal", "machine_id": msg.get("machine_id"), "session_id": msg.get("session_id"),
+                          "error": "session %s is not running" % msg.get("session_id")})
                     continue
                 if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_CONTROL and msg.get("control"):
                     sid, mid, ctl = msg.get("session_id"), msg.get("machine_id"), msg["control"]
@@ -20367,6 +20505,30 @@ if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") in ("1", "summary"):
     TODOS = copy.deepcopy(TODOS_INIT)
     TASK_PLANS.clear()
     TASK_FEED[ASK1] = []
+
+# MOCK_MODEL_FALLBACK=1 (#2528, docs/protocol/protocol.md "Going back to the configured model"): after an upstream refusal
+# Claude Code moved two sessions to a fallback model that then wasn't there: the review agent (a terminal session: the card
+# only says to type /model) and the main conversation (headless: "Back to configured model" closes its idle process).
+# Each transcript has the refusal notice (Item.model_refusal, the public fields and the refusal's own words) and the 404
+# after it; POST …/restore-model answers as the node does and pushes Session.model_restore (web/e2e/model-fallback.mjs).
+MODEL_FALLBACK = os.environ.get("MOCK_MODEL_FALLBACK") == "1"
+MODEL_FALLBACK_TO = "claude-opus-5-5"  # the configured model the node would read when it closes the process
+if MODEL_FALLBACK:
+    _refusal = {"subtype": "model_refusal_fallback", "original_model": "claude-opus-5-5", "fallback_model": "claude-sonnet-5-5",
+                "category": "cyber", "scope": "session", "explanation": "The upstream provider declined this request.",
+                "text": "Claude Code is unable to respond to this request with claude-opus-5-5, so it will continue with "
+                        "claude-sonnet-5-5 for the rest of this session."}
+    _error = "API Error: 404 model: claude-sonnet-5-5 is not available for this account"
+    for _sid, _ask in ((REVIEW, "接着看 PR #42 里新加的鉴权中间件"), (ASK1, "帮我看看 PR #42 的鉴权改动有没有漏洞")):
+        ITEMS[_sid] = ITEMS.get(_sid, []) + [
+            it("user", "text", 2, text=_ask),
+            it("system", "notice", 1.9, text=_refusal["text"], model_refusal=dict(_refusal)),
+            it("assistant", "text", 1.8, text=_error)]
+        for _s in SESSIONS + ASSISTANT:
+            if _s["session_id"] == _sid:
+                _s.update(model_fallback=dict(_refusal), turn_error=_error, turn_error_code="model_fallback_unavailable",
+                          status="done", state="idle", last_text=_error, updated_at=ago(minutes=1.8))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")

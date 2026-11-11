@@ -807,3 +807,11 @@ refused as `dialog_open` with nothing on the phone to answer.
   setup (a meeting's room, `node/assistant_guest.go` `meetingRoomKeys`) copies only what it needs from it (env, login, model).
 - A node's session state is stored by the hub's manager (`db.NodeSession`): a field it does not keep is gone after the next node
   restart. Persist what decides how a process runs (a guest's tools and kind), and fail closed when it is missing.
+
+## A headless Claude's queue is on its stdout, not in its transcript (#4342)
+
+`claude -p --input-format stream-json` writes `queue-operation enqueue` with no content for a message that waits, so a transcript reader
+sees a wait it can't name, and a following `dequeue` pops whatever it guessed. Give each user line a `uuid` and follow the
+`command_lifecycle` lines for it instead (queued, started, cancelled, completed). Take one back with `cancel_async_message`, and treat
+`cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
+`claude -p` script before building on it; the requests are not in the public docs.

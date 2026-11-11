@@ -18,6 +18,7 @@ type NodeSession struct {
 	Model            string    `json:"model,omitempty"`
 	ModelFingerprint string    `json:"model_fingerprint,omitempty"`
 	ModelEffort      string    `json:"model_effort,omitempty"`
+	ConfigDir        string    `json:"config_dir,omitempty"` // the assistant's explicit Claude profile
 	Pane             string    `json:"pane,omitempty"`
 	Launcher         string    `json:"launcher"`
 	Cwd              string    `json:"cwd"`
@@ -62,10 +63,10 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 		SELECT 'node_model.' || machine_id || '.' || session_id,
 		jsonb_build_object('model', $8::text, 'model_fingerprint', $9::text, 'model_effort', $10::text,
 			'app_mode', $11::text, 'app_effort', $12::text, 'ultracode_process', $13::jsonb,
-			'started_at_unknown', $14::bool, 'guest', $17::jsonb, 'guest_kind', $18::text), now() FROM saved
+			'started_at_unknown', $14::bool, 'guest', $17::jsonb, 'guest_kind', $18::text, 'config_dir', $19::text), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
-		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind)
+		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir)
 	return err
 }
 
@@ -86,6 +87,7 @@ type nodeModel struct {
 	ModelEffort      string `json:"model_effort"`
 	AppMode          string `json:"app_mode"`
 	AppEffort        string `json:"app_effort"`
+	ConfigDir        string `json:"config_dir"`
 	// UltracodeProcess and StartedAtUnknown: the ultracode observation of the session's process, and a row stored
 	// without a start time (see PutNodeSession).
 	UltracodeProcess json.RawMessage `json:"ultracode_process"`
@@ -111,6 +113,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		}
 		s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort = m.Model, m.ModelFingerprint, m.ModelEffort, m.AppMode, m.AppEffort
 		s.Guest, s.GuestKind = m.Guest, m.GuestKind
+		s.ConfigDir = m.ConfigDir
 		if len(m.UltracodeProcess) > 0 && string(m.UltracodeProcess) != "null" {
 			s.UltracodeProcess = m.UltracodeProcess
 		}

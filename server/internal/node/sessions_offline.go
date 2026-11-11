@@ -180,6 +180,7 @@ func (n *Node) scanOffline() []proto.Session {
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
 		s.ModelFallback = m.modelFallback
+		n.setModelRestore(&s, c.path, m)
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
 		untitled(&s, m)
 		out = append(out, s)

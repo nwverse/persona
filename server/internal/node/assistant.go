@@ -125,6 +125,10 @@ type assistantProc struct {
 	turnError     string // the latest turn failed on the model service, as Codex's app-server said it (#2571)
 	turnErrorKind string // proto.TurnErrorTransient, User or UsageLimit
 
+	// written: the user's messages written to Claude, in order, until its command_lifecycle says it started, cancelled
+	// or finished them; the ones it said it queued are the conversation's queue (assistant_queue.go, #4342).
+	written []assistantInput
+
 	// owner: the Node that took it over from an earlier connection of a resident node (assistant_keep.go); nil: the
 	// one that started it.
 	owner atomic.Pointer[Node]
@@ -292,6 +296,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if execution.ConfigDir != "" {
+			return "", errors.New("config_dir is only supported for Claude assistant conversations")
+		}
 		if id != "" && (onRuntime == nil || !runs) && !(runs && launcher == "") { // another kind of agent than its own
 			return "", errors.New("换到另一种 Agent 需要新建对话")
 		}
@@ -341,6 +348,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil && (agent != "claude" || execution.Runtime != "") {
 		return "", errGuestAgent
 	}
+	if agent == "claude" {
+		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, execution.Runtime, executionOption(options).ConfigDir, resume)
+		if err != nil {
+			return "", err
+		}
+	} else if executionOption(options).ConfigDir != "" {
+		return "", errors.New("config_dir is only supported for Claude assistant conversations")
+	}
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
@@ -375,6 +390,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		id = p.id
 	}
 
+	// One at a time with restoreModel and compactions on this conversation's process (model_restore.go): a restore
+	// either sees the process this send made busy, or this send starts a new one after the restore closed it.
+	defer n.assistantLife.lock(id)()
 	n.mu.Lock()
 	p = n.procs[id]
 	n.mu.Unlock()
@@ -417,7 +435,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain || st.ConfigDir != execution.ConfigDir {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -425,6 +443,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Launcher, st.Cwd, st.StartedAt = launcher, cwd, started
 		st.Model, st.ModelFingerprint, st.ModelEffort, st.Runtime = execution.Model, execution.Fingerprint, execution.Effort, execution.Runtime
 		st.IsMain = execution.IsMain
+		st.ConfigDir = execution.ConfigDir
 		n.state.put(id, st)
 	}
 
@@ -462,7 +481,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if strings.TrimSpace(text) != "" || len(images) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
-	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": content}})
+	in := assistantInput{text: text, images: images, content: content}
 	retryMode, retryEffort := n.modesOf(id)
 	for attempt := 1; ; attempt++ {
 		controlErr := n.syncAssistantModes(ctx, p) // a new or resumed process starts without them
@@ -480,7 +499,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		p.mu.Unlock()
 		werr := controlErr
 		if werr == nil {
-			werr = p.write(line)
+			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
 		}
 		switch {
 		case werr != nil && !fresh:
@@ -565,6 +584,8 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Tools    []string                 `json:"tools"`
 			Version  string                   `json:"claude_code_version"`
 			Response assistantControlResponse `json:"response"`
+			Command  string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
+			State    string                   `json:"state"`        // and what became of it (assistant_queue.go)
 			Event    struct {
 				Type  string `json:"type"`
 				Delta struct {
@@ -626,6 +647,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			n.rememberTasks(p.id, tasks)
 		case "control_response":
 			p.controlResponse(ev.Response)
+		case "command_lifecycle":
+			if p.commandLifecycle(ev.Command, ev.State) {
+				n.notifySessions() // the queue strip shows it, or no longer
+			}
 		case "stream_event":
 			if ev.ParentToolUseID != nil && *ev.ParentToolUseID != "" {
 				// A subagent's stream (#4495): its words are not the conversation's live text, its start does not clear
@@ -838,9 +863,13 @@ func (n *Node) assistantSessions() []proto.Session {
 		updated := p.lastActive
 		turnError := p.turnError
 		turnErrorKind := p.turnErrorKind
+		var queued []string
+		if busy {
+			queued = queuedTexts(p.queuedLocked()) // typed while it works and not taken yet (assistant_queue.go)
+		}
 		p.mu.Unlock()
 		s := proto.Session{SessionID: p.id, Cwd: p.cwd, Status: status, Launcher: p.launcher, UpdatedAt: updated.UTC(),
-			Runtime: p.runtime, RuntimeFallback: p.fallback}
+			Runtime: p.runtime, RuntimeFallback: p.fallback, Queued: queued}
 		if p.agent == "codex" {
 			s.Agent = "codex"
 		}
@@ -855,6 +884,7 @@ func (n *Node) assistantSessions() []proto.Session {
 				// they start, and a list shows them (channel.Background).
 				n.setBackground(&s, m)
 				s.ModelFallback = m.modelFallback
+				n.setModelRestore(&s, path, m)
 				untitled(&s, m)
 				if !busy {
 					s.UpdatedAt = lastUsed(m, st)

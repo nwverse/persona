@@ -560,7 +560,6 @@
         "com.jarvis.node",
         "jarvis",
         "jarvis-link",
-        "jarvis-link-",
         "jarvis-pgdata",
         "jarvis-postgres",
         "jarvisd",

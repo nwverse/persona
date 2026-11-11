@@ -16,20 +16,25 @@ import java.security.MessageDigest
 class GlassTokenContractTest {
     @Test fun standardTypeUsesTheSystemFontWithoutContentLineSpacing() {
         val t = Types.Glass
+        // Each role is an iPhone text level (spec/tokens checks the levels against Theme.Font); strong text is semibold.
         val roles = listOf(
-            Triple(t.largeTitle, 28.sp, FontWeight.Bold),
-            Triple(t.title, 22.sp, FontWeight.SemiBold),
-            Triple(t.headline, 17.sp, FontWeight.SemiBold),
-            Triple(t.body, 17.sp, FontWeight.Normal),
-            Triple(t.bodyStrong, 17.sp, FontWeight.SemiBold),
-            Triple(t.callout, 15.sp, FontWeight.Normal),
-            Triple(t.caption, 13.sp, FontWeight.Normal),
-            Triple(t.micro, 12.sp, FontWeight.Normal),
-            Triple(t.label, 17.sp, FontWeight.SemiBold),
-            Triple(t.labelSmall, 15.sp, FontWeight.Medium),
-            Triple(t.number, 28.sp, FontWeight.Bold),
-            Triple(t.voice, 17.sp, FontWeight.Normal),
+            Triple(t.largeTitle, Tokens.Type.Display.size, Tokens.Type.Display.weight),
+            Triple(t.title, Tokens.Type.Title.size, Tokens.Type.Title.weight),
+            Triple(t.headline, Tokens.Type.Heading.size, Tokens.Type.Heading.weight),
+            Triple(t.body, Tokens.Type.Body.size, Tokens.Type.Body.weight),
+            Triple(t.bodyStrong, Tokens.Type.Body.size, FontWeight.SemiBold),
+            Triple(t.callout, Tokens.Type.Secondary.size, Tokens.Type.Secondary.weight),
+            Triple(t.caption, Tokens.Type.Caption.size, Tokens.Type.Caption.weight),
+            Triple(t.micro, Tokens.Type.Label.size, Tokens.Type.Label.weight),
+            Triple(t.label, Tokens.Type.Heading.size, Tokens.Type.Heading.weight),
+            Triple(t.labelSmall, Tokens.Type.Secondary.size, FontWeight.Medium),
+            Triple(t.number, Tokens.Type.Display.size, Tokens.Type.Display.weight),
+            Triple(t.voice, Tokens.Type.Body.size, Tokens.Type.Body.weight),
         )
+        // The sizes and weights it drew before the levels came from the tokens.
+        assertEquals(listOf(28.sp, 22.sp, 17.sp, 17.sp, 17.sp, 15.sp, 13.sp, 12.sp, 17.sp, 15.sp, 28.sp, 17.sp), roles.map { it.first.fontSize })
+        assertEquals(listOf(FontWeight.Bold, FontWeight.SemiBold, FontWeight.SemiBold, FontWeight.Normal, FontWeight.SemiBold, FontWeight.Normal,
+            FontWeight.Normal, FontWeight.Normal, FontWeight.SemiBold, FontWeight.Medium, FontWeight.Bold, FontWeight.Normal), roles.map { it.first.fontWeight })
         for ((style, size, weight) in roles) {
             assertEquals(FontFamily.Default, style.fontFamily)
             assertEquals(size, style.fontSize)
@@ -39,6 +44,7 @@ class GlassTokenContractTest {
         assertEquals(TabularFigures, t.number.fontFeatureSettings)
         assertEquals(TabularFigures, t.micro.fontFeatureSettings)
         assertEquals(FontFamily.Monospace, t.code.fontFamily)
+        assertEquals(listOf(13.sp, 12.sp), listOf(t.code.fontSize, t.codeSmall.fontSize))
     }
 
     @Test fun glassUsesSharedSystemSurfacesAndCurrentStateSemantics() {
@@ -50,8 +56,13 @@ class GlassTokenContractTest {
             assertEquals(p.ink2, p.ink3)
             val systemBlue = if (dark) Tokens.Semantic.Glass.Dark.accent else Tokens.Semantic.Glass.Light.accent
             assertEquals(Palettes.glassText(systemBlue, dark), p.accent)
-            assertEquals(systemBlue, p.needsYou.dot)
-            assertEquals(Palettes.glassText(if (dark) Color(0xFF409CFF) else Color(0xFF0064C8), dark), p.needsYou.text)
+            // Needs You is the iPhone blue (#4209), now read from the generated tokens.
+            val needsDot = if (dark) Tokens.Status.Dark.NeedsYou.dot else Tokens.Status.Light.NeedsYou.dot
+            val needsText = if (dark) Tokens.Status.Dark.NeedsYou.text else Tokens.Status.Light.NeedsYou.text
+            assertEquals(systemBlue, needsDot)
+            assertEquals(if (dark) Color(0xFF409CFF) else Color(0xFF0064C8), needsText)
+            assertEquals(needsDot, p.needsYou.dot)
+            assertEquals(Palettes.glassText(needsText, dark), p.needsYou.text)
             assertEquals(if (dark) Tokens.Status.Dark.Working.dot else Tokens.Status.Light.Working.dot, p.working.dot)
             assertEquals(Palettes.glassText(if (dark) Tokens.Status.Dark.Working.text else Tokens.Status.Light.Working.text, dark), p.working.text)
             assertEquals(if (dark) Tokens.Status.Dark.Unread.dot else Tokens.Status.Light.Unread.dot, p.done.dot)
@@ -70,6 +81,12 @@ class GlassTokenContractTest {
         assertEquals(22.dp, Shapes.Glass.panel)
         assertEquals(10.dp, Shapes.Glass.control)
         assertEquals(20.dp, Tokens.Radius.bubble)
+    }
+
+    @Test fun spacingIsTheIPhoneScale() {
+        val t = Tokens.Space
+        assertEquals(listOf(0, 2, 4, 6, 8, 12, 16, 24, 32).map { it.dp }, listOf(t.flush, t.xxs, t.xs, t.sm, t.s, t.m, t.l, t.xl, t.xxl))
+        assertEquals(listOf(t.xs, t.s, t.l, t.xl, t.l), listOf(t.lines, t.titleToContent, t.block, t.section, t.page))
     }
 
     @Test fun compactChromeAndSidebarBadgesKeepReadableText() {
