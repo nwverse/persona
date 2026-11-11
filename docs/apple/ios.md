@@ -342,8 +342,9 @@ Chat page:
 - Terminal/Files/Git in development chats (`Views/Session/`): **no tabs** (requested 2026-10-30: remove Chat · Terminal · Git · Files).
   Terminal in top-right ⋯ (requested 2026-10-31: remove standalone button, also collapsed bar); active work row still has terminal. Files/Git by **left swipe** (Chat → Files → Git, right back),
   or ⋯ Files / Git (change count); Back in Files/Git first returns to chat. Git only in repos, Files when cwd known; absent for assistant.
-  - Terminal (`TerminalPanel`, `Views/Session/Terminal/`, `docs/integrations/terminal.md`): view in any state. Button opens **full-page cover from bottom** (`TerminalCover`, requested 2026-10-30), no title/tabs, slim top bar (size left, handle center, settings right),
-    drag bar down follows finger, closes past 140pt or fast swipe (handle tap too); terminal size changes only with keyboard, not header (resize changes controlled pane, requiring Claude relayout).
+  - Terminal (`TerminalPanel`, `Views/Session/Terminal/`, `docs/integrations/terminal.md`): view in any state. Button opens **full-page cover from bottom** (`TerminalCover`, requested 2026-10-30), no title/tabs, slim top bar (size left, handle center, settings and Close right),
+    drag bar down follows finger, closes past 140pt or fast swipe (handle tap, Close and VoiceOver's escape too); terminal size changes only with keyboard, not header (resize changes controlled pane, requiring Claude relayout).
+    The bar is above the screen in every state (connecting, error, no terminal, live). No terminal (the session isn't running, e.g. a finished task's Agent whose tab the hub closed): an `EmptyStateView` with **Resume Session** for a Claude Code session (`POST /sessions` with `resume_session_id`; the node keeps what it ran with), no key bar, and the whole area drags down like the bar (#4328).
     Moshi-style bottom key bar: low dark capsule, flat 30pt keys, small monospace Ctrl/Esc/Tab, others icons, preserving terminal height. With `terminal_stream`, subscribe live
     (`TerminalFeed`: herdr observe frames applied to pane-sized `TerminalGrid`, dropped frame/new stream restarts from full frame, reconnect with epoch/seq);
     without hub/node/herdr streaming, fetch colored screen each second (`format=ansi`).
