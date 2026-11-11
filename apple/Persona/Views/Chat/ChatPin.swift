@@ -10,7 +10,16 @@ import SwiftUI
 @MainActor final class ChatPin {
     /// The chat list's scroll view (`ChatPin.Finder` in its content). Moved directly: asking `ScrollPosition` for a
     /// point landed on it, then 10 pt off a moment later (the content margin), and back, frame after frame.
-    weak var list: UIScrollView?
+    weak var list: UIScrollView? {
+        didSet {
+            guard list !== oldValue else { return }
+            listWatch = list?.observe(\.contentOffset, options: [.new]) { @Sendable [weak self] _, _ in
+                MainActor.assumeIsolated { self?.keepHeld() }
+            }
+        }
+    }
+    /// The list's offset, watched for a kept hold (`keepHeld`).
+    private var listWatch: NSKeyValueObservation?
     /// The flipped list's actual distance from its newest end; SwiftUI geometry can lag a completed jump.
     var measuredNewestGap: CGFloat? {
         guard let list else { return nil }
@@ -26,6 +35,9 @@ import SwiftUI
     /// list to whatever comes in next and now holds it instead (`ChatFollow.toggledRow`): the row is kept where it is
     /// until the user takes the list, taps ↓ or sends (#3005).
     var anchor: () -> Bool = { false }
+    /// Set by the chat: a kept hold whose header the list could not keep where it was (a work line folded at the newest
+    /// end, `glide`) took the list to the newest end. The chat follows again from there (#1173).
+    var landed: () -> Void = {}
 
     /// The coordinate space of the list's content: a place in it does not change when the list scrolls.
     nonisolated static let space = "chatContent"
@@ -341,6 +353,22 @@ import SwiftUI
         stopGlide()
         gliding = nil
         if want != nil, let list, !list.isTracking { put(list) }
+        if let h = held, h.until == .distantFuture, let list, list.contentOffset.y <= -list.adjustedContentInset.top + 0.5 {
+            landed()
+        }
+    }
+
+    /// The list moved while a header is kept (until the user scrolls, taps ↓ or sends, each of which lets go of it), and
+    /// not by the user's finger or a glide (which keeps its own way): put back where the hold has it, in the same pass.
+    /// As a step came in under a row the user had open, the pin moved the list by the step's height and the list was
+    /// set back where it had been, the row 56 pt up on screen and staying there, while SwiftUI went on reporting it
+    /// where it was, so nothing moved it back (`ToolFoldTests`, now and then). Only once the header has said where it
+    /// is in the content (until then `watch` moves the list by its growth).
+    private func keepHeld() {
+        guard let h = held, h.reported, h.until == .distantFuture, glidePath == nil, gliding == nil, let list,
+              !list.isTracking, !list.isDecelerating, let spot = last[h.key] else { return }
+        let target = Self.within(list, wanted(h, grown: spot.content - h.at.content), content: max(reach, spot.content))
+        if abs(list.contentOffset.y - target) >= 0.5 { list.contentOffset.y = target }
     }
 
     /// How long UIKit's animated scroll takes.

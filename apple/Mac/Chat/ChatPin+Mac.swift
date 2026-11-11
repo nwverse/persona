@@ -22,6 +22,8 @@ import SwiftUI
     /// Set by the chat: a row is opening or closing under the click (`toggleInPlace`). True when the chat holds the list
     /// there instead of following what comes in next (`ChatFollow.toggledRow`, as on iOS, #3005).
     var anchor: () -> Bool = { false }
+    /// Set by the chat: a kept hold glided to the newest end (iOS, #1173). The Mac pin does not glide; never called.
+    var landed: () -> Void = {}
 
     nonisolated static let space = "chatContent"
     /// How long a tapped header is held at most.

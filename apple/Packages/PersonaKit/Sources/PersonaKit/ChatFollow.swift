@@ -116,8 +116,9 @@ public nonisolated struct ChatFollow: Equatable, Sendable {
 
     /// A header was tapped open or closed. Opening something is not taking the list: whatever it was doing (following
     /// at the newest, reading further up) it goes back to once the header has settled. `anchored` (a running work line
-    /// opened at the newest end, its header raised under the top bar): held until the user takes the list, folds it, or
-    /// goes back to the newest; following would scroll the header away, holding back would freeze the turn (#1046).
+    /// opened at the newest end, its header raised under the top bar; one opened or folded where the chat would follow):
+    /// held until the user takes the list or goes back to the newest (↓, sending, a fold that took the list there);
+    /// following would scroll the header away, holding back would freeze the turn (#1046).
     public mutating func hold(anchored: Bool = false) {
         if mode != .holding {
             resume = mode == .landing ? (near ? .following : .reading) : mode

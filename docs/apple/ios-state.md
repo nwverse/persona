@@ -392,6 +392,11 @@ Why it works this way:
   back by how far that edge moved on screen (`ChatPin.resized`), a glide under way with it; not for the keyboard, above which the newest stays
   as before. Folded at the newest end, the list glides to the newest end with the offset set every display frame (`ChatPin.glide`), not UIKit's
   animated scroll, which ran from wherever SwiftUI had put the offset in the same pass.
+  A work line folded where the chat would follow stays anchored on its header too; going back to the newest end 1.5 s later moved the list
+  by itself. Only a fold the list cannot keep the header for (at the newest end, what is left under it shorter than the screen) glides there
+  and follows again (`ChatPin.landed`, #1173). While a hold is kept, any move of the offset but the user's finger or a glide is put back in the
+  same pass (`ChatPin.keepHeld`, KVO on `contentOffset`): as a step came in under an open row, the list was now and then set back after the pin
+  had moved it, the row 56 pt up while SwiftUI still reported it in place.
 - **Withhold while the finger is down (including inertia after release), then decide by position** (`holdsBack` includes `touching`): in an inverted list, growth at latest pushes content under the finger upward,
   causing 23 pt and 39 pt movement during a light drag while streaming. Release within tolerance resumes following, so a short look upward doesn't stop the stream, bringing held content in together. Leaving tolerance separately records `draggedAway` to control ↓.
 

@@ -1241,8 +1241,12 @@ struct ChatView: View {
         // while the chat holds still for a row the user opened (`ChatFollow.toggledRow`), and for a run of chips opened
         // or closed: handed to the usual hold, following came back 1.5 s later and took the list to the newest end, the
         // tapped chips up by what had opened under them (BeautifulUI, 119–381 pt, #1123), or the next step did (#3005).
+        // Folded, likewise: the folded header stays where it was, and the user reads on from there. Going back to the
+        // newest end 1.5 s later moved the list by itself (a work line folded 61 pt short of it, `UnfoldTests`). Only a
+        // fold the list could not keep the header for (at the newest end, what is left under it shorter than the
+        // screen) glides to the newest end, and follows from there (`ChatPin.landed`, #1173).
         let following = follow.follows
-        let anchored = fromHeader && (run || !wasOpen) && follow.followsNext
+        let anchored = fromHeader && follow.followsNext
         if fromHeader {
             pin.hold(id, from: id, slow: true,
                      rise: !run && !wasOpen ? workRise(id) : 0, keep: anchored)
@@ -1251,7 +1255,7 @@ struct ChatView: View {
         // Not taking the list: while the header settles nothing pulls it away (the pin has it) and nothing is held
         // back (the running turn opened at the newest keeps growing: it froze, #1046); then the chat goes on as before.
         holdFollow(anchored: anchored)
-        if anchored, following, !run { keepHeader(id, rise: workRise(id)) }
+        if anchored, following, !run, !wasOpen { keepHeader(id, rise: workRise(id)) }
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -1716,9 +1720,9 @@ struct ChatView: View {
         var next = follow
         change(&next)
         guard next != follow else { return }
-        // Out of a kept hold (↓, sending, the user's scrolling): the pin lets go of the header too; into another hold
-        // (folded, another line opened), what was tapped settles first.
-        if follow.anchored && !next.anchored {
+        // Out of a kept hold (↓, sending, the user's scrolling, a jump to a saved place): the pin lets go of the header
+        // too; into another hold (folded, another line opened), what was tapped settles first.
+        if follow.anchored, !next.anchored || next.mode == .landing {
             if next.mode == .holding { pin.unkeep() } else { pin.release() }
         }
         follow = next
@@ -2627,6 +2631,13 @@ struct ChatView: View {
                 let anchored = next.toggledRow()
                 if next != follow.wrappedValue { follow.wrappedValue = next }
                 return anchored
+            }
+            pin.landed = { [follow = $follow, pin] in
+                var next = follow.wrappedValue
+                guard next.anchored else { return }
+                next.follow()
+                follow.wrappedValue = next
+                pin.release()
             }
         }
         #if os(macOS)

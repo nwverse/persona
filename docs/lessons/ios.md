@@ -1642,6 +1642,12 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
   `frame(in: .global)` said 40 pt up, for as long as it stayed open: a later part of that move never reached SwiftUI's geometry. Measure what
   the screen shows from the layers: `DrawnProbe` in the header's background, read from the presentation layers on the display link
   (`UnfoldTrace.Result.drawn`). Read from the views during the pass, it caught the new offset with the old layout, a state never drawn.
+- **A moved offset can be set back without a geometry report**: as a step came in under a held row, the pin moved the list by the step's height, and
+  now and then the list was back at the old offset before the next frame, the row 56 pt up, while the row's `onGeometryChange` still said it was
+  in place, so nothing asked the pin again. A kept hold now watches the offset itself (KVO on `contentOffset`, as the glide does) and puts it back
+  in the same pass. Only kept holds: those always end when the user or the app moves the list (↓, sending, a jump), a moment's hold does not.
+- **A delayed "back to following" is a jump too**: folding a work line anchored a moment before went back to following 1.5 s later and scrolled
+  to the newest end, 61 pt short of it, after the fold itself had held still. A fold stays anchored unless it took the list to the newest end.
 - **XCUITest scrolls an element into view before tapping it**: the "middle" tap of `UnfoldTests` dragged the header just off the screen, so the tap
   scrolled it back first and ran 61 pt from the newest end, following. To test a row in the middle, tap a coordinate on one already there.
 - **Test it with a mock that pushes one step at a time** (`MOCK_TOOL_TURN=1`, `/mock/tool_turn?step=…`, `ToolFoldTests`): a step, the answer and the
