@@ -337,9 +337,10 @@ export function panelSections({ providers, state, view: chosen, query, favorites
       continue;
     }
     const rows = [...(groups.get(p.id) ?? [])];
+    // only in a provider that takes a pick here (an Agent's other launchers too, with the in-session switch, #5035), and
     // only when none of its models answers the search (by the model's own words, not the provider's name): a word that
     // names a listed model is a search, not an ID
-    if (typed && p.typable && state.recommended.includes(p.id) && validModelId(typed) && !p.models.some((m) => matchesQuery({ name: "" }, m, q))) {
+    if (typed && p.typable && !p.unavailable && !p.locked && validModelId(typed) && !p.models.some((m) => matchesQuery({ name: "" }, m, q))) {
       const model: PanelModel = { id: typed, name: typed, efforts: [], custom: true };
       rows.push({ key: `typed:${p.id}\n${typed}`, kind: "typed", provider: p, model, setup: { provider: p.id, model: typed }, current: false, customized: false });
     }

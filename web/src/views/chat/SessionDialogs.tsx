@@ -5,6 +5,7 @@ import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, 
 import { openLink } from "../../lib/links";
 import { BYPASS_MODE, BYPASS_WARNING, effortOptions, effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
 import { headerIcon, headerTone, modeMenuItems, modesChangeable, type ModeTone } from "../../lib/header-mode";
+import { sessionLauncher } from "../../lib/model-switch";
 import { href, navigate, parse, showsSession } from "../../lib/router";
 import { stripBase } from "../../lib/base";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
@@ -336,7 +337,25 @@ export function useModeSet(session: Session) {
       return false;
     }
   };
-  return { set, latest };
+  /** POST …/modes {launcher, model?, effort?} (#5035): another launcher records a switch that the next message carries
+   *  out, the session's own drops one. The pending switch shows at once (the pill's clock) and goes back to what it was
+   *  if the hub says no, with its words. */
+  const switchLauncher = async (step: { launcher: string; model?: string; effort?: string }): Promise<boolean> => {
+    const base = latest.current;
+    const before = base.pending_switch;
+    const next: Session = { ...base, pending_switch: step.launcher === sessionLauncher(base) ? undefined : { ...step, at: new Date().toISOString() } };
+    upsertSession(next);
+    latest.current = next; // a step after this one builds on it before the push draws it
+    try {
+      await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: step });
+      return true;
+    } catch (e) {
+      upsertSession({ ...latest.current, pending_switch: before });
+      toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+      return false;
+    }
+  };
+  return { set, latest, switchLauncher };
 }
 
 /** POST …/modes {service_tier}: Codex's speed (the Speed submenu, the model pill). Nothing is drawn ahead of it: the
