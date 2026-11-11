@@ -80,6 +80,16 @@ describe("port chips under an agent's answer", () => {
     expect(getPanel()).toMatchObject({ kind: "preview", mid: "m1", sid: "s1", cwd: "/w/site", port: 4000, path: "/preview" });
   });
 
+  it("shows explicit default-port chips and opens their original page in the session preview", async () => {
+    request.mockResolvedValue({ listening: true, http: true });
+    await render("Open http://localhost:80/app?x=1#top or https://localhost:443/docs");
+    expect(chips().map((b) => b.dataset.port)).toEqual(["80", "443"]);
+    expect(chip(443)?.title).toContain("https://localhost:443/docs");
+    await act(async () => chip(80)!.click());
+    expect(getPanel()).toMatchObject({ kind: "preview", mid: "m1", sid: "s1", cwd: "/w/site", port: 80, path: "/app?x=1#top" });
+    expect(request.mock.calls.map((c) => c[0]).sort()).toEqual(["/machines/m1/ports/443", "/machines/m1/ports/80"]);
+  });
+
   it("draws nothing for an assistant conversation, a session without a folder, or a hub without previews", async () => {
     await render(ANSWER, "a1");
     expect(chips()).toHaveLength(0);

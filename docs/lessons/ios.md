@@ -8,6 +8,16 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
 - UI tests of this feature share one mock hub for the whole run, and the hub keeps each recording's live log and asks. A test that reads `asks.first` passes alone and fails after another test asked about the same sample recording. Restart the mock hub (stop it by its port) before each run, or run the test alone.
 - `Text(timerInterval:)` has no text a UI test can read: its accessibility label is the caller's ("Recording time") and the time is the spoken value, so assert on the value. A `Label` carrying an accessibility identifier gives the identifier to its icon too; combine its children first, or the test finds the SF Symbol name as the label.
 
+## The first Photos query in a process loads the Photos database (#4250)
+
+`PHAsset.fetchAssets` looks cheap, but the first query in a process opens the Photos client database
+(`-[PHPhotoLibrary mainQueuePhotoLibrary]` → `-[PLPhotoLibrary loadDatabaseWithOptions:error:]`, Core Data plus a wait on the
+photos daemon). Run from a MainActor model, that blocked the attach panel's first opening for 50 ms to 1.3 s on a simulator,
+while later openings took 4-50 ms. Time Profiler hides most of it (the main thread is waiting, not running): measure the wall
+time and the frame gaps. Fetch in a detached task, and warm the library once in the background where the user is about to
+need it, only when access is already given. `@State var model = Model()` runs `Model()` on every init of the view (17-20
+times per launch for the chat's `AttachPanel`), so one-time work goes in `.task` behind a flag, not in an initializer.
+
 ## The general pasteboard belongs to the app on screen (#4192)
 
 `UIPasteboard.general.string = …` neither throws nor returns anything, and in the background (an app woken by a silent

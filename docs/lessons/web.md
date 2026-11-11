@@ -740,6 +740,7 @@ If the header grows, elements below it (App.tsx connection-status pill) cannot a
 - Pages scroll in their own `overflow-y-auto` box under `<main>`, not the window, so the browser's scroll restoration does nothing for them. Overview unmounts when a card opens a conversation, and Settings' phone list shares one scroller with every category (the category's shorter content clamps `scrollTop`), so Back landed at the top. The inbox never had the problem: its list stays mounted, hidden, under the opened item.
 - `useScrollMemory(ref, key)` (`lib/scroll-memory.ts`) remembers `scrollTop` per key and restores it only when the router saw Back / Forward land on the current address (`takeReturn`); a link or a tap starts at the top. Decide the target once per key: React's StrictMode runs the layout effect twice in development, and the second run would find the return already taken.
 - Checking it in a browser: an edit made while Vite is running can keep serving the old module (the "negative control" passed with the hook disabled). Restart Vite with `--force` and fetch the module to confirm before trusting a before/after comparison.
+- The key names the page the scroller shows, not everything in the address. Settings keyed it `settings/<tab>/<sub>`, and on Models `sub` is the purpose whose dialog is open: opening and closing the dialog each read as a fresh visit and put the page at the top, away from the row just saved (#4282). Include an item in the key only where it replaces the page (`itemIsPage`). A row opened from the page in view also passes no section to `pick`: naming one scrolls that section to the top of the page the row is already on. A link from another page still names it.
 
 ## Keep background task drawers open across turn status changes (2026-11-06)
 
@@ -807,6 +808,14 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 
 - Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
 - A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
+
+## Validate MCP scalar text before JavaScript normalizes it (#3332)
+
+`Date.parse` can normalize an impossible day, and `Number.isInteger(Number(text))` can accept a rounded fraction or underflowed value. Check the original date-time components and decimal/exponent wholeness before constructing an answer; also require a safe numeric integer. A safe-integer check alone misses fractions that round to a safe integer. Preserve exact integral forms such as `2.0`, `2e3` and zero with a negative exponent. Test both the public validation/resolution helpers and the card: invalid input must disable Submit and produce no resolve request, while correcting it submits the intended value once.
+
+## Explicit default ports disappear during URL normalization (#4233)
+
+`URL.port` is empty for both an implicit port and an explicitly written HTTP `:80` or HTTPS `:443`. When recognizing links to an Agent's dev server, retain explicit authority-port intent from the original text after validating its URL, protocol and host. Do not infer a scheme default for a URL with no port, or borrow a colon from credentials, a path, query or fragment. Regress the public helper, reply chips and click routing together; keep hub-owned pages and preview capability/session/folder checks ahead of opening a preview. Recognition alone does not establish HTTPS preview transport support.
 
 ## Connection tests must use the form's credential choice (#1903)
 

@@ -30,7 +30,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them |
 | Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls still follow the session permission mode |
 | Agents | `agents_list` / `agent_read` / `agent_send` / `agent_start`: use hub session state (`decorated`) and node `session.items` / `session.send` / `session.start` directly, not ssh. With `worktree.branch`, `agent_start` first has the computer's engine make the worktree through node `worktree.prepare` / `worktree.create` (the workspace found by `cwd`; herdr's or Orca's own, so Orca and the app list it), then starts the Agent in it, instead of the Agent running `git worktree add` itself (#5325, `assistant/agent_worktree.go`) |
-| Answer questions on the user's behalf | `interaction_answer`: when the owner says "answer that question for me, choose A", the assistant answers other Agents' **question-type** interactions. Only `kind: question`, excluding the assistant's own chat; `permission` / `plan` / `screen` are always rejected with an explanation that only the owner can answer in the App (no proxy approvals is a hard boundary). Validate every question: all must be answered, keys must be exact question text, choices must be listed, single-select exactly one, multi-select joined as `A, B` like the App; reject free text (answer in the App or use `agent_send`). Expired, answered, dismissed, cancelled, and nonexistent interactions each return their own error (the latter four consult history). `Resolution.AnsweredBy = "assistant"` accompanies interaction history (`GET /api/v1/interactions/history`) and `interaction_resolved` broadcasts; the App marks "Answered by Persona". On Agent questions, the assistant first decides whether to answer, see "Assistant answers questions first" below. `agents_list`'s waiting rows include `interaction_id` and options for every question, avoiding another lookup (tools and rules all belong to the assistant: `toolInteractionAnswer` in `assistant/tools_apps.go`, tests `assistant/tools_apps_test.go`; the interaction queue also lives in the manager: `interactions.get` returns the interaction or its historical outcome if no longer waiting; `interactions.answer` records validated answers as assistant answers, directly in-process, `assistant/fleet_routes.go`) |
+| Answer questions on the user's behalf | `interaction_answer`: when the owner says "answer that question for me, choose A", the assistant answers other Agents' **question-type** interactions. Only `kind: question`, excluding the assistant's own chat; `permission` / `plan` / `screen` are always rejected with an explanation that only the owner can answer in the App (no proxy approvals is a hard boundary). Validate every question: all must be answered, keys must be exact question text, choices must be listed (an answer that writes out exactly one option, its label then its own description as `label：description`, with `:`, a dash or the description in brackets, quotes or spaces around it, counts as that label, #3929), single-select exactly one, multi-select joined as `A, B` like the App; reject free text (answer in the App or use `agent_send`). Expired, answered, dismissed, cancelled, and nonexistent interactions each return their own error (the latter four consult history). `Resolution.AnsweredBy = "assistant"` accompanies interaction history (`GET /api/v1/interactions/history`) and `interaction_resolved` broadcasts; the App marks "Answered by Persona". On Agent questions, the assistant first decides whether to answer, see "Assistant answers questions first" below. `agents_list`'s waiting rows include `interaction_id` and options for every question, avoiding another lookup (tools and rules all belong to the assistant: `toolInteractionAnswer` in `assistant/tools_apps.go`, tests `assistant/tools_apps_test.go`; the interaction queue also lives in the manager: `interactions.get` returns the interaction or its historical outcome if no longer waiting; `interactions.answer` records validated answers as assistant answers, directly in-process, `assistant/fleet_routes.go`) |
 | Interrupt, adopt, report | `agent_interrupt`: stop an Agent's current turn immediately, optionally followed by a new instruction (`agent_send` queues behind the turn); `agent_supervise`: bring an Agent not dispatched by main chat under its supervision (it becomes a main-chat task); the Agents' `report_to_supervisor`: an Agent on a supervised task reports a needed decision, blocker, completion with evidence, or progress into the supervision message. See `docs/assistant/unified-entry.md` ("Supervision", #5112) |
 | Archive Agent sessions | `agent_archive` / `agent_unarchive`: when the user asks, archive or restore a coding Agent's session with the same manager-owned, reversible archive the apps use (`setAgentArchive`, `docs/protocol/protocol.md` ("Agent session archives")); nothing is ever deleted. Archive and restore change nothing on the computer and need no confirmation (like `conversation_archive`). `agent_archive` with `close: true` is "Archive and close" (`archiveAndCloseAgentSession`): a busy Agent is refused before anything is asked, then the user confirms on a phone permission card every time (also outside the health space, as `persona_settings`), and a declined card changes nothing. The result states what happened for the assistant to repeat: archived or not, the native archive (`native: done / pending / unsupported`), and the close outcome (`closed`, `not_running`, or `refused` / `offline` / `failed` with the localized reason: the session stays archived and still open). Busy Agents are refused with nothing changed; an Agent awaiting the user's reply is not busy. `agents_list` leaves archived sessions out unless `state` is `archived` (only those) or `all` (marked `archived`). Persona conversations are refused (`conversation_archive`). `assistant/agent_archive_tools.go` |
 | Dispatch tasks | `task_plan`: hand Agent work to the user, one task per to-do (`origin` = this chat). Read-only and user-remembered tasks start directly; others become plan cards awaiting "Start" without blocking the turn. Progress appears in the live snapshot's "Tasks started from chat"; completion receipts, answered questions, and direct task messages enter chat activity ([unified-entry.md](unified-entry.md), `assistant/tasks.go`) |
@@ -66,6 +66,54 @@ Where the system does not tell the peer process (Windows), the request must name
 those ids cannot be guessed, but any process of the same user can read them from the assistant's command lines, so there the check stops only inherited environments. Any other request goes as an Agent's (`node/clicall.go` `mcpAssistantOf`).
 hub lists these tools only for assistant=true and forwards calls to the assistant (`assistant/tools.go`). Ordinary Agents in herdr can't see them, even with the assistant's environment;
 a program run under the assistant's own process (its Bash tool) counts as the assistant, as for `personad tool`, and so does an Agent in an engine whose server that shell started without detaching it.
+
+## Per-criterion acceptance progress (#3635)
+
+`todo_supervision.done_when` remains the ordered list of criterion text. The additive
+`criteria` JSON field stores the latest state of each entry: `criterion`,
+`state` (`pending`, `met`, `not_met`), `evidence`, `at` (UTC RFC 3339), and `by`
+(`agent:<machine>/<session>`, `supervisor:<conversation>`, or `judge`).
+An old row with only `done_when` reads as all pending, without invented timestamps
+or confirmers; reviews and other ledger fields are not rewritten. Reordering
+unchanged text keeps its evidence; adding or changing text starts pending.
+
+An Agent uses the existing `report_to_supervisor`, authenticated as the working
+Agent of that task, to report one or more entries by their **one-based** position:
+
+```json
+{
+  "kind": "progress",
+  "text": "The tests pass; the PR is still pending.",
+  "criteria": [
+    {"number": 2, "state": "met", "evidence": "go test ./internal/db: PASS"}
+  ]
+}
+```
+
+`met` and `not_met` require nonempty evidence (up to 600 characters); `pending`
+resets the entry. Out-of-range or duplicate numbers, invalid states, and missing
+evidence reject the whole batch. Omitted entries keep their state. The ledger is
+persisted before the tool succeeds and the normal to-do change event refreshes
+the web count immediately. A progress report still does not wake the assistant;
+the recorded states and evidence accompany the next supervision event. A
+question, blocker or completion report follows its existing delivery rules.
+
+The supervisor's `task_review.checks` writes each matching `done_when` entry back
+as `met` / `not_met`, with the review time and actual reviewing conversation.
+Unchecked entries are preserved; unmatched checks stay in the review history.
+Existing accepted reviews from the done judge also record their checks.
+These reports are evidence, not acceptance: no count closes a task, changes
+dispatch, runs tests, or substitutes for the supervisor's own review.
+
+To-do API responses include `supervision.criteria` for all clients. The web task
+cards and to-do list keep their existing N/M badge. The task detail's existing
+`review-checklist` renders persisted criteria through the same `checklist()` and
+`MARK` states and existing translations; older hubs fall back to review checks.
+Evidence, timestamp and the recorded reporter stay in that existing detail
+section. No new component, panel, disclosure or translation is added, and the
+existing checklist and marks live with the lazy to-do page rather than the
+first-screen card badges. The first-screen byte budget stays unchanged. Mobile UI changes,
+automatic CI observation, and criterion dependency gates are outside this change.
 
 ## Boundary with hub (2026-11-04, #1446)
 
@@ -267,14 +315,24 @@ The assistant and the L2 read-only connector are available; Inbox, knowledge bas
 
 ## Built-in MCP namespaces
 
-For a new Claude, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
+For a new or resumed Claude, Codex app-server, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
 `persona` MCP namespace and matching automatic tool permissions. This avoids sending duplicate tool definitions and
-starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. Resumed
-assistant sessions also keep both namespaces, including restarts after idle recycling, until removing historically
-used aliases has been verified with the model provider. Existing transcript readers continue recognizing both names.
+starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. A real Claude Code
+2.1.322 resume verified that a transcript containing `mcp__jarvis__*` tool calls can continue with only `persona` offered;
+existing transcript readers, hooks and read-only-worker supervision continue recognizing both names. The generated
+assistant instructions map old names in stored routines to `mcp__persona__*`. Only `persona_settings` is advertised;
+the legacy `jarvis_settings` call is still normalized and runs. The shared `mcp.json` for ordinary Agent launches and
+automatic resumes remains dual-namespace.
 See [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md) ("MCP namespace / tools") for the
-negotiation and resume boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates
-remain in force; no setting is required to enable the new-session behavior.
+negotiation boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates remain in force.
+
+Ordinary Claude starts also pass a built-in allow-list (`--tools`; `tools` in the Agent SDK bridge): Bash, Read, Write,
+Edit, Monitor, Skill, Agent, ListAgents, SendMessage, TaskStop, WebFetch and WebSearch. MCP tools are unaffected. This removes the
+Claude-specific cron, worktree, notebook, LSP, design, workflow, code-review and resource-tool surfaces; Persona's own
+scheduling and question tools remain. The merged start settings disable bundled skills and the development-only
+feature-dev, frontend-design, mattpocock, gopls, context7 and HUD plugins, with overrides for the remaining development
+skills. User/project setting sources, auto-memory, Persona and connector skills are not disabled. Guest conversations keep
+their stricter `--tools ""` and `--strict-mcp-config` behavior. No setting is required.
 
 ## Extension MCP servers (Claude assistant only)
 
@@ -329,7 +387,7 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Eligible questions**: `kind: question`, including hook AskUserQuestion, Codex questions, and triage "Your decision" cards (`persona_triage`, also `waitInteraction` → `announce`). Permissions, plan approvals, terminal dialogs, forms, assistant `ask_user`, and questions within assistant chats go directly to users; triage cards requiring authorization links or risky actions such as push / deployment aren't answered either. Don't wait if assistant disconnected.
 - **Answer only real questions, once per question** (2026-11-06): Agent requests (AskUserQuestion, Codex) already await input; triage cards are inferred from stopped-turn text. Delegate only if a question contains `?` / `？` or at least two Agent-authored options (not manager defaults like "Okay, do as you said" / "Leave it for now") (`asksForInput`). Declarative stops ("Waiting for runner recovery and 0.14.0 release") get only fallback choices; formerly the assistant selected "Okay", the Agent repeated itself, another card appeared, and delegation repeated—one board Agent answered three times in a minute. Remember delegated questions per session (compare after removing spaces / punctuation, or bigram similarity ≥ 0.8; `delegated` in `session_work_events`, reloaded on restart): the same Agent repeating within 24 hours goes to the user, recording `delegate_repeat`.
 - **Flow** (`assistant/fleet_delegate.go`; queue in manager since 2026-11-05, #3246): manager `announce` first reports the card to hub with `delegating: true` (visible / answerable in the App, no push or bot card), then evaluates in the background for up to `timeout_seconds` (default 3 minutes). Assistant answer → same `interaction_answer` path (`answerQuestion` → `resolve`, `answered_by: "assistant"` + `reason`), with reason / answers in history and `interaction_resolved`. User handoff, failure, or timeout → remove `delegating`, attach `delegate` context, and use the normal push / bot / channel / quiet-task path; hub appends "Assistant suggests: X" to push body (`hub/push_payload.go`). If the user answers during evaluation, first answer wins and the assistant result is discarded.
-- **Decision** (`assistant/delegate.go`, prompt `prompts/agents/delegate.md`, separate model-config category "Question delegation", `agent.delegate`: before selection uses the information-filtering provider and Opus 5.5; change on that Settings › Model Configuration page, `docs/assistant/model-config.md`): one model call reads user messages / final Agent text from the latest three turns, its to-do (title, notes, decisions), cwd project, question, and choices. Prompt rules: answer internal choices with a short reason; send irreversible actions (deploy, release, merge, delete data, force-push, external messages), socially visible actions (MR comments, reviewers, approvals / tickets, contacting people, creating groups, touching others' MRs), and goal changes to the user, supplying "what this is, why ask now, recommended answer, cost of not choosing, why you must decide". Default deadline 24 hours, or earlier card expiry. Two hard checks follow: every question answered using listed choices (same `interaction_answer`, no free text); selected labels / descriptions containing `riskyWords` (push, deploy, merge, send messages…) are handed to the user as recommendations, except short "don't do it" choices such as "Don't merge yet" / "Don't send". User `rules` can broaden internal choices but never red lines.
+- **Decision** (`assistant/delegate.go`, prompt `prompts/agents/delegate.md`, separate model-config category "Question delegation", `agent.delegate`: before selection uses the information-filtering provider and Opus 5.5; change on that Settings › Model Configuration page, `docs/assistant/model-config.md`): one model call reads user messages / final Agent text from the latest three turns, its to-do (title, notes, decisions), cwd project, question, and choices. Prompt rules: answer internal choices with a short reason; send irreversible actions (deploy, release, merge, delete data, force-push, external messages), socially visible actions (MR comments, reviewers, approvals / tickets, contacting people, creating groups, touching others' MRs), and goal changes to the user, supplying "what this is, why ask now, recommended answer, cost of not choosing, why you must decide". Default deadline 24 hours, or earlier card expiry. Two hard checks follow: every question answered using listed choices (same `interaction_answer`, no free text; the model sometimes copies an option's whole `label：description` line from the input, which counts as that label, while its own words after a label or text that reads as two options go to the user, #3929); selected labels / descriptions containing `riskyWords` (push, deploy, merge, send messages…) are handed to the user as recommendations, except short "don't do it" choices such as "Don't merge yet" / "Don't send". User `rules` can broaden internal choices but never red lines.
 - **Why one model call, not a persistent Claude chat**: handle questions from over ten Agents concurrently within 3 minutes; headless chat startup alone takes a minute or two and its tools create permission cards. Single-call input / output is easier to test and inspect in goldens. Insufficient context goes to the user (uncertainty handoff is a prompt rule).
 - **Why not an extension**: it attaches to hub `announce` and interaction `resolve`, both core flows. No "intercept new interaction" extension point exists; extraction first needs one (manifest validation, permission / consent to answer for users, process protocol, timeout fallback), not a smaller change.
 - **Audit and changing answers**: triage answers sent to Agents explain "The assistant answered for me under my rules (reason: …); I may change my answer later" (`prompts/agents/answer.md`); task chat activity says "Assistant answered: X, because Y". Don't record delegation as to-do decisions (those are the user's). To change: `POST /api/v1/interactions/{id}/reanswer {answers}` (hub forwards to manager; card-answer-only devices can't use it). The Agent has already acted, so send the new answer as a message (`prompts/agents/reanswer.md`, including original assistant answer), broadcast `interaction_reanswered`, and record the user answer in task history / decisions.
@@ -482,7 +540,8 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
 - hub snapshot: reuse data for 45 seconds; refresh stale data in the background, wait at most 1.5 seconds per message, then use the prior snapshot if within 30 minutes. Time is always current; ended items removed.
 - App versions (#3672): one line names the Persona app on each kind of device with the version it last reported to the hub (`iPhone App 1.4.0 (build 52)（iOS 26.1）`; iPad, Apple Watch, Mac, Vision Pro and Android too), from `devices.list`'s `apps` ([protocol.md](../protocol/protocol.md) "Client capabilities and heartbeat"), so it holds while the app is in the background. Per kind the most recent device is shown, a real one before a simulator (`assistant/client_apps.go`). The line carries no time, so a reconnect does not make it a changed section.
 - Size budget (#3203): a rendered snapshot carries at most 6000 characters (`snapshotBudget` in `assistant/context.go`). Measured on one install over 14 days before it, a full snapshot was a median 8.3k characters (12.5 KB) and the changed sections a message carried a median 6.6k; tasks, the Agents section and the knowledge digest were most of it, resent on almost every message because one of their items changed.
-  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: muted, done and waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
+  Done agents (24 hours) and muted agents always render only their counts and the exact `agents_list` filter (`state=done` / `state=muted`) that lists them on demand; their names, conclusions and session ids never occupy the snapshot. Needs-you and awaiting-reply agents, results waiting for acceptance, delivery approvals and today's meetings stay detailed.
+  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
   A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`): never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
 
 ## Compaction
@@ -662,6 +721,37 @@ and don't re-enable tasks disabled in the App. Copied leading "⏰ … (your sch
 Migration: first startup without `assistant.tasks` moves `assistant.routines` / `assistant.followups` (ids, times, prior statuses unchanged),
 then clears old follow-ups so an older hub can't rerun them; thereafter reads only the new table. Failed Postgres reads save nothing (formerly defaults overwrote).
 Legacy App `routines` / `followups` APIs still read / write this table (`docs/protocol/protocol.md`).
+
+## Background rounds
+
+Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
+`conversation_new` (a supervisor message), a scheduled task or follow-up runs, and the hub's supervision wakes the chat.
+They used to fill the main chat and push the user's own exchanges out of sight. Since #4314 the apps fold the first two
+the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"):
+
+- **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
+  the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
+  `conversation`, `followup` or `patrol`. A `followup` counts only as a scheduled follow-up (the hub gives those the
+  task's title): Persona continuing the user's own work after a usage limit reset (`injected.state: limit_continue`),
+  waking the chat for what it waits on (`wake`) or an untitled follow-up is not a background round, so the answer to
+  the user's question never folds away. Like a supervision round it lasts until the next genuine input; a queued user
+  message never joins it, and recaps or compactions inside it stay inside. Other conversations and Agent sessions are not
+  affected: a conversation another one opened shows its first message as before.
+- **Folded**: one muted line, `@<source> · Background round` (`· Running in the background` while it runs), that the
+  user can open and close at any time to see the full transcript, history included (super rule 2.4). A scheduled task's
+  prompt is never shown in the main chat while folding is on: its source block says only which task ran, closed or open.
+  A supervisor message shows its text when opened.
+- **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
+  `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
+  `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
+  with user visibility.
+- **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
+  conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
+  the rows and their order within a group are unchanged.
+- **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
+  on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
+  Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
+  notify or push is unchanged.
 
 ## Chat titles
 

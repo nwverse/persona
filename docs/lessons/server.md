@@ -1,5 +1,12 @@
 # Lessons: hub / node and networking
 
+## Shared web fixtures belong in the Docker build context (2026-11-11, #4260)
+
+The web production build typechecks test files. A JSON fixture imported from `spec/fixtures/` needs both a
+`.dockerignore` exception and a `COPY` into the web stage at the same relative path. A native build sees the
+whole checkout and can pass while the Docker build fails with TS2307. The Docker entrypoint suite now checks
+shared JSON imports, including globs, against both files, catching new fixture groups before an image build.
+
 ## Sharing frontiers and migration lanes (#3604)
 
 - Migration numbers are global across the hub and manager sets, even though their
@@ -352,7 +359,8 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 ## Rolling-upgrade identity contracts (#6223)
 
 - Treat a rename as an ABI change wherever a byte reaches another process, persisted state, a cryptographic domain or an operating-system registration. Use an explicit authenticated feature, an old-safe default and exact aliases; display names and build strings do not prove compatibility. Push-to-start needs a persisted registration capability, independent of the socket's XML capability.
-- Connection capability changes must invalidate unused warm processes (#3269). The devices manager can reconnect to another hub while retaining the node connection, so a Claude spare can carry the previous MCP namespace policy. Record the policy at process start and require it to match before adopting or reusing the spare; established conversations retain their configuration. Shared generated MCP files also serve automatic resumes and cannot be narrowed using only the current hub capability.
+- Connection capability changes must invalidate unused warm processes (#3269). The devices manager can reconnect to another hub while retaining the node connection, so a Claude spare can carry the previous MCP namespace policy. Record the policy at process start and require it to match before adopting or reusing the spare. With a capable hub, assistant resumes can also use only `persona`: a real Claude Code 2.1.322 transcript containing a legacy tool call accepted the next request after the alias was removed. Ordinary Agents' shared generated MCP files still serve automatic resumes without a per-session decision and cannot be narrowed using only the current hub capability.
+- Measure a headless assistant with its actual environment and registered conversation identity (#4238). `system/init` under ToolSearch, or a manually spawned MCP process whose session was not discovered as the assistant, exposes a smaller tool set than the real request. Compare the request's `api-request-shape` and first assistant usage together; an init tool count or a standalone `tools/list` alone is not the fixed-context baseline.
 - A deterministic receipt or thread seed, HPKE info or grant AAD is an invariant, not copy. Keep the original output bytes; decoding can accept both explicitly known domains. A dual-key JSON payload cannot repair encryption the old receiver cannot open. Never rotate a key, token or database to hide incompatibility.
 - Normalize typed protocol fields only. Generic recursive replacements can change unrelated event sources, user text and large opaque JSON numbers. Preserve field presence (including false and null), use exact aliases, and project detached manifest validation values without rewriting signed package bytes. Both copies of forwarded headers must be removed together, or the legacy copy can resurrect a forwarding loop.
 - Keep custom JSON methods off an anonymously embedded DTO. A method promoted from the embedded launcher swallowed its surrounding health and agent-type fields on both encode and decode. Use an explicit root transport envelope and test that embedding the plain DTO preserves sibling fields.
@@ -1124,6 +1132,7 @@ and add that directory to image workflow PR paths.
 
 - `-race` always flagged devices and connector: tests only `defer cancel()` without waiting for `Machine.run` / `watchOne`, so the next test changed `reconnectGrace` / `watchBackoffFirst` while old goroutines read them (even already-finished reads race without synchronization). devices tests use `runMachine(t, m)` (Cleanup cancels, then waits with timeout for `run`); connector `Start` reads backoff parameters once and passes them to watchers.
 - Waiting for `run` exposed another bug: a tailcat connection stuck writing in `configureNode` (peer not reading) outlived ctx, while `watchTailcat` exited without closing it; `run` never returned and hub `workers.Wait()` hung at shutdown. `serve` now closes tailcat on ctx end (`context.AfterFunc`). Cancel-without-wait tests hid the hang.
+- A goroutine stopped before it starts still reads what it reads when it does start (2026-11-11, #3942). `TestPlanThenWatchStopsWhenTheCardAnswers` cancels the plan-then watch at once, and the goroutine read `planThenEvery` after `fastPlanThen`'s cleanup had put it back; `planThenAfterTerminal` now reads it before `go`. The same holds for fields: `setCatalog` prefetches a pushed entry in a goroutine that reads `n.peer`, so a test gives the node its hub before `setCatalog`, never after.
 
 
 ## Knowledge corrections and extension permissions (#1908)
@@ -1727,3 +1736,9 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 
 - `uid_t` is unsigned, but macOS `ps -o uid` prints it signed: `nobody` (4294967294) shows as `-2`. Linux prints 65534, so hosted CI (Ubuntu) never sees a negative owner. `parseProcessTable` treated one as a corrupt row and failed the whole table, so `personad manager maintenance prepare|observe` broke on any Mac running a `nobody` process (`dhcp6d`, the DHCPv6 client, once a network uses DHCPv6).
 - When a check covers every row of a system table, validate the format (a number), not a range taken from one platform; keep the real constraint (the target is the current user's) on the row it is about.
+
+## A field that pushes a row past its size class (2026-11-11, #3937)
+
+- `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
+- When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
+- Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.

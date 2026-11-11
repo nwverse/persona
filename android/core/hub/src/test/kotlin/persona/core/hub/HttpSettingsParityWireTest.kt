@@ -82,4 +82,20 @@ class HttpSettingsParityWireTest {
             assertEquals("""{"timezone":"Europe/Paris"}""", server.takeRequest().body.readUtf8())
         }
     }
+
+    /** #4314: "Fold background rounds" goes out alone when set; an older hub that omits it reads as on. */
+    @Test fun mainBackgroundFoldedIsSentOnlyWhenSetAndOnWhenMissing() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"machine_id":"server","launcher":"claude","cwd":"","main_background_folded":false}"""))
+            val saved = api.updateConfig(AssistantConfigUpdate(mainBackgroundFolded = false))
+            assertEquals("""{"main_background_folded":false}""", server.takeRequest().body.readUtf8())
+            assertEquals(false, saved.mainBackgroundFolded)
+            assertEquals(false, saved.backgroundFolded)
+            server.enqueue(MockResponse().setBody("""{"machine_id":"server","launcher":"claude","cwd":""}"""))
+            val old = api.config()
+            assertEquals(null, old.mainBackgroundFolded)
+            assertEquals(true, old.backgroundFolded)
+        }
+    }
 }

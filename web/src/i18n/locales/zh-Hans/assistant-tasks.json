@@ -138,6 +138,9 @@
   "review_pending": "待验收",
   "review_rework": "返工第 {round} 轮",
   "review_needs_user": "等你决定",
+  "review_parked": "已搁置",
+  "review_parked_until": "搁置到 {time} · {reason}",
+  "review_parked_reason": "已搁置 · {reason}",
   "review_accepted": "已验收",
   "review_cancelled": "已取消",
   "review_ongoing": "督办中",
@@ -192,5 +195,6 @@
   "interrupt_batch_title_other": "{cause}，{count} 个任务被打断",
   "interrupt_batch_title_on_other": "{machine} {cause}，{count} 个任务被打断",
   "interrupt_batch_counts": "→ 已处理 {resolved} / 待处理 {pending}",
-  "interrupt_batch_all": "→ 都处理了"
+  "interrupt_batch_all": "→ 都处理了",
+  "needs_group_another": "其他对话"
 }

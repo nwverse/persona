@@ -138,6 +138,9 @@
   "review_pending": "検収待ち",
   "review_rework": "差し戻し {round} 回目",
   "review_needs_user": "判断待ち",
+  "review_parked": "保留中",
+  "review_parked_until": "{time} まで保留 · {reason}",
+  "review_parked_reason": "保留中 · {reason}",
   "review_accepted": "検収済み",
   "review_cancelled": "取り消し",
   "review_ongoing": "監督中",
@@ -192,5 +195,6 @@
   "interrupt_batch_title_other": "{cause}：{count} 件のタスクが中断",
   "interrupt_batch_title_on_other": "{machine} で{cause}：{count} 件のタスクが中断",
   "interrupt_batch_counts": "→ 対応済み {resolved} / 未対応 {pending}",
-  "interrupt_batch_all": "→ すべて対応済み"
+  "interrupt_batch_all": "→ すべて対応済み",
+  "needs_group_another": "別の会話"
 }
