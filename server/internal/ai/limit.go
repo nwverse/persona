@@ -297,9 +297,9 @@ func retryAfter(v string) time.Duration {
 
 var quotaWords = lazyre.New(`quota|usage limit|exhaust|insufficient|credit|billing`)
 
-// streamLimit is a Responses stream that answered 200 and then reported a limit in its response.failed or error
-// event, as relays and Codex-style backends do. It holds the connection like the HTTP answer; its text is the
-// event's as before.
+// streamLimit is a stream that answered 200 and then reported a limit: a Responses stream's response.failed or error
+// event, as relays and Codex-style backends send, or a Messages stream's error event (overloaded_error,
+// rate_limit_error). It holds the connection like the HTTP answer; its text is the event's as before.
 type streamLimit struct{ reason, event, code, msg string }
 
 func (e *streamLimit) Error() string { return fmt.Sprintf("ai: %s: %s", e.event, e.msg) }
@@ -309,6 +309,8 @@ var streamCodes = map[string]string{
 	"rate_limit_exceeded": ReasonBusy, "slow_down": ReasonBusy, "server_is_overloaded": ReasonBusy,
 	"insufficient_quota": ReasonQuota, "credit_balance_exhausted": ReasonQuota,
 	"organization_spend_limit_exceeded": ReasonQuota, "project_spend_limit_exceeded": ReasonQuota,
+	// The Messages API's error types for HTTP 529 and 429, which a stream reports in an error event after the 200.
+	"overloaded_error": ReasonBusy, "rate_limit_error": ReasonBusy,
 }
 
 // streamLimitFor is the limit an in-stream failure's code reports, nil for any other failure.
@@ -317,6 +319,9 @@ func streamLimitFor(event, code, msg string) *streamLimit {
 	reason, ok := streamCodes[strings.ToLower(code)]
 	if !ok {
 		return nil
+	}
+	if strings.EqualFold(code, "rate_limit_error") && quotaWords.MatchString(strings.ToLower(msg)) {
+		reason = ReasonQuota // as an HTTP 429 whose body speaks of quota (classify)
 	}
 	return &streamLimit{reason: reason, event: event, code: code, msg: msg}
 }

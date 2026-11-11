@@ -4,6 +4,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -177,17 +178,21 @@ func apiEndpoint(base, path string) string {
 
 // messages calls the Messages API; answered is whether the upstream said 200, Truncated whether the reply stopped at
 // MaxTokens. A model that thinks spends its thinking from the same MaxTokens, so a long answer can stop half written.
+// It streams (#4245): a gateway's cap on a non-streamed request's total time (often 120 s) otherwise fails every
+// answer a slow model needs longer for. A server that ignores "stream" and answers one JSON message is read as before.
 func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Request) (reply Reply, answered bool, err error) {
 	turns := make([]any, 0, len(r.Messages))
 	for _, m := range r.Messages {
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
-	body, _ := json.Marshal(map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns})
+	body, _ := json.Marshal(map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns,
+		"stream": true})
 	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}
 	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "text/event-stream")
 	if c.cfg.Bearer {
 		req.Header.Set("authorization", "Bearer "+key)
 	} else {
@@ -199,12 +204,64 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		return reply, false, fmt.Errorf("ai: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != 200 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return reply, false, newHTTPError(resp, raw)
 	}
-	if readErr != nil {
-		return reply, true, fmt.Errorf("ai: read response: %w", readErr)
+	in := bufio.NewReader(resp.Body)
+	if wholeMessage(in) {
+		return readMessage(in)
+	}
+	return readMessageStream(in)
+}
+
+// wholeMessage says the answer is one JSON message rather than an event stream: its first byte past any white space
+// opens an object (an event stream starts with a field or a comment). A body that can't be read is left to the stream
+// reader, which reports it.
+func wholeMessage(in *bufio.Reader) bool {
+	for {
+		b, err := in.Peek(1)
+		if err != nil {
+			return false
+		}
+		switch b[0] {
+		case ' ', '\t', '\r', '\n':
+			_, _ = in.ReadByte()
+		default:
+			return b[0] == '{'
+		}
+	}
+}
+
+// messageUsage is a Messages API usage object, whose fields come in parts across a stream.
+type messageUsage struct {
+	InputTokens              *int `json:"input_tokens"`
+	OutputTokens             *int `json:"output_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+}
+
+// into sets the fields u has on to: message_delta's usage carries the totals so far, of only some fields.
+func (u *messageUsage) into(to *Usage) {
+	if u == nil {
+		return
+	}
+	for _, f := range []struct {
+		from *int
+		to   *int
+	}{{u.InputTokens, &to.InputTokens}, {u.OutputTokens, &to.OutputTokens},
+		{u.CacheReadInputTokens, &to.CacheReadInputTokens}, {u.CacheCreationInputTokens, &to.CacheCreationInputTokens}} {
+		if f.from != nil {
+			*f.to = *f.from
+		}
+	}
+}
+
+// readMessage reads a whole Messages API answer (a server that didn't stream).
+func readMessage(body io.Reader) (Reply, bool, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, 4<<20))
+	if err != nil {
+		return Reply{}, true, fmt.Errorf("ai: read response: %w", err)
 	}
 	var out struct {
 		Model   string `json:"model"`
@@ -216,7 +273,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		Usage      Usage  `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return reply, true, fmt.Errorf("ai: decode: %w", err)
+		return Reply{}, true, fmt.Errorf("ai: decode: %w", err)
 	}
 	var b strings.Builder
 	for _, part := range out.Content {
@@ -224,10 +281,103 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 			b.WriteString(part.Text)
 		}
 	}
-	if out.StopReason == "refusal" { // declined, usually with no text at all: not a reply that lacks its JSON
-		return Reply{Model: out.Model, Usage: out.Usage}, true, &RefusalError{StopReason: out.StopReason}
+	return messageReply(b.String(), out.StopReason, out.Model, out.Usage)
+}
+
+// messageReply is the reply of a finished message, or the refusal it was.
+func messageReply(text, stopReason, model string, usage Usage) (Reply, bool, error) {
+	if stopReason == "refusal" { // declined, usually with no text at all: not a reply that lacks its JSON
+		return Reply{Model: model, Usage: usage}, true, &RefusalError{StopReason: stopReason}
 	}
-	return Reply{Text: b.String(), Truncated: out.StopReason == "max_tokens", Model: out.Model, Usage: out.Usage}, true, nil
+	return Reply{Text: text, Truncated: stopReason == "max_tokens", Model: model, Usage: usage}, true, nil
+}
+
+// readMessageStream reads a Messages API event stream, framed by SSEEvents: the model and usage from message_start,
+// the text of the text blocks (content_block_start, text_delta; thinking and tool input are skipped), the stop reason
+// and the usage totals from message_delta. message_stop ends it. A stream that ends with neither message_stop nor a
+// stop reason was cut: an error wrapping io.ErrUnexpectedEOF (Transient), not a short reply. An error event is the
+// failure it reports; overloaded_error and rate_limit_error are the limits HTTP 529 and 429 stand for and hold the
+// gate the same way (streamLimit), so they count as no answer.
+func readMessageStream(body io.Reader) (Reply, bool, error) {
+	var (
+		b       strings.Builder
+		model   string
+		stop    string
+		usage   Usage
+		failed  error
+		stopped bool
+	)
+	err := SSEEvents(body, func(data string) bool {
+		var ev struct {
+			Type    string `json:"type"`
+			Message struct {
+				Model string        `json:"model"`
+				Usage *messageUsage `json:"usage"`
+			} `json:"message"`
+			ContentBlock struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content_block"`
+			Delta struct {
+				Type       string `json:"type"`
+				Text       string `json:"text"`
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage *messageUsage `json:"usage"`
+			Error *struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			return false
+		}
+		switch ev.Type {
+		case "message_start":
+			model = ev.Message.Model
+			ev.Message.Usage.into(&usage)
+		case "content_block_start":
+			if ev.ContentBlock.Type == "text" {
+				b.WriteString(ev.ContentBlock.Text)
+			}
+		case "content_block_delta":
+			if ev.Delta.Type == "text_delta" {
+				b.WriteString(ev.Delta.Text)
+			}
+		case "message_delta":
+			stop = cmp.Or(ev.Delta.StopReason, stop)
+			ev.Usage.into(&usage)
+		case "message_stop":
+			stopped = true
+			return true
+		case "error":
+			kind, msg := "error", ""
+			if e := ev.Error; e != nil {
+				kind, msg = cmp.Or(e.Type, kind), e.Message
+			}
+			if limit := streamLimitFor("error", kind, msg); limit != nil {
+				failed = limit
+			} else {
+				failed = fmt.Errorf("ai: error: %s: %s", kind, msg)
+			}
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		return Reply{}, true, fmt.Errorf("ai: read stream: %w", err)
+	}
+	if failed != nil {
+		var limit *streamLimit
+		return Reply{}, !errors.As(failed, &limit), failed
+	}
+	if !stopped && stop == "" { // the connection was cut: whatever text came is only part of the answer
+		if b.Len() == 0 {
+			return Reply{}, true, fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
+		}
+		return Reply{}, true, fmt.Errorf("ai: stream ended before the message completed: %w", io.ErrUnexpectedEOF)
+	}
+	return messageReply(b.String(), stop, model, usage)
 }
 
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
