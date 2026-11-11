@@ -3,8 +3,9 @@ import XCTest
 /// The composer's + (#3225), in a conversation and in a new one (#3805). On the iPhone a tap opens the photo / file panel
 /// and touch and hold opens a menu of what the panel's More tab lists, in the same order: Voice Chat, Take Photo,
 /// Mention a File or Session, an Agent's Quick Commands in a submenu, then extension prompts. A new conversation has the
-/// same, less what needs a conversation (Voice Chat). The iPad's + is that menu, with Photos and Files first. Against
-/// scripts/mock/mock_hub.py (PERSONA_MOCK_HUB); `-showCameraRows YES` lists Take Photo, since the simulator has no camera.
+/// same, less what needs a conversation (Voice Chat), and so does Health's (#3825). The iPad's + is that menu, with Photos
+/// and Files first. Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB); `-showCameraRows YES` lists Take Photo, since the
+/// simulator has no camera.
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps screenshots, in light and dark (`-ui.scheme`) and in the BeautifulUI style too.
 /// Voice Chat is in the menu on the iPad too, as it was before (`VoicePlatform.phone`: iPhone, iPad and Vision Pro, #4896).
 final class AttachMenuTests: XCTestCase {
@@ -13,6 +14,8 @@ final class AttachMenuTests: XCTestCase {
     /// The main conversation, named: the Persona tab otherwise opens on whatever the last launch left (a new one).
     private static let persona = tab + ["-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]
     private static let new = tab + ["-newAssistant", "YES"]
+    /// Health's new conversation page (#3825).
+    private static let health = tab + ["-openShellPage", "health"]
     private static let agent = ["-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000002"] // weather › tests: working, Claude in herdr
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     private var shots: Bool { ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil }
@@ -64,6 +67,41 @@ final class AttachMenuTests: XCTestCase {
         }
     }
 
+    /// Health's new conversation (#3825): Persona's new conversation's composer and menu, less Voice Chat.
+    @MainActor func testHealthMenu() {
+        for style in styles {
+            for scheme in schemes {
+                let app = launch(Self.health, scheme: scheme, style: style)
+                openMenu(app)
+                for id in ["composer-menu-camera", "composer-menu-mention"] {
+                    XCTAssertTrue(item(app, id).waitForExistence(timeout: 5), "no \(id) in Health's menu:\n\(app.debugDescription)")
+                }
+                XCTAssertFalse(item(app, "composer-menu-voice").exists, "Voice Chat before the health conversation exists")
+                XCTAssertFalse(commands(app).exists, "Quick Commands in Health's new conversation")
+                photosAndFiles(app)
+                shot("attach-menu-health", scheme, style)
+                app.terminate()
+            }
+        }
+    }
+
+    /// Health's model button (#3825): Persona's new conversation's menu, the effort and, a level down, the permission mode.
+    @MainActor func testHealthModelMenu() {
+        for scheme in schemes {
+            let app = launch(Self.health, scheme: scheme)
+            let modes = app.buttons["shell-composer-modes"].firstMatch
+            XCTAssertTrue(modes.waitForExistence(timeout: 40), "no model button on Health's page:\n\(app.debugDescription)")
+            sleep(2) // the page settles
+            modes.tap()
+            for title in ["思考强度", "权限模式"] {
+                let row = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 5), "no \(title) in Health's model menu:\n\(app.debugDescription)")
+            }
+            shot("health-model-menu", scheme)
+            app.terminate()
+        }
+    }
+
     /// An Agent's conversation: Quick Commands fold into a submenu, with /clear dimmed while the Agent works.
     @MainActor func testAgentMenu() {
         for scheme in schemes {
@@ -89,8 +127,8 @@ final class AttachMenuTests: XCTestCase {
     /// menu's rows (an Agent's commands under them).
     @MainActor func testATapOpensThePanel() throws {
         guard !isPad else { throw XCTSkip("the iPad's + is the menu") }
-        var pages = [("persona", Self.persona, "glass"), ("agent", Self.agent, "glass"), ("new", Self.new, "glass")]
-        if shots { pages += [("persona", Self.persona, "beautiful"), ("new", Self.new, "beautiful")] }
+        var pages = [("persona", Self.persona, "glass"), ("agent", Self.agent, "glass"), ("new", Self.new, "glass"), ("health", Self.health, "glass")]
+        if shots { pages += [("persona", Self.persona, "beautiful"), ("new", Self.new, "beautiful"), ("health", Self.health, "beautiful")] }
         for scheme in schemes {
             for (name, args, style) in pages {
                 let app = launch(args, scheme: scheme, style: style)
@@ -103,7 +141,7 @@ final class AttachMenuTests: XCTestCase {
                 for id in ["composer-menu-camera", "composer-menu-mention"] {
                     XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "no \(id) in More (\(name)):\n\(app.debugDescription)")
                 }
-                XCTAssertEqual(app.buttons["composer-menu-voice"].exists, name != "new", "Voice Chat in More (\(name))")
+                XCTAssertEqual(app.buttons["composer-menu-voice"].exists, name != "new" && name != "health", "Voice Chat in More (\(name))")
                 // The list draws what is on screen: the first command, not /clear at the bottom.
                 let command = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'attach-command-'")).firstMatch
                 XCTAssertEqual(command.exists, name == "agent", "the commands in More (\(name))")
