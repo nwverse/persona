@@ -13,7 +13,11 @@ final class MainThreadWatchdogTests: XCTestCase {
 
         // Keep the main thread in this test method: the signal handler must sample this stack, not the run loop after it.
         let until = CACurrentMediaTime() + 0.25
-        while CACurrentMediaTime() < until {}
+        var reportedWhileBlocked = false
+        while CACurrentMediaTime() < until {
+            if watchdog.snapshot.count == 1 { reportedWhileBlocked = true }
+        }
+        XCTAssertTrue(reportedWhileBlocked, "a persistent block must be visible before the main thread answers again")
 
         let deadline = Date.now.addingTimeInterval(2)
         while watchdog.snapshot.count == 0, Date.now < deadline {
@@ -28,6 +32,7 @@ final class MainThreadWatchdogTests: XCTestCase {
         XCTAssertTrue(stack.contains("PersonaTests") && stack.contains("testCapturesABlocked"),
                       "the sampled stack must contain the deliberately blocked test method: \(block.backtrace)")
     }
+
     @MainActor func testResponsiveMainThreadStaysQuiet() {
         let watchdog = MainThreadWatchdog.shared
         watchdog.stop()

@@ -337,9 +337,11 @@ Start from a reproduction, measure the base, change one thing, measure again.
 4. **Count redraws.** Add `PerfTrace.body("ViewName")` at the top of a heavy `body`; launch with `-perfCounts YES`.
    `PerfCount` counts bodies and the main thread's time from each push to the next idle run loop.
 5. **Catch main-thread blocks.** DEBUG and PERF_SIGNPOST builds start `MainThreadWatchdog` with the root view. A background
-   thread pings the main run loop every 25 ms. If a ping takes at least 100 ms, a directed signal makes the main thread
-   capture its own return addresses; the watchdog thread symbolicates them after the handler returns. Healthy pings capture
-   no stack and emit no event. A block emits `PerfTrace.event("Main thread block")`, appears as `main_thread_blocks` in
+   thread pings the main run loop every 25 ms. If a ping takes at least 100 ms, the watchdog suspends the main Mach thread,
+   copies its registers and frame-pointer chain, resumes it, and symbolicates the addresses afterwards. Raw addresses and a
+   `PerfTrace.event` are recorded before symbolication, so a persistent hang is visible before the main thread answers again;
+   the answer's own timestamp supplies the final duration without the sampler's overhead. Healthy pings capture no stack and
+   emit no event. A block appears as `main_thread_blocks` in
    `PerfCount`, and is attached to each `FrameProbe` run in `frames.json`. Reports keep the five longest blocks and 32 frames
    per stack. `PerfAssistantTests/testWelcomePageIdle` asserts that every measured run has zero such blocks; other suites
    attach the data without enforcing the budget yet.

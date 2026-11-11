@@ -194,6 +194,7 @@ class PerfTestCase: XCTestCase {
             XCTAssertNil(run["error"], "the app could not run the requested glide: \(run)")
             XCTAssertEqual(run["name"] as? String, testName)
             XCTAssertEqual(run["sample_source"] as? String, "app-list-glide")
+            XCTAssertNotNil(run["main_thread_blocks"] as? [String: Any], "every measured run includes the watchdog report")
             XCTAssertGreaterThan((run["frames"] as? NSNumber)?.doubleValue ?? 0, 0)
             XCTAssertGreaterThan((run["seconds"] as? NSNumber)?.doubleValue ?? 0, 5)
             let viewport = (run["viewport_height_pt"] as? NSNumber)?.doubleValue ?? 0
