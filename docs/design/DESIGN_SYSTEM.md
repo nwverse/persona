@@ -486,6 +486,7 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Long press on a message | lifted menu with an action bar |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
+| Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
