@@ -171,6 +171,8 @@ export interface TriageSwitches {
   tool_loop?: boolean;
   /** Ask for a closeout (#3612): hold an agent's stop once when a turn that did work ends without one (off when absent). */
   closeout?: boolean;
+  /** Ask afterwards (#3616): one status question to an unsupervised agent whose turn did work and ended without a closeout (off when absent). */
+  closeout_ask?: boolean;
   /** Remind When Seen, Unanswered (#5096): remind once when an agent asked the user something and it stays unanswered after they saw
    *  it. Rule-based, no tokens, so it is on when absent and does not depend on `enabled`. */
   reply_reminder?: boolean;
@@ -718,6 +720,9 @@ export interface Delegate {
 
 export interface Launcher {
   name: string;
+  /** A Persona-managed provider's name for people, any language (#5029); absent for an rc alias or from an older hub.
+   *  Show it through lib/provider-names.ts. */
+  display_name?: string;
   model?: string;
   /** What it starts when not Claude Code ("codex"); agent_type: what the hub's machine config says it runs. */
   agent?: string;

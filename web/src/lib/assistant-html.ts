@@ -1,22 +1,27 @@
 // The assistant's html component on the web (docs/assistant/assistant-views.md "Free-form HTML" and "Security boundaries every client must verify").
 //
-// The web does not run it. A plain `iframe sandbox="allow-scripts"` with a CSP is not a network-denying sandbox (the
-// frame's own navigation, meta refresh and the like are not all stopped by default-src), and a ready timeout cannot
-// stop an endless loop on the page's thread. Until a runtime that is isolated, has no host network and can be stopped
-// from outside passes the network / navigation / loop cases, every html card shows its plain-text fallback.
+// A plain `iframe sandbox="allow-scripts"` with a CSP is not a network-denying sandbox (the frame's own navigation,
+// meta refresh and the like are not all stopped by default-src), and a ready timeout cannot stop an endless loop on
+// the page's thread. So the web runs a card's code in QuickJS inside a worker it can terminate, and draws what the
+// code made into a frame that runs no script (lib/html-runtime/, #4215). Until that runtime has passed the network /
+// navigation / loop cases in Chromium and WebKit, WEB_HTML_RUNTIME_VERIFIED stays false and every html card shows its
+// plain-text fallback.
 //
-// What is here is the part that does not depend on that runtime, so it can be wired once one passes: whether to run
-// (never, for now), the bridge's messages held to the one instance that is on screen, the native confirmation with a
-// limit on prompts after a refusal, and the body the hub's html-actions endpoint takes (htmlRequest).
+// What is here: whether to run, the bridge's messages held to the one instance that is on screen, the native
+// confirmation with a limit on prompts after a refusal, and the body the hub's html-actions endpoint takes (htmlRequest).
 import { TEXT_MOST, openTarget } from "./assistant-blocks";
 import type { CardKey } from "./assistant-views";
 import type { AssistantHTMLActionInput } from "./extension-wire";
 
 /**
- * Whether this client has a runtime for html that passed the security cases. False on the web: no such runtime yet,
- * so nothing here starts one, whatever the hub's assistant.html_views says.
+ * Whether the web's html runtime passed the security cases (web/e2e/html-runtime-security.mjs on Chromium and WebKit).
+ * False until then: nothing starts it, whatever the hub's assistant.html_views says. Dev pages turn it on for
+ * themselves (ui/AssistantCard.tsx HtmlRuntime).
  */
 export const WEB_HTML_RUNTIME_VERIFIED = false;
+
+/** The hub's hello feature for the bridge: …/html-actions is there, with persona_view and html_views both on. */
+export const HTML_BRIDGE_FEATURE = "assistant_html_bridge";
 
 export type HtmlRunDecision = { run: true } | { run: false; reason: "runtime_unverified" | "disabled" | "no_key" };
 

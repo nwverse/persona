@@ -245,6 +245,9 @@ func (in launcherInput) applyProvider(s *storedLauncher) {
 
 var errNoPreset = i18n.Err("assistant-models_launchers.err_no_preset")
 
+// maxDisplayName is how long a provider's display name may be, in characters (err_display_name).
+const maxDisplayName = 64
+
 // gatewayHost is the host of a provider's Base URL, lower case; "" without one.
 func gatewayHost(baseURL string) string {
 	u, err := url.Parse(baseURL)
@@ -302,7 +305,7 @@ func (in launcherInput) check() error {
 		return i18n.Err("assistant-models_launchers.err_name")
 	}
 	if in.DisplayName != nil {
-		if d := strings.TrimSpace(*in.DisplayName); utf8.RuneCountInString(d) > 64 || strings.IndexFunc(d, unicode.IsControl) >= 0 {
+		if d := strings.TrimSpace(*in.DisplayName); utf8.RuneCountInString(d) > maxDisplayName || strings.IndexFunc(d, unicode.IsControl) >= 0 {
 			return i18n.Err("assistant-models_launchers.err_display_name")
 		}
 	}

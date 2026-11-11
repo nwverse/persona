@@ -85,6 +85,8 @@ export interface ViewHandlers extends V6Handlers {
   local?: NativeLocal;
   /** Native-only vocabulary supplement; undefined delegates to the unchanged legacy drawing. */
   renderItem?: (item: UIItem, handlers: ViewHandlers) => ReactNode | undefined;
+  /** An assistant card's html component (#4215): drawn only by a caller that runs it; extensions never pass this. */
+  renderHtml?: (item: UIItem) => ReactNode;
 }
 
 export { INERT } from "./view-sections-lazy";
@@ -165,7 +167,7 @@ interface SectionProps extends ViewHandlers {
 }
 
 /** The components drawn as cards of their own, one under another, not inside the section's card. */
-const STANDALONE = new Set(["code", "diff", "comment_thread", "grid", "carousel"]);
+const STANDALONE = new Set(["code", "diff", "comment_thread", "grid", "carousel", "html"]);
 
 function Section({ section, embedded, compact, bare, onPicked, ...rest }: SectionProps) {
   // Section-level callbacks (including MoreLine) use the section's key under the explicit stream adapter.
@@ -332,12 +334,14 @@ function Item(props: Omit<SectionProps, "section" | "embedded" | "onMore" | "bar
   return <div data-native-key={props.item.key}>{custom === undefined ? <NativeItem {...handlers} /> : custom}</div>;
 }
 
-function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoose, canPress, chosen, locked, onAct, onPicked, draft, local, nativeFetch, nativeAvailable, ...v6 }: Omit<SectionProps, "section" | "embedded" | "onMore" | "bare"> & { item: UIItem }) {
+function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoose, canPress, chosen, locked, onAct, onPicked, draft, local, nativeFetch, nativeAvailable, renderHtml, ...v6 }: Omit<SectionProps, "section" | "embedded" | "onMore" | "bare"> & { item: UIItem }) {
   const manager = useLinkManager();
   const pressable = (a: UIAction) => (canPress ? canPress(a) : true);
   const tiles = { glyphs: ROW_ICON, busy, onPress, canPress, ...v6 };
   const code = { act: onAct ?? ((a: UIAction) => onPress(a)), busy: locked ? busy || "stream-locked" : busy, reveal: revealDiff, local, fetch: nativeFetch, canFetch: nativeAvailable };
   switch (it.type) {
+    case "html":
+      return renderHtml ? renderHtml(it) : null;
     case "header":
       return <CodeItem><Header item={it} native={!!local} /></CodeItem>;
     case "breadcrumb":
