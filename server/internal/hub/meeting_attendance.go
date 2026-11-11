@@ -17,19 +17,28 @@ const featureMeetingAttendance = assistantwire.CapabilityMeetingAttendance
 // (docs/assistant/meeting-minutes.md "Meeting conversation (#3862)", "Flags and compatibility").
 const featureMeetingConversation = assistantwire.CapabilityMeetingConversation
 
-// meetingAttendanceFeatures are the features while the default manager is connected and named their capabilities in
-// its hello; nothing otherwise, so a phone offers no role, nor a room, to an older manager, which would ignore them.
-// meeting_conversation comes only with meeting_attendance.
+// meetingAttendanceFeatures is the feature while the default manager is connected and named the capability in its
+// hello; nothing otherwise, so a phone offers no role to an older manager, which would ignore it.
 func (h *Hub) meetingAttendanceFeatures() []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	owner := h.defaultOwner(ctx)
-	if h.archiveManagerHas(owner, assistantwire.CapabilityMeetingAttendance) != http.StatusOK {
+	if !h.defaultManagerNames(assistantwire.CapabilityMeetingAttendance) {
 		return nil
 	}
-	out := []string{featureMeetingAttendance}
-	if h.archiveManagerHas(owner, assistantwire.CapabilityMeetingConversation) == http.StatusOK {
-		out = append(out, featureMeetingConversation)
+	return []string{featureMeetingAttendance}
+}
+
+// meetingConversationFeatures is meeting_conversation while the default manager names it beside meeting_attendance
+// (a manager that takes the room takes #2981 too); nothing otherwise, so a phone asks no older manager for a room.
+func (h *Hub) meetingConversationFeatures() []string {
+	if !h.defaultManagerNames(assistantwire.CapabilityMeetingAttendance) || !h.defaultManagerNames(assistantwire.CapabilityMeetingConversation) {
+		return nil
 	}
-	return out
+	return []string{featureMeetingConversation}
+}
+
+// defaultManagerNames: the default manager (the one the recordings' routes go to) is connected and named capability
+// in its hello.
+func (h *Hub) defaultManagerNames(capability string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return h.archiveManagerHas(h.defaultOwner(ctx), capability) == http.StatusOK
 }

@@ -210,7 +210,6 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		}
 	}
 	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
-	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID) // a Just me turn's: pushed without its content
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
 		if ix.Resumable { // its hook's earlier attempt left the card pending: it is answered too
 			_ = s.resolveRemembered(ix.ID, r, false)
@@ -226,6 +225,9 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 // (the manager restarted with it on the phone) is shown again without a second push.
 func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
 	ix = cleanTitle(ix)
+	// A Just me turn's card, the node's or the manager's own (ask_user, a confirmation): pushed without its content,
+	// never to Lark or a channel (meeting_justme.go).
+	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
 	if ix.ExpiresAt.IsZero() {
 		ix.ExpiresAt = time.Now().Add(s.notifyTimings().hookTimeout()).UTC()
 	}

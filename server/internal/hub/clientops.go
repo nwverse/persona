@@ -80,6 +80,10 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 			return
 		}
 		if !claimed {
+			if h.rerunClientOp(op) { // a meeting follow-up's call a restart cut off (meeting_receipts.go)
+				h.executeClientOp(w, r, kind, id, next)
+				return
+			}
 			h.waitClientOp(w, r, op)
 			return
 		}
@@ -255,9 +259,6 @@ func (h *Hub) waitClientOp(w http.ResponseWriter, r *http.Request, op *db.Client
 			writeClientOpResult(w, result)
 			return
 		case "unknown":
-			if op.Kind == meetingFollowupOp && h.rerunClientOp(w, r, op) {
-				return // a follow-up's call a restart cut off runs again: its creation record makes nothing twice
-			}
 			// Start, checkout and reply retries must not repeat side effects or replace a recorded HTTP outcome.
 			// A recovered pending operation has no result and remains explicitly unknown.
 			if op.Kind == "start" || op.Kind == "assistant_start" || op.Kind == "worktree_create" || op.Kind == "lark_send" || op.Kind == "inbox_reply" || op.Kind == "inbox_handoff" || op.Kind == "lark_thread_reply" {

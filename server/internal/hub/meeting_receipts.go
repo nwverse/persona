@@ -67,25 +67,18 @@ type clientOpRerunner interface {
 	ReclaimClientOp(ctx context.Context, id string) (bool, error)
 }
 
-// rerunClientOp runs op's call again when the store takes it back; false when it did not (another call took it, or
-// the store cannot), and the caller answers as before.
-func (h *Hub) rerunClientOp(w http.ResponseWriter, r *http.Request, op *db.ClientOp) bool {
+// rerunClientOp takes back a follow-up's operation a restart left unknown, so its call runs again (its creation record
+// and followup-<id> make nothing twice); false for any other, or when another call took it first.
+func (h *Hub) rerunClientOp(op *db.ClientOp) bool {
+	if op.Kind != meetingFollowupOp || op.State != "unknown" {
+		return false
+	}
 	re, ok := h.store.(clientOpRerunner)
 	if !ok {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	taken, err := re.ReclaimClientOp(ctx, op.ID)
-	cancel()
-	if err != nil || !taken {
-		return false
-	}
-	next := h.assistantRelayFor(r)
-	h.executeClientOp(w, r, op.Kind, op.ID, next)
-	return true
-}
-
-// assistantRelayFor is the relay of the manager's route r was for.
-func (h *Hub) assistantRelayFor(r *http.Request) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, h.byRequest) }
+	return err == nil && taken
 }
