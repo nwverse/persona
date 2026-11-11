@@ -450,7 +450,7 @@ button:disabled { cursor: default; }
   --effort-move: 200ms; --effort-resize: 150ms; --effort-ease: var(--ease-link);
 }
 .dark { --favorite-star: #e8b425; }
-@theme inline { --color-effort-minimal: var(--effort-minimal); --color-effort-low: var(--effort-low); --color-effort-medium: var(--effort-medium); --color-effort-high: var(--effort-high); --color-effort-xhigh: var(--effort-xhigh); --color-effort-max: var(--effort-max); --color-fast: var(--fast); --color-fast-tint: var(--fast-tint); --color-favorite-star: var(--favorite-star); }
+@theme inline { --color-fast: var(--fast); --color-fast-tint: var(--fast-tint); --color-favorite-star: var(--favorite-star); }
 /* From the pill's shape (--model-panel-from, set where it opens) to the panel; the clip ends past the panel's edges so
    its shadow is whole, and goes when the animation does. */
 @keyframes model-panel-morph{0%{clip-path:var(--model-panel-from);transform:translateY(var(--model-panel-shift,0px))}to{clip-path:inset(-32px round 44px);transform:none}}

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-// The model panel's data for an Agent's chat (#5032): the computer's launchers as providers, the session's own the only one
-// that switches (others wait for #5035, another engine needs a new conversation, a Codex thread keeps its model), the row
-// it runs, what a pick sends and in which order, what the pill says, and the lists kept and read again behind them.
+// The model panel's data for an Agent's chat (#5032, lib/session-models.ts and lib/session-panel.ts): the computer's
+// launchers as providers, the session's own the only one that switches (others wait for #5035, another engine needs a new
+// conversation, a Codex thread keeps its model), the row it runs, what a pick sends and in which order, what the pill
+// says, and the lists kept and read again behind them.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
 import type { LauncherModels } from "./launcher-models";
-import { currentModelRow, forgetModel, modelLabel, modelList, pickPlan, pillView, readModels, sessionPanel, type ModelList } from "./session-models";
+import { currentModelRow, forgetModel, modelLabel, modelList, pillView, readModels, type ModelList } from "./session-models";
+import { pickPlan, sessionPanel, speedStep } from "./session-panel";
 import type { Launcher, Session } from "./types";
 
 const ALL = ["low", "medium", "high", "xhigh", "max"];
@@ -34,8 +36,8 @@ describe("the providers of an Agent's chat", () => {
     const [plain, own, cx] = providers;
     expect(own.unavailable).toBeUndefined();
     expect(own.typable).toBe(true);
-    expect(plain.unavailable).toBe(t("chat-modelpill.other_provider"));
-    expect(cx.unavailable).toBe(t("chat-modelpill.other_engine", { from: "Claude Code", to: "Codex" }));
+    expect(plain.unavailable).toBe(t("chat-modelpanel.other_provider"));
+    expect(cx.unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
     expect(state.recommended).toEqual(["gateway"]);
     // the alias that stands for what runs, not the default entry that does too
     expect(state.current).toEqual({ provider: "gateway", model: "opus", effort: "high" });
@@ -46,7 +48,7 @@ describe("the providers of an Agent's chat", () => {
     const { providers } = sessionPanel(session(), launchers, lists({ gateway: { list: claudeList } }));
     const own = providers.find((p) => p.id === "gateway")!;
     expect(own.models).toEqual([
-      { id: "default", name: "Default (recommended)", resolved: "claude-opus-5-5", efforts: ALL, defaultEffort: "high", isDefault: true },
+      { id: "default", name: "Default (recommended)", resolved: "claude-opus-5-5", efforts: ALL, defaultEffort: "high" },
       { id: "opus", name: "Opus 5.5", resolved: "claude-opus-5-5", efforts: ALL, defaultEffort: "high", description: "Most capable", context: 200000 },
       { id: "haiku", name: "Haiku 5.5", resolved: "claude-haiku-5-5", efforts: ["low", "high"] },
       // a typed ID's efforts aren't known: Claude Code takes any
@@ -57,7 +59,9 @@ describe("the providers of an Agent's chat", () => {
   it("puts the session's own launcher first when the computer doesn't list it, and says while lists are read or failed", () => {
     const { providers } = sessionPanel(session({ launcher: "gone" }), launchers, lists({ claude: { error: "claude 没有登录" } }));
     expect(providers.map((p) => p.id)).toEqual(["gone", "claude", "gateway", "cx"]);
-    expect(providers[0]).toMatchObject({ models: null, loading: true });
+    // the own list on its way: the model it runs is its row meanwhile (its flyout works)
+    expect(providers[0]).toMatchObject({ loading: true });
+    expect(providers[0].models!.map((m) => m.id)).toEqual(["claude-opus-5-5"]);
     expect(providers[1]).toMatchObject({ models: null, error: "claude 没有登录" });
     expect(providers[1].loading).toBeUndefined();
     // before the launchers are read: the own one alone
@@ -89,14 +93,14 @@ describe("the providers of an Agent's chat", () => {
   it("a Codex thread keeps its model: its own rows say why, the model it runs has the thread's efforts and Fast", () => {
     const { providers, state } = sessionPanel(codex({ service_tier: "priority" }), launchers, lists({ cx: { list: codexList } }));
     const own = providers.find((p) => p.id === "cx")!;
-    expect(own.unavailable).toBe(t("chat-modelpill.model_fixed", { agent: "Codex" }));
+    expect(own.unavailable).toBe(t("chat-modelpanel.model_fixed", { agent: "Codex" }));
     expect(own.typable).toBeUndefined();
     expect(state.recommended).toEqual([]);
     expect(state.busy).toBeUndefined();
     expect(state.current).toEqual({ provider: "cx", model: "gpt-5.5", effort: "high", fast: true });
     expect(own.models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], fast: true });
     expect(own.models![1].fast).toBeUndefined();
-    expect(providers.find((p) => p.id === "gateway")!.unavailable).toBe(t("chat-modelpill.other_engine", { from: "Codex", to: "Claude Code" }));
+    expect(providers.find((p) => p.id === "gateway")!.unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" }));
   });
 });
 
@@ -128,8 +132,8 @@ describe("what a pick sends", () => {
   it("a Codex thread: its effort and its speed, Standard back from Fast", () => {
     expect(pickPlan(codex(), { provider: "cx", model: "gpt-5.5", effort: "low", fast: true }, codexList)).toEqual([{ effort: "low" }, { service_tier: "priority" }]);
     expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5", fast: false }, codexList)).toEqual([{ service_tier: "default" }]);
-    // a setup that says nothing of speed leaves it
-    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5" }, codexList)).toEqual([]);
+    // a saved Standard setup has no `fast` (cleanSetup drops false): picking it turns Fast off
+    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5" }, codexList)).toEqual([{ service_tier: "default" }]);
   });
 
   it("an Antigravity variant brings its own thinking level", () => {
@@ -241,3 +245,34 @@ describe("reading the lists", () => {
     expect(modelList("m-forget", "gateway").list!.models.map((m) => m.id)).toEqual(["default", "opus", "haiku", "vendor/model-x"]);
   });
 });
+
+describe("a speed change", () => {
+  const tiers = [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }];
+  it("is sent only where the thread has Fast and only when it changes", () => {
+    expect(speedStep(session({ service_tiers: tiers }), true)).toEqual({ service_tier: "priority" });
+    expect(speedStep(session({ service_tiers: tiers }), false)).toBeUndefined();
+    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), false)).toEqual({ service_tier: "default" });
+    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), true)).toBeUndefined();
+    expect(speedStep(session(), true)).toBeUndefined();
+    expect(speedStep(session({ service_tiers: tiers }), undefined)).toBeUndefined();
+    // the flyout's switch goes whatever the session says (its speed arrives only with the push)
+    expect(speedStep(session({ service_tiers: tiers }), false, true)).toEqual({ service_tier: "default" });
+    expect(speedStep(session(), false, true)).toBeUndefined();
+  });
+});
+
+describe("the running model while its list is not in", () => {
+  it("stays in the panel (its flyout works) while the list is read, and when it couldn't be", () => {
+    for (const [e, flag] of [[{ loading: true }, "loading"], [{ error: "no CLI" }, "error"]] as const) {
+      const { providers, state } = sessionPanel(session(), launchers, lists({ gateway: e }));
+      const own = providers.find((p) => p.id === "gateway")!;
+      expect(own[flag]).toBeTruthy();
+      expect(own.models?.map((m) => m.id)).toEqual(["claude-opus-5-5"]);
+      expect(own.models?.[0].efforts.length).toBeGreaterThan(1);
+      expect(state.current?.model).toBe("claude-opus-5-5");
+    }
+    // another provider's list on its way: no rows yet
+    expect(sessionPanel(session(), launchers, lists({})).providers.find((p) => p.id === "claude")!.models).toBeNull();
+  });
+});
+

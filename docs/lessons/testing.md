@@ -208,6 +208,9 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - `xcrun simctl launch` only foregrounds an already-running app; new launch arguments do not apply. Use `--terminate-running-process` before screenshots.
 - `MOCK_EXTENSIONS=1` keeps plugin settings, secrets, and switches in process memory (2026-11-04, #1711). After light-mode `ExtensionSettingsTests`, "Example Notes" is configured;
   an immediate dark run fails at the start of `testSetUpAnExtension` because "Needs setup" is absent, looking like broken code. Restart the mock by port between modes/reruns (like `MOCK_WECHAT`).
+- Resetting a mock does not reset the app's outbox or drafts (2026-11-12, #4475). `/mock/reset` is a **GET**; a POST can return a generic success without restoring the fixture.
+  Use the GET and `-openDraftsFresh YES`, and make messages whose pending copy is matched run-unique: a previous test's same-text outbox otherwise supplies its photo count or sending bubble again.
+  A pristine screenshot after such mutations needs a fresh app container, not just another mock reset. An empty XCUI composer can also return its placeholder as `value`; when checking that automatic stand-in words were not restored, assert their absence (or the model's empty draft), not `value == ""`.
 - All UI tests launch with `app.launchPinned()` (`UITestStyle`). The app remembers prior test styles; BeautifulUI looks different, so unspecified tests inherit someone else's appearance
   (LongSessionTests failed after BeautifulStyleTests). Default is Liquid Glass; `TEST_RUNNER_PERSONA_UI_STYLE=beautiful` runs the whole suite in BeautifulUI.
   Style-specific tests pass `-ui.style` themselves. It launches through `launchPersona()`, which only performs a clean Demo Mode start and never overrides navigation. `UITestStyleTests` scans source (`launch()` and `launchPersona()` both count as omissions).

@@ -231,13 +231,13 @@ describe("what is kept", () => {
 
 describe("what can be picked and customized", () => {
   it("not while busy, on a provider that can't take a pick, a locked launcher or a list not read; each says why", () => {
-    expect(rowBlock(claude(), {})).toEqual({ blocked: false, reason: "" });
-    expect(rowBlock(claude(), { busy: "Working" })).toEqual({ blocked: true, reason: "Working" });
-    expect(rowBlock(codex({ unavailable: "Needs a new conversation" }), {})).toEqual({ blocked: true, reason: "Needs a new conversation" });
-    expect(rowBlock(claude({ locked: "Fixed by the launcher" }), {})).toEqual({ blocked: true, reason: "Fixed by the launcher" });
-    expect(rowBlock(claude({ models: null }), {})).toEqual({ blocked: true, reason: "" });
+    expect(rowBlock(claude(), {})).toBeUndefined();
+    expect(rowBlock(claude(), { busy: "Working" })).toEqual({ reason: "Working" });
+    expect(rowBlock(codex({ unavailable: "Needs a new conversation" }), {})).toEqual({ reason: "Needs a new conversation" });
+    expect(rowBlock(claude({ locked: "Fixed by the launcher" }), {})).toEqual({ reason: "Fixed by the launcher" });
+    expect(rowBlock(claude({ models: null }), {})).toEqual({ reason: "" });
     // a list shown from before and read again behind it can be picked
-    expect(rowBlock(claude({ loading: true }), {}).blocked).toBe(false);
+    expect(rowBlock(claude({ loading: true }), {})).toBeUndefined();
   });
 
   it("the model that runs now keeps its flyout when edits apply live, even when picks are off", () => {
@@ -287,7 +287,33 @@ describe("geometry and colors", () => {
   it("writes context windows short", () => {
     expect(contextSize(200_000)).toBe("200K");
     expect(contextSize(1_000_000)).toBe("1M");
+    expect(contextSize(999_600)).toBe("1M");
     expect(contextSize(272_000)).toBe("272K");
     expect(contextSize(1_500_000)).toBe("1.5M");
   });
 });
+
+describe("the running model's row", () => {
+  it("is the row named exactly what runs, not also an alias standing for it", () => {
+    const dflt: PanelModel = { id: "default", name: "Default", efforts: [], resolved: "gw-model" };
+    const typed: PanelModel = { id: "gw-model", name: "gw-model", efforts: [], custom: true };
+    const p: PanelProvider = { id: "gw", name: "gw", engine: "claude", models: [dflt, typed] };
+    const lit = panelSections({ providers: [p], state: { current: { provider: "gw", model: "gw-model" }, recommended: ["gw"] }, view: { kind: "provider", provider: "gw" }, query: "", favorites: [], recent: [], overrides: {} })
+      .flatMap((s) => s.rows).filter((r) => r.current).map((r) => r.model.id);
+    expect(lit).toEqual(["gw-model"]);
+    // an alias still lights when no row is named what runs
+    const alias = panelSections({ providers: [{ ...p, models: [dflt] }], state: { current: { provider: "gw", model: "gw-model" }, recommended: ["gw"] }, view: { kind: "provider", provider: "gw" }, query: "", favorites: [], recent: [], overrides: {} })
+      .flatMap((s) => s.rows).filter((r) => r.current).map((r) => r.model.id);
+    expect(alias).toEqual(["default"]);
+  });
+
+  it("shows its Fast as it runs, not a saved override", () => {
+    const m: PanelModel = { id: "gpt-x", name: "x", efforts: ["low", "high"], fast: true };
+    const p = { id: "codex", models: [m] };
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x" } }, { fast: true }).fast).toBeUndefined();
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x", fast: true } }, {}).fast).toBe(true);
+    // another model's row still takes its override
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "other" } }, { fast: true }).fast).toBe(true);
+  });
+});
+

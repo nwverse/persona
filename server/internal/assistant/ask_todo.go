@@ -391,7 +391,7 @@ func (s *Service) tellAsker(ctx context.Context, a askTodo, title, text string) 
 	}
 	msg := relayMsg{From: a.TodoID, FromTitle: "待办「" + title + "」", Tool: askAnswerTool, Text: text, At: time.Now().UTC()} // i18n-ignore: a label of the relay queue, as a task notice's
 	c, ok := s.session(ctx, machine, to)
-	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(to) > 0 {
+	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
 		if s.queueRelay(to, msg) == 0 {
 			return errors.New("the relay queue can't be read")
 		}

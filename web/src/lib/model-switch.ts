@@ -1,7 +1,7 @@
 // Switching a running Agent's model (issue #2434, now through the composer's model pill and panel, #5032): which sessions
 // can, the launcher whose list the panel shows, which row is the one it runs, and the small event bus that lets the
 // composer open the panel when `/model` is entered. Applying sends POST …/modes {model} and then {effort}
-// (lib/session-models.ts pickPlan), and the node types `/model <id>` into Claude Code through the same guards as a
+// (lib/session-panel.ts pickPlan), and the node types `/model <id>` into Claude Code through the same guards as a
 // message (server/internal/node/model_switch.go).
 import { t } from "../i18n";
 import { sessionCan, stateOf } from "./format";
@@ -28,8 +28,9 @@ export function modelBusy(s: Session): string {
 export const sessionLauncher = (s: Pick<Session, "launcher">) => s.launcher || "claude";
 
 /** Whether `m` is the model the session runs now: `current` is what the transcript shows (a concrete model id), or
- *  the id the app switched to; the list has the alias (`opus`) and what it stands for (`resolved`). */
-export function isCurrentModel(m: AgentModel, current: string | undefined): boolean {
+ *  the id the app switched to; the list has the alias (`opus`) and what it stands for (`resolved`), any case. The model
+ *  panel matches its rows and saved setups by the same rule. */
+export function isCurrentModel(m: Pick<AgentModel, "id" | "resolved">, current: string | undefined): boolean {
   if (!current) return false;
   const c = current.toLowerCase();
   return [m.id, m.resolved].some((v) => v && v.toLowerCase() === c);

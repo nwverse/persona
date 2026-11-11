@@ -6,6 +6,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { BASE } from "../../lib/base";
 import { storedValue, storeValue } from "../../lib/compatibility";
+import { uuid } from "../../lib/format";
 import {
   addFavorite,
   pushRecent,
@@ -104,8 +105,6 @@ function subscribe(l: () => void): () => void {
   };
 }
 
-const uid = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`);
-
 /** The records of one scope (read at once, kept in step) and the changes the panel makes to them. */
 export function usePanelStore(scope: PanelScope) {
   const favorites = useSyncExternalStore(subscribe, () => read<PanelFavorite[]>(scope, "favorites"));
@@ -120,7 +119,7 @@ export function usePanelStore(scope: PanelScope) {
     favorites,
     recent,
     overrides,
-    addFavorite: (c: PanelConfig) => change<PanelFavorite[]>("favorites", (l) => addFavorite(l, c, uid())),
+    addFavorite: (c: PanelConfig) => change<PanelFavorite[]>("favorites", (l) => addFavorite(l, c, uuid())),
     removeFavorite: (id: string) => change<PanelFavorite[]>("favorites", (l) => removeFavorite(l, id)),
     updateFavorite: (id: string, patch: PanelOverride) => change<PanelFavorite[]>("favorites", (l) => updateFavorite(l, id, patch)),
     pushRecent: (c: PanelConfig) => change<PanelConfig[]>("recent", (l) => pushRecent(l, c)),
