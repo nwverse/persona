@@ -1680,24 +1680,52 @@ struct ChatView: View {
         #if os(iOS) || os(visionOS)
         if let list = pin.list {
             if pin.holding { pin.release() } // a tapped header held in place would put the list back each frame
+            // SwiftUI's stored position still says where the user's own scrolling left the list. The jump moves the
+            // scroll view, not that position: on the next change of content (the rows held back while reading, let in
+            // by this tap; a streamed line; a row laid out taller than guessed) SwiftUI put the list back there, during
+            // the jump or after it, and as it was following by then, ↓ was gone and nothing brought it back (#4788).
+            // Forgotten here, as `ChatPin` forgets it before it moves the list; the newest end is stored once there.
+            position = ScrollPosition(idType: String.self)
             #if DEBUG
             scratch.endJumps += 1
             let tapped = CACurrentMediaTime()
             #endif
-            jumpRun.start(list) { _ in
+            jumpRun.start(list) { arrived in
                 #if DEBUG
                 scratch.jumpMs = Int((CACurrentMediaTime() - tapped) * 1000)
                 #endif
-                reconcileNewestGeometry()
-                // A reply that streamed on, or held-back lines let in by ↓: the list stays at offset 0, and this
-                // makes sure of it (a finger that took the list meanwhile has decided already).
-                if follow.follows, !scratch.atNewest { scrollToEnd() }
+                landedAtNewest(list, arrived: arrived, again: true)
             }
             return
         }
         #endif
         scrollToEnd(animated: true)
     }
+
+    #if os(iOS) || os(visionOS)
+    private static let jumpLog = Logger(subsystem: "persona", category: "chat-jump")
+
+    /// ↓'s jump is over: the geometry is read from the list (#1211), and following, SwiftUI's position is the newest end
+    /// again, as every other way there leaves it, so what streams in next keeps the list there (it is there already:
+    /// nothing moves). A finger that took the list meanwhile has decided already. `again`: a moment later the list is
+    /// looked at once more, and if anything took it away from the newest end while it follows, it goes there again.
+    private func landedAtNewest(_ list: UIScrollView, arrived: Bool, again: Bool) {
+        reconcileNewestGeometry()
+        if follow.follows { scrollToEnd() }
+        guard arrived, again else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard pin.list === list, follow.follows, !jumpRun.running, !list.isTracking, !list.isDecelerating,
+                  let gap = pin.measuredNewestGap, gap > ChatJump.there else { return }
+            Self.jumpLog.notice("↓ landed, then the list moved \(Int(gap), privacy: .public) pt from the newest end: again")
+            #if DEBUG
+            scratch.jumpSlips += 1
+            #endif
+            position = ScrollPosition(idType: String.self)
+            jumpRun.start(list) { arrived in landedAtNewest(list, arrived: arrived, again: false) }
+        }
+    }
+    #endif
 
     /// ↓ shows: the follow state says so, once the chat has settled on entry.
     private var arrowShows: Bool { follow.arrow && settled && !pinRising }
