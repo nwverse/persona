@@ -344,7 +344,7 @@ Start from a reproduction, measure the base, change one thing, measure again.
    `PerfAssistantTests`, `PerfComposerTests`, …) do this with `XCTHitchMetric` and report through
    `scripts/app/perf_report.py`.
 6. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
-   ("Automated checks").
+   (#4265).
 
 Report the device or simulator, OS, build settings, data set, number of runs and the range, and say what was not measured.
 
@@ -355,11 +355,11 @@ Report the device or simulator, OS, build settings, data set, number of runs and
 | `scripts/test/test_apple_perf_patterns.py` | Ratchet over Swift under `apple/` (tests excluded): Photos fetches, `SecItemCopyMatching`, `Data` / `String(contentsOf:)`, directory listings, `UserDefaults.synchronize()`, `UIImage(data:)` / `(contentsOfFile:)` / `NSImage(data:)`, and `TimelineView(.animation…)` without `paused:`. Each file's counts (`scripts/test/apple_perf_baseline.json`) may only go down; a call verified to run off the main thread is marked `// perf-ok: <reason>`. After removing calls, run it with `--update`; `--list` prints every counted call. Runs in `scripts/ci/python-tests.py`. | Implemented |
 | `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push, who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
 | `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page | Existing, run by hand |
-| Isolation-aware lint | Flag the patterns above only where the compiler says the call is on the main actor (SwiftSyntax or a SourceKit index over the isolation of the enclosing declaration), so the ratchet can become a hard zero | Proposed (follow-up issue) |
-| Expensive `@State` initial values | Flag `@State … = T()` where `T`'s `init` does more than assign stored properties | Proposed (follow-up issue) |
-| DEBUG main-thread watchdog | A background thread pings the main run loop and logs a `PerfTrace.event` plus a main-thread sample when it is blocked over 100 ms, so UI tests and runtime CLI scenarios catch blocks without Instruments | Proposed (follow-up issue) |
-| MetricKit | Subscribe `MXMetricManager` in TestFlight builds; send hang (`MXHangDiagnostic`), launch and memory payloads into Copy Diagnostics | Proposed (follow-up issue) |
-| Launch metric | A UI test with `XCTApplicationLaunchMetric` in `scripts/app/perf-test.sh` | Proposed (follow-up issue) |
+| Isolation-aware lint | Flag the patterns above only where the compiler says the call is on the main actor (SwiftSyntax or a SourceKit index over the isolation of the enclosing declaration), so the ratchet can become a hard zero | Proposed, #4262 |
+| Expensive `@State` initial values | Flag `@State … = T()` where `T`'s `init` does more than assign stored properties | Proposed, #4263 |
+| DEBUG main-thread watchdog | A background thread pings the main run loop and logs a `PerfTrace.event` plus a main-thread sample when it is blocked over 100 ms, so UI tests and runtime CLI scenarios catch blocks without Instruments | Proposed, #4264 |
+| MetricKit | Subscribe `MXMetricManager` in TestFlight builds; send hang (`MXHangDiagnostic`), launch and memory payloads into Copy Diagnostics | Proposed, #4265 |
+| Launch metric | A UI test with `XCTApplicationLaunchMetric` in `scripts/app/perf-test.sh` | Proposed, #4266 |
 
 ## Review checklist
 
@@ -376,7 +376,8 @@ Paste into a PR that touches `apple/`, marking each item done, not applicable, o
 
 ## Survey of the current code
 
-What the rules found on `main` on 2026-11-11. Each line is a problem to fix in its own issue, not an exemption.
+What the rules found on `main` on 2026-11-11. Each line is a problem to fix (tracked in #4267), not an exemption; a PR
+that fixes one removes its line.
 
 Grep counts are across `apple/` without tests; they are leads to read, not each a bug.
 
