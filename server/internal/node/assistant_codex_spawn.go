@@ -78,6 +78,10 @@ function command { if [[ "$1" == codex ]]; then shift; __persona_codex "$@"; els
 }
 
 func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options ...modelExecution) (*assistantProc, error) {
+	return n.spawnCodexWithMode(id, cwd, launcher, resume, spare, "", options...)
+}
+
+func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, mode string, options ...modelExecution) (*assistantProc, error) {
 	execution := executionOption(options)
 	if err := execution.check(); err != nil {
 		return nil, err
@@ -104,7 +108,7 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 		}
 	}()
 	cmd.Env = identity.Environment(cmd.Env, gateEnv...)
-	cmd.SysProcAttr = osproc.GroupAttr()
+	cmd.SysProcAttr = osproc.SessionGroupAttr()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -178,7 +182,7 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 
 	ctx, cancel := context.WithTimeout(context.Background(), codexStartTimeout)
 	defer cancel()
-	if err := c.start(ctx, id, root, resume); err != nil {
+	if err := c.start(ctx, id, root, resume, mode); err != nil {
 		p.stop()
 		return nil, fmt.Errorf("%s（codex app-server）没有启动起来: %w", launcher, err)
 	}

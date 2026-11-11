@@ -4,7 +4,9 @@ import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
 import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
+import { defaultLabel, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { navigate } from "../lib/router";
+import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
@@ -50,6 +52,8 @@ import {
 } from "../lib/todos";
 import type { AgentState, Interaction, Launcher, Machine } from "../lib/types";
 import { Button, cx, Dialog, IconButton, Loading, Menu, toast, useMenu } from "../ui/atoms";
+import { contextMenuProps } from "../ui/context-menu";
+import type { MenuAt } from "../ui/menu-model";
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
@@ -77,6 +81,7 @@ import { useTodoField } from "./use-todo-field";
 import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
+import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
 const VIEW_KEY = "persona.todos.view";
@@ -147,6 +152,14 @@ export function TodosView({
   const [newOpen, setNewOpen] = useState(false);
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  // Which to-do the hand-over and delete dialogs are for: a row's whose menu chose them (#4429), or for hand-over
+  // none, the open one, which it follows. Each stays set after its dialog closes, so the dialog leaves with the to-do
+  // it showed.
+  const [handoverId, setHandoverId] = useState<string>();
+  const [deleteId, setDeleteId] = useState<string>();
+  // A row's menu (#4429), where it opens and whether the row's checkbox showed the to-do open; the day picker it opens
+  const [rowMenu, setRowMenu] = useState<{ id: string; at: MenuAt; open: boolean } | null>(null);
+  const [dueFor, setDueFor] = useState<string>();
   const [deleting, setDeleting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [showDone, setShowDone] = useState(false);
@@ -311,6 +324,42 @@ export function TodosView({
     }
   }, []);
 
+  // a priority, due date or reminder chosen in a row's menu: saved at once, as the to-do's page saves its fields; false
+  // when it failed (said in a toast)
+  const savePlan = async (id: string, patch: TodoPatch): Promise<boolean> => {
+    try {
+      await updateTodo(id, patch);
+      await refreshTodos();
+      return true;
+    } catch (e) {
+      toast(t("todos.save_plan_failed", { error: errorText(e) }), "error");
+      return false;
+    }
+  };
+  // `id`: a row's to-do; none: the open one, as the page's Hand to agent
+  const openHandover = (id?: string) => {
+    setHandoverId(id);
+    setHandoverOpen(true);
+  };
+  const askDelete = (id: string) => {
+    setDeleteId(id);
+    setDeleteConfirm(true);
+  };
+  // stable, so the memoized rows keep the same props
+  const openRowMenu = useCallback((todo: Todo, at: MenuAt, open: boolean) => setRowMenu({ id: todo.id, at, open }), []);
+  const menuTodo = rowMenu ? todos.find((x) => x.id === rowMenu.id) : undefined;
+  const handoverTodo = handoverId ? todos.find((x) => x.id === handoverId) : activeTodo;
+  const deleteTodoShown = todos.find((x) => x.id === deleteId);
+  const dueTodo = todos.find((x) => x.id === dueFor);
+  // the to-do went (deleted elsewhere, another assistant): its menu and the dialogs opened for it go with it, and do
+  // not come back with it
+  useEffect(() => {
+    if (rowMenu && !menuTodo) setRowMenu(null);
+    if (handoverId && !handoverTodo) setHandoverOpen(false);
+    if (deleteId && !deleteTodoShown) setDeleteConfirm(false);
+    if (dueFor && !dueTodo) setDueFor(undefined);
+  }, [rowMenu, menuTodo, handoverId, handoverTodo, deleteId, deleteTodoShown, dueFor, dueTodo]);
+
   const retryTodos = async () => {
     if (retrying) return;
     setRetrying(true);
@@ -322,8 +371,8 @@ export function TodosView({
   };
 
   const handleDelete = async () => {
-    if (!activeTodo || deleting) return;
-    const id = activeTodo.id;
+    if (!deleteTodoShown || deleting) return;
+    const id = deleteTodoShown.id;
     setDeleting(true);
     try {
       await deleteTodo(id);
@@ -337,10 +386,13 @@ export function TodosView({
     // be deleted a second time (the hub answers 404 for it).
     dropTodo(id);
     setDeleteConfirm(false);
-    setActiveId(undefined);
-    pushedId.current = undefined;
-    // replace: Back must not land on ?id=<the deleted todo>
-    navigate(calendarOn ? calendarRoute(calendarMode, anchor) : { name: "todos" }, true);
+    // a row's menu can delete another to-do than the one open: that one stays open
+    if (id === activeTodo?.id || id === selectedId) {
+      setActiveId(undefined);
+      pushedId.current = undefined;
+      // replace: Back must not land on ?id=<the deleted todo>
+      navigate(calendarOn ? calendarRoute(calendarMode, anchor) : { name: "todos" }, true);
+    }
     toast(t("todos.deleted"), "ok");
     // the rest of the page catches up in the background; a failed refresh leaves the list as dropped, the next push fixes it
     void refreshTodos().then(() => refresh()).catch(() => {});
@@ -435,8 +487,8 @@ export function TodosView({
                 showReleased={showReleased}
                 onToggleReleased={() => setShowReleased((v) => !v)}
                 onToggleDone={() => toggleDone(selectedTodo)}
-                onOpenHandover={() => setHandoverOpen(true)}
-                onDeleteClick={() => setDeleteConfirm(true)}
+                onOpenHandover={() => openHandover()}
+                onDeleteClick={() => askDelete(selectedTodo.id)}
               />
             </div>
           )}
@@ -525,6 +577,7 @@ export function TodosView({
                       onSelect={openFromList}
                       onToggleDone={toggleDone}
                       onRestore={onRestore}
+                      onMenu={openRowMenu}
                     />
                   ),
                 )}
@@ -539,6 +592,7 @@ export function TodosView({
                     selectedId={activeTodo?.id}
                     onSelect={openFromList}
                     onToggleDone={toggleDone}
+                    onMenu={openRowMenu}
                   />
                 ))}
 
@@ -567,6 +621,7 @@ export function TodosView({
                             selected={activeTodo?.id === todo.id}
                             onSelect={openFromList}
                             onToggleDone={toggleDone}
+                            onMenu={openRowMenu}
                           />
                         ))}
                       </div>
@@ -605,8 +660,8 @@ export function TodosView({
               showReleased={showReleased}
               onToggleReleased={() => setShowReleased((v) => !v)}
               onToggleDone={() => toggleDone(activeTodo)}
-              onOpenHandover={() => setHandoverOpen(true)}
-              onDeleteClick={() => setDeleteConfirm(true)}
+              onOpenHandover={() => openHandover()}
+              onDeleteClick={() => askDelete(activeTodo.id)}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -628,20 +683,37 @@ export function TodosView({
         onCreated={(id) => setActiveId(id)}
       />
 
-      {activeTodo && (
+      {rowMenu && menuTodo && (
+        <Menu
+          anchor={rowMenu.at.anchor ?? null}
+          point={rowMenu.at.point}
+          onClose={() => setRowMenu(null)}
+          items={todoRowMenu(menuTodo, rowMenu.open, Date.now(), {
+            toggleDone: () => void toggleDone(menuTodo, rowMenu.open),
+            save: (patch) => void savePlan(menuTodo.id, patch),
+            pickDue: () => setDueFor(menuTodo.id),
+            handOver: () => openHandover(menuTodo.id),
+            remove: () => askDelete(menuTodo.id),
+          })}
+        />
+      )}
+
+      {dueTodo && <TodoDueDialog key={dueTodo.id} todo={dueTodo} onClose={() => setDueFor(undefined)} onSave={(patch) => savePlan(dueTodo.id, patch)} />}
+
+      {handoverTodo && (
         <HandoverDialog
-          key={activeTodo.id}
+          key={handoverTodo.id}
           open={handoverOpen}
-          todo={activeTodo}
+          todo={handoverTodo}
           machines={machines}
           onClose={() => setHandoverOpen(false)}
         />
       )}
 
-      {activeTodo && (
+      {deleteTodoShown && (
         <Dialog open={deleteConfirm} onClose={() => setDeleteConfirm(false)} title={t("todos.delete_title")}>
           <div className="py-2 text-[13.5px] text-ink-2">
-            {t("todos.delete_confirm", { title: activeTodo.title })}
+            {t("todos.delete_confirm", { title: deleteTodoShown.title })}
           </div>
           <div className="mt-4 flex justify-end gap-2">
             <Button tone="secondary" onClick={() => setDeleteConfirm(false)}>
@@ -726,6 +798,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   selectedId,
   onSelect,
   onToggleDone,
+  onMenu,
 }: {
   group: TodoProjectGroup;
   /** Its todos' row views, in the same order as group.todos. */
@@ -733,6 +806,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
+  onMenu: TodoRowMenuOpener;
 }) {
   const holds = group.todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds });
@@ -757,6 +831,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
               selected={selectedId === todo.id}
               onSelect={onSelect}
               onToggleDone={onToggleDone}
+              onMenu={onMenu}
             />
           ))}
         </div>
@@ -796,6 +871,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
   onSelect,
   onToggleDone,
   onRestore,
+  onMenu,
 }: {
   section: TriageSection;
   /** Whether it starts folded: Other open only while some open section has rows. */
@@ -808,6 +884,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
   onRestore: (id: string) => void;
+  onMenu: TodoRowMenuOpener;
 }) {
   const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
   const [folded, toggle] = useFolded(`todos-section:${section}`, foldedFirst, { follow: true, holds });
@@ -822,7 +899,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
       {!folded && (
         <div className="flex flex-col gap-1 pt-0.5">
           {groups.map((g) => (
-            <TodoTriageRow key={g.key} group={g} views={views} selectedId={selectedId} onSelect={onSelect} onToggleDone={onToggleDone} onRestore={onRestore} />
+            <TodoTriageRow key={g.key} group={g} views={views} selectedId={selectedId} onSelect={onSelect} onToggleDone={onToggleDone} onRestore={onRestore} onMenu={onMenu} />
           ))}
         </div>
       )}
@@ -838,6 +915,7 @@ function TodoTriageRow({
   onSelect,
   onToggleDone,
   onRestore,
+  onMenu,
 }: {
   group: TriageGroup;
   views: ReadonlyMap<string, TodoRowView>;
@@ -845,6 +923,7 @@ function TodoTriageRow({
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
   onRestore: (id: string) => void;
+  onMenu: TodoRowMenuOpener;
 }) {
   const others = group.members.slice(1);
   const [opened, setOpen] = useState(false);
@@ -860,6 +939,7 @@ function TodoTriageRow({
       onToggleDone={onToggleDone}
       section={group.triage.get(td.id)?.section}
       onRestore={onRestore}
+      onMenu={onMenu}
     />
   );
   return (
@@ -978,6 +1058,9 @@ function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Intera
 
 const TONE_CLASS = TODO_TONE_CLASS;
 
+/** Opens a row's menu (#4429) where `at` says, for the to-do the row's checkbox shows open (`open`) or done. */
+type TodoRowMenuOpener = (todo: Todo, at: MenuAt, open: boolean) => void;
+
 const TodoListItem = memo(function TodoListItem({
   todo,
   view,
@@ -986,6 +1069,7 @@ const TodoListItem = memo(function TodoListItem({
   onToggleDone,
   section,
   onRestore,
+  onMenu,
 }: {
   todo: Todo;
   view: TodoRowView;
@@ -995,6 +1079,7 @@ const TodoListItem = memo(function TodoListItem({
   /** Its status section (#3156): a PR to merge shows its link, a shelved one its Restore. */
   section?: TriageSection;
   onRestore?: (id: string) => void;
+  onMenu?: TodoRowMenuOpener;
 }) {
   const { status, dotState, activeCount } = view;
   const pr = section === "pr" ? prLink(todo.pr_url) : null;
@@ -1004,6 +1089,8 @@ const TodoListItem = memo(function TodoListItem({
   // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713)
   const open = checksAsOpen(todo, section);
   const failedOpen = open && Boolean(todo.start_error);
+  // Its menu (#4429): a right click opens it at the pointer, the menu key and Shift+F10 on the row
+  const menu = onMenu ? contextMenuProps((at) => onMenu(todo, at, open)) : undefined;
 
   return (
     <div
@@ -1011,8 +1098,14 @@ const TodoListItem = memo(function TodoListItem({
       tabIndex={0}
       aria-current={selected || undefined}
       onClick={() => onSelect(todo.id)}
+      // a right click on its PR link keeps the browser's menu (Copy link, open in a new tab)
+      onContextMenu={menu && ((e) => {
+        if (!(e.target as HTMLElement).closest("a[href]")) menu.onContextMenu(e);
+      })}
       // Enter / Space on the row itself (not on its own buttons) opens it, as a click does
       onKeyDown={(e) => {
+        menu?.onKeyDown(e);
+        if (e.defaultPrevented) return;
         if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
         e.preventDefault();
         onSelect(todo.id);
@@ -2271,6 +2364,50 @@ function NewTodoDialog({
   );
 }
 
+// ── Due Date Dialog ──────────────────────────────────────────
+
+/** A row menu's Due date › Pick a date… (#4429): any day, starting from the one it is due on (else today). A to-do due
+ *  at a time keeps the time (`duePatch`). It stays open, with the toast, when the save fails. */
+function TodoDueDialog({ todo, onClose, onSave }: { todo: Todo; onClose: () => void; onSave: (patch: TodoPatch) => Promise<boolean> }) {
+  const [day, setDay] = useState(() => dayKey(dueOn(todo) ?? Date.now()));
+  const [busy, setBusy] = useState(false);
+  const picked = parseDayKey(day);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (picked === undefined || busy) return;
+    setBusy(true);
+    if (await onSave(duePatch(todo, picked))) onClose();
+    else setBusy(false);
+  };
+  return (
+    <Dialog open onClose={onClose} title={t("todos.menu_due")}>
+      <form onSubmit={submit} className="flex flex-col gap-3.5">
+        <div>
+          <label htmlFor="todo-due-pick" className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.due_label")}</label>
+          <input
+            id="todo-due-pick"
+            type="date"
+            required
+            autoFocus
+            data-testid="todo-due-pick"
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            className="rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent"
+          />
+        </div>
+        <div className="mt-2 flex justify-end gap-2">
+          <Button tone="secondary" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button tone="accent" type="submit" disabled={picked === undefined || busy} busy={busy}>
+            {t("common.save")}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 // ── Handover to Agent Dialog ─────────────────────────────────
 
 export function HandoverDialog({
@@ -2293,6 +2430,10 @@ export function HandoverDialog({
   const [mid, setMid] = useState(() => onlineMachines[0]?.id ?? "");
   const [cwd, setCwd] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
+  // What Model settings › Agents runs on this computer, as the hub says (null: no launcher default); undefined until the list
+  // is in, and from an older hub, which has no default to follow.
+  const [hubDefault, setHubDefault] = useState<LauncherDefault | null | undefined>(undefined);
+  // "": the default (the hub resolves it at the start, as New Agent's "Default: …")
   const [launcher, setLauncher] = useState("");
 
   // For "existing":
@@ -2320,20 +2461,29 @@ export function HandoverDialog({
   useEffect(() => {
     if (!open || !mid) return;
     const controller = new AbortController();
-    api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`, { signal: controller.signal })
+    // another computer's list is not this one's
+    setLaunchers([]);
+    setHubDefault(undefined);
+    setLauncher("");
+    machineLaunchers(mid, { signal: controller.signal })
       .then((r) => {
-        setLaunchers(r.launchers ?? []);
-        // the first this computer can start now, not one its terminal can't run (#1643)
-        if (r.launchers?.length) setLauncher(initialLauncher(null, r.launchers));
+        const ls = r.launchers ?? [];
+        setLaunchers(ls);
+        setHubDefault(r.default);
+        // the default the user configured, as New Agent starts from it (#4384); an older hub has none: the first this computer
+        // can start now, not one its terminal can't run (#1643)
+        setLauncher(r.default !== undefined ? "" : initialLauncher(null, ls));
       })
-      .catch(() => {});
+      .catch((e) => { if (!controller.signal.aborted) toast(errorText(e), "error"); });
     return () => controller.abort();
   }, [open, mid]);
 
   const previewCard = useMemo(() => {
     return formatTodoContext(todo.title, todo.notes);
   }, [todo]);
-  const pickedBlock = launcherBlock(launchers.find((l) => l.name === launcher));
+  // the default is held to what it runs here
+  const pickedBlock = launcherBlock(launchers.find((l) => l.name === (launcher || hubDefault?.provider)));
+  const defaultChoice = hubDefault ? defaultLabel(hubDefault) : t("newagent.follow_model_settings");
 
   const submitNew = async () => {
     if (!mid) return;
@@ -2441,14 +2591,16 @@ export function HandoverDialog({
               />
             </div>
 
-            {launchers.length > 0 && (
+            {(launchers.length > 0 || hubDefault !== undefined) && (
               <div>
                 <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.launcher")}</label>
                 <select
+                  data-testid="todo-handoff-launcher"
                   value={launcher}
                   onChange={(e) => setLauncher(e.target.value)}
                   className="w-full rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none"
                 >
+                  {hubDefault !== undefined && <option value="">{defaultChoice}</option>}
                   {usableFirst(launchers).map((l) => {
                     const block = launcherBlock(l);
                     // still a choice (a start that works clears it), with why, after the ones that can start (#1643)
@@ -2465,6 +2617,19 @@ export function HandoverDialog({
                     <span className="min-w-0">{pickedBlock.reason}</span>
                   </p>
                 )}
+                {/* add, hide or restore launchers (#4384): Settings › Model providers, as New Agent's entry */}
+                <button
+                  type="button"
+                  data-testid="todo-handoff-manage-launchers"
+                  onClick={() => {
+                    onClose();
+                    navigate(settingsHref("models", null, false, null, "providers"));
+                  }}
+                  className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium whitespace-nowrap text-accent-ink hover:underline"
+                >
+                  <Icon name="gear" size={11} />
+                  {t("newagent.manage_launchers")}
+                </button>
               </div>
             )}
           </div>

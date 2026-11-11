@@ -2,6 +2,12 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A meeting-recording sheet: three traps from #4240 (2026-11-11)
+
+- A type nested in a `nonisolated` type or extension is not `nonisolated` itself; used from a test or a background queue it crashes with `dispatch_assert_queue`. Write `nonisolated` on each nested enum and struct.
+- UI tests of this feature share one mock hub for the whole run, and the hub keeps each recording's live log and asks. A test that reads `asks.first` passes alone and fails after another test asked about the same sample recording. Restart the mock hub (stop it by its port) before each run, or run the test alone.
+- `Text(timerInterval:)` has no text a UI test can read: its accessibility label is the caller's ("Recording time") and the time is the spoken value, so assert on the value. A `Label` carrying an accessibility identifier gives the identifier to its icon too; combine its children first, or the test finds the SF Symbol name as the label.
+
 ## The first Photos query in a process loads the Photos database (#4250)
 
 `PHAsset.fetchAssets` looks cheap, but the first query in a process opens the Photos client database
@@ -171,6 +177,10 @@ A frozen transcript can reveal its withheld rows during Jump to Latest and move 
 
 - A machine's token summary and its navigation card can repeat the same text. Scope the tap to the actual card button, not an application-wide text query. Choose a known multi-agent demo fixture before testing sibling selection, and expand a folded chat title before looking for its tabs. The home needs-you list intentionally shows at most three rows: verify the overflow route when Inbox actions are not among them, rather than assuming every kind is visible. Tests expecting the Agents list must clear `dev.openChat` at launch: opening a new assistant conversation does not discard the Agent chat a previous test correctly restored.
 - Simulator entitlement emulation lives in the Mach-O `__TEXT,__entitlements` section generated from `*-Simulated.xcent`. `codesign`'s host-signature output alone can report no groups even when the simulator's effective groups are present. An unsigned test build can omit the simulated section and make the pairing registry unreadable; build the test app with ad-hoc signing and check the generated section instead of blaming the tab lifecycle. Device exports still need the normal signature entitlement check.
+
+## Duplicate transcript cache entries (#4305)
+
+`ChatStore.ids` being a Set does not prove `items` is unique after loading a replayed disk cache. A later backlog containing one of those IDs then builds `Dictionary(uniqueKeysWithValues:)` over the duplicates and traps on the main thread. Collect monotone promotion evidence before normalizing existing and incoming items, then keep the last copy of each ID before fold/index processing to match the merge's new-copy-wins contract; merely changing the dictionary to `uniquingKeysWith` would hide the crash while retaining duplicate transcript rows. Cover the real `ChatCache.save → ChatStore.init → apply(backlog)` crash, same-batch duplicate metadata and reconnect tool/image replays in Debug and Release tests.
 
 ## Retained chat visibility (#739)
 

@@ -237,6 +237,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
+		if p.PermissionMode == "" {
+			p.PermissionMode = proto.ModeBypass
+		}
 	}
 	var cwd string
 	var err error
@@ -250,6 +253,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.ConfigDir != "" {
+		params["config_dir"] = p.ConfigDir
+	}
 	if p.GuestTools != nil {
 		// The node starts it with no built-in tools and only these of Persona's (node/assistant_guest.go).
 		params["guest"] = map[string]any{"tools": p.GuestTools}

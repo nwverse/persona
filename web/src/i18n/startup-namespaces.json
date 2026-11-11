@@ -30,6 +30,7 @@
   "chat-mentionmenu",
   "chat-messageactions",
   "chat-messages",
+  "chat-modelfallback",
   "chat-navrail",
   "chat-outboxbubbles",
   "chat-panetabs",
@@ -153,6 +154,7 @@
   "settings-notifications",
   "settings-sent",
   "settings-shortcutsettings",
+  "settings-standing",
   "settings-triagesettings",
   "shellswitch",
   "shortcuthelp",
@@ -175,5 +177,7 @@
   "usage",
   "voice",
   "workspace-board",
-  "worktree"
+  "workspace-tree",
+  "worktree",
+  "worktree-actions"
 ]

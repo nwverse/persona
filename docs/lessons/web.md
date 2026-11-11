@@ -1,5 +1,27 @@
 # Lessons: web UI and interactions
 
+## A Go toolchain's files are not always under GOROOT (#4559)
+
+Homebrew's Go sets `GOROOT` to the formula's `libexec` directory and keeps `LICENSE` one level up, so a build step that
+reads `$(go env GOROOT)/LICENSE` works with the official distribution and fails on a Homebrew machine. Look in every
+place a supported install keeps the file and, when none has it, fail naming each place tried
+(`web/scripts/go-license.mjs`). Check a build script that reads the toolchain's files on Homebrew's Go too.
+
+## Remembered task rules need their exact owner and retry context (#4418)
+
+A remembered task rule's key is opaque: encode the returned value as a query parameter, not a reconstruction from its
+computer and directory. A manager may flag a key as ambiguous; show its raw identifier as unresolved rather than
+presenting a guessed directory. A failed or unconfirmed removal can be omitted by a later list read, so keep the rule
+and its retry context in session memory scoped to the assistant and credential generation, including across unmounts.
+When a lost reply is followed by a not-remembered response, let the user dismiss the local warning without calling
+the removal confirmed; a later list can show the rule again. Include access type in each row action's spoken name.
+Synchronous admission prevents a second delete after reopening while the first is pending. Fence reads, confirmation,
+refresh and callbacks on manager changes (including a round trip), credential replacement and unmount. A retired
+request's 401 must not sign out a later view, even when it uses the same credential; a current request keeps the normal
+401 policy. A proxy login page or redirect can also reload the whole app: apply the same context and credential fence
+before that side effect, while retaining unowned pairing probes and validated 304 responses. A successful removal does not rule out a matching plan remembering it
+again, and an older manager's empty response is not proof that storage was read successfully.
+
 ## Dismiss a draft, not its source item (#3743)
 
 A task-progress reply card has its own feed id; its Inbox reference can be shared by later progress drafts. Persist
@@ -817,6 +839,8 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 
 `URL.port` is empty for both an implicit port and an explicitly written HTTP `:80` or HTTPS `:443`. When recognizing links to an Agent's dev server, retain explicit authority-port intent from the original text after validating its URL, protocol and host. Do not infer a scheme default for a URL with no port, or borrow a colon from credentials, a path, query or fragment. Regress the public helper, reply chips and click routing together; keep hub-owned pages and preview capability/session/folder checks ahead of opening a preview. Recognition alone does not establish HTTPS preview transport support.
 
+For reply tokenization (#4498), distinguish a bracketed IPv6 authority from surrounding Markdown brackets. A direct URL helper can accept the address while the prose tokenizer drops it, leaving no chip. Exercise scheme links, Markdown/autolinks and existing bare forms through the public chip renderer as well as the helper; keep URL/host admission and delimiter boundaries unchanged.
+
 ## Connection tests must use the form's credential choice (#1903)
 
 A saved credential and an empty input are different from explicitly removing that credential. Send the removal flag through the test API and give it the same precedence as saving, including when a new key was typed before removal was selected. Changing the credential choice invalidates both the displayed test result and any pending result for the old form. Test against a synthetic source and assert that the saved configuration stays unchanged.
@@ -849,9 +873,46 @@ is not done), so the owner saw one task out of four and asked what the others we
 other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
 `start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.
 
+## Workspace identity outlives its Agents
+
+An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
+
+The current assistant and the roster's default are different scopes. Workspace discovery and management entry points follow `shownManager`, while an item without a manager still belongs to `defaultManager`. A choice change must cancel reads and invalidate deletion previews immediately, even if the user switches back before a response arrives; subscribing only to changes of the roster's default misses that transition.
+
+## Preserve referenced design section numbers during integration
+
+When parallel design additions occupy the same section number, keep the upstream
+section and its references together. Move the feature section to the next free
+number instead of replacing either contract (#3223). The pending-request rules
+remain section 4.8; workspace selection and management follow in section 4.10.
+
+## Keep workspace action resolution behind its lazy entry
+
+A lazy menu still adds to the first screen when its always-mounted opener imports
+its permission and catalog resolvers. Keep only request routing and immediate scope
+invalidation in that opener module; import resolution and child-request assembly
+from the lazy menu (#3223).
+Check the real production bundle against the fixed main baseline and retain the
+same owner, manager, host and workspace safety checks.
+
+## Preserve workspace controls when adopting shared fold motion
+
+A workspace row has separate disclosure, selection and action controls. When merging shared sidebar fold timing, keep that structure and apply `sidebarFoldMotion` to its disclosure chevron and `sidebarFold` to the matching `Collapse`. Choosing either side wholesale drops either workspace controls or the shared timing; child-workspace folds need the same motion contract.
+
+The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
+
 ## Archive refusals must roll back optimistic removal (#4277)
 
 A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
 optimistically removed. Keep the pre-request session snapshot and restore it immediately on archive failure,
 before refreshing. Preserve a newer pushed row if one arrived meanwhile. Exercise mounted rows and the real
 store refresh with both delta and bounded list negotiation.
+
+## Recovering from an expired page cursor must not shrink the list
+The hub keeps a session list's frozen view for 5 minutes and at most 32 of them (`server/internal/sessionlist/index.go`).
+Reaching the end of an Agents list open longer than that asked for the next page with an expired cursor, and both
+clients recovered by starting over: the web emptied the list (`clearBaseline`) and the iPhone replaced its rows with the
+first page. A list 300 rows deep became 50, the scroller clamped its offset, and the reader was thrown back near the top
+every time they reached the bottom. Recover by reading a fresh view as deep as the reader has scrolled plus one page,
+keeping the old rows on screen until it arrives (web `SessionList.reread`, #4431; iOS `SessionListModel.rebaseline`); any
+recovery that publishes fewer rows than are on screen moves the reader.

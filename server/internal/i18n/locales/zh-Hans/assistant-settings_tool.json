@@ -1,4 +1,6 @@
 {
+  "title_task_workspace_preference": "派发任务时优先使用",
+  "change_task_workspace_preference": "派发任务时优先使用：{before} → {after}",
   "title_notes": "关于我",
   "title_main_tasks_quiet": "主对话派的任务只在主对话里通知",
   "title_start_requested_tasks": "我在对话里说过的，直接开始",
@@ -22,6 +24,8 @@
   "change_interject_background": "「插话时把手头的命令转到后台」：{before} → {after}",
   "title_agent_tasks": "Persona 启动的每个 Agent 都归入一个有人跟进的任务",
   "change_agent_tasks": "「Persona 启动的每个 Agent 都归入一个有人跟进的任务」：{before} → {after}",
+  "title_inbox_signals": "收件箱有新消息说到受督办的任务时，告诉它的督办方",
+  "change_inbox_signals": "「收件箱有新消息说到受督办的任务时，告诉它的督办方」：{before} → {after}",
   "title_model_tiers": "Agent 预设",
   "change_model_tier": "{profile} · {tier}：{before} → {after}",
   "title_review_sample_percent": "抽查验收的比例",
@@ -39,5 +43,6 @@
   "minutes_unchanged": "会议纪要保留设置未变：已保存 {saved}，当前生效为 {after}。",
   "minutes_applied": "会议纪要保留已设为 {saved}，当前生效为 {after}。转写仍按录音保留时间清理。",
   "title_main_background_folded": "后台轮次默认折叠",
-  "change_main_background_folded": "「后台轮次默认折叠」：{before} → {after}"
+  "change_main_background_folded": "「后台轮次默认折叠」：{before} → {after}",
+  "title_standing_authorizations": "长期授权"
 }
