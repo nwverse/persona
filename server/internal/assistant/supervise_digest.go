@@ -88,7 +88,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 		if id != "" {
 			here = s.settings(ctx)
 		}
-		if lost := s.backgroundLost(ctx, was, web); len(lost) > 0 { // what waited for the one that is gone goes out with these
+		if lost := s.backgroundLost(ctx, was, cmp.Or(id, here.Main), web); len(lost) > 0 { // what waited for the one that is gone goes out with these
 			list = mergeSignals(lost, list)
 			b.mu.Lock()
 			for _, g := range list {
@@ -117,9 +117,13 @@ func (s *Service) sendDigest(ctx context.Context) {
 		to := s.digestTo(here, g)
 		if to != here.Main {
 			if _, seen := gone[to]; !seen {
-				c, ok := s.session(ctx, here.MachineID, to)
-				// The background supervisor just started is there before its machine lists it: its message queues.
-				gone[to] = (!ok || !c.Assistant) && !s.backgroundFresh(here, to)
+				if to == here.BackgroundSupervisor {
+					// One just started, or whose machine has not listed yet, is there: its message queues (backgroundThere).
+					gone[to] = !s.backgroundThere(ctx, here, to)
+				} else {
+					c, ok := s.session(ctx, here.MachineID, to)
+					gone[to] = !ok || !c.Assistant
+				}
 			}
 			if gone[to] {
 				to = here.Main
@@ -154,6 +158,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	b := &s.supervise
 	var entries []prompts.SuperviseEntry
 	var kept []superviseSignal
+	s.remedyGoesTo(to, list) // a failed start is ended by this conversation's turn, no other's (start_remedy.go)
 	for _, g := range list {
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			entries = append(entries, e)
@@ -189,6 +194,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	background := leader && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
 	render := func(list []prompts.SuperviseEntry) string {
 		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Escalated: escalatedIn(list),
+			BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
 			LeaderStuck: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:     slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
 			ParkedDue:   slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),

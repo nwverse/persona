@@ -132,8 +132,9 @@ type superviseBook struct {
 	timerAt time.Time
 	hold    map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
 	visible map[string]bool      // an explicit user action makes the current triage turn visible
-	// failSeen: tasks whose failed start a supervision message carried, and when (start_remedy.go remedyTurnEnded)
-	failSeen map[string]time.Time
+	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
+	// (start_remedy.go remedyTurnEnded)
+	failSeen map[string]failSeen
 	// lines are the reports being paraphrased for the Progress row (report_line.go; the tests wait on them).
 	lines sync.WaitGroup
 }
@@ -144,7 +145,7 @@ func (b *superviseBook) init() {
 		b.visible = map[string]bool{}
 	}
 	if b.failSeen == nil {
-		b.failSeen = map[string]time.Time{}
+		b.failSeen = map[string]failSeen{}
 	}
 }
 

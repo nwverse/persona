@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -81,6 +82,18 @@ func (s *Service) backgroundSupervises(ctx context.Context, self string, t Todo)
 	return !s.isLeader(ctx, sup) && !s.isLeaderRef(sup)
 }
 
+// followUpWords tells conversation self, in the answer of the tool that just made an agent its supervised task
+// (agent_supervise, agent_send with a task), who follows the task up: the background supervisor for the main
+// conversation while it is on, else self, in the words these answers always had.
+func (s *Service) followUpWords(ctx context.Context, self string) string {
+	if s.backgroundOn(s.settings(ctx)) && s.isMain(ctx, self) {
+		return "the background supervisor follows it up: its supervision messages (📋) go there and it reviews the task with " +
+			"task_review, so none comes to you for it. You still hear of what it hands to the user, and may review the task " +
+			"yourself (task_review)"
+	}
+	return "you get a supervision message (📋) when it needs you, and close it with task_review"
+}
+
 // ensureBackground is the background supervisor to send to now, made if there is none yet or the one there was is
 // gone; "" while it is off, there is no main conversation or machine, or it cannot start (its tasks' signals then go
 // to the main conversation, and the start is tried again after backgroundRetry). gone is the one it found gone (on
@@ -116,11 +129,14 @@ func (s *Service) ensureBackground(ctx context.Context) (id, gone string) {
 	return id, gone
 }
 
-// backgroundLost takes back what was still queued for background supervisor old, which is gone: its relay queue is
-// dropped, and the signals of the supervision message that waited there are returned with their deduplication entries
-// forgotten, so they are told again where they go now. dedupMu is held.
-func (s *Service) backgroundLost(ctx context.Context, old, web string) []superviseSignal {
-	if old == "" {
+// backgroundLost takes back what was still queued for background supervisor old, which is gone. The signals of the
+// supervision message that waited there are returned with their deduplication entries forgotten, so they are told
+// again where they go now, and that message is dropped. When the signals are not known (the manager restarted since it
+// was queued: supervise.queued is memory only, the deduplication history is not) the message itself moves to
+// conversation to, the new background supervisor or the main conversation, as do the other messages that waited
+// there: nothing queued is dropped unread. dedupMu is held.
+func (s *Service) backgroundLost(ctx context.Context, old, to, web string) []superviseSignal {
+	if old == "" || old == to {
 		return nil
 	}
 	b := &s.supervise
@@ -128,13 +144,32 @@ func (s *Service) backgroundLost(ctx context.Context, old, web string) []supervi
 	lost := b.queued[old]
 	b.setQueuedLocked(old, nil)
 	b.mu.Unlock()
+	moved := 0
 	r := &s.relays
 	r.mu.Lock()
 	if s.relayLocked(ctx) && len(r.st.Queue[old]) > 0 && !r.draining[old] {
+		for _, msg := range r.st.Queue[old] {
+			if msg.Tool == superviseTool && len(lost) > 0 {
+				continue // told again from its signals
+			}
+			if to != "" {
+				r.st.Queue[to] = append(r.st.Queue[to], msg)
+				moved++
+			}
+		}
 		delete(r.st.Queue, old)
 		s.saveRelayLocked()
 	}
 	r.mu.Unlock()
+	if moved > 0 {
+		s.logf("supervise: %d message(s) queued for the background supervisor %s, which is gone, wait for %s now", moved, short(old), short(to))
+		if cfg := s.settings(ctx); cfg.MachineID != "" {
+			if c, ok := s.session(ctx, cfg.MachineID, to); ok {
+				s.drainRelays(cfg.MachineID, []proto.Session{c})
+			}
+		}
+		s.publish(ctx)
+	}
 	if len(lost) > 0 {
 		s.logf("supervise: %d signal(s) queued for the background supervisor %s, which is gone, are told again", len(lost), short(old))
 		s.forgetSupervision(ctx, lost, web)
@@ -142,22 +177,26 @@ func (s *Service) backgroundLost(ctx context.Context, old, web string) []supervi
 	return lost
 }
 
-// backgroundStranded, from the watch loop: a supervision message still queued for a background supervisor that is
-// gone would wait for ever when no new signal comes for it. Its signals go back among the pending ones, and the next
-// digest sends them to a new background supervisor, or to the main conversation.
+// backgroundStranded, from the watch loop: a message still queued for a background supervisor that is gone would wait
+// for ever when no new signal comes for it. Its signals go back among the pending ones, and the next digest sends them
+// to a new background supervisor, or to the main conversation; a message whose signals are not known (queued before a
+// restart) waits for the main conversation instead.
 func (s *Service) backgroundStranded(ctx context.Context) {
 	cfg := s.settings(ctx)
 	id := cfg.BackgroundSupervisor
+	if id == "" || id == cfg.Main {
+		return
+	}
 	b := &s.supervise
 	b.mu.Lock()
-	waiting := id != "" && len(b.queued[id]) > 0
+	waiting := len(b.queued[id]) > 0
 	b.mu.Unlock()
-	if !waiting || cfg.BackgroundSupervisorMachineID == cfg.MachineID && s.backgroundThere(ctx, cfg, id) {
+	if !waiting && s.queuedFor(id) == 0 || cfg.BackgroundSupervisorMachineID == cfg.MachineID && s.backgroundThere(ctx, cfg, id) {
 		return
 	}
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
-	lost := s.backgroundLost(ctx, id, s.webBase(ctx))
+	lost := s.backgroundLost(ctx, id, cfg.Main, s.webBase(ctx))
 	if len(lost) == 0 {
 		return
 	}
@@ -176,8 +215,11 @@ func (s *Service) backgroundStranded(ctx context.Context) {
 }
 
 // backgroundThere: background supervisor id is still a conversation of the assistant's machine. One started within
-// backgroundGrace is (its machine may not list it yet), and so is one whose machine cannot be asked now: what is sent
-// to it queues until the machine is back. Only a machine that answers without it says it is gone.
+// backgroundGrace is (its machine may not list it yet), and so is one whose machine cannot say now: what is sent to it
+// queues until the machine is back. It is gone only when the machine is connected and lists its assistant
+// conversations without it. A list with no assistant conversation at all is not that: the manager answers session.get
+// and sessions.list from what the node last listed, which is empty from a manager's start until the node has
+// connected and listed, and calling it gone then would replace a background supervisor that is still there.
 func (s *Service) backgroundThere(ctx context.Context, cfg Settings, id string) bool {
 	if s.backgroundFresh(cfg, id) {
 		return true
@@ -189,7 +231,24 @@ func (s *Service) backgroundThere(ctx context.Context, cfg Settings, id string) 
 	if err := s.call(ctx, cfg.MachineID, DeviceSessionGet, map[string]any{"session_id": id}, &res); err != nil {
 		return true
 	}
-	return res.OK && res.Session.Assistant
+	if res.OK {
+		return res.Session.Assistant
+	}
+	if d, ok := s.device(ctx, cfg.MachineID); !ok || !d.Online || !d.Reachable {
+		return true
+	}
+	list, err := s.sessions(ctx, cfg.MachineID)
+	if err != nil {
+		return true
+	}
+	listed := false // the node listed since this manager started: an assistant conversation is in its list
+	for _, c := range list {
+		if c.SessionID == id {
+			return c.Assistant
+		}
+		listed = listed || c.Assistant
+	}
+	return !listed
 }
 
 // backgroundFresh: conversation id is the background supervisor, started within backgroundGrace.
@@ -248,18 +307,39 @@ func (s *Service) backgroundModel(ctx context.Context, params map[string]any) {
 	maps.Copy(params, p)
 }
 
-// announceBackground: the main conversation is told once that the background supervisor follows up its tasks (a
-// default never changes without a word): the background supervisor's id the first time it is asked once there is one,
-// "" before and after.
+// backgroundAnnounceReceipt names the announcement among assistant.context's receipts (ContextResult.Receipts): the
+// node sends the receipts back once the message carrying the context is delivered, and only then is it said.
+const backgroundAnnounceReceipt = "background_supervisor"
+
+// announceBackground: the main conversation is told that the background supervisor follows up its tasks (a default
+// never changes without a word): the background supervisor's id, with every message until one carrying it was
+// delivered (announcedBackground), "" before there is one and after. Asking marks nothing: a message that fails to go
+// out, or goes without its context, leaves it for the next one.
 func (s *Service) announceBackground(ctx context.Context) string {
 	cfg := s.settings(ctx)
 	id := s.ownSupervisor(cfg)
 	if id == cfg.Main || cfg.BackgroundSupervisorAnnounced {
 		return ""
 	}
-	if _, err := s.updateSettings(ctx, func(v *Settings) error { v.BackgroundSupervisorAnnounced = true; return nil }); err != nil {
-		s.logf("supervise: note the background supervisor's announcement: %v", err)
-		return "" // told once it can be noted, never twice
-	}
 	return id
+}
+
+// announcedBackground takes the announcement's receipt out of ack, what the node confirms of a message delivered to
+// conversation: from the main conversation, for the background supervisor there is now, it is said for good.
+func (s *Service) announcedBackground(ctx context.Context, conversation string, ack []assistantwire.ViewErrorReceipt) []assistantwire.ViewErrorReceipt {
+	rest := ack[:0:0]
+	for _, r := range ack {
+		if r.ItemID != backgroundAnnounceReceipt {
+			rest = append(rest, r)
+			continue
+		}
+		cfg := s.settings(ctx)
+		if conversation != cfg.Main || r.Digest == "" || r.Digest != cfg.BackgroundSupervisor || cfg.BackgroundSupervisorAnnounced {
+			continue
+		}
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.BackgroundSupervisorAnnounced = true; return nil }); err != nil {
+			s.logf("supervise: note the background supervisor's announcement: %v; it is said again", err)
+		}
+	}
+	return rest
 }

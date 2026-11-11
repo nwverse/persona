@@ -153,9 +153,9 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 			criteriaWords(nil, todo.Supervision)), nil
 	}
 	s.taskCard(ctx, self, todo.ID)
-	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
-		"and close it with task_review. done_when %s. The agent was not told: if it should work to these criteria or report to you "+
-		"(report_to_supervisor), tell it with agent_send.", agentLabel(c), am.Name, todo.ID, todo.Title, criteriaWords(nil, todo.Supervision)), nil
+	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): %s. done_when %s. The agent was not told: "+
+		"if it should work to these criteria or report to its supervisor (report_to_supervisor), tell it with agent_send.",
+		agentLabel(c), am.Name, todo.ID, todo.Title, s.followUpWords(ctx, self), criteriaWords(nil, todo.Supervision)), nil
 }
 
 // adoptAgent puts agent c of machine am under conversation self's supervision (agent_supervise, agent_send with a
@@ -416,8 +416,8 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 		return fmt.Sprintf(" It already works for your task %s (%q): no new task was made, done_when %s.", h.todo.ID, h.todo.Title,
 			criteriaWords(nil, h.todo.Supervision)) + refused
 	}
-	return fmt.Sprintf(" It is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
-		"and close it with task_review. done_when %s.", h.todo.ID, h.todo.Title, criteriaWords(nil, h.todo.Supervision))
+	return fmt.Sprintf(" It is now your task %s (%q, its card is in the conversation): %s. done_when %s.", h.todo.ID, h.todo.Title,
+		s.followUpWords(ctx, h.self), criteriaWords(nil, h.todo.Supervision))
 }
 
 // sendFailed: the send did not go, so a task made for it is taken back (deleted, its link with it: a closed task's

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -221,12 +222,32 @@ func TestBackgroundSupervisorIsAnnouncedOnce(t *testing.T) {
 	if strings.Contains(s.Context(ctx, ContextParams{SessionID: bg}).Text, said) {
 		t.Fatal("announced to the background supervisor itself")
 	}
-	first := s.Context(ctx, ContextParams{SessionID: "conv1"}).Text
-	if !strings.Contains(first, said) || !strings.Contains(first, bg) || !strings.Contains(first, "assistant.main_supervises_own_tasks") {
-		t.Fatalf("the main conversation is not told:\n%s", first)
+	first := s.Context(ctx, ContextParams{SessionID: "conv1"})
+	if !strings.Contains(first.Text, said) || !strings.Contains(first.Text, bg) || !strings.Contains(first.Text, "assistant.main_supervises_own_tasks") {
+		t.Fatalf("the main conversation is not told:\n%s", first.Text)
 	}
-	if strings.Contains(s.Context(ctx, ContextParams{SessionID: "conv1"}).Text, said) {
-		t.Fatal("announced twice")
+	// Asking for the context tells nobody: the message may fail to go out, or go without it. It is said again until
+	// the node confirms a message that carried it.
+	again := s.Context(ctx, ContextParams{SessionID: "conv1"})
+	if !strings.Contains(again.Text, said) || s.settings(ctx).BackgroundSupervisorAnnounced {
+		t.Fatal("counted as said before any message carrying it was delivered")
+	}
+	receipt := assistantwire.ViewErrorReceipt{ItemID: backgroundAnnounceReceipt, Digest: bg}
+	if !slices.Contains(again.Receipts, receipt) {
+		t.Fatalf("no receipt for the node to confirm: %+v", again.Receipts)
+	}
+	// Not by another conversation's message, nor for a background supervisor that is not the one there is.
+	s.Context(ctx, ContextParams{SessionID: bg, Ack: []assistantwire.ViewErrorReceipt{receipt}})
+	s.Context(ctx, ContextParams{SessionID: "conv1", Ack: []assistantwire.ViewErrorReceipt{{ItemID: backgroundAnnounceReceipt, Digest: "another"}}})
+	if s.settings(ctx).BackgroundSupervisorAnnounced {
+		t.Fatal("confirmed by a receipt that is not the main conversation's own")
+	}
+	s.Context(ctx, ContextParams{SessionID: "conv1", Ack: again.Receipts})
+	if !s.settings(ctx).BackgroundSupervisorAnnounced {
+		t.Fatal("not said after the node confirmed the message")
+	}
+	if last := s.Context(ctx, ContextParams{SessionID: "conv1"}); strings.Contains(last.Text, said) || len(last.Receipts) != 0 {
+		t.Fatal("announced again after it was delivered")
 	}
 }
 
@@ -377,6 +398,17 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 		{"a review", superviseSignal{Todo: todo.ID, Kind: sigReview}, "bg1"},
 		{"a report", superviseSignal{Todo: todo.ID, Kind: sigReport}, "bg1"},
 		{"a stall", superviseSignal{Todo: todo.ID, Kind: sigStalled}, "bg1"},
+		{"a stop short", superviseSignal{Todo: todo.ID, Kind: sigIdle}, "bg1"},
+		{"a stop nobody judged", superviseSignal{Todo: todo.ID, Kind: sigUnjudged}, "bg1"},
+		{"a waiting agent", superviseSignal{Todo: todo.ID, Kind: sigNeedsYou}, "bg1"},
+		{"an interrupted turn", superviseSignal{Todo: todo.ID, Kind: sigInterrupted}, "bg1"},
+		{"a task nobody works on", superviseSignal{Todo: todo.ID, Kind: sigOrphaned}, "bg1"},
+		{"a task past its clock", superviseSignal{Todo: todo.ID, Kind: sigOverdue}, "bg1"},
+		{"a parking that is due", superviseSignal{Todo: todo.ID, Kind: sigParkedDue}, "bg1"},
+		{"an inbox message", superviseSignal{Todo: todo.ID, Kind: sigInbox}, "bg1"},
+		{"a decision to recheck", superviseSignal{Todo: todo.ID, Kind: sigRecheck}, "bg1"},
+		{"a decision nobody can answer", superviseSignal{Todo: todo.ID, Kind: sigUndecidable}, "bg1"},
+		{"a decision the owner cannot answer", superviseSignal{Todo: todo.ID, Kind: sigOwnerCannot}, "bg1"},
 		{"a failed start", superviseSignal{Todo: todo.ID, Kind: sigFailed}, "conv1"},
 		{"a retried start", superviseSignal{Todo: todo.ID, Kind: sigStarted}, "conv1"},
 		{"an escalation", superviseSignal{Todo: todo.ID, Kind: sigEscalated}, "conv1"},
@@ -544,7 +576,7 @@ func TestGoldenBackgroundSupervisor(t *testing.T) {
 			{ID: "t1", Title: "修登录崩溃", Kind: sigReview, Machine: "Mac", Session: "a1b2c3d4", DoneWhen: []string{"PR 合并到 main"}, Last: "做完了，PR 已合并"},
 			{ID: "t2", Title: "补测试", Kind: sigAsk, Asks: []prompts.SuperviseAsk{{ID: "ix1", Kind: proto.IxQuestion, Machine: "Mac", Session: "b2c3d4e5", Text: "用哪个分支？"}}},
 		})}))
-	golden(t, "supervise.background_escalated", prompts.RenderSupervise(prompts.Supervise{Escalated: true, Entries: []prompts.SuperviseEntry{
+	golden(t, "supervise.background_escalated", prompts.RenderSupervise(prompts.Supervise{Escalated: true, BackgroundEscalated: true, Entries: []prompts.SuperviseEntry{
 		{ID: "t1", Title: "修登录崩溃", Kind: sigEscalated, Background: true, Detail: "要不要顺手改 iPhone 横屏", Recommend: "先只修 iPad"}}}))
 
 	bare := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
@@ -564,5 +596,74 @@ func TestGoldenBackgroundSupervisor(t *testing.T) {
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &yes })
 	if got := s.claudeMD(context.Background(), "server", false); got != off {
 		t.Fatal("with the setting on the CLAUDE.md is not what it was before the background supervisor")
+	}
+}
+
+// A manager that just started answers from an empty session list until the assistant's machine has connected and
+// listed: that is no word on the background supervisor. It is not replaced, and what is for it queues until the
+// machine lists it; the main conversation gets nothing.
+func TestBackgroundSupervisorIsNotGoneBeforeItsMachineListed(t *testing.T) {
+	s, f, _ := newBackgroundService(t)
+	ctx := context.Background()
+	old := time.Now().Add(-time.Hour).UTC()
+	setSettings(t, s, func(v *Settings) {
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID, v.BackgroundSupervisorAt = "bg1", "server", &old
+	})
+	f.setSessions("server") // nothing listed yet
+	if !s.backgroundThere(ctx, s.settings(ctx), "bg1") {
+		t.Fatal("gone by a list its machine has not sent yet")
+	}
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "做完了", 0)
+	waitFor(t, "the message queued for the background supervisor", func() bool { return s.queuedFor("bg1") > 0 })
+	s.backgroundStranded(ctx)
+	if got := s.settings(ctx).BackgroundSupervisor; got != "bg1" {
+		t.Fatalf("the background supervisor was replaced by %q", got)
+	}
+	if n := len(conversationStarts(f)); n != 0 {
+		t.Fatalf("%d conversation(s) started", n)
+	}
+	if got := f.noticesTo("conv1"); len(got) != 0 || s.queuedFor("conv1") != 0 {
+		t.Fatalf("the main conversation got its message: %q", got)
+	}
+	listBackground(t, s, f, "bg1")
+	waitFor(t, "the message delivered once it is listed", func() bool { return len(f.noticesTo("bg1")) == 1 })
+
+	// Listed without it by a machine that lists the main conversation: now it is gone.
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	if s.backgroundThere(ctx, s.settings(ctx), "bg1") {
+		t.Fatal("still there though its machine lists without it")
+	}
+	// A machine that is not connected says nothing either.
+	f.mu.Lock()
+	f.devices = []Device{{ID: "server", Name: "server"}, {ID: "box", Name: "box", Online: true, Reachable: true}}
+	f.mu.Unlock()
+	if !s.backgroundThere(ctx, s.settings(ctx), "bg1") {
+		t.Fatal("gone by the list of a machine that is not connected")
+	}
+}
+
+// A supervision message queued for a background supervisor before the manager restarted has no signals in memory to
+// tell again, and its deduplication entries would keep them from going out: when that background supervisor is gone,
+// the message itself moves to the main conversation instead of being dropped.
+func TestBackgroundSupervisorGoneAfterRestartKeepsItsQueuedMessage(t *testing.T) {
+	s, f, _ := newBackgroundService(t)
+	ctx := context.Background()
+	old := time.Now().Add(-time.Hour).UTC()
+	setSettings(t, s, func(v *Settings) {
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID, v.BackgroundSupervisorAt = "gone1", "server", &old
+	})
+	if s.queueRelay("gone1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "📋 督办：重启前排队的", At: time.Now().UTC()}) == 0 {
+		t.Fatal("could not queue for the old background supervisor")
+	}
+	s.backgroundStranded(ctx)
+	waitFor(t, "the message in the main conversation", func() bool {
+		return slices.ContainsFunc(f.noticesTo("conv1"), func(n string) bool { return strings.Contains(n, "重启前排队的") })
+	})
+	if s.queuedFor("gone1") != 0 {
+		t.Fatal("the old background supervisor's queue was kept")
+	}
+	if got := f.noticesTo("gone1"); len(got) != 0 {
+		t.Fatalf("something was sent to the conversation that is gone: %q", got)
 	}
 }

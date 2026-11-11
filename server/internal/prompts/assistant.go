@@ -570,6 +570,9 @@ type Supervise struct {
 	// Background: with Leader, it goes to the background supervisor (#4927): the leader's message, for tasks other
 	// conversations handed out, whose cards go from it to the user.
 	Background bool
+	// BackgroundEscalated: with Escalated, one of those entries is the background supervisor's needs_user (#4927): no
+	// leader is named for it.
+	BackgroundEscalated bool
 	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
 	// Overdue: an entry is a task past its brief's clock (#3822).
