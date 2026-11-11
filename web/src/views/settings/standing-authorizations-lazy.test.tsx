@@ -47,7 +47,10 @@ it("keeps the other settings groups when the standing authorizations import fail
   const root = createRoot(host);
   try {
     await act(async () => root.render(<PageBoundary page="settings"><AssistantSettings /></PageBoundary>));
-    await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull(), { timeout: 20_000 });
+    await vi.waitFor(async () => {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    }, { timeout: 20_000 });
     expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
     expect(host.textContent).toContain(t("settings-nav.tab_model_config"));
     expect(host.querySelector(`select[aria-label="${t("settings-assistantsettings.default_permissions")}"]`)).not.toBeNull();
