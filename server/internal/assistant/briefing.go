@@ -79,6 +79,9 @@ type briefFacts struct {
 	// Briefs, BriefsDone: the pieces of work handed out that need the owner or changed since the last briefing, and
 	// those that ended since, from their briefs (task_brief_digest.go), for the model only.
 	Briefs, BriefsDone []prompts.BriefTask
+	// Day: the evening routine's today's all-day recording (briefing_day.go), for the model only; nil for any other
+	// run, or without one today.
+	Day *prompts.BriefDay
 }
 
 // briefFactsAt works out the facts for a run that starts at now. self is the routine that is running: its own earlier
@@ -129,6 +132,9 @@ func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) 
 	f.Confirmations = s.briefConfirmationsAt(ctx, now, loc)
 	f.ConfirmationLines = s.confirmationLines(l, f.Confirmations)
 	f.Leaders = s.briefLeaders(ctx, now)
+	if self == "evening" { // the day's recap was written for it, 30 minutes before (kb_day.go)
+		f.Day = s.briefDay(ctx, now, loc)
+	}
 	return f
 }
 
@@ -371,7 +377,7 @@ func (f *briefFacts) modelText() string {
 	b.ConfirmationSummary = f.Confirmations.summary(f.l)
 	b.Confirmations = f.ConfirmationLines
 	b.ProgressTotal, b.Leaders = f.ProgressTotal, f.Leaders
-	b.Briefs, b.BriefsDone = f.Briefs, f.BriefsDone
+	b.Briefs, b.BriefsDone, b.Day = f.Briefs, f.BriefsDone, f.Day
 	for _, p := range f.Progress {
 		b.Progress = append(b.Progress, prompts.BriefProgress{Title: clip(oneLine(p.Title), 60), Stage: p.Stage})
 	}
