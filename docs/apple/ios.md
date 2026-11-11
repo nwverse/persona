@@ -1,5 +1,7 @@
 # iOS / watchOS App
 
+「连接 hub」默认提供密码登录：输入 HTTPS 地址，在系统登录窗口输入管理员设置的连接密码，通过一次性授权码和 PKCE 返回 App。密码使用 OPAQUE 验证，原文不上传；设备凭据沿用现有独立撤销机制。扫码和手动 token 入口仍可切换使用。详见 [协议](../protocol/protocol.md#客户端密码登录)。
+
 XcodeGen source is `apple/project.yml`, generating `apple/Persona.xcodeproj` (generated files are not committed). iOS 26 / watchOS 10 (the watch App must install on older watches stuck on watchOS 10), Swift 6, default MainActor isolation. Depends on MarkdownUI.
 Performance rules, budgets and how to measure: `docs/apple/performance.md` (read before changing `apple/` code).
 Bundle ID comes from configuration (`app.bundle_id`, watch `<id>.watchkitapp`, `docs/operations/config.md`). The UI supports English, Simplified Chinese and Japanese (`en` / `zh-Hans` / `ja`).
