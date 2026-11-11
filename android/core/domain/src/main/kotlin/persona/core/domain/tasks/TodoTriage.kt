@@ -282,9 +282,11 @@ fun triageTodos(
     restored: Map<String, Long> = emptyMap(),
     quiet: Boolean = true,
     zone: ZoneId = ZoneId.systemDefault(),
+    // a caller that narrows the list (search, a filter) passes the set decided on every to-do (#3713)
+    known: Set<String>? = null,
 ): TriageResult {
     val list = if (quiet) todos else todos.filter { !it.quiet }
-    val superseded = supersededFailedStarts(list)
+    val superseded = known ?: supersededFailedStarts(list)
     val placed = list.associate { it.id to it.triage(lookup, now, restored[it.id] ?: 0, zone, superseded = it.id in superseded) }
 
     val roots = relatedRoots(list)
