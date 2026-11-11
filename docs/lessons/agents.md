@@ -731,6 +731,22 @@ either one.
 - To check that a key really arrives, run a control: a plain Enter on the empty prompt left the queue as it was, while `ctrl+enter`
   (herdr's key name, or the CSI u bytes `ESC [13;5u`) sent it. Confirm in the transcript (`queue-operation remove`), not only on screen.
 
+## A fullscreen Claude Code scrolled up has its hints off screen (2026-11-11, #4537, 2.1.321)
+
+"Send now" was refused as `send_now_unrecognized` although 2.1.321 still draws `ctrl+enter to send now`. Every machine runs
+Claude Code with `"tui": "fullscreen"`, where the queued message and its hint scroll with the transcript. Scrolled up, the
+screen shows only `Jump to bottom (ctrl+End) ↓` and `❯ Press up to edit queued messages`, so the node, which reads the visible
+screen, saw a queue in the transcript and no hint.
+
+- Before concluding a hint changed, read the version's bundled code and capture the screen. Here the text was built from the
+  binding (`${keys} to send now`) and was unchanged from 2.1.311; what differed was where it was drawn.
+- A screen-reading check has to consider that the user may have scrolled. In fullscreen, Claude Code's own `scroll:bottom`
+  (ctrl+End, the key the pill names on Linux) brings the end back without sending anything, and the node reads again.
+- herdr 0.9's `send-keys` rejects End, Home and the page keys (`invalid_key`). `pane.send_text` writes their xterm bytes as
+  they are (`ESC [1;5F` for ctrl+End), which Claude Code reads as the key.
+- Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
+  that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
+
 ## Antigravity planner message completion can be progress narration (#3389)
 
 A text-only `PLANNER_RESPONSE` with `status: DONE` can precede more reasoning and tools. It closes that message, not the
