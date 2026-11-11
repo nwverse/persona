@@ -1104,6 +1104,10 @@ iOS shell and regular-width card inputs retain their original tree: single-line�
 
 `PerfTestCase.swift` 统一 `launchPinned()`、配对、模拟器系统提示处理、原始 frame 附件及各测量入口。需要 mock 的性能测试在普通 UI 测试中跳过；跳过不算测量成功。当前清单覆盖本轮盘点的主要场景，不等于 App 的每个设置叶子页都已有独立性能测量。
 
+Every measured run also has `main_thread_blocks`: the DEBUG watchdog's count, longest duration and five longest sampled
+main-thread stacks (#4264). `PerfAssistantTests/testWelcomePageIdle` fails when this count is not zero; the other scenarios
+attach the evidence without enforcing the 100 ms budget. A missing report fails that assertion rather than passing as no blocks.
+
 机器和收件箱的 `measureVerifiedGlide()` 在 App 内固定持有一个真正可滚动的 UIKit 列表，避免 XCUITest 元素位置查询随树变化漂移；一轮显式 warm-up 加 N 轮正式样本，并验证样本归属、帧数、时长和实际位移。其他手势、输入和跳转入口仍是诊断测量：XCUITest 查询/手势开销混在窗口内，报告标成 `legacy_unverified`，不能作纯 App 的 60 FPS 证据。
 
 `scripts/app/perf_report.py` 优先导出 xcresult 原始 frame 附件，保存各轮与来源；缺样、失败、工具错误不写成通过。FPS 是 CADisplayLink 回调 cadence，不是 GPU 呈现帧率；hitch 是自定义迟到时间，run-loop busy 不是 CPU 时间。看最低 cadence、最差 hitch 和最长帧，不能只看中位数。`--final-acceptance` 只检查样本完整性，不证明稳定 60 FPS。回归测试：`python3 scripts/app/test_perf_report.py`。

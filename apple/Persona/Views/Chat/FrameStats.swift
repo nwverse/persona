@@ -138,9 +138,11 @@ import UIKit
             Task { await runGlide() }
         } else if name == start {
             if stats.running { stats.stop(label: "probe") }
+            MainThreadWatchdog.shared.reset()
             stats.start()
         } else if name == stop, stats.running {
-            let result = stats.stop(label: "probe")
+            var result = stats.stop(label: "probe")
+            result["main_thread_blocks"] = MainThreadWatchdog.shared.report
             guard let hub = AppModel.shared.api?.config,
                   let body = try? JSONSerialization.data(withJSONObject: result) else { return }
             var r = URLRequest(url: hub.url.appending(path: "mock/frames"))
