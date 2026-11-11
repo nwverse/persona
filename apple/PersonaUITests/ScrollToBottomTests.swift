@@ -426,9 +426,11 @@ final class ScrollToBottomTests: XCTestCase {
         XCTAssertEqual(r0.mode, "reading", "read up, let go:\n\(describe(read))")
         XCTAssertGreaterThan(r0.listGap ?? 0, screen * 3 / 2, "far enough up that ↓ leaps a screen short of the newest first")
         XCTAssertEqual(r0.storedRow, true, "the scrolling stored a row in SwiftUI's position, as after a row was opened on the phone")
-        // A reply streams in at the newest end (a delta every 80 ms for about 5 s, then written), with the agent's own
-        // steps every 2 s (MOCK_STREAM): held back while the user reads.
-        say(hub, "第 13 轮的结果先发你：重试和小组件都改好了，截图在上面，测试都过了。\n\n还剩一件：标题截断的那张图我再补一张深色的。")
+        // A reply streams in at the newest end (a delta every 80 ms for about 3 s) and is still being written when ↓ is
+        // tapped, as on the phone: nothing new is written meanwhile. A written line took the list to the newest end, and
+        // hid the bug: the list was put back where the user read, and 0.65 s later the reply, written, brought it down.
+        let reply = "第 13 轮的结果先发你：重试和小组件都改好了，截图在上面，测试都过了。\n\n还剩一件：标题截断的那张图我再补一张深色的。"
+        say(hub, reply, steps: 40, upto: 50)
         sleep(2)
         XCTAssertTrue(waitFor(seconds: 2) { $0.frozen == true && $0.arrow == true }, "held back while reading, ↓ showing")
         XCTAssertTrue(arrowButton.waitForExistence(timeout: 2) && arrowButton.isHittable, "↓ to tap")
@@ -441,7 +443,7 @@ final class ScrollToBottomTests: XCTestCase {
         XCTAssertLessThanOrEqual(end.listGap ?? .max, 1, "the scroll view is at its newest end:\n\(describe(s))")
         XCTAssertEqual(end.lastShown, true, "the newest line is on screen:\n\(describe(s))")
         XCTAssertFalse(arrowButton.exists, "↓ gone")
-        // Once there, it stays there while the reply streams on and is written: never put back up.
+        // Once there, it stays there while the reply is being written: never put back up.
         if let at = s.firstIndex(where: { ($0.r.listGap ?? .max) <= 1 }) {
             let away = s[at...].filter { ($0.r.listGap ?? 0) > 1 }
             XCTAssertTrue(away.isEmpty, "pulled away from the newest end after ↓ got there:\n\(describe(s))")
@@ -450,15 +452,23 @@ final class ScrollToBottomTests: XCTestCase {
         }
         XCTAssertEqual(end.slips ?? -1, 0, "↓ landed and was taken away again (the second look had to bring it back)")
         XCTAssertFalse(s.contains { $0.r.mode == "reading" }, "reading again after ↓:\n\(describe(s))")
-        XCTAssertGreaterThan(end.items, r0.items, "the agent's steps and the reply came in")
         consistent("13", s)
+        // The reply is written: still at the newest end, its line on screen.
+        say(hub, reply, steps: 1, ms: 0)
+        let w = record("13 written", seconds: 3, shots: 1)
+        let written = try XCTUnwrap(w.last?.r)
+        XCTAssertGreaterThan(written.items, r0.items, "the reply was written")
+        XCTAssertFalse(w.contains { ($0.r.listGap ?? 0) > 1 }, "away from the newest end as the reply was written:\n\(describe(w))")
+        XCTAssertEqual(written.lastShown, true, "the written reply is on screen:\n\(describe(w))")
     }
 
-    /// A reply streamed into the open chats (`/mock/say`): a delta every 80 ms, as the hub sends them, then written.
-    private func say(_ hub: String, _ text: String) {
+    /// A reply streamed into the open chats (`/mock/say`): a delta every `ms` (80, the hub's pace), then written; with
+    /// `upto`, streamed to its first `upto` characters and left open there, unwritten, until the next call.
+    private func say(_ hub: String, _ text: String, steps: Int = 60, ms: Int = 80, upto: Int = 0) {
         var c = URLComponents(string: hub + "/mock/say")!
         c.queryItems = [URLQueryItem(name: "text", value: text), URLQueryItem(name: "stream", value: "1"),
-                        URLQueryItem(name: "steps", value: "60"), URLQueryItem(name: "ms", value: "80")]
+                        URLQueryItem(name: "steps", value: "\(steps)"), URLQueryItem(name: "ms", value: "\(ms)"),
+                        URLQueryItem(name: "upto", value: "\(upto)")]
         _ = try? Data(contentsOf: c.url!)
     }
 

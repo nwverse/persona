@@ -324,7 +324,7 @@ The behavior before #1046 (several separate truths), its measurements and the pl
 | 10 | Several pending cards over the chat (#939) | At rest: no ↓, following; scrolled up, ↓ sits clear of the cards and returns to latest |
 | 11 | Flick up from latest and tap ↓ while the list still glides (#3027) | The glide stops at once; at latest within 0.7 s, following, no ↓, never reading again |
 | 12 | The same in Persona's chat while its turn runs | As 11, then keeps following the steps the turn adds |
-| 13 | A long Agent chat at work (tall messages, screenshots): a work line opened and folded, then read a few screens up, let go at rest, a reply streams meanwhile, then tap ↓ (#4788) | At the newest end and staying there while the reply streams on, its newest line on screen, ↓ gone; never put back where the user read |
+| 13 | A long Agent chat at work (tall messages, screenshots): a work line opened and folded, then read a few screens up, let go at rest, a reply streams meanwhile and is still being written when ↓ is tapped, then written (#4788) | At the newest end and staying there while the reply is written, its newest line on screen, ↓ gone; never put back where the user read |
 
 ### How ↓ gets there (#3027)
 
