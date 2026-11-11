@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/bytemare/opaque"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/passwordpake"
 )
 
@@ -121,8 +121,8 @@ func (h *Hub) passwordLimited(w http.ResponseWriter, r *http.Request, count bool
 	return false
 }
 
-var pkceChallenge = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
-var pkceVerifier = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`)
+var pkceChallenge = lazyre.New(`^[A-Za-z0-9_-]{43}$`)
+var pkceVerifier = lazyre.New(`^[A-Za-z0-9._~-]{43,128}$`)
 
 func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 	open := http.NewServeMux()

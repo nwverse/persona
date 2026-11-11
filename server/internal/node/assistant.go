@@ -264,6 +264,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if !resume {
 		guest = guestFrom(ctx)
 	}
+	if mode == "" && guest == nil {
+		mode = st.AppMode
+		if mode == "" {
+			mode = n.assistantModeOf(id)
+		}
+		if mode == "" {
+			mode = proto.ModeBypass
+		}
+	}
 	if guest != nil {
 		if resume {
 			launcher, options = "", nil // it keeps what it started on (the hub sends none either)
@@ -370,7 +379,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		go func(id string) { snapc <- n.assistantContext(id) }(id)
 	}
 	if id == "" { // a new Codex conversation: the thread's id is Codex's to pick
-		if p, err = n.spawnCodex("", cwd, launcher, false, false, execution); err != nil {
+		if p, err = n.spawnCodexWithMode("", cwd, launcher, false, false, mode, execution); err != nil {
 			return "", err
 		}
 		id = p.id
@@ -412,9 +421,6 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	}
 	n.noteModes(id, mode, effort)
-	if !resume {
-		n.persistModes(id, mode, effort) // the mode a new conversation was started in, as if set from the app
-	}
 	fresh := p == nil
 	if p == nil {
 		if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
@@ -433,6 +439,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		n.state.put(id, st)
 	}
 
+	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
 	n.noteAssistantRecoveryProcess(ctx, p)
 	live, commit := n.turnContext(id, <-snapc)
 	if p.agent == "codex" {
