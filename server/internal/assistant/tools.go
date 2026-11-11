@@ -359,8 +359,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Ultracode bool `json:"ultracode"`
 			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
 			Attachments []string `json:"attachments"`
+			// SecretEnv: environment variables the Agent gets from secret providers, by reference, after the user
+			// approves on the phone (secret_handoff.go).
+			SecretEnv map[string]string `json:"secret_env"`
 		}
 		_ = json.Unmarshal(args, &a)
+		if err := checkSecretEnvArg(args); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		am, ok := s.machineByName(ctx, a.Machine)
 		if !ok {
 			return "", fmt.Errorf("unknown machine %q (machines: %s)", a.Machine, s.machineIDs(ctx))
@@ -430,7 +436,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Ultracode {
 			where += " · ultracode"
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, args); err != nil {
+		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: no agent was started.", nil
@@ -463,6 +469,24 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if note != "" {
 			note = " Note: " + note + "."
 		}
+		// Secrets for this run (secret_handoff.go): checked, then asked on the card, for the computer and launcher it
+		// starts with; resolved and staged right before the start.
+		var hand *secretHandoff
+		approvedBy := ""
+		if len(a.SecretEnv) > 0 {
+			if hand, err = s.handoffPrepare(ctx, am.ID, am.Name, params, a.SecretEnv); err != nil {
+				return "", fmt.Errorf("%w; no agent was started", err)
+			}
+			tab, _ := params["tab_name"].(string)
+			by, answer, err := s.handoffApprove(ctx, machine, self, hand, tab, a.Cwd, a.Prompt)
+			if err != nil {
+				return "", err
+			}
+			if by == "" {
+				return answer, nil
+			}
+			approvedBy = by
+		}
 		if runs != "" {
 			note = " Preset " + tier + ": runs on " + runs + "." + note
 		}
@@ -492,12 +516,36 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		knownIDs := s.knownSessionIDs(lctx, am.ID)
 		lcancel()
 		s.setPlanThen(ctx, am.ID, params)
+		var values *handoffValues
+		if hand != nil {
+			var answer string
+			if values, answer = s.handoffResolve(sctx, hand, approvedBy); values == nil {
+				return answer, nil
+			}
+			defer values.wipe()
+			if params["secret_ticket"], err = values.stage(sctx); err != nil {
+				return "", fmt.Errorf("the secrets could not be staged on %s: %v; no agent was started", am.Name, err)
+			}
+			if params["ultracode"] != true {
+				values.wipe() // no retry can need them again
+			}
+			note += hand.granted(approvedBy)
+		}
 		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
 			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
 			note += " Note: started without ultracode (" + reason + ")." // an answer lost on the way still says so
 			err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+			// Refused before the node took the ticket, the same ticket starts it; one the refused start took and
+			// dropped is gone, and the values are staged once more for this start.
+			if values != nil && refusedWith(err, proto.CodeSecretEnvGone) {
+				if params["secret_ticket"], err = values.stage(sctx); err != nil {
+					return "", fmt.Errorf("the secrets could not be staged on %s again: %v; no agent was started", am.Name, err)
+				}
+				err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+			}
 		}
+		values.wipe()
 		if err != nil {
 			s.recordStartFailure(ctx, am.ID, launcher, err)
 			if startResultUnknown(err) {
@@ -634,6 +682,9 @@ type question struct {
 	answer chan proto.Resolution
 	// userSpoke is set (under questions.mu) when the question was withdrawn because the user wrote in the conversation.
 	userSpoke bool
+	// later: asked with wait false (ask_later.go): no call waits on answer, its end is told to the conversation as a
+	// message; telling (under questions.mu) while that is being done.
+	later, telling bool
 }
 
 // errUserSpoke is what ask returns for a question withdrawn because the user wrote in the conversation.
@@ -653,6 +704,8 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 			MultiSelect bool                   `json:"multiSelect"`
 			Options     []proto.QuestionOption `json:"options"`
 		} `json:"questions"`
+		// Wait false: the card goes up and the tool returns at once (ask_later.go). Unset is true.
+		Wait *bool `json:"wait"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || len(a.Questions) == 0 {
 		return "", fmt.Errorf("questions are required")
@@ -701,6 +754,9 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
 	s.promoteSupervision(sessionID)
+	if a.Wait != nil && !*a.Wait {
+		return s.askLaterStart(ctx, ix)
+	}
 	r, err := s.ask(ctx, ix)
 	if errors.Is(err, errUserSpoke) {
 		return prompts.RenderQuestionUserSpoke(), nil
@@ -775,7 +831,8 @@ func (s *Service) withdrawAskUser(session string) {
 	s.questions.mu.Lock()
 	var mine []*question
 	for _, q := range s.questions.m {
-		if q.ix.SessionID == session && q.ix.ToolName == "ask_user" && !q.userSpoke {
+		// One asked without waiting holds no turn: its card stays up and can still be answered (ask_later.go).
+		if q.ix.SessionID == session && q.ix.ToolName == "ask_user" && !q.userSpoke && !q.later {
 			q.userSpoke = true
 			mine = append(mine, q)
 		}
@@ -794,8 +851,10 @@ func (s *Service) withdrawAskUser(session string) {
 	}
 }
 
-// pendingQuestions are the questions out to the user, oldest first.
+// pendingQuestions are the questions out to the user, oldest first: the ones a call waits on, and the ones asked
+// without waiting (those a manager before this one left are read back first, ask_later.go).
 func (s *Service) pendingQuestions() []proto.Interaction {
+	s.loadAskLater(context.Background())
 	s.questions.mu.Lock()
 	defer s.questions.mu.Unlock()
 	out := []proto.Interaction{}
@@ -834,6 +893,10 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 		return ActionResult{}, errInvalidQuestionCancel
 	}
 	r = honest(q.ix, r)
+	if q.later { // asked without waiting: its end goes to the conversation as a message (ask_later.go)
+		err := s.askLaterEnded(ctx, q, r)
+		return ActionResult{OK: err == nil}, err
+	}
 	select {
 	case q.answer <- r:
 	default: // answered already
