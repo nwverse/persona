@@ -71,10 +71,9 @@ class PhoneConfirmations(context: Context) : AutoCloseable {
             queue.addLast(entry)
             if (current == null) promoteLocked()
         }
-        // Post the notification outside the lock: `NotificationManager.notify` may block on a system call and we
-        // must not hold the gate while it does. A concurrent resolve()/dismiss() between promote and this call is
-        // fine because by then `callbacks`/`dismissals` no longer carry this token and the cancel below clears it.
-        maybeNotify(entry)
+        // Settle the current card's background notification outside the lock (no-op if this entry is still
+        // queued). `NotificationManager.notify` may block on a system call and must not run under the gate.
+        notifyCurrent()
 
         return try {
             entry.deferred.await()
@@ -90,6 +89,8 @@ class PhoneConfirmations(context: Context) : AutoCloseable {
                 }
             }
             manager.cancel(token, 0)
+            // The promoted card (if any) needs its own notification attempt.
+            notifyCurrent()
             throw cancelled
         }
     }
@@ -108,6 +109,8 @@ class PhoneConfirmations(context: Context) : AutoCloseable {
         }
         manager.cancel(token, 0)
         entry.deferred.complete(if (allowed) PhoneConfirmation.Allowed else PhoneConfirmation.Denied)
+        // Promote-then-notify: the next card only becomes visible through this path.
+        notifyCurrent()
     }
 
     /** The notification of [token] was swiped away: end only that one (#3861). */
@@ -123,36 +126,19 @@ class PhoneConfirmations(context: Context) : AutoCloseable {
         }
         manager.cancel(token, 0)
         entry.deferred.complete(PhoneConfirmation.Dismissed)
+        notifyCurrent()
     }
 
     fun setForeground(value: Boolean) {
         foreground = value
-        val entry = synchronized(lock) { current } ?: return
         if (value) {
-            // Back in the foreground: the dialog takes over from the notification.
+            // Back in the foreground: the dialog takes over from the notification for the current card only.
+            val entry = synchronized(lock) { current } ?: return
             manager.cancel(entry.token, 0)
         } else {
-            // Going to background: try the notification for the current card only. Queued entries wait their turn.
-            if (!showNotification(entry)) {
-                // No notifications: end just this one as NotShown. Others queue behind it and try when promoted.
-                failEntry(entry, PhoneConfirmation.NotShown)
-            }
-        }
-    }
-
-    /** Finish [entry] with [outcome], promoting the next queued one if it was current. */
-    private fun failEntry(entry: Entry, outcome: PhoneConfirmation) {
-        val accepted = synchronized(lock) {
-            if (current != entry) return
-            current = null
-            _pending.value = null
-            callbacks.remove(entry.token); dismissals.remove(entry.token)
-            promoteLocked()
-            true
-        }
-        if (accepted) {
-            manager.cancel(entry.token, 0)
-            entry.deferred.complete(outcome)
+            // Going to background: settle the current card's notification. notifyCurrent() walks the queue,
+            // ending entries as NotShown one by one until a card can post or the queue is empty.
+            notifyCurrent()
         }
     }
 
@@ -164,13 +150,32 @@ class PhoneConfirmations(context: Context) : AutoCloseable {
         _pending.value = PendingPhoneConfirmation(next.token, next.summary)
     }
 
-    /** Post the background notification for [entry] if we are not in the foreground. */
-    private fun maybeNotify(entry: Entry) {
-        if (foreground) return
-        // If the entry is no longer current by the time we get here (a fast resolve/dismiss/close), skip.
-        val isCurrent = synchronized(lock) { current == entry }
-        if (!isCurrent) return
-        if (!showNotification(entry)) failEntry(entry, PhoneConfirmation.NotShown)
+    /**
+     * Settle the current card's background notification, outside the lock. Every path that changes `current`
+     * (confirm registering, resolve, dismiss, a cancelled awaiter, setForeground(false)) ends here, so a
+     * promoted card always gets its own notification attempt instead of waiting forever with only a StateFlow
+     * value. If notifications are unavailable the current entry finishes as [PhoneConfirmation.NotShown] and
+     * the next one is promoted, looping until a card can post or the queue drains. In the foreground the
+     * in-app dialog is the surface and nothing is posted.
+     */
+    private fun notifyCurrent() {
+        while (true) {
+            val entry = synchronized(lock) { if (closed) null else current } ?: return
+            if (foreground) return
+            if (showNotification(entry)) return
+            val promoted = synchronized(lock) {
+                if (closed || current != entry) return
+                current = null
+                _pending.value = null
+                callbacks.remove(entry.token); dismissals.remove(entry.token)
+                promoteLocked()
+                true
+            }
+            if (!promoted) return
+            manager.cancel(entry.token, 0)
+            entry.deferred.complete(PhoneConfirmation.NotShown)
+            // Loop: the newly promoted card also needs its own notification attempt.
+        }
     }
 
     private fun showNotification(entry: Entry): Boolean {
@@ -209,7 +214,15 @@ class PhoneConfirmations(context: Context) : AutoCloseable {
             context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { intent ->
                 builder.setContentIntent(PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             }
-            manager.notify(entry.token, 0, builder.build()); true
+            beforeNotify?.invoke(entry.token)
+            manager.notify(entry.token, 0, builder.build())
+            // A resolve/dismiss/close that landed while the notification was being built and posted must not
+            // leave the answered card's notification on screen: the answer path already ran `cancel` before
+            // the post landed, so cancel again now that the post has happened. The token is already gone from
+            // `callbacks`/`dismissals`, so even if the user somehow taps it nothing answers the wrong card.
+            val stillCurrent = synchronized(lock) { current == entry && !closed }
+            if (!stillCurrent) manager.cancel(entry.token, 0)
+            true
         } catch (_: Exception) { false }
     }
 
@@ -241,6 +254,10 @@ class PhoneConfirmations(context: Context) : AutoCloseable {
         internal const val CHANNEL = "phone_tools_confirmation"
         internal val callbacks = ConcurrentHashMap<String, (Boolean) -> Unit>()
         internal val dismissals = ConcurrentHashMap<String, () -> Unit>()
+        /** Test seam: invoked with the token right before `NotificationManager.notify` posts a confirmation.
+         *  Lets a test resolve or close that entry mid-post to exercise the resurrect-then-cancel path in
+         *  `showNotification`. Always null in production. */
+        internal var beforeNotify: ((String) -> Unit)? = null
     }
 }
 
