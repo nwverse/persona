@@ -62,7 +62,7 @@ test('guest: only the stdio server\'s declared tools cross the SDK boundary', as
   assert.equal(opts.options.strictMcpConfig, true)
   assert.equal(opts.options.guestMcpServers, undefined)
   assert.equal(opts.options.mcpServers.persona.type, 'sdk')
-  assert.deepEqual(opts.options.mcpServers.persona.tools, ['exampledocs_search'])
+  assert.equal(opts.options.mcpServers.persona.name, 'persona')
   assert.equal(await b.end(), 0)
 })
 

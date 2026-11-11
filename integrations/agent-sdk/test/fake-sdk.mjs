@@ -33,7 +33,7 @@ export function query({ prompt, options }) {
   // its boundary for the bridge tests instead of serializing the SDK instance.
   const mcpServers = Object.fromEntries(Object.entries(rest.mcpServers ?? {}).map(([name, server]) => [name,
     server?.type === 'sdk'
-      ? { type: 'sdk', name: server.name, tools: Object.keys(server.instance._registeredTools) }
+      ? { type: 'sdk', name: server.name }
       : server,
   ]))
   send({ type: 'fake_options', options: { ...rest, mcpServers }, settings_file: file, env_keys: Object.keys(env ?? {}).length, has_stderr: typeof stderr === 'function' })

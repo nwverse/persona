@@ -14,10 +14,13 @@ test('guest MCP registers and invokes only its declared tools', async () => {
   try {
     assert.equal(server.type, 'sdk')
     assert.equal(server.name, 'persona')
-    const definitions = server.instance._registeredTools
-    assert.deepEqual(Object.keys(definitions), ['exampledocs_search'])
-    const answer = await definitions.exampledocs_search.handler({ query: 'synthetic' })
-    assert.deepEqual(answer.content, [{ type: 'text', text: 'synthetic:synthetic' }])
+    const messages = []
+    const transport = { send: (message) => messages.push(message) }
+    await server.instance.connect(transport)
+    await transport.onmessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    assert.deepEqual(messages[0].result.tools.map((definition) => definition.name), ['exampledocs_search'])
+    await transport.onmessage({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'exampledocs_search', arguments: { query: 'synthetic' } } })
+    assert.deepEqual(messages[1].result.content, [{ type: 'text', text: 'synthetic:synthetic' }])
   } finally {
     await close()
   }
