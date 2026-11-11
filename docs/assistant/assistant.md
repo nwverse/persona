@@ -38,7 +38,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Return on a schedule | `schedule_followup` (`at` once; `every: "30m"` repeats by interval) / `list_followups` / `cancel_followup`; when due, hub sends the prompt (starting with "⏰") into the original chat (`assistant.send` uses `--resume`), or starts a new one on failure |
 | Scheduled tasks | One table ("Scheduled tasks" below), default "Morning briefing" on weekdays 09:00 enabled, "Evening review" weekdays 21:30 disabled; normal "completion" push afterward (with the task's `facts` on, as `docs/extensions/bots.md` "Morning and evening briefings" says, Persona computes what waits and what failed, and the push is the counts). When told "every day / on weekday X at…", the assistant creates one with `schedule_routine` (marked "Created by Persona" in the App), deletes with `delete_routine`. With `facts` on, the briefing is also the daily digest of handed-out work, told from each task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): "On <date> you said: <their words>" (or who started it and its goal), where it stands in a line, what is needed from the owner, overdue and scope changes since the last briefing; what ended since is listed once with each criterion's result, and work that needs nothing and has not changed is left out. The mark of the last briefing is the setting `assistant.brief_digest_at`; a list has at most 8 rows |
 | Run history | Every run (chat started successfully / failed to start / skipped because downtime missed it) is stored in settings `assistant.runs` (latest 200), `GET /api/v1/assistant/runs[?ref=]`; scheduled tasks include `last_status` |
-| Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt |
+| Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt. A run into a conversation the owner is talking in waits for them, 5 minutes past its time at most ("Messages from the system wait for the owner") |
 | Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them |
 | Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls follow the session permission mode; assistant conversations default to `bypassPermissions` when no manager or conversation mode is selected |
 | Agents | `agents_list` / `agent_read` / `agent_send` / `agent_start`: use hub session state (`decorated`) and node `session.items` / `session.send` / `session.start` directly, not ssh. With `worktree.branch`, `agent_start` first has the computer's engine make the worktree through node `worktree.prepare` / `worktree.create` (the workspace found by `cwd`; herdr's or Orca's own, so Orca and the app list it), then starts the Agent in it, instead of the Agent running `git worktree add` itself (#5325, `assistant/agent_worktree.go`) |
@@ -482,6 +482,7 @@ Prompts live in `server/internal/prompts/assistant/` (`docs/assistant/prompts.md
   A runtime's launcher counts only when it says `assistant`. A Paseo provider is no shell command, so it would fail every message with "launcher missing".
   A Persona-managed Codex launcher does not count either: `personad launch` execs `codex` itself, past the `app-server` wrapper the main chat adds, and waits as an interactive Codex.
   A message that picks such a launcher is refused with the reason. A chat left on one moves to the main chat's launcher, and the web chips drop a stale pick and say so.
+  When the main chat's configured launcher itself can't run there (gone from the computer, or not one for the assistant), it gives way only to a launcher of the same agent kind (`finishMainChatModel`, #4659): for Claude, plain `claude` first when the computer reported Claude Code and the user did not hide it, then the main chat's list in order; never Codex for Claude or the other way round. A launcher whose latest health check failed (signed out, out of quota) is skipped. The configured model stays when the substitute's model list has it. With no such launcher the message is refused (`assistant-start.launcher_no_substitute`), pointing to Model configuration › Main chat. A hidden launcher is not gone: the configuration that names it keeps running it.
 - **Don't switch while busy** (#1554): while a process answers or has background tasks, changed launcher / model messages still go to that running process (session state records the actual one);
   restart with the new selection on the first idle message. Previously it rejected with "Model configuration changed; wait until the current task ends", trapping users when the assistant kept creating background tasks.
   node's post-restart "Background tasks were lost" message also first asks hub (`assistant.model`, forwarded to assistant `assistant.send_params`, same as phone sends), not starting from the session's last model.
@@ -808,6 +809,128 @@ the way quiet supervision rounds already were (#1988, `docs/assistant/unified-en
   Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
   notify or push is unchanged.
 
+## Messages from the system wait for the owner (#4925)
+
+The owner comes first in every assistant conversation, the main chat and leader conversations alike
+(`docs/design/proposals/main-chat-availability.md` 3b rules 1 and 3; `server/internal/assistant/relay_presence.go`).
+What the system puts into a conversation (supervision messages, task notices, late `ask_user` answers, messages from
+other conversations) goes through one per-conversation queue (`assistant.relay`, "Managing its own conversations"):
+
+- **Owner present, system messages wait.** The owner is present in a conversation for 2 minutes after their last message
+  to it (`ownerPresentFor`); the time is taken from `session.user_spoke` and stored as `assistant.relay`'s `spoke`. While
+  they are present nothing from the system is delivered there, whether the conversation is idle or not: a message that
+  would have gone straight into an idle conversation is queued instead.
+- **Nothing hangs.** A message that waits on a decision is held for a present owner at most 5 minutes from when it queued
+  (`relayDecisionMax`, the time a card stays on one rung, `askHoldFor`), however long the owner keeps talking. These are a
+  late `ask_user` answer, a supervision message carrying a signal somebody waits on (the queued message's `urgent`,
+  `waitsOnDecision`: the signals supervision sends in its 2-minute gap, `docs/assistant/unified-entry.md` "Supervision",
+  except `started` and a `report` that is neither a question nor blocked, which are told soon but wait on nobody), and a
+  task notice of state `needs`, `interrupted` or `failed`.
+- **What ends the hold.** A timer per conversation drains its queue when the first hold ends. The supervision tick (30
+  seconds) drains any conversation whose hold ended without a timer: after a manager restart (the queue and `spoke` are
+  in settings, the timers are not), or when the conversation list could not be read at that moment. A conversation that is
+  on a turn then gets its queue when the turn ends, as before.
+- **The queue is ranked.** The next message to go is the best rank among those not held, the one that queued first
+  within a rank: (1) late `ask_user` answers, (2) messages that wait on a decision, (3) outcomes to report to the owner
+  (a task notice of state `done`; a concern's outcome reaches the conversation this way, since a concern has no message
+  of its own), (4) everything else. One message goes per turn, as before. A supervision message or task notice that
+  replaces the one still queued for the same conversation or task keeps the time the first one queued (`queued_at`,
+  the time the queue wait of "Availability metrics" below counts from), so merging never restarts its wait; one that
+  only then starts to wait on a decision counts its 5 minutes from then (`decision_at`), its queue wait still from when
+  the first queued. A message that
+  could not go in (its agent's computer unreachable for a `needs` notice's recheck, a delivery that failed) is passed
+  over at the next drain while another may go, so it holds up nothing but itself.
+- **Scheduled runs wait too.** A follow-up or scheduled task that runs in a conversation the owner is present in (the
+  one it came from, else its own) is not started: it stays due, nothing is recorded or skipped, and the scheduler looks
+  again when the hold ends (`runHold`; nothing is stored, so a restart only looks again). It waits at most 5 minutes past
+  its time (`relayDecisionMax` again: a run has a time the owner set). Not held: "Run now", a run that starts a new
+  conversation, and the first run of a daily or cron task (its time is only looked back for 2 minutes, so waiting would
+  lose it).
+- **Compatibility.** `urgent`, `decision_at` and `spoke` are optional fields; the queue's shape is otherwise unchanged.
+  A previous version reads the queue as before and drops the fields on its next save, after which those messages rank
+  and wait as ordinary ones and no hold applies. A message queued before `queued_at` existed counts its 5 minutes from
+  its own time (`at`).
+- **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
+  attend, so it is not held. Interrupting a round already running is F2 of the proposal.
+
+## Availability metrics (#4924)
+
+Step M1 of `docs/design/proposals/main-chat-availability.md`: four numbers that say whether the main chat stays
+available to the owner while background work grows. They are measured for every assistant conversation and read with
+`GET /api/v1/assistant/availability?hours=168` (full devices only, `docs/protocol/protocol.md`); nothing shows them in
+an app or a briefing yet. Each number in one sentence:
+
+- **Reply wait** (`reply_wait`): the seconds from the manager taking the owner's message for a conversation to the
+  first reply text after it, split by what the conversation was doing when the message came (`idle`, on a round the
+  owner started `owner_round`, on a round they did not `background_round`).
+- **Background share** (`background_share`): per day and conversation, the round time and the number of rounds by
+  what started the round (`owner`, `supervision`, `followup`, `patrol`, `conversation`, `notice`, `other`), and, of
+  the time whose round's start is known (all but `other`), the share the owner did not start.
+- **Queue wait** (`queue_wait`): for each system message queued for a conversation (behind its turn, or held while
+  the owner talks in it), the seconds from queueing to delivery and the queue's length when it was added, by kind
+  (median, 90th percentile, longest), for all conversations and for the main one alone, plus what is queued right now.
+- **Ask outcome** (`ask_outcome`): per card kind, how many cards each of the owner, a supervisor, the delegate, a
+  standing authorization or the default at a decision's deadline answered, and after how many seconds.
+
+How they are recorded (`server/internal/assistant/availability.go`): each is a row in `session_work_events`, kept 30
+days as the triage statistics are, with no new table, no model call and no transcript read. One row per answered
+owner message (`reply_wait`), per ended round (`round`), per delivered queued message (`queue_wait`) and per ended
+card (`ask_outcome`); the read joins `ask_outcome` with the `delegate_start` and `standing_authorized` events that
+already existed and with the task cards of the acceptance book.
+
+Against the proposal's acceptance rows: A1 reads `reply_wait.main_days`, where each day carries its 90th percentile
+and `open_tasks`, the most tasks open when one of that day's messages came; A2 reads the main conversation's
+`background_share`; A3 reads `queue_wait.main_by_kind` (`max_seconds`) and `queued_now` (`oldest_seconds`), which do
+not know whether the owner was away; A4 is #4601's number and is not part of this read.
+
+What the numbers do and do not say:
+
+- **Reply text** is the first change of the conversation's last text in its node's session list once nothing of the
+  owner's is still queued behind the turn, so it is about a second coarse and is the first written text block, not the
+  first streamed token. A reply the list never showed changing counts when its round ends (`by: turn_end`), and a
+  message with no reply within 30 minutes is recorded `unanswered` at that bound. Several messages sent before a
+  reply count as one wait, from the first. The first message of a new conversation is not measured.
+- **A message that comes during a round**: text counts as its reply only after the node showed the message queued
+  or a new turn started; before that the text is the running round's own. Only a headless Claude Code that reports
+  its queue ("Interjecting while it answers" above) shows a message being taken into the
+  running round. On Codex, a runtime, the Agent SDK bridge or an older Claude Code the list shows no queue, so a
+  message taken into the running round is counted to that round's end (`by: turn_end`), which overstates its wait;
+  one that waits for the round to end is counted to the first text of the round that follows.
+- **What is no wait**: a message the hub reports as not sent (`session.assistant_sent` failed, or the manager
+  refused it) or that started no turn in an idle conversation within 5 minutes is dropped, not counted `unanswered`
+  (failed sends are the north star's availability, `docs/assistant/north-star.md`); a replay of a message already
+  delivered (the same `client_msg_id` within an hour) opens no wait. A message from a channel or the inbox whose send
+  failed while a background round wrote text within those 5 minutes is still counted, against that text.
+- **Rounds**: the manager names a round after the last input it sent or accepted before the round started. `notice`
+  is a task notice, a late `ask_user` answer or a spawned conversation's report; `other` is a round whose input the
+  manager did not see (a new conversation's first message, which is the owner's; a background task reporting back,
+  which is not; a round under way when the manager restarted, which also reads `unknown_round` for a wait), so it is
+  listed but left out of the share. A message taken into a running round (interjecting) does not start a round of its
+  own. A round that stopped without a turn's end (interrupted, its process gone) is recorded up to the stop, with
+  `stopped` in its row. A recorded meeting's batches are side exchanges and are not rounds.
+- **Queue wait** counts delivered messages only: a notice dropped because its card was answered meanwhile is not a
+  wait. A supervision message or notice that replaces a queued one keeps the first one's queueing time. Since #4925 a
+  message also queues while the owner is talking in an idle conversation, and the queue goes out by rank: the time a
+  message is held for the owner and the time it waits behind better-ranked ones are both part of its wait ("Messages
+  from the system wait for the owner" above).
+- **Ask outcome**: `dismissed` is a card that ended without an answer, `expired` one that ended because nobody
+  answered it in time (where the card's end says so; a hub that keeps the cards itself sends a bare dismissal, which
+  reads `dismissed`), `remembered` an "Always allow in this session" kept earlier. An answer the assistant gave counts
+  as the `delegate`'s when the delegate had taken the card up (`delegate_start`, looked for up to 48 hours before the
+  read's window), as a `standing_authorization`'s when one answered it, else as a `supervisor`'s (a conversation's
+  `interaction_answer`); a card the delegate handed on and a supervisor then answered reads `delegate`. The task
+  cards (`decision`, `conclusion`, `verify`) are those the acceptance book still holds, so a card whose task was
+  closed or asked again has left the count.
+- Rounds and waits under way are in the manager's memory: a manager restart loses those, not the recorded rows.
+
+The route is a separate one, not part of `GET /api/v1/assistant/north-star` as the proposal has it: the north star
+reads one day from the database alone (also from the command line, with no manager running), while these numbers
+cover a window of days and read the queues and the acceptance book of the running manager. The four top-level fields
+do not collide with the north star's, so they can be served from that read later. The north star's own
+`availability` is a different number: whether a conversation could be started or resumed at all. The reply wait
+starts when the hub takes the owner's message (`session.user_spoke`), before the node accepts it; the hub's message
+outcome (`session.assistant_sent`) only takes back the wait of a message that was not sent.
+
 ## Chat titles
 
 Requested: "Generate titles after starting new chats; standardize as ‘MMDD | Type | Topic’." Implemented as follows:
@@ -897,8 +1020,8 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
     if a reply is needed, use `conversation_send`; do not reply merely to acknowledge receipt. `Item.source.kind="conversation"` retains the stable sender id and title, separately from the runtime role and native peer `from`. Clients show a source message rather than a user bubble; the relay's instructions remain inspectable as Context. Explicit source metadata is persisted in a separate `message-source` context, not a selectable Context card. Full canonical legacy relay contexts remain recognizable; user-pasted templates are protected at the entry point.
   - **A spawned chat reports back** (#4669, `assistant/spawned.go`): a chat `conversation_new` opened is followed (`assistant.relay`'s `spawned`, kept 7 days) until it sends to its opener with `conversation_send`. A turn of it that fails, or one that ends without it ever having reported, leaves one notice in the opener (`OriginRef`; `prompts/assistant/spawn_notice.md`) with its id, link and error or last words. The notice is a message from the spawned chat under the same hop and rate limits as its own `conversation_send`; past them the log says the opener was not told.
   - **A failed turn is a failure** (#4669): the node makes a Claude turn whose result is `is_error`, or whose whole answer is an auth / upstream error line (`assistantwire.ErrorOnlyText`, sharing `AuthErrorWords` with the triage's `userErrorWords`), the session's `turn_error`: the apps show it failed, the push is ⚠️ and goes out however quick the turn was, and the hub logs `assistant <id>: turn failed (launcher …, kind …, code …)` without the error's words.
-  - **Queue while running**: if target is running or already queued, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
-    (session `queued`). After its turn ends (no longer working), hub sends one at a time. Don't write into running processes: Codex merges through `turn/steer`, not queueing.
+  - **Queue while running**: if target is running, already queued, or the owner is talking in it, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
+    (session `queued`). After its turn ends (no longer working) and the owner's hold is over, hub sends one at a time, by rank ("Messages from the system wait for the owner"). Don't write into running processes: Codex merges through `turn/steer`, not queueing.
     They come after the user's own queued messages, and `queued_relayed` counts them: the apps only show and copy them.
 - **The user's own queue** (#4342): a message the user sends while a chat works goes to its headless Claude at once and waits in Claude Code's
   queue until the next step takes it in. The transcript notes that wait without the words, so the node gives each message an id and follows
