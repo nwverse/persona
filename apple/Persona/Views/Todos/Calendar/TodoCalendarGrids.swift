@@ -334,6 +334,10 @@ struct TodoCalendarTimeline: View {
                                       dragging = CalendarDragging(entry: e, point: p, grab: grab)
                                       moves?.carrying(true)
                                       Haptics.tap()
+                                      #if DEBUG
+                                      let m = dropMap
+                                      CalendarDragTrace.shared.note("began \(CalendarDragTrace.point(p)) grab \(Int(grab)) allDay \(CalendarDragTrace.rect(m.allDay)) axis \(CalendarDragTrace.rect(m.axis)) scrolled \(Int(m.scrolled)) width \(Int(m.width))") // i18n-ignore: DEBUG trace
+                                      #endif
                                   },
                                   moved: { p in
                                       dragging?.point = p
@@ -342,6 +346,10 @@ struct TodoCalendarTimeline: View {
                                   ended: { dropped in
                                       guard let d = dragging else { return }
                                       let drop = dropped ? landing : nil
+                                      #if DEBUG
+                                      let spot = dropMap.spot(d.point, grab: d.grab).map { "\($0)" } ?? "none"
+                                      CalendarDragTrace.shared.note("ended \(dropped ? "let go" : "cancelled") moved \(d.moved) at \(CalendarDragTrace.point(d.point)) scrolled \(Int(scrolled)) spot \(spot) drop \(drop.map { "\($0)" } ?? "none")") // i18n-ignore: DEBUG trace
+                                      #endif
                                       dragging = nil
                                       moves?.carrying(false)
                                       if let drop { moves?.drop(d.entry, drop) }
@@ -641,6 +649,9 @@ struct TodoCalendarMonth: View {
                                       dragging = CalendarDragging(entry: e, point: p, grab: grab)
                                       moves?.carrying(true)
                                       Haptics.tap()
+                                      #if DEBUG
+                                      CalendarDragTrace.shared.note("began month \(CalendarDragTrace.point(p)) grid \(CalendarDragTrace.rect(dropMap.grid)) cell \(Int(dropMap.cell)) scrolled \(Int(dropMap.scrolled))") // i18n-ignore: DEBUG trace
+                                      #endif
                                   },
                                   moved: { p in
                                       dragging?.point = p
@@ -649,6 +660,9 @@ struct TodoCalendarMonth: View {
                                   ended: { dropped in
                                       guard let d = dragging else { return }
                                       let drop = dropped ? landing : nil
+                                      #if DEBUG
+                                      CalendarDragTrace.shared.note("ended month \(dropped ? "let go" : "cancelled") moved \(d.moved) at \(CalendarDragTrace.point(d.point)) day \(dropMap.day(d.point).map(String.init) ?? "none") drop \(drop.map { "\($0)" } ?? "none")") // i18n-ignore: DEBUG trace
+                                      #endif
                                       dragging = nil
                                       moves?.carrying(false)
                                       if let drop { moves?.drop(d.entry, drop) }

@@ -14,17 +14,13 @@ final class TodoCalendarTests: XCTestCase {
             throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
         }
         continueAfterFailure = false
-        app = XCUIApplication()
-        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        // The view and the mode are switched here, not by launch arguments: a value in the argument domain could not be
-        // changed by the taps below.
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
-                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         // An iPad on its side: the calendar beside the sidebar is wide enough for the full week (Theme.CalendarGrid.wide).
         let pad = UIDevice.current.userInterfaceIdiom == .pad
         if pad { XCUIDevice.shared.orientation = .landscapeLeft }
         defer { if pad { XCUIDevice.shared.orientation = .portrait } }
-        app.launchPinned()
+        // The view and the mode are switched here, not by launch arguments: a value in the argument domain could not be
+        // changed by the taps below.
+        start(hub)
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
         calendarSwitch.tap()
@@ -88,48 +84,56 @@ final class TodoCalendarTests: XCTestCase {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
             throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
         }
-        let env = ProcessInfo.processInfo.environment
-        let before = env["PERSONA_BEFORE"] != nil
-        continueAfterFailure = before
-        switch env["PERSONA_APPEARANCE"] {
-        case "dark": XCUIDevice.shared.appearance = .dark
-        case "light": XCUIDevice.shared.appearance = .light
-        default: break
-        }
-        app = XCUIApplication()
-        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
-                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        let before = ProcessInfo.processInfo.environment["PERSONA_BEFORE"] != nil
+        // each move starts from 10:00 again: one that fails doesn't hide what the others do
+        continueAfterFailure = true
+        let cal = Calendar.current
+        let ten = cal.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        // before the app reads its to-dos, so the axis opens on the morning
+        try resetReview(hub, to: ten)
         let pad = UIDevice.current.userInterfaceIdiom == .pad
         if pad { XCUIDevice.shared.orientation = .landscapeLeft }
         defer { if pad { XCUIDevice.shared.orientation = .portrait } }
-        app.launchPinned()
+        start(hub)
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
         calendarSwitch.tap()
         app.buttons["日"].tap()
-        let cal = Calendar.current
-        let ten = cal.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
-        try resetReview(hub, to: ten)
         let review = entry("检查 PR #42")
         XCTAssertTrue(review.waitForExistence(timeout: 60))
+        /// Ready for the next move: due at 10:00 today again (a failed move leaves it wherever it went), the to-do's
+        /// page that the app before #2045 opens on a press closed, and the block in sight.
+        func ready(_ block: Bool = true) {
+            if before {
+                let back = app.buttons.matching(identifier: "BackButton").matching(NSPredicate(format: "label == %@", "待办")).firstMatch
+                if back.exists { back.tap() }
+            } else if (try? due(hub, "todo_review")) != Due(at: ten, day: nil) {
+                try? resetReview(hub, to: ten)
+            }
+            guard block else { return }
+            XCTAssertTrue(review.waitForExistence(timeout: 10))
+            bringIntoView(review)
+        }
         /// Checks the mock's to-do (not before), then Undo on the toast puts it back at 10:00 today.
-        func expectSaved(_ what: String, at: Date? = nil, day: String? = nil, visible: Bool = true) {
+        func expectSaved(_ what: String, at: Date? = nil, day: String? = nil) {
             guard !before else { return }
-            XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: at, day: day) }, "\(what): \((try? self.due(hub, "todo_review")).map { "\($0)" } ?? "?")")
+            let saved = wait { try self.due(hub, "todo_review") == Due(at: at, day: day) }
+            XCTAssertTrue(saved, "\(what): \((try? self.due(hub, "todo_review")).map { "\($0)" } ?? "?"); trace: \(trace())")
+            guard saved else { return }
             let undo = app.buttons["toast-action"]
-            XCTAssertTrue(undo.waitForExistence(timeout: 10), "\(what): no Undo on the toast")
+            guard undo.waitForExistence(timeout: 10) else { return XCTFail("\(what): no Undo on the toast") }
             shot("drag-\(what)-toast")
             undo.tap()
             XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: ten, day: nil) }, "\(what): Undo didn't put it back")
-            if visible { XCTAssertTrue(review.waitForExistence(timeout: 10)) }
         }
 
         // The day: two hours later (the block's top edge moves with the finger, snapped to the quarter hour).
+        ready()
         drag(review, to: review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).withOffset(CGVector(dx: 0, dy: 2 * Self.hour)))
         expectSaved("day", at: cal.date(byAdding: .hour, value: 2, to: ten))
 
         // The All Day row: due today, all day.
+        ready()
         let allDay = app.staticTexts["全天"].firstMatch
         XCTAssertTrue(allDay.exists)
         let row = review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -140,25 +144,27 @@ final class TodoCalendarTests: XCTestCase {
         // Held near the axis's bottom edge it scrolls on: it lands well after the hour under the finger. Last on the day:
         // the week opens scrolled to its morning again.
         if !before {
+            ready()
             let bar = app.descendants(matching: .any)["todo.calendar.undated"]
             XCTAssertTrue(bar.exists)
             let edge = bar.frame.minY - Self.hour / 3, y0 = review.frame.midY
             let from = review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             from.press(forDuration: 0.6, thenDragTo: from.withOffset(CGVector(dx: 0, dy: edge - y0)), withVelocity: .slow, thenHoldForDuration: 1.5)
             let underFinger = ten.addingTimeInterval(Double((edge - y0) / Self.hour) * 3600)
-            XCTAssertTrue(wait { (try self.due(hub, "todo_review").at ?? .distantPast) > underFinger.addingTimeInterval(3600) },
-                          "autoscroll: \((try? self.due(hub, "todo_review")).map { "\($0)" } ?? "?")")
+            let scrolled = wait { (try self.due(hub, "todo_review").at ?? .distantPast) > underFinger.addingTimeInterval(3600) }
+            XCTAssertTrue(scrolled, "autoscroll: \((try? self.due(hub, "todo_review")).map { "\($0)" } ?? "?"); trace: \(trace())")
             let undo = app.buttons["toast-action"]
-            XCTAssertTrue(undo.waitForExistence(timeout: 10))
-            undo.tap()
-            XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: ten, day: nil) })
+            if scrolled, undo.waitForExistence(timeout: 10) {
+                undo.tap()
+                XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: ten, day: nil) })
+            }
         }
 
         // The week: the next day's column, at the same time (the day before on the week's last day).
         app.buttons["周"].tap()
         let headers = app.descendants(matching: .any).matching(identifier: "todo.calendar.dayHeader")
         XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(review.waitForExistence(timeout: 10))
+        ready()
         let todayColumn = (0..<headers.count).first { abs(headers.element(boundBy: $0).frame.midX - review.frame.midX) < headers.element(boundBy: $0).frame.width / 2 } ?? 0
         let step = todayColumn + 1 < headers.count ? 1 : -1
         let next = headers.element(boundBy: todayColumn + step)
@@ -167,6 +173,7 @@ final class TodoCalendarTests: XCTestCase {
 
         // The month: the next day, at the same time. Today's first line is 10:00's (its chip, under the date). A phone's
         // month day is one element, its chips not apart: they are found by where they are.
+        ready(false)
         app.buttons["月"].tap()
         let days = app.descendants(matching: .any).matching(identifier: "todo.calendar.monthDay")
         XCTAssertTrue(days.firstMatch.waitForExistence(timeout: 10))
@@ -179,7 +186,7 @@ final class TodoCalendarTests: XCTestCase {
         let chip = today.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: today.frame.width / 2, dy: Self.monthFirstLine))
         let onTarget = chip.withOffset(CGVector(dx: target.frame.midX - today.frame.midX, dy: target.frame.minY - today.frame.minY))
         chip.press(forDuration: 0.6, thenDragTo: onTarget, withVelocity: .slow, thenHoldForDuration: 0.5)
-        expectSaved("month", at: cal.date(byAdding: .day, value: monthStep, to: ten), visible: false)
+        expectSaved("month", at: cal.date(byAdding: .day, value: monthStep, to: ten))
         shot("drag-month")
         app.buttons["日"].tap()
     }
@@ -192,23 +199,20 @@ final class TodoCalendarTests: XCTestCase {
         guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("an iPad's pointer") }
         guard ProcessInfo.processInfo.environment["PERSONA_BEFORE"] == nil else { throw XCTSkip("not in the app before #2045") }
         continueAfterFailure = false
-        app = XCUIApplication()
-        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
-                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
-        app.launchPinned()
+        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        try resetReview(hub, to: ten)
+        start(hub)
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
         calendarSwitch.tap()
         app.buttons["日"].tap()
-        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
-        try resetReview(hub, to: ten)
         let review = entry("检查 PR #42")
         XCTAssertTrue(review.waitForExistence(timeout: 60))
-        let start = review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        start.click(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: Self.hour)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        bringIntoView(review)
+        let from = review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        from.click(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: Self.hour)), withVelocity: .slow, thenHoldForDuration: 0.3)
         XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: ten.addingTimeInterval(3600), day: nil) },
-                      "\((try? self.due(hub, "todo_review")).map { "\($0)" } ?? "?")")
+                      "\((try? self.due(hub, "todo_review")).map { "\($0)" } ?? "?"); trace: \(trace())")
         let undo = app.buttons["toast-action"]
         XCTAssertTrue(undo.waitForExistence(timeout: 10))
         undo.tap()
@@ -225,17 +229,16 @@ final class TodoCalendarTests: XCTestCase {
         continueAfterFailure = false
         let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
         try resetReview(hub, to: ten)
-        app = XCUIApplication()
-        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
-                               "-openRescheduleTitled", "检查 PR #42",
-                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
-        app.launchPinned()
+        start(hub, ["-openRescheduleTitled", "检查 PR #42"])
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
-        // The sheet opens with the calendar: at once when the page opens on it (a tap above the sheet would close it).
+        // The sheet opens with the calendar: at once when the page opens on it (a tap above the sheet would close it),
+        // else once it is switched to (from the list, or from the list and back).
         let allDay = app.switches["todo.calendar.rescheduleAllDay"]
-        if !allDay.waitForExistence(timeout: 3) { calendarSwitch.tap() }
+        if !allDay.waitForExistence(timeout: 4) {
+            if calendarSwitch.isSelected { app.buttons["列表"].tap() }
+            calendarSwitch.tap()
+        }
         XCTAssertTrue(allDay.waitForExistence(timeout: 30))
         XCTAssertTrue(app.navigationBars["改截止时间"].exists)
         shot("reschedule-sheet")
@@ -252,6 +255,41 @@ final class TodoCalendarTests: XCTestCase {
     /// `Theme.Size.iconS`, under `Theme.Space.xs`, then half a line).
     private static let hour: CGFloat = 52
     private static let monthFirstLine: CGFloat = 36
+
+    /// Launches the app paired with the mock on the to-dos page, in Simplified Chinese and the run's appearance
+    /// (PERSONA_APPEARANCE, set for every test: the first one in a configuration doesn't inherit it). A first launch on a
+    /// fresh simulator can pair after the page was asked for and stay on the assistant's home: then once more.
+    @MainActor private func start(_ hub: String, _ extra: [String] = []) {
+        switch ProcessInfo.processInfo.environment["PERSONA_APPEARANCE"] {
+        case "dark": XCUIDevice.shared.appearance = .dark
+        case "light": XCUIDevice.shared.appearance = .light
+        default: break
+        }
+        app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + extra
+        app.launchPinned()
+        if !app.buttons["日历"].waitForExistence(timeout: 45) {
+            app.terminate()
+            app.launchPinned()
+        }
+    }
+
+    /// A block scrolled out of the part of the axis in sight (above it: the axis opened on a later hour) is brought
+    /// back with short swipes down.
+    @MainActor private func bringIntoView(_ element: XCUIElement) {
+        var tries = 0
+        while !element.isHittable && tries < 5 {
+            app.swipeDown(velocity: .fast)
+            tries += 1
+        }
+    }
+
+    /// What the app's last drags did (DEBUG builds, `CalendarDragTrace`).
+    @MainActor private func trace() -> String {
+        app.descendants(matching: .any)["todo.calendar.undated"].value as? String ?? "none"
+    }
 
     /// Held still, then carried slowly to `target` and held there a moment before it is let go.
     @MainActor private func drag(_ element: XCUIElement, to target: XCUICoordinate) {

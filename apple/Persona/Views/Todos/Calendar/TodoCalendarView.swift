@@ -109,6 +109,9 @@ struct TodoCalendarView: View {
         .task(id: todos.count) {
             guard !debugRescheduled, let match = UserDefaults.standard.string(forKey: "openRescheduleTitled"),
                   let todo = todos.first(where: { $0.title.contains(match) }) else { return }
+            // after the page's push: a sheet asked for during it is dropped
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled, !debugRescheduled else { return }
             debugRescheduled = true
             rescheduling = todo
         }
@@ -268,6 +271,7 @@ struct TodoCalendarView: View {
                 Rectangle().fill(Theme.CalendarGrid.line).frame(height: pixel)
             }
             .accessibilityIdentifier("todo.calendar.undated")
+            .debugDragTrace()
         }
     }
 }

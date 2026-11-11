@@ -126,7 +126,32 @@ nonisolated struct MonthDropMap: Equatable {
     }
 }
 
+#if DEBUG
+/// What the last drags on the calendar did, for the UI tests (#2045): where one was picked up and let go, and what
+/// that meant. Read as the accessibility value of the calendar's bar under it (`debugDragTrace()`).
+@MainActor @Observable final class CalendarDragTrace {
+    static let shared = CalendarDragTrace()
+    private(set) var text = ""
+
+    func note(_ line: String) {
+        text = (text.split(separator: "|").suffix(3).map(String.init) + [line]).joined(separator: "|")
+    }
+
+    static func point(_ p: CGPoint) -> String { "(\(Int(p.x)),\(Int(p.y)))" } // i18n-ignore: DEBUG trace
+    static func rect(_ r: CGRect) -> String { "\(point(r.origin))+\(Int(r.width))x\(Int(r.height))" } // i18n-ignore: DEBUG trace
+}
+#endif
+
 extension View {
+    /// The calendar's drag trace for the UI tests, in DEBUG builds; nothing otherwise.
+    func debugDragTrace() -> some View {
+        #if DEBUG
+        accessibilityValue(Text(verbatim: CalendarDragTrace.shared.text))
+        #else
+        self
+        #endif
+    }
+
     /// A to-do on the calendar that can be moved (#2045): picked up and carried in the grid's coordinate space `space`,
     /// faded while it is (`lifted`), and "Change Due Date…" for VoiceOver and Switch Control (not on a phone's month,
     /// whose day is one element that opens the day). Nothing without `moves`, and nothing on the Mac (frozen).
@@ -224,6 +249,13 @@ final class CalendarHoldRecognizer: UIGestureRecognizer {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesCancelled(touches, with: event)
         state = state == .began || state == .changed ? .cancelled : .failed
+    }
+
+    /// A scroll view under it waits for this to fail (a finger that moves before it is held, or none at all): once a
+    /// to-do is picked up, the scroll under it never takes the drag over (a pointer drags after 4 pt, before a scroll's
+    /// 10 pt).
+    override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
+        other is UIPanGestureRecognizer && other.view is UIScrollView
     }
 
     override func reset() {
