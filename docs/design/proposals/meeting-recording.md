@@ -1,6 +1,6 @@
 # Proposal: the iPhone meeting recording page, interaction and motion
 
-Status: proposal (#4240). Line numbers in section 2 are as of the proposal's base commit `ac9fd51bf`; re-check them before implementing.
+Status: built (#4240) on iPhone: the live sheet, now-recording card, wrap-up, recording page and minutes polish, the Live Activity layout tweaks, and the DEBUG `-showMeetingSample flow`. Not built: scroll anchoring by id while the reader is detached (the unread count counts every new item since detaching), the follow-ups in section 14, and real-device checks of haptics and audio. Where the built code differs, `docs/apple/recording.md` is the reference. Line numbers in section 2 are as of the proposal's base commit `ac9fd51bf`; re-check them before implementing.
 Covers the iPhone app only (`apple/Persona/Recording/`, one new token file in `apple/Shared/Design/`, the Live Activity layout
 in `apple/PersonaWidgets/`). No hub, protocol, prompt or Android / web change. The new views are guarded `#if os(iOS)`; the visionOS
 controls stay as today, and the Mac, Vision and watch targets must still build (section 15).
