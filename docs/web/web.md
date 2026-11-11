@@ -77,6 +77,19 @@ drives the built client with synthetic data in Chinese, English and Japanese, wi
 Dismiss, Undo, reload, new same-reference progress, and that no reply or task/Agent mutation was requested; `--cdp`
 uses the shared browser and keeps the test pages open.
 
+**The open tray's room (#4656).** An open Needs you / In progress tray follows the viewport instead of the old
+`min(20rem, 40dvh)` box: while it is open, `styles.css` lets the chat dock (`DOCK_MAX`, 55% of the visible height otherwise)
+take up to `--assistant-dock-open-max` (82% of `--kb-h`), the conversation above giving up the room, and the tray fills only
+what its cards need. The tray is a column: its header (title, **All**, **Expand**, close) stays and only `[data-tray-list]`
+scrolls, so a plan card's sticky Start row (`data-plan-actions`, with a hairline in the tray) sticks to the list's bottom edge
+and never under the header. **Expand** (`data-expanded`) gives the dock the whole chat column (the conversation's scroller
+goes to zero height, the composer and the entries stay); **Restore size**, closing the tray or switching entries gives the
+room back. **All** opens the task board from its own chunk (`views/assistant/TaskBoard.tsx`), loaded when it opens, so neither
+it nor `lib/task-board.ts` is part of the first screen. `python3 web/e2e/assistant-tray-room.py <preview URL> --shots <output directory>`
+checks it against synthetic data with two plans waiting (five tasks with briefs), two asking Agents, a draft and 14 running
+Agents, wide (1280×900) and phone (390×844), light and dark: the tray's height against the viewport, the header fixed while
+the list scrolls, Start in reach, the composer on screen, expand and restore, and the board.
+
 `python3 web/e2e/assistant-task-trays.py <preview URL> --shots <output directory>` runs the production-built client against
 synthetic HTTP/WebSocket data in wide and phone widths, light/dark, including the entries' measured capsule height and
 selected state, keyboard toggling, live same-row completion, owner decisions and proof that no draft was sent by approval. Its captures are browser screenshots, not a deployed-hub check.
