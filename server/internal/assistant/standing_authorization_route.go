@@ -5,23 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Only complete, single-action confirmation requests have a deterministic interpretation. General plans and choices
 // keep their ordinary route: finding one authorized verb somewhere in a plan does not authorize the whole plan.
-var standingRequest = regexp.MustCompile(`(?i)^(?:(?:should|may|can) i |please |是否|可以|请)?(merge|push|deploy-test|deploy-production|send|delete|spend|合并|推送|部署测试|部署生产|发送|删除|花钱)(?:\s+(?:(?:the|this) )?(?:pr|branch|changes|message|files|money))?(?:\s+(https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*))?\s*(?:now|现在)?[?.？。!！]?$`) // i18n-ignore: matched requests
+var standingRequest = lazyre.New(`(?i)^(?:(?:should|may|can) i |please |是否|可以|请)?(merge|push|deploy-test|deploy-production|send|delete|spend|合并|推送|部署测试|部署生产|发送|删除|花钱)(?:\s+(?:(?:the|this) )?(?:pr|branch|changes|message|files|money))?(?:\s+(https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*))?\s*(?:now|现在)?[?.？。!！]?$`) // i18n-ignore: matched requests
 
-var standingConfirmationLabel = regexp.MustCompile(`(?i)^(yes|no|continue|not now|cancel|approve|proceed|是|否|继续|暂不|取消|批准|はい|いいえ|続行|キャンセル)(?: \(recommended\))?$`) // i18n-ignore: matched option labels
+var standingConfirmationLabel = lazyre.New(`(?i)^(yes|no|continue|not now|cancel|approve|proceed|是|否|继续|暂不|取消|批准|はい|いいえ|続行|キャンセル)(?: \(recommended\))?$`) // i18n-ignore: matched option labels
 
-var standingConfirmationHeader = regexp.MustCompile(`(?i)^(confirm|confirmation|approval|merge|push|确认|审批|合并|推送|確認|承認)$`) // i18n-ignore: matched question headers
+var standingConfirmationHeader = lazyre.New(`(?i)^(confirm|confirmation|approval|merge|push|确认|审批|合并|推送|確認|承認)$`) // i18n-ignore: matched question headers
 
 func standingInteractionAction(ix proto.Interaction) (action, target, question string, ok bool) {
 	if ix.Secret || len(ix.Fields) > 0 || ix.Elicitation != nil {
@@ -308,11 +308,11 @@ func (s *Service) persistStandingInteraction(p *pending, r proto.Resolution, a *
 }
 
 // Explicit task limits are narrower than a standing grant. Unclear prohibitions keep approval manual.
-var standingTaskReadonly = regexp.MustCompile(`(?i)read[- ]only|只读|読み取り専用`)                             // i18n-ignore: task constraints
-var standingTaskNegation = regexp.MustCompile(`(?i)\b(?:no|not|never|don't|without)\b|不|别|勿|禁止|しない|せず`) // i18n-ignore: task constraints
-var standingStopAtPR = regexp.MustCompile(`(?i)stop at (?:a |the )?pr|停在.*pr|只.*pr`)                    // i18n-ignore: task constraints
-var standingTaskClauses = regexp.MustCompile(`[.;!?\n。；！？]`)                                            // i18n-ignore: clause punctuation
-var standingNoConflicts = regexp.MustCompile(`(?i)no (?:merge )?conflicts|without (?:asking|confirmation|further review)`)
+var standingTaskReadonly = lazyre.New(`(?i)read[- ]only|只读|読み取り専用`)                             // i18n-ignore: task constraints
+var standingTaskNegation = lazyre.New(`(?i)\b(?:no|not|never|don't|without)\b|不|别|勿|禁止|しない|せず`) // i18n-ignore: task constraints
+var standingStopAtPR = lazyre.New(`(?i)stop at (?:a |the )?pr|停在.*pr|只.*pr`)                    // i18n-ignore: task constraints
+var standingTaskClauses = lazyre.New(`[.;!?\n。；！？]`)                                            // i18n-ignore: clause punctuation
+var standingNoConflicts = lazyre.New(`(?i)no (?:merge )?conflicts|without (?:asking|confirmation|further review)`)
 
 func standingTaskForbids(text, action string) bool {
 	if standingTaskReadonly.MatchString(text) || action != "push" && standingStopAtPR.MatchString(text) {
