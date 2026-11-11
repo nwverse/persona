@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/bytemare/opaque"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/passwordpake"
 )
 
@@ -74,7 +74,7 @@ func (s *passwordLoginState) take(id string) (passwordFlow, bool) {
 func (h *Hub) passwordDB(w http.ResponseWriter) (passwordStore, bool) {
 	s, ok := h.store.(passwordStore)
 	if !ok {
-		writeErrCode(w, http.StatusServiceUnavailable, "unavailable", errors.New("密码登录暂不可用"))
+		writeErrCode(w, http.StatusServiceUnavailable, "unavailable", i18n.Err("hub-password_login.unavailable"))
 	}
 	return s, ok
 }
@@ -83,18 +83,18 @@ func passwordJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
 	d.DisallowUnknownFields() // In particular, never accept a plaintext password field.
 	if err := d.Decode(v); err != nil {
-		writeErrCode(w, 400, "bad_request", errors.New("验证请求无效"))
+		writeErrCode(w, 400, "bad_request", i18n.Err("hub-password_login.invalid_request"))
 		return false
 	}
 	if err := d.Decode(new(any)); err != io.EOF {
-		writeErrCode(w, 400, "bad_request", errors.New("验证请求无效"))
+		writeErrCode(w, 400, "bad_request", i18n.Err("hub-password_login.invalid_request"))
 		return false
 	}
 	return true
 }
 
 func passwordInvalid(w http.ResponseWriter) {
-	writeErrCode(w, http.StatusUnauthorized, "bad_password", errors.New("密码不正确或验证已失效，请重试"))
+	writeErrCode(w, http.StatusUnauthorized, "bad_password", i18n.Err("hub-password_login.invalid_proof"))
 }
 
 func (h *Hub) passwordLimited(w http.ResponseWriter, r *http.Request, count bool) bool {
@@ -109,7 +109,7 @@ func (h *Hub) passwordLimited(w http.ResponseWriter, r *http.Request, count bool
 	} {
 		if d := entry.limiter.retry(entry.key, now, entry.cfg); d > 0 {
 			retryAfter(w, d)
-			writeErrCode(w, 429, "rate_limited", errors.New("登录尝试过多，请稍后再试"))
+			writeErrCode(w, 429, "rate_limited", i18n.Err("hub-password_login.rate_limited"))
 			return true
 		}
 	}
@@ -152,16 +152,16 @@ func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 			return
 		}
 		if in.Challenge != "" && !pkceChallenge.MatchString(in.Challenge) {
-			writeErrCode(w, 400, "bad_request", errors.New("授权请求无效"))
+			writeErrCode(w, 400, "bad_request", i18n.Err("hub-password_login.invalid_authorization"))
 			return
 		}
 		if in.Kind != "web" && in.Kind != "phone" && in.Kind != "desktop" {
-			writeErrCode(w, 400, "bad_request", errors.New("设备类型无效"))
+			writeErrCode(w, 400, "bad_request", i18n.Err("hub-password_login.invalid_kind"))
 			return
 		}
 		in.Name = strings.TrimSpace(in.Name)
 		if len([]rune(in.Name)) == 0 || len([]rune(in.Name)) > 80 {
-			writeErrCode(w, 400, "bad_request", errors.New("设备名称无效"))
+			writeErrCode(w, 400, "bad_request", i18n.Err("hub-password_login.invalid_name"))
 			return
 		}
 		s, ok := h.passwordDB(w)
@@ -174,12 +174,12 @@ func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 			return
 		}
 		if p == nil || !p.Enabled {
-			writeErrCode(w, 403, "password_login_disabled", errors.New("管理员尚未开启密码登录，请使用配对链接"))
+			writeErrCode(w, 403, "password_login_disabled", i18n.Err("hub-password_login.disabled"))
 			return
 		}
 		server, err := passwordpake.Server(p.ServerKeys)
 		if err != nil {
-			writeErr(w, 503, errors.New("密码登录配置无效"))
+			writeErr(w, 503, i18n.Err("hub-password_login.invalid_configuration"))
 			return
 		}
 		ke1, err := server.Deserialize.KE1(in.Message)
@@ -189,7 +189,7 @@ func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 		}
 		record, err := server.Deserialize.RegistrationRecord(p.Record)
 		if err != nil {
-			writeErr(w, 503, errors.New("密码登录配置无效"))
+			writeErr(w, 503, i18n.Err("hub-password_login.invalid_configuration"))
 			return
 		}
 		ke2, output, err := server.GenerateKE2(ke1, &opaque.ClientRecord{CredentialIdentifier: p.CredentialID,
@@ -200,7 +200,7 @@ func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 		}
 		id, ok := h.passwordLogin.put(passwordFlow{mac: output.ClientMAC, revision: p.Revision, name: in.Name, kind: in.Kind, challenge: in.Challenge})
 		if !ok {
-			writeErrCode(w, 503, "busy", errors.New("登录请求较多，请稍后重试"))
+			writeErrCode(w, 503, "busy", i18n.Err("hub-password_login.busy"))
 			return
 		}
 		writeJSON(w, map[string]any{"session": id, "message": ke2.Serialize(), "identity": passwordpake.ServerIdentity(h.hubID()), "suite": passwordpake.Suite})
@@ -231,7 +231,7 @@ func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 			f.mac = nil
 			code, ok := h.passwordLogin.put(f)
 			if !ok {
-				writeErrCode(w, 503, "busy", errors.New("登录请求较多，请重试"))
+				writeErrCode(w, 503, "busy", i18n.Err("hub-password_login.retry"))
 				return
 			}
 			writeJSON(w, map[string]string{"code": code})
@@ -267,7 +267,7 @@ func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 		}
 		// Do not trust X-Forwarded-* from arbitrary callers. TLS termination on loopback is supported.
 		if r.TLS == nil && !remoteIP(r).IsLoopback() {
-			writeErrCode(w, 403, "tls_required", errors.New("密码登录需要 HTTPS 连接"))
+			writeErrCode(w, 403, "tls_required", i18n.Err("hub-password_login.tls_required"))
 			return
 		}
 		if r.Method != http.MethodGet {
@@ -338,7 +338,7 @@ func (h *Hub) adminPasswordLoginRoutes(mux *http.ServeMux) {
 		}
 		request, err := server.Deserialize.RegistrationRequest(in.Message)
 		if err != nil {
-			writeErrCode(w, 400, "bad_request", errors.New("注册消息无效"))
+			writeErrCode(w, 400, "bad_request", i18n.Err("hub-password_login.invalid_registration_message"))
 			return
 		}
 		credential := opaque.RandomBytes(64)
@@ -349,13 +349,13 @@ func (h *Hub) adminPasswordLoginRoutes(mux *http.ServeMux) {
 		}
 		session, _ := h.currentAdminSession(r)
 		if session == nil {
-			writeErrCode(w, 401, "login_required", errors.New("请重新登录管理端"))
+			writeErrCode(w, 401, "login_required", i18n.Err("hub-password_login.login_required"))
 			return
 		}
 		id, ok := h.passwordLogin.put(passwordFlow{admin: session.IDHash, previous: in.Revision,
 			registration: &db.ClientPassword{Enabled: true, Revision: randomToken(), ServerKeys: keys, CredentialID: credential}})
 		if !ok {
-			writeErrCode(w, 503, "busy", errors.New("请求较多，请稍后重试"))
+			writeErrCode(w, 503, "busy", i18n.Err("hub-password_login.settings_busy"))
 			return
 		}
 		writeJSON(w, map[string]any{"session": id, "message": response.Serialize(), "identity": passwordpake.ServerIdentity(h.hubID()), "suite": passwordpake.Suite})
@@ -375,12 +375,12 @@ func (h *Hub) adminPasswordLoginRoutes(mux *http.ServeMux) {
 		f, ok := h.passwordLogin.take(in.Session)
 		session, _ := h.currentAdminSession(r)
 		if !ok || f.registration == nil || session == nil || f.admin != session.IDHash {
-			writeErrCode(w, 400, "invalid_registration", errors.New("设置已失效，请重试"))
+			writeErrCode(w, 400, "invalid_registration", i18n.Err("hub-password_login.expired_settings"))
 			return
 		}
 		server, _ := passwordpake.Configuration().Server()
 		if _, err := server.Deserialize.RegistrationRecord(in.Message); err != nil {
-			writeErrCode(w, 400, "bad_request", errors.New("注册记录无效"))
+			writeErrCode(w, 400, "bad_request", i18n.Err("hub-password_login.invalid_record"))
 			return
 		}
 		f.registration.Record = in.Message
@@ -408,7 +408,7 @@ func (h *Hub) adminPasswordLoginRoutes(mux *http.ServeMux) {
 			return
 		}
 		if p == nil {
-			writeErrCode(w, 409, "not_set", errors.New("请先设置连接密码"))
+			writeErrCode(w, 409, "not_set", i18n.Err("hub-password_login.not_set"))
 			return
 		}
 		p.Enabled, p.Revision = in.Enabled, randomToken()
@@ -434,7 +434,7 @@ func (h *Hub) savePasswordLogin(w http.ResponseWriter, r *http.Request, p db.Cli
 		return
 	}
 	if !saved {
-		writeErrCode(w, 409, "stale_settings", errors.New("设置已被修改，请刷新后重试"))
+		writeErrCode(w, 409, "stale_settings", i18n.Err("hub-password_login.stale_settings"))
 		return
 	}
 	for _, id := range ids {

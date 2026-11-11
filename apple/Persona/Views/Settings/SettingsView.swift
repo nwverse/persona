@@ -1022,15 +1022,15 @@ struct PairView: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("连接方式", selection: $passwordMode) {
-                        Text("密码登录").tag(true)
-                        Text("扫码或 Token").tag(false)
+                    Picker("Connection method", selection: $passwordMode) {
+                        Text("Password sign-in").tag(true)
+                        Text("Scan or token").tag(false)
                     }.pickerStyle(.segmented)
                 }
                 if passwordMode {
-                    Section("密码登录") {
-                        TextField("HTTPS hub 地址", text: $url).autocorrectionDisabled()
-                        Text("在系统登录窗口输入管理员设置的连接密码。自签名证书请使用扫码配对。")
+                    Section("Password sign-in") {
+                        TextField("HTTPS hub address", text: $url).autocorrectionDisabled()
+                        Text("Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates.")
                             .font(Theme.Font.caption).foregroundStyle(.secondary)
                     }
                 }

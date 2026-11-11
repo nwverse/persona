@@ -14,9 +14,9 @@ nonisolated struct PasswordLoginRequest: Sendable {
         guard var base = URLComponents(string: text.contains("://") ? text : "https://" + text),
               base.scheme == "https", base.host?.isEmpty == false, base.user == nil, base.password == nil,
               base.query == nil, base.fragment == nil, base.path.isEmpty || base.path == "/"
-        else { throw APIError(status: 0, message: "请输入有效的 HTTPS hub 地址") }
+        else { throw APIError(status: 0, message: interfaceText("Enter a valid HTTPS hub address")) }
         base.path = "/"
-        guard let server = base.url else { throw APIError(status: 0, message: "hub 地址无效") }
+        guard let server = base.url else { throw APIError(status: 0, message: interfaceText("Invalid hub address")) }
         self.server = server
         state = try Self.random()
         verifier = try Self.random()
@@ -26,7 +26,7 @@ nonisolated struct PasswordLoginRequest: Sendable {
                                .init(name: "kind", value: kind), .init(name: "name", value: String(name.prefix(70)))]
         base.path = "/login/device"
         base.percentEncodedFragment = fragment.percentEncodedQuery
-        guard let page = base.url else { throw APIError(status: 0, message: "无法创建登录请求") }
+        guard let page = base.url else { throw APIError(status: 0, message: interfaceText("Could not create the sign-in request")) }
         self.page = page
     }
 
@@ -45,7 +45,7 @@ nonisolated struct PasswordLoginRequest: Sendable {
               parts.queryItems?.first(where: { $0.name == "state" })?.value == state,
               let code = parts.queryItems?.first(where: { $0.name == "code" })?.value,
               code.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil
-        else { throw APIError(status: 0, message: "登录回调无效，请重试") }
+        else { throw APIError(status: 0, message: interfaceText("Invalid sign-in callback. Try again")) }
         var request = URLRequest(url: server.appending(path: "api/v1/auth/password/exchange"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -54,11 +54,11 @@ nonisolated struct PasswordLoginRequest: Sendable {
         defer { session.invalidateAndCancel() }
         let (data, response) = try await session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw APIError(status: 0, message: "登录授权已失效，请重新登录")
+            throw APIError(status: 0, message: interfaceText("Sign-in authorization has expired. Sign in again"))
         }
         let credential = try JSONDecoder().decode(Credential.self, from: data)
         guard credential.token.hasPrefix("jd_"), credential.id.hasPrefix("dev_") else {
-            throw APIError(status: 0, message: "设备凭据无效")
+            throw APIError(status: 0, message: interfaceText("Invalid device credential"))
         }
         return credential
     }
@@ -66,7 +66,7 @@ nonisolated struct PasswordLoginRequest: Sendable {
     private static func random() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            throw APIError(status: 0, message: "无法创建安全登录请求")
+            throw APIError(status: 0, message: interfaceText("Could not create a secure sign-in request"))
         }
         return encode(Data(bytes))
     }

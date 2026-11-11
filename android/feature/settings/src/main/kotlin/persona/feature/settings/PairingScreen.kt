@@ -335,7 +335,7 @@ fun PairingScreen(
             running || progress.isNotEmpty() -> {
                 item { PairingHeading(stringResource(R.string.settings_pairing_connecting_title), stringResource(R.string.settings_pairing_connecting_body)) }
                 pairingProgress(progress, running, failed = false, resources)
-                if (running && passwordEntry) item { JTextButton("取消登录", { loginJob?.cancel() }) }
+                if (running && passwordEntry) item { JTextButton(stringResource(R.string.settings_password_login_cancel), { loginJob?.cancel() }) }
             }
             confirm != null -> {
                 val request = requireNotNull(confirm)
@@ -392,22 +392,22 @@ fun PairingScreen(
                 }
             }
             passwordEntry -> {
-                item { PairingHeading("密码登录", "输入 hub 地址，在系统浏览器中输入连接密码。登录成功后会自动返回 App。") }
+                item { PairingHeading(stringResource(R.string.settings_password_login_title), stringResource(R.string.settings_password_login_body)) }
                 item { JCard {
-                    JTextField(address, { address = it }, label = "HTTPS hub 地址", modifier = Modifier.fillMaxWidth(),
+                    JTextField(address, { address = it }, label = stringResource(R.string.settings_password_login_address), modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true)
                 } }
                 item { PairingActions {
-                    JButton("使用密码连接", { connect(null, address) }, Modifier.fillMaxWidth(), enabled = address.isNotBlank())
-                    JButton("扫码或配对链接", { passwordEntry = false }, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
-                    SettingsCaption("需要管理员先在管理端开启密码登录。自签名证书的 hub 请使用扫码配对。")
+                    JButton(stringResource(R.string.settings_password_login_connect), { connect(null, address) }, Modifier.fillMaxWidth(), enabled = address.isNotBlank())
+                    JButton(stringResource(R.string.settings_password_login_pairing), { passwordEntry = false }, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
+                    SettingsCaption(stringResource(R.string.settings_password_login_note))
                 } }
             }
             else -> {
                 item { PairingHeading(stringResource(R.string.settings_pairing_connect_title), stringResource(R.string.settings_pairing_connect_body)) }
                 item {
                     PairingActions {
-                        JButton("密码登录", { passwordEntry = true }, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
+                        JButton(stringResource(R.string.settings_password_login_title), { passwordEntry = true }, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
                         JButton(stringResource(R.string.settings_pairing_scan), ::requestScan, Modifier.fillMaxWidth(), icon = PhIcons.Scan)
                         Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                             JButton(stringResource(R.string.settings_pairing_paste), ::paste, Modifier.weight(1f), kind = JButtonKind.Secondary)
