@@ -62,6 +62,7 @@ done
 
 // fakeCLI is a claude -p that keeps its args and finishes each turn at once.
 const fakeCLI = `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+printf '%s\n' "$CLAUDE_CONFIG_DIR" > "$SDK_FAKE_DIR/cli-profile"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
   case "$line" in *'"type":"user"'*) echo '{"type":"result","subtype":"success"}' ;; esac
@@ -283,7 +284,7 @@ func TestSDKStartMergesAFollowingProvidersBypassList(t *testing.T) {
 	})
 	pinned := func(launcher string) (any, any) {
 		t.Helper()
-		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), mcp: map[string]any{}}
+		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), configDir: profile, mcp: map[string]any{}}
 		_, first, err := n.sdkCommand(b, launcher, s, []string{"PATH=/usr/bin", "no_proxy=localhost"})
 		if err != nil {
 			t.Fatal(err)
