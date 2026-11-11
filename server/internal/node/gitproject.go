@@ -128,7 +128,7 @@ func normalizedRemote(raw string) string {
 	if host == "" || strings.ContainsAny(host, " /\\?#@\r\n\t") {
 		return ""
 	}
-	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	path = strings.Trim(path, "/")
 	for part := range strings.SplitSeq(path, "/") {
 		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\\x00\r\n") {
 			return ""

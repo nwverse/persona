@@ -87,6 +87,17 @@ func TestGitProjectDistinguishesSSHHomeFromAbsolutePath(t *testing.T) {
 	}
 }
 
+func TestGitProjectStripsOnlyOneRepositorySuffix(t *testing.T) {
+	one := normalizedRemote("https://example.com/team/repo.git")
+	two := normalizedRemote("https://example.com/team/repo.git.git")
+	if one == "" || two == "" || one == two {
+		t.Fatal("repositories with different names merged")
+	}
+	if two != normalizedRemote("git@example.com:team/repo.git.git/") {
+		t.Fatal("transport spelling changed the same repository identity")
+	}
+}
+
 func TestRecordedSessionStartDoesNotUseLaterActivity(t *testing.T) {
 	at := "2026-01-02T03:04:05Z"
 	for _, opening := range []string{
