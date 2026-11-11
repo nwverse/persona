@@ -1872,9 +1872,10 @@ SCHEDULE_RAN = []  # what "Run now" started (UI tests read it back at /mock/sche
 ASSISTANT_HUB_NOTES = "代码都在 ~/code 下，平时用 MacBook 开发。\n周报每周五下班前先给我草稿，不要直接发。\n服务器上的 /srv 目录不要动。"
 ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "Asia/Shanghai", "notes": None, "main": ASK1,
                     "main_tasks_quiet": True,  # Notify tasks dispatched from the main chat only in that chat (#1731), on by default
-                    # Every agent Persona starts is a supervised task (#3617), off by default; closed sessions archive
-                    # themselves after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
-                    "agent_tasks": False, "archive_closed_days": 3,
+                    # Every agent Persona starts is a supervised task (#3617), off by default; new Inbox messages on a
+                    # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
+                    # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
+                    "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
@@ -1900,7 +1901,8 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"], kb_topics=cfg["kb_topics"])
+        out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
+                   kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -16691,6 +16693,9 @@ class H(BaseHTTPRequestHandler):
                 after, _, back = fail.partition(":")
                 if t > float(after) and not (back and t > float(after) + float(back)):
                     return self.send_json({"error": "node macbook: not connected"}, 503)
+            row = next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
+            if row is not None and row.get("status") == "offline":  # no pane runs it (node/panescreen.go)
+                return self.send_json({"text": "", "status": "offline"})
             return self.send_json({"text": TERMINAL, "status": "idle"})
         if p.startswith("/api/v1/kb/"):  # the knowledge base (Persona › Knowledge base)
             parts = p.split("/")[4:]
@@ -17985,6 +17990,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["archive_closed_days"] = days
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("inbox_signals"), bool):
+                ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
@@ -18062,6 +18069,14 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "machine is offline"}, 503)
             if body.get("cwd", "").endswith("/broken"):  # a launcher that never gets ready
                 return self.send_json({"error": "claude did not become ready within 1m0s\nzsh: command not found: claude"}, 502)
+            # Resume Session (#4328): a session that isn't running comes back in a new tab under the same id, answered
+            # once it is up (a resume is never async). MOCK_RESUME_ERROR=<why>: the node refuses it.
+            resume = next((x for x in SESSIONS if body.get("resume_session_id") and x["session_id"] == body["resume_session_id"]), None)  # the row itself (all_sessions() decorates copies)
+            if resume is not None:
+                if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
+                resume.update(status="idle", state="idle")
+                push_machine(resume["machine_id"])
+                return self.send_json({"session": decorated_session(resume)})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
             if codex and (body.get("async") or not (body.get("prompt") or "").strip()):
                 return self.send_json({"error": "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", "code": "codex_needs_prompt"}, 400)
@@ -18566,6 +18581,12 @@ class H(BaseHTTPRequestHandler):
                         elif ch >= " ": drive["typed"] += ch
                     if ctl: drive.update(cols=ctl["cols"], rows=ctl["rows"])
                     drive["send"](full=bool(ctl))
+                    continue
+                if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and any(
+                        x["session_id"] == msg.get("session_id") and x.get("status") == "offline" for x in all_sessions()):
+                    # Nothing runs it (#4328): the stream ends with the node's words (node/send.go paneFor), watched or driven.
+                    send({"type": "terminal", "machine_id": msg.get("machine_id"), "session_id": msg.get("session_id"),
+                          "error": "session %s is not running" % msg.get("session_id")})
                     continue
                 if msg.get("type") == "terminal_subscribe" and TERMINAL_STREAM and TERMINAL_CONTROL and msg.get("control"):
                     sid, mid, ctl = msg.get("session_id"), msg.get("machine_id"), msg["control"]
