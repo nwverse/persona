@@ -4,7 +4,7 @@
 // side panel.
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
-import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
+import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
   answeredItems,
@@ -74,6 +74,7 @@ import { formatDate, t } from "../../i18n";
 import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
 import { Empty } from "./parts";
+import { conversationTitle } from "./conversations";
 import { PlanEditDialog } from "./PlanEdit";
 import { machineStartBlocked, todoUltracode, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltraMark, UltracodeChip } from "../chat/Ultracode";
@@ -1417,8 +1418,19 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick: re-read the clock once a minute
     [conversation, main, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick],
   );
-  const asking = entries.needsYou.filter((item) => (item.kind === "task" || item.kind === "agent") && item.asks.length > 0);
-  const rest = entries.needsYou.filter((item) => !asking.includes(item));
+  const isAsking = (item: NeedsYouItem) => (item.kind === "task" || item.kind === "agent") && item.asks.length > 0;
+  // While background rounds fold, rows other conversations supervise are grouped under them (#4314); with the
+  // switch off, or every row this conversation's, the tray is as it was.
+  const foldBackground = useStore((s) => s.assistant?.main_background_folded) !== false;
+  const conversations = useStore((s) => s.assistant?.conversations);
+  const groups = foldBackground ? needsYouBySupervisor(entries.needsYou, conversation) : [{ supervisor: conversation, items: entries.needsYou }];
+  const own = groups[0].items;
+  const asking = own.filter(isAsking);
+  const rest = own.filter((item) => !asking.includes(item));
+  const supervisorTitle = (id: string) => {
+    const row = conversations?.find((c) => c.session_id === id);
+    return row ? conversationTitle(row) : t("assistant-tasks.needs_group_another");
+  };
   const counts: Record<AssistantTray, number> = { needs: ownCount + entries.needsYou.length, running: entries.running.length };
   useEffect(() => {
     const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
@@ -1453,6 +1465,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {asking.map((item) => <NeedsYouRow key={item.key} item={item} />)}
             {ownPending}
             {rest.map((item) => <NeedsYouRow key={item.key} item={item} />)}
+            {groups.slice(1).map((group) => (
+              <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={supervisorTitle(group.supervisor)} className="flex flex-col gap-2">
+                <h3 className="truncate px-1 pt-1 text-xs text-ink-2">{supervisorTitle(group.supervisor)}</h3>
+                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} />)}
+              </section>
+            ))}
             {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}
           </div>}
         </section>

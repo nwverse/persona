@@ -93,6 +93,40 @@ Housekeeping notices (compaction, restarts, schedule setup) are hidden while dat
 metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
 Original events and background records remain inspectable rather than being deleted from history.
 
+#### Background rounds fold into one line (#4314)
+
+The main conversation folds the rounds it did not start, as web and iOS do (rules in
+[assistant.md](../assistant/assistant.md#background-rounds)):
+
+- **Which rounds**: only in the main conversation (the tasks store's `mainConversation`, else the config's `main`) and
+  only while the hub's `main_background_folded` is on (`AssistantConfig.backgroundFolded`: a hub that omits it counts as
+  on). `AssistantConversation.project(…, BackgroundFolding)` (`core/domain/.../tasks/BackgroundRounds.kt`) starts a round
+  at a user input whose message source (`sourceOf`) is `conversation`, `followup` or `patrol` and ends it at the next
+  genuine input, a queued one included; a system hint inside it does not end it. Such a round stays in the conversation
+  rather than going to the background record; supervision and the other quiet rounds keep going there as before.
+  A `followup` counts only as a scheduled follow-up: not a usage-limit continuation or a wake-up (injected
+  `limit_continue` / `wake`), and not one without a title; those stay shown. Until the hub's config is read, the page
+  uses the value it last read this run (in memory, `BackgroundFoldSetting.lastKnown`), else on.
+- **Folded**: the round's lines become one `ChatLine.Extra` carrying a `BackgroundRound`, drawn by `BackgroundRoundLine`
+  with the work summary's own line (`AssistantFoldLine`): `@<source> · Background round`, `· Running in the background`
+  while it runs. A tap opens it and its lines follow in place (the id `bg-<first input>` sits in the chat's open-line set,
+  so it survives scrolling and history paging); a search hit or a `?at=` link inside it opens it. A folded line keeps its
+  place among the feed's lines and days (`AssistantLines`).
+- **Not folded**: `supervisionVisible` (web's rule): a successful `ask_user` / `notify_user` (bare or Persona's
+  `mcp__persona__…`), a pending `ask_user` while the round runs, a `task_review` with verdict `accepted` / `needs_user`,
+  a `supervision_finish` whose result says `visibility: "user"`, or a hub fold with `supervision_user`.
+- **Prompts**: while folding is on, a scheduled task's or follow-up's input shows only the hub's `injected.line` under its
+  source label (`SourceMessage(hidePrompt)`), opened or not, and its line opens no prompt sheet; a supervisor message
+  shows its text when opened.
+- **Needs you**: same entry and count; with folding on and task rows from more than one supervising conversation (a
+  to-do's `origin`), `needsYouGroups` groups them under that conversation's title (`JSectionHeader`, "Another
+  conversation" without one), this conversation's group first with its cards, plans and drafts. One group: as before.
+- **Switch**: Settings › Assistant › **Fold background rounds**, shown when the hub sends the field
+  (`AssistantSettingsState.setMainBackgroundFolded`, as `main_tasks_quiet`). Off: the conversation and Needs you are
+  exactly as before.
+- **Tests**: `BackgroundRoundsTest` (core/domain), `AssistantSettingsStateTest.backgroundFoldSwitchSavesAndComesBackOnFailure`,
+  `HttpSettingsParityWireTest.mainBackgroundFoldedIsSentOnlyWhenSetAndOnWhenMissing`.
+
 #### Shared data contract
 
 The only hub API addition is `task_cards` on the existing `GET /api/v1/assistant/conversations/{id}/feed?since=` response:

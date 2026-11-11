@@ -153,3 +153,18 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     shelved: shelved.sort(newest).map((row) => row.item),
   };
 }
+
+/** Needs you's rows by the conversation supervising them (#4314, docs/assistant/assistant.md "Background rounds"): a
+ *  task's `origin`, else `conversation` (agents, plans, message cards, hand-made to-dos). This conversation's group comes
+ *  first, then the others in the order their first row appears; the rows and their order within a group are as given,
+ *  so the entry's count is unchanged. One group when every row is this conversation's. */
+export function needsYouBySupervisor(items: readonly NeedsYouItem[], conversation: string): { supervisor: string; items: NeedsYouItem[] }[] {
+  const groups = new Map<string, NeedsYouItem[]>([[conversation, []]]);
+  for (const item of items) {
+    const supervisor = item.kind === "task" && item.todo.origin ? item.todo.origin : conversation;
+    const group = groups.get(supervisor);
+    if (group) group.push(item);
+    else groups.set(supervisor, [item]);
+  }
+  return [...groups].map(([supervisor, rows]) => ({ supervisor, items: rows }));
+}
