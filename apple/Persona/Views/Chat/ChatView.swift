@@ -5243,6 +5243,7 @@ struct QueueStrip: View {
     @State private var confirmSend = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
     private static let visibleRows: CGFloat = 3
 
     var body: some View {
@@ -5256,19 +5257,25 @@ struct QueueStrip: View {
             .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(queued.count), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {
-            HStack(spacing: Theme.Space.sm) {
-                ThemedIcon("tray.and.arrow.down").accessibilityHidden(true)
-                Text("\(queued.count) queued · Claude will handle them in order").lineLimit(1)
-                Spacer(minLength: 0)
-                if busy {
-                    ProgressView().controlSize(.mini)
-                } else if steers {
-                    Button { confirmSend = true } label: {
-                        Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
+            Group {
+                if typeSize.isAccessibilitySize {
+                    // Side by side, Send Now (which keeps its width) left the title a few points and took the tap that
+                    // opens the strip (#4846): at these sizes the title wraps and Send Now has the line under it.
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                            tray
+                            title
+                        }
+                        sendNow
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.accent)
-                    .accessibilityIdentifier("queue-send-now")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack(spacing: Theme.Space.sm) {
+                        tray
+                        title.lineLimit(1)
+                        Spacer(minLength: 0)
+                        sendNow
+                    }
                 }
             }
             .font(Theme.Font.labelStrong)
@@ -5285,6 +5292,23 @@ struct QueueStrip: View {
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .accessibilityIdentifier("queue-strip")
+    }
+
+    private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
+    private var title: Text { Text("\(queued.count) queued · Claude will handle them in order") }
+
+    /// Send Now for a Claude in a terminal, or the spinner while the queue is being handed over.
+    @ViewBuilder private var sendNow: some View {
+        if busy {
+            ProgressView().controlSize(.mini)
+        } else if steers {
+            Button { confirmSend = true } label: {
+                Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent)
+            .accessibilityIdentifier("queue-send-now")
+        }
     }
 
     private var rows: some View {
