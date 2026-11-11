@@ -22,7 +22,7 @@ type Hub interface {
 	// Hello is manager.hello's answer: hub.json's assistant section (the defaults of the assistant's own settings) and
 	// the machines. BusHub keeps the last one and takes manager.updated.
 	Hello(ctx context.Context) (Hello, error)
-	// DeviceCall is device.call {device, method, params}: a call to one of the user's machines (DeviceMethod*).
+	// DeviceCall is device.call {device, method, params}: a call to one of the user's machines (assistantwire.Device*).
 	DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error)
 	// AppCall is app.call {app_id, method, params}: a call to an app the hub runs (App*).
 	AppCall(ctx context.Context, p AppCall) (json.RawMessage, error)
@@ -46,6 +46,7 @@ type (
 	Placement           = assistantwire.Placement
 	DeviceCall          = assistantwire.DeviceCall
 	Device              = assistantwire.Device
+	ClientApp           = assistantwire.ClientApp
 	ConfiguredLauncher  = assistantwire.ConfiguredLauncher
 	HubModels           = assistantwire.HubModels
 	AppCall             = assistantwire.AppCall

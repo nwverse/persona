@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Item, Subagent } from "../../lib/types";
 import type { Step } from "../../lib/turns";
 import { planProgress, type ToolStep, type WorkGroupNode } from "../../lib/work-groups";
-import { ActionRow, DIFF_FOLD_LINES, diffStats, editDiffs, foldDiffs, lineDiff, presentAction, truncateParam } from "./ActionRow";
+import { ActionRow, argumentLines, DIFF_FOLD_LINES, diffStats, editDiffs, foldDiffs, inlineInput, lineDiff, presentAction, truncateParam } from "./ActionRow";
 import { ChatContext } from "./chat-context";
 import { emptyTaskIndex } from "../../lib/tasks";
 import { latestPlan, PlanCard, PlanList, PlanPill, planSummary } from "./PlanCard";
@@ -30,14 +30,14 @@ describe("WorkGroup", () => {
     expect(renderToStaticMarkup(<PlanCard id="p" todos={[{ content: "读", status: "pending" }]} />)).toContain(coarse);
   });
 
-  it("while live: a spinner, 正在工作… and a clock, its newest steps on a rail", () => {
+  it("while live: only a collapsed summary, spinner and clock, with no preview", () => {
     const html = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls", description: "看目录" }, false)], true)} p={props} />);
     expect(html).toContain('data-work-group="live"');
     expect(html).toContain(">正在工作…<");
     expect(html).toMatch(/font-mono text-\[12px\][^>]*>[\d秒分钟小时天 ]+</);
-    expect(html).toContain("data-live-preview");
-    expect(html).toContain("border-l-2 border-tool-rail");
-    expect(html).toContain(">看目录<");
+    expect(html).not.toContain("data-live-preview");
+    expect(html).not.toContain(">看目录<");
+    expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("data-work-detail"); // a lazy Collapse: nothing until it opens
   });
 
@@ -48,14 +48,14 @@ describe("WorkGroup", () => {
     expect(html).not.toContain("data-live-preview");
   });
 
-  it("a live group with five steps or fewer does not open: its preview is all of it", () => {
+  it("every nonempty live group can be manually opened and never previews tools", () => {
     const five = [1, 2, 3, 4, 5].map((n) => tool(`t${n}`, "Bash", { command: `echo ${n}` }));
-    expect(renderToStaticMarkup(<WorkGroup g={group(five, true)} p={props} />)).toMatch(/<button[^>]*disabled=""/);
+    expect(renderToStaticMarkup(<WorkGroup g={group(five, true)} p={props} />)).not.toMatch(/<button[^>]*disabled=""/);
     const six = [...five, tool("t6", "Bash", { command: "echo 6" })];
     const html = renderToStaticMarkup(<WorkGroup g={group(six, true)} p={props} />);
     expect(html).not.toMatch(/^<div[^>]*><button[^>]*disabled/);
-    expect(html).not.toContain("echo 1"); // only the newest five peek out
-    expect(html).toContain("echo 6");
+    expect(html).not.toContain("echo 1");
+    expect(html).not.toContain("echo 6");
   });
 });
 
@@ -89,8 +89,30 @@ describe("ActionRow", () => {
   it("verbs follow cindy's table", () => {
     const verb = (name: string, input: Record<string, unknown> = {}) => presentAction(use("v", name, input)).verb;
     expect([verb("Edit", { file_path: "/a" }), verb("Write", { file_path: "/a" }), verb("Grep", { pattern: "x" }), verb("WebFetch", { url: "u" }), verb("mcp__github__create_issue")]).toEqual(["编辑", "创建", "搜索", "访问", "调用"]);
-    expect(presentAction(use("v", "mcp__github__create_issue", {})).param!.text).toBe("github · create issue");
+    expect(presentAction(use("v", "mcp__github__create_issue", {})).param!.text).toBe("GitHub · Create issue");
+    expect(presentAction(use("v", "mcp__github__create_issue", { title: "Crash" })).param!.text).toBe("GitHub · Create issue · Crash");
     expect(presentAction(use("v", "mcp__persona__unknown_tool", {})).param).toEqual({ text: "Persona · unknown tool", title: "mcp__persona__unknown_tool" });
+  });
+
+  it("Claude Code's newer tools say what they did, then what about (#2986)", () => {
+    expect(presentAction(use("n", "TaskCreate", { subject: "Write tests", description: "…" }))).toEqual({ verb: "加待办", param: { text: "Write tests", title: "Write tests" } });
+    expect(presentAction(use("n", "ListAgents", {}))).toEqual({ verb: "看 Agent 列表" });
+    expect(presentAction(use("n", "Monitor", { command: "tail -f x", description: "errors in x" })).verb).toBe("监视");
+    expect(presentAction(use("n", "PowerShell", { command: "Get-ChildItem" }))).toEqual({ verb: "运行命令", raw: "Get-ChildItem" });
+    expect(inlineInput(use("n", "Monitor", { command: "tail -f x", description: "d" }))).toBe("tail -f x");
+  });
+
+  it("a tool named like one of Object's methods reads as any other unknown tool", () => {
+    expect(presentAction(use("n", "constructor", {}))).toEqual({ verb: "调用", param: { text: "constructor", title: undefined } });
+    expect(presentAction(use("n", "hasOwnProperty", { title: "T" })).param!.text).toBe("hasOwnProperty · T");
+    expect(presentAction(use("n", "mcp__foundry__constructor_args", {})).param!.text).toBe("Foundry · Constructor args");
+  });
+
+  it("any other call opens to its arguments as key: value lines, not JSON", () => {
+    expect(argumentLines({ repo: "persona", title: "Crash", labels: ["bug", "ios"], meta: { a: 1 }, blank: " ", none: [] })).toBe(
+      "title: Crash\nlabels: bug, ios\nmeta: {\"a\":1}\nrepo: persona",
+    );
+    expect(inlineInput(use("n", "mcp__github__create_issue", { title: "Crash", body: "Steps" }))).toBe("title: Crash\nbody: Steps");
   });
 
   it("Persona's own tools read as their verb, then what they were given", () => {
@@ -277,7 +299,7 @@ describe("the user's bubble and the answer", () => {
     expect(html.indexOf("已工作")).toBeLessThan(html.indexOf("看完了。"));
   });
 
-  it("live words: the assistant's stand for the live work row, an agent's keep it under them (#1309)", () => {
+  it("live words occupy the same slot after the folded work on every conversation (#2602)", () => {
     const user: Item = { id: "u1#0", seq: 1, role: "user", kind: "text", text: "跑一遍测试", ts: at(0) };
     const seg = { id: "s", user: { id: "u1#0", text: "跑一遍测试", images: [], contexts: [], ts: at(0) }, steps: [], tools: 0, thoughts: 0, replies: 0, folds: [], start: user.ts };
     const live = (batchedWords?: boolean) =>
@@ -285,7 +307,7 @@ describe("the user's bubble and the answer", () => {
     expect(live()).not.toContain('data-work-group="live"');
     const agent = live(true);
     expect(agent).toContain('data-work-group="live"');
-    expect(agent.indexOf('data-answer="streaming"')).toBeLessThan(agent.indexOf('data-work-group="live"'));
+    expect(agent.indexOf('data-work-group="live"')).toBeLessThan(agent.indexOf('data-answer="streaming"'));
     // no live words yet: the row as before
     const waiting = renderToStaticMarkup(<SegmentView seg={seg} live mid="m" sid="s" batchedWords expandFold={async () => {}} />);
     expect(waiting).toContain('data-work-group="live"');

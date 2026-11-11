@@ -52,7 +52,7 @@ type ContextParams struct {
 }
 
 // ContextResult is assistant.context's answer: the <persona-context> text, and the <persona-view-errors> block of the
-// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Feedback next turn").
+// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Next-turn feedback").
 // Reading it consumes nothing: the node acks Receipts once the message is delivered.
 type ContextResult struct {
 	Text       string             `json:"text"`
@@ -108,11 +108,20 @@ type MessageCard struct {
 	Sender  string `json:"sender,omitempty"`
 	Text    string `json:"text"` // the message, clipped
 	Draft   string `json:"draft"`
+	// MessageVersion and ProgressVersion identify the source message and task
+	// progress used to produce the draft, independently of its wording.
+	MessageVersion  string `json:"message_version,omitempty"`
+	ProgressVersion string `json:"progress_version,omitempty"`
 	// SentAt: the reply to the item went out (from this card or from the inbox, on any device) and Sent is what it
 	// said; set when the inbox sent the reply (the inbox is the assistant's too), never cleared, so the card stays sent
 	// when the item opens again. A card sent before that was recorded has no Sent (the draft is what went out).
 	SentAt *time.Time `json:"sent_at,omitempty"`
 	Sent   string     `json:"sent,omitempty"`
+	// Dismissal is per draft card, not inbox filing or task completion. Undo
+	// removes these two fields but retains DismissalUpdatedAt for incremental reads.
+	DismissedAt        *time.Time `json:"dismissed_at,omitempty"`
+	DismissalID        string     `json:"dismissal_id,omitempty"`
+	DismissalUpdatedAt *time.Time `json:"dismissal_updated_at,omitempty"`
 }
 
 // APIErrorMarkers start what Claude Code answers when the model call itself failed (an error card in the app). Both

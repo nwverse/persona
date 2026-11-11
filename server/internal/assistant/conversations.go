@@ -386,7 +386,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 		// Register before dispatch: a fast MCP call can arrive before assistant.send returns.
 		s.holdPushes(ctx, to)
 	}
-	if err := s.call(ctx, machine, DeviceAssistantSend, map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, "supervision": msg.Tool == superviseTool}, nil); err != nil {
+	if err := s.call(ctx, machine, DeviceAssistantSend, map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, holdPushesParam: msg.Tool == superviseTool}, nil); err != nil {
 		if msg.Tool == superviseTool {
 			s.releasePushes(ctx, to)
 		}
@@ -496,7 +496,7 @@ func (s *Service) assistantConversation(ctx context.Context, id string) (proto.S
 }
 
 // spaceConversation is assistantConversation among the conversations of one space only (in == nil: any): a
-// conversation's tools reach only the conversations of its own space (docs/assistant/health.md "Isolation").
+// conversation's tools reach only the conversations of its own space (docs/assistant/health.md "How directories and memory are isolated").
 func (s *Service) spaceConversation(ctx context.Context, id string, in *string) (proto.Session, error) {
 	list, err := s.sessions(ctx, s.settings(ctx).MachineID)
 	if errors.Is(err, ErrNoDevice) {

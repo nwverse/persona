@@ -22,7 +22,7 @@ type Model interface {
 const (
 	compressBatch = 50
 	compressQuiet = 10 * time.Minute
-	compressInput = 24000 // characters of new messages per call
+	compressInput = 24000 // bytes of new messages per call (Store.Since)
 )
 
 // After a failed compression the chat waits compressRetry, doubled with every further failure in a row up to
@@ -188,7 +188,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	var d chatDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.Owner}), in, 4000, &d); err != nil {
+	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.ownerName()}), in, 4000, &d); err != nil {
 		return e.compressFailed(ctx, c, err)
 	}
 	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back
@@ -231,11 +231,14 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	// A DM is mostly about the other person: their profile follows it.
 	if c.Kind == "dm" || c.Kind == "mail" {
 		for _, pid := range c.People {
-			if p, ok := e.Store.Person(pid); ok && !p.Locked {
+			_, _, _ = e.Store.updatePerson(pid, false, nil, func(p *Person) bool {
+				if p.Locked {
+					return false
+				}
 				p.Importance, p.Relevance = c.Importance, c.Relevance
 				p.Tags = c.Tags
-				_ = e.Store.PutPerson(p)
-			}
+				return true
+			})
 		}
 	}
 	for _, pid := range c.People {

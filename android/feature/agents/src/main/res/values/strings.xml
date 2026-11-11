@@ -34,6 +34,7 @@
     <string name="agents_action_new_session">New session</string>
     <string name="agents_action_list_settings">List settings</string>
     <string name="agents_search_placeholder">Search spaces, sessions or latest messages</string>
+    <string name="agents_action_search">Search</string>
     <string name="agents_requests_title">Needs your decision</string>
     <plurals name="agents_requests_more">
         <item quantity="one">1 more</item>
@@ -78,6 +79,7 @@
     <string name="agents_range_running">Running</string>
     <string name="agents_range_all">All</string>
     <string name="agents_range_history">History</string>
+    <string name="agents_grouping_current">Grouping: %1$s</string>
     <string name="agents_grouping_repo">By repository</string>
     <string name="agents_grouping_state">By status</string>
     <string name="agents_grouping_todo">By to-do</string>
@@ -130,6 +132,8 @@
     <string name="agents_row_draft_attachments_text">Draft with attachments: %1$s</string>
     <string name="agents_row_pinned">Pinned</string>
     <string name="agents_row_muted">Muted</string>
+    <string name="agents_row_closeout_contradicted">The hub found its closeout claim untrue</string>
+    <string name="agents_row_not_finished">Not finished</string>
     <string name="agents_action_open_read_only">Open read-only</string>
     <string name="agents_action_delete_chat">Delete chat</string>
     <string name="agents_action_unpin">Unpin</string>
@@ -151,13 +155,12 @@
     <string name="agents_repo_repository">Repository</string>
     <string name="agents_repo_main_checkout">Main worktree</string>
     <string name="agents_repo_worktree">Worktree</string>
-    <string name="agents_card_question">Has a question for you</string>
-    <string name="agents_card_question_by">%1$s has a question for you</string>
-    <string name="agents_card_permission">Wants to use %1$s</string>
-    <string name="agents_card_permission_by">%1$s wants to use %2$s</string>
-    <string name="agents_card_tool">a tool</string>
-    <string name="agents_card_plan">A plan needs your approval</string>
-    <string name="agents_card_screen">A dialog in the terminal needs you</string>
+    <string name="agents_card_question">Claude has a question</string>
+    <string name="agents_card_question_by">%1$s has a question</string>
+    <string name="agents_card_permission">Needs your permission</string>
+    <string name="agents_card_permission_by">%1$s needs your permission</string>
+    <string name="agents_card_plan">Plan awaiting approval</string>
+    <string name="agents_card_screen">Terminal needs you</string>
     <string name="agents_card_other">Needs you</string>
     <string name="agents_card_open_session">Open the session to see the request</string>
     <string name="agents_space_index">Space %1$d</string>
@@ -246,9 +249,12 @@
     <string name="agents_dialog_delete">Delete</string>
     <string name="agents_dialog_rename_space">Rename space</string>
     <string name="agents_dialog_rename_space_text">This also renames the workspace in herdr.</string>
+    <string name="agents_dialog_rename_space_text_tern">Also renames this session in Tern.</string>
     <string name="agents_dialog_rename_text">The tab name syncs to herdr; the session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
+    <string name="agents_dialog_rename_text_tern">The tab name syncs to Tern; the session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="agents_dialog_save">Save</string>
     <string name="agents_dialog_tab_name">Tab name (herdr tab)</string>
+    <string name="agents_dialog_tab_name_tern">Tab name (Tern tab)</string>
     <string name="agents_dialog_space_name">Space name</string>
     <string name="agents_dialog_session_name">Session name</string>
     <string name="agents_space_actions">Space actions</string>
@@ -298,6 +304,10 @@
     <string name="agents_new_use_directory">Use this directory</string>
     <string name="agents_new_retry_check">Check result again</string>
     <string name="agents_new_start">Start chat</string>
+    <string name="agents_new_recent">Recent</string>
+    <string name="agents_new_recent_separator">" · "</string>
+    <string name="agents_new_recent_remove">Remove from Recent</string>
+    <string name="agents_new_recent_clear">Clear Recent Setups</string>
     <string name="agents_mode_follow">Follow launcher</string>
     <string name="agents_mode_default">Ask each time</string>
     <string name="agents_mode_accept_edits">Auto-edit files</string>
@@ -353,6 +363,7 @@
     <string name="agents_todo_delete_action">Delete</string>
     <string name="agents_todo_done_failed">Couldn\'t complete the to-do: %1$s</string>
     <string name="agents_todo_delete_failed">Couldn\'t delete the to-do: %1$s</string>
+    <string name="agents_todo_state_didnt_start">Didn\'t start</string>
     <string name="agents_todo_start_failed">Couldn\'t start: %1$s</string>
     <string name="agents_todo_in_progress">In progress</string>
     <plurals name="agents_todo_agents">
@@ -434,6 +445,8 @@
     <string name="agents_todo_active_agents">Agents on it</string>
     <string name="agents_todo_no_agents">No agents assigned</string>
     <string name="agents_todo_no_agents_hint">Tap “Hand to agent” below to assign it.</string>
+    <string name="agents_todo_no_agents_done_hint">Reopen it to hand it to an agent.</string>
+    <string name="agents_todo_hand_off_failed">Couldn\'t hand it over: %1$s</string>
     <string name="agents_todo_session_short">Session %1$s</string>
     <string name="agents_todo_not_listed">(Not in the current active list)</string>
     <string name="agents_todo_remove_agent">Remove</string>
@@ -452,6 +465,7 @@
     <string name="agents_handoff_directory">Working directory</string>
     <string name="agents_handoff_mode_default">Default (default)</string>
     <string name="agents_handoff_mode_bypass">Allow everything (bypassPermissions)</string>
+    <string name="agents_handoff_mode_named">%1$s (%2$s)</string>
     <string name="agents_handoff_pick_agent">Choose a running agent</string>
     <string name="agents_handoff_no_agents">No agents running</string>
     <string name="agents_handoff_no_agents_hint">No active agent can take a task right now.</string>
@@ -500,7 +514,73 @@
     <string name="agents_herdr_why_timeout">herdr took too long to come up; check again in a moment</string>
     <string name="agents_empty_no_computer_title">No computers yet</string>
     <string name="agents_empty_no_computer_hint">Add one and Persona can work on it for you.</string>
-    <string name="agents_page_loaded">%1$d of %2$d sessions loaded</string>
+    <plurals name="agents_page_loaded">
+        <item quantity="one">%1$d of %2$d session loaded</item>
+        <item quantity="other">%1$d of %2$d sessions loaded</item>
+    </plurals>
     <string name="agents_page_more">Load more</string>
     <string name="agents_page_previous">Load earlier sessions</string>
+    <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
+    <string name="agents_todos_section_waiting">Needs you</string>
+    <string name="agents_todos_section_working">Working</string>
+    <string name="agents_todos_section_just_done">Just finished</string>
+    <string name="agents_todos_section_pr">PR to merge</string>
+    <string name="agents_todos_section_other">Other open</string>
+    <string name="agents_todos_section_shelved">Shelved</string>
+    <string name="agents_todos_filter_button">Filter and sort</string>
+    <string name="agents_todos_filter_show">Show</string>
+    <string name="agents_todos_sort_by">Sort by</string>
+    <string name="agents_todos_filter_all">All</string>
+    <string name="agents_todos_filter_no_due">No due date</string>
+    <string name="agents_todos_filter_today">Today</string>
+    <string name="agents_todos_filter_week">This week</string>
+    <string name="agents_todos_filter_month">This month</string>
+    <string name="agents_todos_sort_recent">Recent activity</string>
+    <string name="agents_todos_sort_due">Due date</string>
+    <string name="agents_todos_sort_priority">Priority</string>
+    <string name="agents_todos_filter_clear">Clear the %1$s filter</string>
+    <string name="agents_todos_filter_hidden_waiting">%1$d more waiting on you, not in %2$s</string>
+    <string name="agents_todos_filter_show_all">Show all</string>
+    <string name="agents_todos_filter_empty_today">Nothing due today</string>
+    <string name="agents_todos_filter_empty_week">Nothing due this week</string>
+    <string name="agents_todos_filter_empty_month">Nothing due this month</string>
+    <string name="agents_todos_filter_empty_no_due">Every to-do has a due date</string>
+    <string name="agents_todos_filter_empty_hint">Try another filter.</string>
+    <plurals name="agents_todos_filter_count">
+        <item quantity="one">%d to-do</item>
+        <item quantity="other">%d to-dos</item>
+    </plurals>
+    <string name="agents_todo_restore">Restore</string>
+    <string name="agents_todo_pr_moved">%1$s · moved %2$s</string>
+    <string name="agents_todo_pr">PR</string>
+    <string name="agents_todo_state_accepted">Accepted</string>
+    <plurals name="agents_todos_related">
+        <item quantity="one">1 related</item>
+        <item quantity="other">%1$d related</item>
+    </plurals>
+    <!-- The to-dos' month (#2046) -->
+    <string name="agents_todos_view_list">List</string>
+    <string name="agents_todos_view_calendar">Calendar</string>
+    <string name="agents_todo_calendar_options">Calendar options</string>
+    <string name="agents_todo_calendar_show_done">Show done</string>
+    <string name="agents_todo_calendar_today">Today</string>
+    <string name="agents_todo_calendar_previous">Previous month</string>
+    <string name="agents_todo_calendar_next">Next month</string>
+    <string name="agents_todo_calendar_more">+%1$d</string>
+    <string name="agents_todo_calendar_see_list">See list</string>
+    <string name="agents_todo_calendar_nothing_due">Nothing is due this day</string>
+    <string name="agents_todo_calendar_all_day">All day</string>
+    <string name="agents_todo_calendar_reminder">Reminder set</string>
+    <string name="agents_todo_calendar_moved">Moved to %1$s</string>
+    <string name="agents_todo_calendar_undo">Undo</string>
+    <string name="agents_todo_calendar_move_failed">Couldn\'t change the due date: %1$s</string>
+    <string name="agents_todo_calendar_change_due">Change Due Date</string>
+    <string name="agents_todo_calendar_change_due_action">Change Due Date…</string>
+    <string name="agents_todo_calendar_change_due_of">Change Due Date: %1$s…</string>
+    <string name="agents_todo_calendar_date">Date</string>
+    <string name="agents_todo_calendar_time">Time</string>
+    <plurals name="agents_todo_calendar_undated">
+        <item quantity="one">1 without a due date</item>
+        <item quantity="other">%1$d without a due date</item>
+    </plurals>
 </resources>

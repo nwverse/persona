@@ -88,7 +88,7 @@ func (c mailConnector) Changes(ctx context.Context, cursor string, _ int) ([]con
 				Messages: []kb.SourceMessage{{ID: fmt.Sprint(m.UID), SenderID: addr, SenderName: name, At: at, Type: "TEXT",
 					SenderHandles: []kb.Handle{{Kind: kb.HandleEmail, Value: addr}},
 					Mine:          strings.EqualFold(addr, a.Email),
-					Text:          "【" + m.Subject + "】" + clipRunes(strings.TrimSpace(text), 4000)}},
+					Text:          "【" + m.Subject + "】" + clip(strings.TrimSpace(text), 4000)}},
 			})
 		}
 		st.store(cursors, a.ID)
@@ -224,6 +224,14 @@ func (c mailConnector) Actions() []proto.Tool {
 
 func (c mailConnector) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	return toolText(c.h.mail.Call(ctx, name, args, nil))
+}
+
+var _ connector.ReadJSON = mailConnector{}
+
+// CallJSON is connector.ReadJSON: mail_accounts and mail_search as JSON for subscriptions (mail.Service.CallJSON),
+// mail_read as its text.
+func (c mailConnector) CallJSON(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
+	return c.h.mail.CallJSON(ctx, name, args)
 }
 
 // Describe refuses a mail_send that could not be sent before the user is asked.

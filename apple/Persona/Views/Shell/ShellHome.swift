@@ -10,6 +10,7 @@ struct ShellHome: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
     @Environment(\.shellRailEdge) private var railEdge
+    @Environment(\.managerSwitcherRoom) private var switcherRoom
     var pending: PendingStart?
     var error: String?
     @Binding var launcher: String?
@@ -38,7 +39,7 @@ struct ShellHome: View {
     var body: some View {
         ScrollView {
             if let pending {
-                FirstMessagePending(pending: pending, name: model.persona.name, shell: true, resend: resend, delete: delete)
+                FirstMessagePending(pending: pending, name: model.assistantDisplayName, shell: true, resend: resend, delete: delete)
                     // The page's height inside its margins, the message at its bottom (a long one runs up out of it, as the
                     // chat shows its newest end).
                     .containerRelativeFrame(.vertical, alignment: .bottom)
@@ -54,7 +55,7 @@ struct ShellHome: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .dismissesKeyboardOnTap()
-        .contentMargins(.top, AssistantTopBar.room(railEdge), for: .scrollContent)
+        .contentMargins(.top, AssistantTopBar.room(railEdge) + switcherRoom, for: .scrollContent)
         // Room to scroll the last things to ask clear of the fade.
         .contentMargins(.bottom, pending == nil ? Self.fade : ChatView.newestGap, for: .scrollContent)
         .onPreferenceChange(WelcomeFold.self) { room.fold = $0 }
@@ -81,9 +82,10 @@ struct ShellHome: View {
                         .onDisappear { room.card = 0 }
                 }
                 if pending == nil, !mentionOpen {
-                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge)), openInbox: openInbox).shellScaled()
+                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge) + switcherRoom), openInbox: openInbox).shellScaled()
                 }
-                StarterComposer(disabled: pending != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
+                if let m = model.assistantManagerOffline { ManagerOfflineNote(manager: m) }
+                StarterComposer(disabled: pending != nil || model.assistantManagerOffline != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
                                 gate: model.readinessGate(route: $route), send: send)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.composerAtRest($0, typeSize: typeSize) }
                     .onPreferenceChange(MentionMenuOpen.self) { open in withAnimation(Theme.Motion.standard) { mentionOpen = open } }
@@ -104,7 +106,7 @@ struct ShellHome: View {
             .background(Theme.pageBackground.ignoresSafeArea(edges: .bottom))
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { room.pageAtRest($0) }
-        .navigationTitle(model.persona.name)
+        .navigationTitle(model.assistantDisplayName)
         .task(id: launcher) { if pending == nil { await model.warmAssistant(launcher: launcher) } }
         .modifier(ReadinessRefresh())
         .readinessSheets($route)
@@ -413,7 +415,7 @@ struct ShellNeedsYou: View {
     }
 }
 
-/// The pages the shell pushes onto the Assistant page by value (docs/apple/ios.md「新外壳」), and what those push in turn: the
+/// The pages the shell pushes onto the Assistant page by value (docs/apple/ios.md「New shell」), and what those push in turn: the
 /// inbox (its items and Feishu pages), the machines (a machine, its agents). One stack, values only: a value pushed on
 /// top of a view-based push lands under it (docs/lessons/ios.md).
 struct ShellDestinations: ViewModifier {
@@ -436,6 +438,7 @@ struct ShellDestinations: ViewModifier {
                 .modifier(InboxDestinations(accounts: accounts.accounts))
                 .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref) }
                 .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
+                .navigationDestination(for: InboxChatRoute.self) { r in ChatView(key: r.key, itemManager: r.manager).id(r.key) }
                 .environment(\.feishuOpen) { path.append($0) }
         } else {
             content
@@ -444,6 +447,6 @@ struct ShellDestinations: ViewModifier {
 }
 
 extension EnvironmentValues {
-    /// The Persona conversation is in the shell (docs/apple/ios.md「新外壳」): neutral bubbles, the shell's composer, modes in it.
+    /// The Persona conversation is in the shell (docs/apple/ios.md「New shell」): neutral bubbles, the shell's composer, modes in it.
     @Entry var shellChat = false
 }

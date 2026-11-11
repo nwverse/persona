@@ -4,12 +4,15 @@ import (
 	"cmp"
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Context is the <persona-context> block a message to conversation p.SessionID starts with (the node asks on every
@@ -20,8 +23,21 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		s.ackViewErrors(ctx, p)
 		return ContextResult{}
 	}
-	text := prompts.RenderAssistantContext(prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
-		Main: s.isMain(ctx, p.SessionID)})
+	c := prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
+		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)}
+	switch {
+	case c.Main:
+		cfg := s.settings(ctx)
+		names := s.leaderNames(ctx, cfg.Leaders)
+		for _, id := range cfg.Leaders {
+			if id != "" && id != cfg.Main {
+				c.Directions = append(c.Directions, prompts.ContextDirection{ID: id, Name: names[id]})
+			}
+		}
+	case c.Leader:
+		c.LeaderName = s.leaderNames(ctx, []string{p.SessionID})[p.SessionID]
+	}
+	text := prompts.RenderAssistantContext(c)
 	errs, receipts := s.viewErrors(ctx, p)
 	return ContextResult{Text: text, ViewErrors: errs, Receipts: receipts}
 }
@@ -72,7 +88,7 @@ func (s *Service) contextSnapshot(ctx context.Context) string {
 	out := *snap
 	out.Now = time.Now().In(s.location(ctx))
 	out.ModelProfile = s.modelProfileContext(ctx)
-	return prompts.RenderSnapshot(out)
+	return fitSnapshot(out)
 }
 
 const (
@@ -80,7 +96,61 @@ const (
 	snapshotWait    = 1500 * time.Millisecond
 	snapshotStale   = 30 * time.Minute
 	snapshotSlowest = 5 * time.Second
+
+	// snapshotBudget: characters of rendered snapshot one message may carry (#3203). The block stays in the
+	// conversation, so its size is what every message adds to the context until the next compaction; the node sends
+	// only the sections that changed, but after a compaction or a restart it sends all of them again.
+	snapshotBudget = 6000
 )
+
+// snapshotOmits are the sections fitSnapshot leaves out, the least needed first. Never left out: the agents waiting
+// for the user (needs you, awaiting a reply), the running workflows (an agent waiting for one has not finished), the
+// plan cards waiting for "Start" and the failed scheduled runs (no tool lists them), the calendar and the chats that
+// @ the user.
+var snapshotOmits = []func(*prompts.SnapshotOmit){
+	func(o *prompts.SnapshotOmit) { o.Waiting = true },
+	func(o *prompts.SnapshotOmit) { o.Routines = true },
+	func(o *prompts.SnapshotOmit) { o.Followups = true },
+	func(o *prompts.SnapshotOmit) { o.OtherChats = true },
+	func(o *prompts.SnapshotOmit) { o.Working = true },
+	func(o *prompts.SnapshotOmit) { o.KB = true },
+	func(o *prompts.SnapshotOmit) { o.Asked = true },
+	func(o *prompts.SnapshotOmit) { o.Unaccepted = true },
+	func(o *prompts.SnapshotOmit) { o.Tasks = true },
+	func(o *prompts.SnapshotOmit) { o.Unread = true },
+	func(o *prompts.SnapshotOmit) { o.Approvals = true },
+}
+
+// fitSnapshot is s rendered within snapshotBudget: as it is when it fits, else with sections left out in
+// snapshotOmits' order until it does (each keeps its heading and count: prompts.SnapshotOmit), else cut short. It
+// changes nothing but s.Omit: s shares its lists with the cached snapshot other messages render at the same time,
+// and the free text in them was clipped where the snapshot was taken.
+func fitSnapshot(s prompts.Snapshot) string {
+	text := prompts.RenderSnapshot(s)
+	for _, omit := range snapshotOmits {
+		if utf8.RuneCountInString(text) <= snapshotBudget {
+			return text
+		}
+		omit(&s.Omit)
+		text = prompts.RenderSnapshot(s)
+	}
+	if utf8.RuneCountInString(text) <= snapshotBudget {
+		return text
+	}
+	return cutSnapshot(text)
+}
+
+// cutSnapshot is text cut short, with the line saying so, within snapshotBudget: for what no section can be left out
+// of. The agents waiting for the user come first in the template, so they are what stays; the cut is at a line break
+// unless that would lose more than half the block (one agent list is one line).
+func cutSnapshot(text string) string {
+	tail := "\n" + prompts.SnapshotCut()
+	head := textfmt.Cut(text, snapshotBudget-utf8.RuneCountInString(tail))
+	if i := strings.LastIndexByte(head, '\n'); i > len(head)/2 {
+		head = head[:i]
+	}
+	return head + tail
+}
 
 // takeSnapshot reads the sources and keeps the result for contextSnapshot; done is closed when it is in.
 func (s *Service) takeSnapshot(done chan struct{}) {
@@ -88,17 +158,14 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	defer cancel()
 	loc := s.location(ctx)
 	now := time.Now().In(loc)
-	devices, phone := s.devicesAndPhone(ctx)
-	snap := prompts.Snapshot{Now: now, Zone: loc.String(), PhoneOnline: phone}
+	devices, phone, apps := s.devicesAndPhone(ctx)
+	snap := prompts.Snapshot{Now: now, Zone: loc.String(), PhoneOnline: phone, Apps: snapshotApps(apps)}
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
+	wg.Add(1)
+	go func() { // one ask for both sections: each connector builds its chats and meetings in one answer
 		defer wg.Done()
-		snap.Chats = s.snapshotChats(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		snap.Calendar = s.snapshotCalendar(ctx, now)
+		live := s.connectorSnapshots(ctx)
+		snap.Chats, snap.Calendar = snapshotChats(live), snapshotCalendar(live, now)
 	}()
 	for _, m := range devices {
 		snap.Machines = append(snap.Machines, prompts.SnapshotMachine{Name: m.Name, ID: m.ID, Online: m.Online})
@@ -113,7 +180,7 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	if e, err := s.kbGet(ctx); err == nil {
 		snap.KB = e.Prompt(6, 8)
 	}
-	snap.Followups, snap.Routines, snap.RoutinesTotal, snap.Missed, snap.MissedTotal = s.snapshotSchedule(ctx, loc, now)
+	snap.Followups, snap.FollowupsTotal, snap.Routines, snap.RoutinesTotal, snap.Missed, snap.MissedTotal = s.snapshotSchedule(ctx, loc, now)
 	wg.Wait()
 
 	cs := &s.live
@@ -143,12 +210,51 @@ func (s *Service) ProfileChanged(context.Context) {
 	s.prefs.mu.Unlock()
 }
 
+type snapshotAgentGroupKind string
+
+const (
+	snapshotAgentOutside  snapshotAgentGroupKind = ""
+	snapshotAgentNeedsYou snapshotAgentGroupKind = "needs_you"
+	snapshotAgentWorking  snapshotAgentGroupKind = "working"
+	snapshotAgentAwaiting snapshotAgentGroupKind = "awaiting"
+	snapshotAgentWaiting  snapshotAgentGroupKind = "waiting"
+	snapshotAgentDone     snapshotAgentGroupKind = "done"
+	snapshotAgentUnread   snapshotAgentGroupKind = "unread"
+)
+
+// snapshotAgentGroup is the live snapshot category a session belongs in before muted sessions are separated. The
+// empty value means it is not in the snapshot; done and the time-limited categories use UpdatedAt, as the snapshot
+// always has (not Work.TurnAt).
+func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
+	recent := now.Sub(c.UpdatedAt) < 24*time.Hour
+	w := c.Work
+	switch {
+	case c.State == proto.StateNeedsYou:
+		return snapshotAgentNeedsYou
+	case c.State == proto.StateWorking:
+		return snapshotAgentWorking
+	case c.AwaitsReply && c.State == proto.StateIdle && recent:
+		return snapshotAgentAwaiting // seen, its question unanswered (#5096)
+	// A decision with no card up (cards off, muted, "Not now") is not "Needs you": the lists, the badges and the Live
+	// Activity go by the state (docs/protocol/agent-states.md), so it stays "Unread" with what it waits for, or is seen.
+	case w != nil && w.Phase == proto.WorkBlocked && w.On != proto.WaitUser && c.State != proto.StateUnread && recent:
+		return snapshotAgentWaiting // the hub waits it out (an unread one is left for the user)
+	case w != nil && w.Phase == proto.WorkDone && recent:
+		return snapshotAgentDone
+	case c.State == proto.StateUnread && recent:
+		return snapshotAgentUnread
+	default:
+		return snapshotAgentOutside
+	}
+}
+
 // snapshotAgents sorts the agents by what they need: the work state (agents_work.go, docs/assistant/agent-work.md) says what a stopped one
 // waits for or concluded. Each has its page in the web app at web ("" for none). The muted ones (the agent or its
 // space) are in none of the others: the Live Activity, the Agents badge and the inbox leave them out
 // (docs/apple/live-activity.md), so "Needs you" here does too; they are told apart, for when the user asks about them (#4562).
 func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web string) (needs, unread, awaiting, waiting, done, muted []prompts.SnapshotAgent,
 	working []prompts.SnapshotAgent, workflows []prompts.SnapshotWorkflow) {
+	now := time.Now()
 	for _, m := range devices {
 		list, off, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
@@ -157,45 +263,40 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			a := prompts.SnapshotAgent{Label: agentLabel(c), Machine: m.ID, Session: short(c.SessionID),
 				Link: sessionLink(web, m.ID, c.SessionID, false), Ultracode: ultracodeState(c.Ultracode), Plan: snapshotPlan(c)}
-			for _, w := range runningWorkflows(c, time.Now()) {
+			for _, w := range runningWorkflows(c, now) {
 				w.Agent, w.Machine, w.Session = a.Label, a.Machine, a.Session
 				workflows = append(workflows, w)
 			}
 			w := c.Work
 			if w != nil && w.Phase != proto.WorkWorking {
-				a.Line = w.Line
+				a.Line, a.Closeout = w.Line, snapshotCloseout(w)
 			}
 			if a.Line == "" && c.AwaitsReply {
 				a.Line = c.Asks // what it asks (#5096)
 			}
-			recent := time.Since(c.UpdatedAt) < 24*time.Hour
-			var into *[]prompts.SnapshotAgent
-			switch {
-			case c.State == proto.StateNeedsYou:
-				into = &needs
-			case c.State == proto.StateWorking:
-				if !off[c.SessionID] {
-					working = append(working, a)
-					continue
-				}
-				into = &muted
-			case c.AwaitsReply && c.State == proto.StateIdle && recent:
-				into = &awaiting // seen, its question unanswered (#5096)
-			// A decision with no card up (cards off, muted, "Not now") is not "Needs you": the lists, the badges and the Live
-			// Activity go by the state (docs/protocol/agent-states.md), so it stays "Unread" with what it waits for, or is seen.
-			case w != nil && w.Phase == proto.WorkBlocked && w.On != proto.WaitUser && c.State != proto.StateUnread && recent:
-				into = &waiting // the hub waits it out (an unread one is left for the user)
-			case w != nil && w.Phase == proto.WorkDone && recent:
-				into = &done
-			case c.State == proto.StateUnread && recent:
-				into = &unread
-			default:
+			a.Line = clip(oneLine(a.Line), 160)
+			group := snapshotAgentGroup(c, now)
+			if group == snapshotAgentOutside {
 				continue
 			}
 			if off[c.SessionID] {
-				into = &muted
+				muted = append(muted, a)
+				continue
 			}
-			*into = append(*into, a)
+			switch group {
+			case snapshotAgentNeedsYou:
+				needs = append(needs, a)
+			case snapshotAgentWorking:
+				working = append(working, a)
+			case snapshotAgentAwaiting:
+				awaiting = append(awaiting, a)
+			case snapshotAgentWaiting:
+				waiting = append(waiting, a)
+			case snapshotAgentDone:
+				done = append(done, a)
+			case snapshotAgentUnread:
+				unread = append(unread, a)
+			}
 		}
 	}
 	return needs, unread, awaiting, waiting, done, muted, working, workflows
@@ -233,10 +334,10 @@ func (s *Service) connectorSnapshots(ctx context.Context) []connector.SnapshotDa
 	return res.Snapshots
 }
 
-// snapshotChats is the unread chats the connectors know of, nil when none answers.
-func (s *Service) snapshotChats(ctx context.Context) *prompts.SnapshotChats {
+// snapshotChats is the unread chats in the connectors' live states, nil when none answered.
+func snapshotChats(live []connector.SnapshotData) *prompts.SnapshotChats {
 	var out *prompts.SnapshotChats
-	for _, d := range s.connectorSnapshots(ctx) {
+	for _, d := range live {
 		if d.Chats == nil {
 			continue
 		}
@@ -253,10 +354,10 @@ func (s *Service) snapshotChats(ctx context.Context) *prompts.SnapshotChats {
 	return out
 }
 
-// snapshotCalendar is the rest of today's meetings the connectors know of, nil when none answers.
-func (s *Service) snapshotCalendar(ctx context.Context, now time.Time) *prompts.SnapshotCalendar {
+// snapshotCalendar is the rest of today's meetings in the connectors' live states, nil when none answered.
+func snapshotCalendar(live []connector.SnapshotData, now time.Time) *prompts.SnapshotCalendar {
 	var out *prompts.SnapshotCalendar
-	for _, d := range s.connectorSnapshots(ctx) {
+	for _, d := range live {
 		if d.Meetings == nil {
 			continue
 		}
@@ -265,7 +366,8 @@ func (s *Service) snapshotCalendar(ctx context.Context, now time.Time) *prompts.
 		}
 		for _, m := range d.Meetings {
 			if m.End.After(now) {
-				out.Events = append(out.Events, prompts.SnapshotEvent{Start: m.Start.In(now.Location()), End: m.End.In(now.Location()), Title: m.Title})
+				out.Events = append(out.Events, prompts.SnapshotEvent{Start: m.Start.In(now.Location()), End: m.End.In(now.Location()),
+					Title: clip(oneLine(m.Title), 40)})
 			}
 		}
 	}
@@ -277,13 +379,13 @@ func (s *Service) snapshotCalendar(ctx context.Context, now time.Time) *prompts.
 
 // snapshotSchedule is the schedule as the snapshot says it: the follow-ups to come, the daily tasks with how their
 // last run went, and the scheduled runs that failed or were skipped since yesterday 18:00 (#4124: the "Morning briefing" tells them
-// without calling list_followups). Bounded: eight daily tasks and the six newest misses, with the totals. The words
+// without calling list_followups). Bounded: the next eight follow-ups, eight daily tasks and the six newest misses, with the totals. The words
 // for a status are the template's (prompts/assistant/snapshot.md).
 func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now time.Time) (follow []prompts.SnapshotFollowup,
-	routines []prompts.SnapshotRoutine, routinesTotal int, misses []prompts.SnapshotMiss, missed int) {
+	followTotal int, routines []prompts.SnapshotRoutine, routinesTotal int, misses []prompts.SnapshotMiss, missed int) {
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		return nil, nil, 0, nil, 0
+		return nil, 0, nil, 0, nil, 0
 	}
 	defer sc.mu.Unlock()
 	for _, t := range sc.tasks {
@@ -304,7 +406,7 @@ func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now 
 			}
 			continue
 		}
-		f := prompts.SnapshotFollowup{At: t.At.In(loc), Label: t.label()}
+		f := prompts.SnapshotFollowup{At: t.At.In(loc), Label: clip(oneLine(t.label()), 30)}
 		if t.Repeat == repeatInterval {
 			f.Every = everyText(t.EveryMinutes)
 		}
@@ -324,7 +426,12 @@ func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now 
 	if len(all) > 6 {
 		all = all[:6]
 	}
-	return follow, routines, routinesTotal, all, missed
+	sort.SliceStable(follow, func(i, j int) bool { return follow[i].At.Before(follow[j].At) })
+	followTotal = len(follow)
+	if len(follow) > 8 {
+		follow = follow[:8]
+	}
+	return follow, followTotal, routines, routinesTotal, all, missed
 }
 
 // snapshotPlans are the plan cards in the main conversation still waiting for the user's "Start" (#4453), newest first:

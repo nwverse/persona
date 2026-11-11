@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canSendStep, chatHeadline, connectorBrand, connectorOpenTitle, connectorState, connectorSummary, connectorTone, deletedLine, feedsFooter, fieldInput, githubInboxFooter, githubMachineLine,
-  githubOptions, githubScopeAdvice, deleteIMessageData, imessageAIFooter, setIMessageAI, isDeviceCode, isPolledStep, isStarting, labelColor, listConnectors, logoutMessage, mediaLine, mergeNewest, mergeOlder, mutableRepo,
+  githubOptions, githubScopeAdvice, deleteIMessageData, imessageAIFooter, setIMessageAI, isPolledStep, isStarting, labelColor, listConnectors, logoutMessage, mediaLine, mergeNewest, mergeOlder, mutableRepo,
   otherConnectors, reachMessage, setGitHubAuth, signInFooter, signsInHere, startsGroup, stepView, storesData, switchFooter, switchLabel, undescribed,
   type HubConnector, type ThreadMessage, type ThreadPage,
 } from "./connectors";
@@ -37,14 +37,14 @@ describe("连接器的状态", () => {
   });
 
   it("leaves mail and Feishu to their own groups", () => {
-    const list = [conn("ok", { id: "lark" }), conn("ok", { id: "mail" }), conn("ok"), conn("ok", { id: "telegram" })];
+    const list = [conn("ok", { id: "lark" }), conn("ok", { id: "larkcli" }), conn("ok", { id: "mail" }), conn("ok"), conn("ok", { id: "telegram" })];
     expect(otherConnectors(list).map((c) => c.id)).toEqual(["github", "telegram"]);
-    // no Lark group (a hub without lark): a connector named lark is listed with the rest
+    // no Lark gateway group (a hub without lark): the gateway connector is listed with the rest, but lark-cli stays in the bot group
     expect(otherConnectors(list, false).map((c) => c.id)).toEqual(["lark", "github", "telegram"]);
   });
 
   it("has a mark only for the connectors that have one; the rest draw the generic icon", () => {
-    expect(["github", "telegram", "lark"].map(connectorBrand)).toEqual(["github", "telegram", "lark"]);
+    expect(["github", "telegram", "lark", "larkcli"].map(connectorBrand)).toEqual(["github", "telegram", "lark", "lark"]);
     // an extension's connector draws the generic icon; a plugin's id may also be an Object.prototype name
     expect(["examplechat", "example", "constructor"].map(connectorBrand)).toEqual([undefined, undefined, undefined]);
   });
@@ -141,9 +141,7 @@ describe("分步登录", () => {
     expect(isPolledStep(null)).toBe(false);
   });
 
-  it("knows a device code and each field's input", () => {
-    expect(isDeviceCode({ kind: "device_code", user_code: "ABCD-1234" })).toBe(true);
-    expect(isDeviceCode({ kind: "device_code" })).toBe(false);
+  it("knows each field's input", () => {
     expect(fieldInput({ name: "password", label: "", secret: true }).type).toBe("password");
     expect(fieldInput({ name: "phone", label: "" }).inputMode).toBe("tel");
     expect(fieldInput({ name: "code", label: "" }).inputMode).toBe("numeric");

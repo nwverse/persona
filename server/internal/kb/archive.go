@@ -57,7 +57,7 @@ type Engine struct {
 	Sources      []Source
 	Model        Model
 	ModelFor     func(string) Model
-	Owner        string // how the owner is called (the AI writes the Chinese "I" for them)
+	Owner        string // how the owner is called (the AI writes the Chinese "I" for them); SetOwner changes it later
 	Logf         func(string, ...any)
 	// ExtraDirs are directories outside the data dir that Search also reads (Markdown files, read only): notes the
 	// user keeps elsewhere, e.g. a git repository of facts. Absolute paths.
@@ -68,8 +68,23 @@ type Engine struct {
 	Unindex func(kind string, ids []string)
 	// RecordingDaysFunc is how many days recordings are kept (the assistant's recording_days; nil or <= 0: 14).
 	RecordingDaysFunc func() int
+	// MinutesDaysFunc is how many days a meeting's minutes are kept once its transcript went (the assistant's
+	// minutes_days; nil or <= 0: forever); finite windows are never fewer than RecordingDaysFunc's (MinutesDays).
+	MinutesDaysFunc func() int
+	// EarlierMeetingsInAnswers stays false until #3862 phase 1 adds a per-meeting private mark.
+	// Only tests opt in for now, preserving retrieval coverage without exposing earlier minutes in answers.
+	EarlierMeetingsInAnswers bool
+	// MinutesWritten is told when a recording's minutes for its current revision are written (minutes.go): the
+	// assistant pushes them. Called from the loop, outside the store's locks.
+	MinutesWritten func(ctx context.Context, r Recording, m Minutes)
+	// LiveChanged is told of recording id when what the attending feeder does may have changed (live.go): a stored
+	// upload of a recording that attends or attended until then, and sentences LiveAppend stored. Called outside the
+	// store's locks; optional.
+	LiveChanged func(id string)
 	// HandleKey is the hub's key for the senders' identity hints (handles.go); without it none are kept.
 	HandleKey []byte
+	// TopicsOn says whether the knowledge points curation runs (topics.go; assistant.kb_topics). nil: it does.
+	TopicsOn func() bool
 
 	// Limits (zero: defaults).
 	ChatsPerRun  int // how many recently active chats an archive run looks at (100)
@@ -93,9 +108,42 @@ type Engine struct {
 	// (WriteHistory) may download while the archive runs.
 	failed atomic.Int32
 
-	find findCache // what Find read last time, kept while the files are unchanged (find.go)
+	find findCache // what Find read last time, kept while the files are unchanged (find_cache.go)
 
-	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
+	// Retries are the steps' backoffs, shared by the engines a caller builds over the same store one after another (the
+	// hub's settings changed), so they carry over (#4247); nil: the engine's own.
+	Retries    *Retries
+	ownRetries Retries
+
+	// ownerNow is how the owner is called as the knowledge base loop last read it (SetOwner); its lanes read it while
+	// it is set (#4247), so it is not the Owner field. Nil: Owner.
+	ownerNow atomic.Pointer[string]
+}
+
+// Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
+type Retries struct {
+	projects   retrySet // projects whose rewrite failed, by slug (RefreshProjects)
+	topics     retrySet // sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>")
+	recordings retrySet // recordings whose summary failed, by id (SummarizeRecordings)
+	items      retrySet // documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems)
+}
+
+func (e *Engine) retries() *Retries {
+	if e.Retries != nil {
+		return e.Retries
+	}
+	return &e.ownRetries
+}
+
+// SetOwner sets how the owner is called in the models' prompts from now on; safe while the lanes run.
+func (e *Engine) SetOwner(owner string) { e.ownerNow.Store(&owner) }
+
+// ownerName is how the owner is called: what SetOwner set last, else Owner.
+func (e *Engine) ownerName() string {
+	if o := e.ownerNow.Load(); o != nil {
+		return *o
+	}
+	return e.Owner
 }
 
 func (e *Engine) modelFor(id string) Model {
@@ -485,7 +533,8 @@ func extOf(media, typ string) string {
 	return ""
 }
 
-// notePerson links the sender and the chat both ways.
+// notePerson links the sender and the chat both ways. The person is read again and written under personMu
+// (updatePerson), so another writer's chats, projects or tags are kept.
 func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 	if m.Mine {
 		if e.MineObserved != nil {
@@ -501,46 +550,50 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		return
 	}
 	pid := PersonID(source, m.SenderID)
-	p, ok := e.Store.Person(pid)
-	if !ok {
-		p = &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
+	linked := false
+	create := func() *Person {
+		return &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
 	}
-	if p.Connector != "" && p.Connector != c.Connector {
-		return
-	}
-	attributed := false
-	if p.Connector == "" && c.Connector != "" {
-		known := len(p.Chats) > 0
-		for _, id := range p.Chats {
-			if id == c.ID {
-				continue
+	p, written, err := e.Store.updatePerson(pid, false, create, func(p *Person) bool {
+		if p.Connector != "" && p.Connector != c.Connector {
+			return false
+		}
+		linked = true
+		attributed := false
+		if p.Connector == "" && c.Connector != "" {
+			known := len(p.Chats) > 0
+			for _, id := range p.Chats {
+				if id == c.ID {
+					continue
+				}
+				other, exists := e.Store.Chat(id)
+				if !exists || other.Connector != c.Connector {
+					known = false
+					break
+				}
 			}
-			other, exists := e.Store.Chat(id)
-			if !exists || other.Connector != c.Connector {
-				known = false
-				break
+			if known {
+				p.Connector = c.Connector
+				attributed = true
 			}
 		}
-		if known {
-			p.Connector = c.Connector
-			attributed = true
+		if m.SenderName != "" {
+			p.Name = m.SenderName
 		}
-	}
-	if m.SenderName != "" {
-		p.Name = m.SenderName
-	}
-	before, seen := len(p.Chats), p.LastSeen
-	p.Chats = addUnique(p.Chats, c.ID)
-	if m.At.After(p.LastSeen) {
-		p.LastSeen = m.At
-	}
-	c.People = addUnique(c.People, pid)
-	e.addHandles(pid, m.SenderHandles)
-	// Only write when something a reader cares about changed (not on every message of a busy group).
-	if !ok || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour {
-		if err := e.Store.PutPerson(p); err == nil {
-			e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
+		before, seen := len(p.Chats), p.LastSeen
+		p.Chats = addUnique(p.Chats, c.ID)
+		if m.At.After(p.LastSeen) {
+			p.LastSeen = m.At
 		}
+		e.addHandles(pid, m.SenderHandles)
+		// Only write when something a reader cares about changed (not on every message of a busy group).
+		return !p.persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
+	})
+	if linked {
+		c.People = addUnique(c.People, pid)
+	}
+	if written && err == nil {
+		e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
 	}
 }
 

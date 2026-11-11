@@ -12,7 +12,7 @@ import (
 // A message can carry <persona-context kind="…" title="…" url="…"> blocks: context picked on the phone, or everything
 // a Feishu /agent request hands its agent (prompts/lark). The tag is being renamed <persona-context> (#3182): readers
 // take either name. The apps show only the text outside the blocks as what the
-// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How the app shows it").
+// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How it shows in the App").
 
 // contextBlockRe is one attributed block (the bare snapshot, ContextRe, is dropped before this).
 var contextBlockRe = lazyre.New(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)
@@ -24,6 +24,11 @@ var legacyLarkAgentRe = lazyre.New(`(?s)^([^\n]*(?:用 /agent 叫你|又(?:发|�
 // legacyLarkAgent rewrites an old Feishu /agent prompt into today's shape, so conversations started before the change
 // show the same way: the instructions and context in blocks, the request outside them.
 func legacyLarkAgent(s string) string {
+	// Every user message's text comes through here, and the regexp's submatch search grows faster than the text
+	// (about 30 µs for 1 KB, 300 µs for 4 KB): text without the headings it needs is left as it is first.
+	if !strings.Contains(s, "## 请求") || !strings.Contains(s, "## 怎么做") {
+		return s
+	}
 	m := legacyLarkAgentRe.FindStringSubmatch(s)
 	if m == nil {
 		return s

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -31,16 +32,21 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	if err := c.call(ctx, "skills/extraRoots/set", map[string]any{"extraRoots": []string{filepath.Join(cwd, ".claude", "skills")}}, nil); err != nil {
 		n.logger.Printf("assistant codex: skills root: %v", err)
 	}
-	mode, _ := n.modesOf(id)
-	approval, sandbox := codexPolicy(mode)
-	params := map[string]any{"cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox}
+	mode := n.codexPermissionMode(id)
+	params := map[string]any{"cwd": cwd}
+	if mode != "" {
+		approval, sandbox := codexPolicy(mode)
+		params["approvalPolicy"], params["sandbox"] = approval, sandbox
+	}
 	if c.p.model.Model != "" {
 		params["model"] = c.p.model.Model
 	}
 	// The same on every start of the thread, apart from the memory index: the live snapshot goes with each message.
 	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir))
 	var res struct {
-		Thread struct {
+		Model       string          `json:"model"`
+		ServiceTier json.RawMessage `json:"serviceTier"`
+		Thread      struct {
 			ID   string `json:"id"`
 			Path string `json:"path"`
 		} `json:"thread"`
@@ -59,6 +65,8 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	}
 	c.mu.Lock()
 	c.threadID = res.Thread.ID
+	c.speedModel = res.Model
+	c.serviceTier = codexServiceTier(res.ServiceTier)
 	c.mu.Unlock()
 	n.mu.Lock()
 	c.p.id = res.Thread.ID
@@ -70,10 +78,29 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 		n.pathsAt[res.Thread.ID] = time.Now()
 	}
 	n.mu.Unlock()
+	c.loadSpeedModels(ctx)
 	if c.nameGates != nil { // larkCheck records what it confirmed under this id (p.id): the addresses stand for it from now on
 		c.nameGates(res.Thread.ID)
 	}
 	return nil
+}
+
+// codexPermissionMode returns only a mode selected for this conversation, including a manager default.
+// The transcript describes Codex's effective policy, which must not become an explicit Persona override:
+// projecting a configured workspace policy onto "auto", for example, would disable its network access.
+func (n *Node) codexPermissionMode(id string) string {
+	n.mu.Lock()
+	mode := n.modes[id].Mode
+	n.mu.Unlock()
+	if mode != "" {
+		return mode
+	}
+	if n.state != nil {
+		if st, ok := n.state.get(id); ok {
+			return st.AppMode
+		}
+	}
+	return ""
 }
 
 // codexPolicy maps the explicitly selected permission mode to the native thread and turn settings.
@@ -137,14 +164,18 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 		}
 		n.logger.Printf("assistant codex %s: steer: %v; starting a turn instead", short(thread), err) // the turn just ended
 	}
-	mode, effort := n.modesOf(c.p.id)
+	_, effort := n.modesOf(c.p.id)
+	mode := n.codexPermissionMode(c.p.id)
 	c.p.mu.Lock()
 	if c.p.model.UseEffort {
 		effort = c.p.model.Effort
 	}
 	c.p.mu.Unlock()
-	approval, _ := codexPolicy(mode)
-	params := map[string]any{"threadId": thread, "input": input, "approvalPolicy": approval, "sandboxPolicy": codexSandboxPolicy(mode, c.memDir)}
+	params := map[string]any{"threadId": thread, "input": input}
+	if mode != "" {
+		approval, _ := codexPolicy(mode)
+		params["approvalPolicy"], params["sandboxPolicy"] = approval, codexSandboxPolicy(mode, c.memDir)
+	}
 	if c.p.model.Model != "" {
 		params["model"] = c.p.model.Model
 	}
@@ -219,19 +250,25 @@ func (c *codexConn) syncTasks() {
 	thread := c.threadID
 	c.mu.Unlock()
 	var res struct {
-		Data []struct {
+		Data *[]struct {
 			Command string `json:"command"`
 		} `json:"data"`
 	}
 	if err := c.call(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": thread}, &res); err != nil {
+		c.p.invalidateUpdateTasks()
+		return
+	}
+	if res.Data == nil {
+		c.p.invalidateUpdateTasks() // an absent or null list is unknown, never proof that a restart kills no work
 		return
 	}
 	tasks := []string{}
-	for _, t := range res.Data {
+	for _, t := range *res.Data {
 		tasks = append(tasks, "后台命令："+unwrapShell(t.Command))
 	}
 	c.p.mu.Lock()
-	c.p.tasks = tasks
+	c.p.tasks, c.p.tasksObserved = tasks, true
+	c.p.tasksRevision++
 	c.p.mu.Unlock()
 	c.p.ownerOr(c.n).rememberTasks(c.p.id, tasks)
 }

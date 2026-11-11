@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-/// The shell's composer (docs/apple/ios.md「新外壳」), ChatGPT's: one line — [+] Ask Persona… [mic] — that grows into a card
+/// The shell's composer (docs/apple/ios.md「New shell」), ChatGPT's: one line — [+] Ask Persona… [mic] — that grows into a card
 /// while typing, the field on top and a row under it: [+] … [model · effort] [mic] [send]. With Voice Chat offered
 /// (`voice`, docs/assistant/voice.md 6.1) the line is [+] … [mic] [voice], or [+] … [voice] [stop] while the agent works (dictation
 /// is then in the card's row), and the card's row has voice in send's place while nothing is typed. The assistant's
@@ -31,12 +31,22 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var history: String? = nil
     /// The main conversation cannot answer yet: send says what to do first and goes there, the draft stays.
     var gate: SendGate? = nil
+    /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, Telegram's attachment menu) from where the button is,
+    /// in the window; nil: the menu of `attach`.
+    var openAttach: ((CGRect) -> Void)? = nil
+    /// Glow While Replying (`ComposerGlow`): the band around the bar while the assistant's reply is being written. Drawn
+    /// inside the bar's animations so it follows the surface when the line grows into the card.
+    var glows = false
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
     @State private var dictation = Dictation()
     @Environment(\.buiTheme) private var theme
     #if os(iOS)
+    /// The mic held down (`ComposerHoldMic`): the box draws the strip, the circle and the lock over itself.
+    @State private var hold = ComposerHold()
+    @State private var plusFrame: CGRect = .zero
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The draft's height at its full width, and a line's height at the current Dynamic Type size.
     @State private var textHeight: CGFloat = 0
     @State private var lineHeight: CGFloat = 0
@@ -54,7 +64,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @State private var pageFocusRequest = 0
 
     private var offersEnlarge: Bool {
-        !text.isEmpty && ComposerGrowth.offersExpansion(textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
+        ComposerGrowth.showsExpandButton(text: text, focused: focused.wrappedValue, textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
     }
 
     /// Count a trailing newline as the empty line it starts.
@@ -118,13 +128,22 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     private var expanded: Bool { alwaysOpen || focused.wrappedValue || !text.isEmpty || hasAttachments }
 
     var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("ShellComposerBar")
+        #endif
         VStack(alignment: .leading, spacing: 0) {
-            if expanded, let quotes, !quotes.wrappedValue.isEmpty {
-                QuoteBar(refs: quotes)
-                    .padding(.leading, Theme.Space.l)
-                    .padding(.trailing, Theme.Space.s)
-                    .padding(.top, Theme.Space.m)
+            VStack(spacing: 0) {
+                if expanded, let quotes, !quotes.wrappedValue.isEmpty {
+                    QuoteBar(refs: quotes)
+                        .padding(.leading, Theme.Space.l)
+                        .padding(.trailing, Theme.Space.s)
+                        .padding(.top, Theme.Space.m)
+                        .transition(quoteTransition)
+                }
             }
+            #if os(iOS)
+            .clipped() // the quotes slide in from under the box's top edge (Telegram's reply bar)
+            #endif
             HStack(alignment: .bottom, spacing: Theme.Space.xs) {
                 if !expanded { plus }
                 TextField(placeholder, text: $text, selection: fieldSelection, axis: .vertical)
@@ -179,6 +198,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             if expanded {
                 HStack(spacing: Theme.Space.xs) {
                     plus
+                    #if os(iOS)
+                    if focused.wrappedValue { dismissKeyboardButton }
+                    #endif
                     Spacer(minLength: Theme.Space.s)
                     if let modesTitle {
                         Menu { modes() } label: { modesLabel(modesTitle) }
@@ -189,15 +211,26 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                             .accessibilityIdentifier("shell-composer-modes")
                     }
                     mic
-                    if let gate {
-                        SendGateButton(gate: gate)
-                    } else if canSend {
-                        round(Theme.Icon.send, label: String(localized: "Send"), id: "shell-composer-send", action: sendTyped)
-                            .keyboardShortcut(sendShortcut)
-                    } else {
-                        if let voice { voiceButton(voice) }
-                        if let stop { stopButton(stop) }
+                    // One place for send and what it replaces, so they swap over each other rather than side by side.
+                    ZStack(alignment: .trailing) {
+                        if let gate {
+                            SendGateButton(gate: gate)
+                        } else if canSend {
+                            HStack(spacing: Theme.Space.flush) {
+                                ComposerRoundButton(symbol: Theme.Icon.send, label: String(localized: "Send"), id: "shell-composer-send",
+                                                    pressScales: telegramMotion) { endDictation(then: sendTyped) }
+                                    .keyboardShortcut(sendShortcut)
+                            }
+                            .transition(telegramMotion ? .composerSend : .scale.combined(with: .opacity))
+                        } else if voice != nil || stop != nil {
+                            HStack(spacing: Theme.Space.xs) {
+                                if let voice { voiceButton(voice) }
+                                if let stop { stopButton(stop) }
+                            }
+                            .transition(telegramMotion ? .composerSwapped : .scale.combined(with: .opacity))
+                        }
                     }
+                    .animation(swapMotion, value: canSend)
                 }
                 .padding(.leading, Theme.Space.s)
                 .padding(.trailing, sendInset)
@@ -208,18 +241,29 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
         .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
         .modifier(ComposerSurface())
+        #if os(iOS)
+        .overlay { ComposerHoldOverlay(hold: hold) }
+        .coordinateSpace(.named(ComposerHold.space))
+        #endif
+        .composerGlow(glows)
         .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
         .onTapGesture { focused.wrappedValue = true }
         .shellScaled()
-        .animation(Theme.Motion.layout, value: expanded)
+        .animation(openMotion, value: expanded)
         .animation(Theme.Motion.state, value: canSend)
-        .animation(Theme.Motion.standard, value: focused.wrappedValue)
+        .animation(focusMotion, value: focused.wrappedValue)
         #if os(iOS)
+        .animation(Theme.Motion.composerAccessory, value: quotes?.wrappedValue.isEmpty == false)
+        // A line more or less in the draft: the box follows at once, briefly eased (Telegram's 0.1 s).
+        .animation(reduceMotion ? nil : Theme.Motion.composerGrow, value: text)
         .background {
             ComposerViewportReader { viewportHeight = $0 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
+        #if DEBUG
+        .background { if ScreenProbe.enabled { ComposerLinesProbe(maximumLines: maximumLines, viewport: viewportHeight, line: lineHeight) } }
+        #endif
         .animation(Theme.Motion.state, value: offersEnlarge)
         .onChange(of: focused.wrappedValue) { _, wants in
             // The box asked for while the page is up: the page takes it, the hidden box under the sheet does not.
@@ -294,21 +338,61 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         enlarged = false
         send()
     }
-    #endif
 
-    private var plus: some View {
-        Menu { attach() } label: {
-            ThemedIcon(Theme.Icon.add)
-                .font(Theme.Font.title)
-                .fontWeight(.regular)
+    private var dismissKeyboardButton: some View {
+        Button(action: dismissKeyboard) {
+            ThemedIcon(Theme.Icon.dismissKeyboard)
+                .font(Theme.Font.heading)
+                .fontWeight(.medium)
                 .foregroundStyle(ink)
                 .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                 .contentShape(.circle)
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .accessibilityLabel("Add photo or file")
-        .accessibilityIdentifier("shell-composer-add")
+        .accessibilityLabel("Hide Keyboard")
+        .accessibilityIdentifier("shell-composer-dismiss-keyboard")
+        .transition(.opacity)
+    }
+
+    private func dismissKeyboard() {
+        Haptics.tap()
+        if focused.wrappedValue { TypedText.commitFocused(into: $text) }
+        focused.wrappedValue = false
+        Keyboard.dismiss()
+    }
+    #endif
+
+    @ViewBuilder private var plus: some View {
+        #if os(iOS)
+        if let openAttach {
+            Button { openAttach(plusFrame) } label: { plusFace }
+                .buttonStyle(.plain)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { plusFrame = $0 }
+                .accessibilityLabel("Add photo or file")
+                .accessibilityIdentifier("shell-composer-add")
+        } else {
+            plusMenu
+        }
+        #else
+        plusMenu
+        #endif
+    }
+
+    private var plusMenu: some View {
+        Menu { attach() } label: { plusFace }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add photo or file")
+            .accessibilityIdentifier("shell-composer-add")
+    }
+
+    private var plusFace: some View {
+        ThemedIcon(Theme.Icon.add)
+            .font(Theme.Font.title)
+            .fontWeight(.regular)
+            .foregroundStyle(ink)
+            .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+            .contentShape(.circle)
     }
 
     /// The model button's face, ChatGPT's: the model in the text's ink, a little bold, then the effort in the quieter
@@ -339,8 +423,51 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         .contentShape(.capsule)
     }
 
-    /// Speech to text into the field (`ComposerMicButton`, shared with an agent's composer).
-    private var mic: some View { ComposerMicButton(dictation: dictation, text: $text, id: "shell-composer-mic") }
+    /// The box opening and closing as the keyboard comes and goes: on the iPhone with the keyboard's own spring.
+    private var openMotion: Animation {
+        #if os(iOS)
+        Theme.Motion.keyboard
+        #else
+        Theme.Motion.layout
+        #endif
+    }
+
+    private var focusMotion: Animation {
+        #if os(iOS)
+        Theme.Motion.keyboard
+        #else
+        Theme.Motion.standard
+        #endif
+    }
+
+    /// Telegram's motion (send growing in, the quote bar sliding) is the iPhone's and iPad's; the Mac's card keeps its own.
+    private var telegramMotion: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    private var quoteTransition: AnyTransition { telegramMotion ? .composerAccessory : .opacity }
+
+    private var swapMotion: Animation {
+        #if os(iOS)
+        reduceMotion ? Theme.Motion.state : Theme.Motion.composerSwap
+        #else
+        Theme.Motion.state
+        #endif
+    }
+
+    /// Speech to text into the field (`ComposerMicButton`, shared with an agent's composer); on the iPhone it can also
+    /// be held down (`ComposerHoldMic`).
+    @ViewBuilder private var mic: some View {
+        #if os(iOS)
+        ComposerHoldMic(dictation: dictation, text: $text, hold: hold, id: "shell-composer-mic")
+        #else
+        ComposerMicButton(dictation: dictation, text: $text, id: "shell-composer-mic")
+        #endif
+    }
 
     private func stopButton(_ stop: @escaping () -> Void) -> some View {
         ComposerRoundButton.stop(id: "shell-composer-stop") { endDictation(then: stop) }
@@ -352,10 +479,6 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             focused.wrappedValue = false
             endDictation(then: voice)
         }
-    }
-
-    private func round(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
-        ComposerRoundButton(symbol: symbol, label: label, id: id) { endDictation(then: action) }
     }
 
     /// Sends what the field shows: the keyboard's composition confirmed into the draft first (`TypedText`, #2203).
@@ -468,7 +591,14 @@ private struct ComposerPageEditor: View {
             .themedPage()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if focused {
+                        Button(action: dismissPageKeyboard) {
+                            ThemedIcon(Theme.Icon.dismissKeyboard)
+                        }
+                        .accessibilityLabel("Hide Keyboard")
+                        .accessibilityIdentifier("composer-page-dismiss-keyboard")
+                    }
                     Button {
                         commitTyped()
                         collapse()
@@ -513,5 +643,88 @@ private struct ComposerPageEditor: View {
     private func commitTyped() {
         if focused { TypedText.commitFocused(into: $text) }
     }
+
+    private func dismissPageKeyboard() {
+        Haptics.tap()
+        commitTyped()
+        focused = false
+        Keyboard.dismiss()
+    }
 }
 #endif
+
+#if DEBUG && os(iOS)
+/// `probe.composer-lines` (`-probes YES`): whether the focused text view cuts a line at its top or its foot, for a test
+/// that the composer shows whole lines while typing (#3703). Read from the text's line fragments (TextKit 2 only:
+/// asking a TextKit 2 view for its layout manager would turn it into a TextKit 1 one).
+private struct ComposerLinesProbe: View {
+    var maximumLines: Int
+    var viewport: CGFloat
+    var line: CGFloat
+    @State private var lines = ComposerLines()
+
+    var body: some View {
+        Color.clear
+            .scaledFrame(width: Theme.Size.nonvisualProbe, height: Theme.Size.nonvisualProbe)
+            .task {
+                while !Task.isCancelled {
+                    if let view = FirstResponder.current as? UITextView, let read = ComposerLines(view) { lines = read }
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+            }
+            .screenProbe("composer-lines", lines.sized(maximumLines: maximumLines, viewport: viewport, line: line))
+    }
+}
+
+struct ComposerLines: Encodable, Equatable {
+    /// Lines of text, and whether one is cut by the text view's top or foot edge (part of it shows, part does not).
+    var count = 0
+    var cutTop = false
+    var cutFoot = false
+    var visible = 0.0
+    var offset = 0.0
+    /// What the box was sized by: its line limit, the height it measured above the keyboard, a line's height.
+    var maximumLines = 0
+    var viewport = 0.0
+    var line = 0.0
+
+    init() {}
+
+    func sized(maximumLines: Int, viewport: CGFloat, line: CGFloat) -> ComposerLines {
+        var sized = self
+        sized.maximumLines = maximumLines
+        sized.viewport = viewport.rounded()
+        sized.line = line.rounded()
+        return sized
+    }
+
+    @MainActor init?(_ view: UITextView) {
+        guard let layout = view.textLayoutManager, let range = layout.textContentManager?.documentRange else { return nil }
+        layout.ensureLayout(for: range)
+        var lines: [CGRect] = []
+        layout.enumerateTextLayoutFragments(from: range.location, options: [.ensuresLayout]) { fragment in
+            let origin = fragment.layoutFragmentFrame.origin
+            for line in fragment.textLineFragments {
+                lines.append(line.typographicBounds.offsetBy(dx: origin.x, dy: origin.y))
+            }
+            return true
+        }
+        // What the view's bounds show (it clips to them), in the text container's coordinates.
+        let container = view.textContainerInset
+        let top = view.contentOffset.y - container.top
+        let foot = view.contentOffset.y + view.bounds.height - container.top
+        count = lines.count
+        // Cut: more than a quarter of the line on each side of the edge. A sliver of a line's leading past the edge (a
+        // scroll to the caret leaves a few points) shows no glyph.
+        func cut(_ line: CGRect, at edge: CGFloat) -> Bool {
+            let quarter = line.height / 4
+            return edge - line.minY > quarter && line.maxY - edge > quarter
+        }
+        cutTop = lines.contains { cut($0, at: top) }
+        cutFoot = lines.contains { cut($0, at: foot) }
+        visible = (foot - top).rounded()
+        offset = top.rounded()
+    }
+}
+#endif
+

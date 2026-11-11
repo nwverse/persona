@@ -110,9 +110,16 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
     /// The latest review, if any.
     var latestReview: Review? { reviews.last }
 
+    /// Whether its acceptance still stands: the latest review accepted it and no review came since. That holds even
+    /// when the hub reopened the task because its agent was sent more work (#3156, docs/assistant/todo-status-sop.md
+    /// "Accepted tasks"): it is accepted until a newer review says otherwise.
+    var acceptanceStands: Bool { state == "accepted" && latestReview?.verdict == "accepted" }
+
     /// Each criterion with how the latest review that judged it found it; criteria a review judged that are not in
-    /// `doneWhen` (a task given none) follow, in the order they were first judged.
+    /// `doneWhen` (a task given none) follow, in the order they were first judged. Once the acceptance stands, a
+    /// criterion no review judged (one added after it) is `unchecked`, not open: nothing waits on it any more.
     var checklist: [ReviewCheckItem] {
+        let settled = acceptanceStands
         var latest: [String: Check] = [:]
         var order: [String] = []
         for r in reviews {
@@ -130,7 +137,7 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
         for criterion in doneWhen {
             seen.insert(criterion)
             let c = latest[criterion]
-            out.append(ReviewCheckItem(criterion: criterion, mark: c.map { $0.met ? .met : .missing } ?? .open, evidence: evidence(c)))
+            out.append(ReviewCheckItem(criterion: criterion, mark: c.map { $0.met ? .met : .missing } ?? (settled ? .unchecked : .open), evidence: evidence(c)))
         }
         for criterion in order where !seen.contains(criterion) {
             let c = latest[criterion]
@@ -139,9 +146,10 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
         return out
     }
 
-    /// "2/3": criteria met of all, for a chip; "" without criteria.
+    /// "2/3": criteria met of all, for a chip; "" without criteria. Criteria left unchecked by a standing acceptance
+    /// are not counted (an accepted task reads "5/5", not "5/8").
     var checkCount: String {
-        let list = checklist
+        let list = checklist.filter { $0.mark != .unchecked }
         guard !list.isEmpty else { return "" }
         return "\(list.filter { $0.mark == .met }.count)/\(list.count)"
     }
@@ -175,20 +183,26 @@ nonisolated struct ReviewBadge: Hashable, Sendable {
 
 /// One criterion's line in the checklist.
 nonisolated struct ReviewCheckItem: Hashable, Sendable {
-    enum Mark: Sendable { case met, missing, open }
+    /// `unchecked`: added after an acceptance that still stands; no review judged it and none waits on it.
+    enum Mark: Sendable { case met, missing, open, unchecked }
     var criterion: String
     var mark: Mark
     var evidence: String?
 }
 
 nonisolated extension TodoItem {
-    /// The review state that holds now: an accepted or cancelled task the user reopened goes on again.
+    /// The review state that holds now: a cancelled task reopened goes on again; an accepted one stays accepted while
+    /// its acceptance stands (`TaskSupervision.acceptanceStands`, #3156).
     var reviewState: ReviewState? {
         guard let supervision else { return nil }
         let st = ReviewState(rawValue: supervision.state) ?? .ongoing
-        if doneAt == nil, st == .accepted || st == .cancelled { return .ongoing }
+        if doneAt == nil, st == .accepted, !supervision.acceptanceStands { return .ongoing }
+        if doneAt == nil, st == .cancelled { return .ongoing }
         return st
     }
+
+    /// Its supervisor's acceptance still stands (see `TaskSupervision.acceptanceStands`).
+    var acceptanceStands: Bool { supervision?.acceptanceStands == true }
 
     /// Its review's chip; nil for a task that is not supervised.
     var reviewBadge: ReviewBadge? {

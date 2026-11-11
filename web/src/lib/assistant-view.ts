@@ -1,6 +1,6 @@
 // The assistant's cards drawn with the extensions' components (docs/extensions/extensions.md "Declarative UI", #1850): a ```persona-view
 // block is a View (or one component) as an extension would send it; the older ```persona-card block (#886: stat, bar,
-// line, stacked_bar) is turned into a View first, by the rules of sdk/go/wire/personacard.go (the reference; the cases in
+// line, stacked_bar, ring) is turned into a View first, by the rules of sdk/go/wire/personacard.go (the reference; the cases in
 // schema/extension/examples/persona-card/ hold every app to the same), so both look the same here as on every other app.
 // In the assistant nothing acts: buttons, fields and segmented are left out, the search box and "Load more" never show; links
 // still open.
@@ -86,6 +86,46 @@ function parts(raw: unknown): Part[] | null {
   return out;
 }
 
+/**
+ * A persona-card no app draws (a type this page does not know, a newer one, or parts that do not add up) as words, so
+ * its JSON never shows: the title, the subtitle, a "label: value unit" line per number (value, total, segments, rest,
+ * points), the note. null when it is not a whole JSON object yet (still being written: the code block shows it).
+ */
+export function cardText(code: string): string | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(code);
+  } catch {
+    return null;
+  }
+  if (!isObject(raw)) return null;
+  const unit = str(raw.unit);
+  const total = isObject(raw.total) ? num(raw.total.value) : undefined;
+  const totalUnit = isObject(raw.total) ? str(raw.total.unit) || unit : unit;
+  const lines: string[] = [];
+  const title = str(raw.title);
+  const subtitle = str(raw.subtitle);
+  if (title) lines.push(title);
+  if (subtitle) lines.push(subtitle);
+  const value = num(raw.value);
+  if (value !== undefined) lines.push(`${title ? t("lib-assistant-view.current") : t("lib-assistant-view.value")}: ${amount(value, unit)}`);
+  if (total !== undefined) lines.push(`${t("lib-assistant-view.total")}: ${amount(total, totalUnit)}`);
+  const each = [raw.segments, isObject(raw.rest) ? [raw.rest] : undefined, raw.points];
+  for (const list of each) {
+    if (!Array.isArray(list)) continue;
+    for (const p of list) {
+      if (!isObject(p)) continue;
+      const v = num(p.value);
+      if (v === undefined) continue;
+      const note = str(p.note);
+      lines.push(`${str(p.label) || "·"}: ${amount(v, total !== undefined ? totalUnit : unit)}${note ? ` (${note})` : ""}`);
+    }
+  }
+  const note = str(raw.note);
+  if (note) lines.push(note);
+  return lines.length ? lines.join("\n") : null;
+}
+
 /** A persona-card as the apps draw it (sdk/go/wire/personacard.go); null when they cannot: it stays a code block. */
 export function cardView(raw: unknown): UIView | null {
   if (!isObject(raw)) return null;
@@ -94,7 +134,7 @@ export function cardView(raw: unknown): UIView | null {
   const points = parts(raw.points);
   if (!segments || !rest || !points) return null;
   const all = [...segments, ...rest];
-  const sum = all.reduce((s, p) => s + p.value, 0);
+  let sum = all.reduce((s, p) => s + p.value, 0);
   const value = num(raw.value);
   const title = str(raw.title);
   const unit = str(raw.unit);
@@ -106,6 +146,16 @@ export function cardView(raw: unknown): UIView | null {
     case "stacked_bar":
       if (!all.length || sum <= 0 || all.some((p) => p.value < 0)) return null;
       break;
+    case "ring": {
+      // what the total leaves over the parts is a part of its own, last
+      const total = isObject(raw.total) ? num(raw.total.value) : undefined;
+      if (total !== undefined && total > sum) {
+        all.push({ label: t("lib-assistant-view.remaining"), value: total - sum, note: "" });
+        sum = total;
+      }
+      if (all.length < 2 || sum <= 0 || all.some((p) => p.value < 0)) return null;
+      break;
+    }
     case "line":
       if (points.length < 2) return null;
       break;
@@ -139,6 +189,19 @@ export function cardView(raw: unknown): UIView | null {
         series.push({ name: t("lib-assistant-view.other"), tone: "neutral", points: [{ label, value: other, display: amount(other, u) }] });
       }
       s.items.push({ type: "chart", kind: "bar", series, ...(u ? { unit: u } : {}), stacked: true });
+      for (const p of all) s.items.push({ type: "row", value: amount(p.value, u), title: p.label, ...(p.note ? { subtitle: p.note } : {}) });
+      break;
+    }
+    case "ring": {
+      const total = isObject(raw.total) ? num(raw.total.value) : undefined;
+      const u = isObject(raw.total) ? str(raw.total.unit) || unit : unit;
+      const shown = all.length > 8 ? [...all.slice(0, 7), { label: t("lib-assistant-view.other"), value: all.slice(7).reduce((x, p) => x + p.value, 0), note: "" }] : all;
+      const center = amount(total ?? sum, u);
+      const item: UIItem = { type: "chart", kind: "donut", series: [{ points: shown.map((p) => ({ label: p.label, value: p.value, display: amount(p.value, u) })) }] };
+      if (u) item.unit = u;
+      if (note) item.detail = note;
+      if ([...center].length <= 20) item.center = center;
+      s.items.push(item);
       for (const p of all) s.items.push({ type: "row", value: amount(p.value, u), title: p.label, ...(p.note ? { subtitle: p.note } : {}) });
       break;
     }

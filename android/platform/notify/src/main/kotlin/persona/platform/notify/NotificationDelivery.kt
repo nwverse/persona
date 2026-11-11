@@ -9,13 +9,27 @@ import persona.core.contracts.api.DeviceNotificationPreferences
 import persona.core.contracts.api.DoneNotification
 import persona.core.contracts.api.InteractionCenter
 import persona.core.contracts.api.SessionsRepository
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.filter
+
+/**
+ * The events [NotificationDelivery.accept] acts on, taken off the hub's event flow at once and handed on in order (#4038).
+ * The merged event flow has no buffer: `emit` returns only after every subscriber took the event, so a subscriber busy
+ * with one (accept reads the preferences and the cards over the network) held up every other live event, chat
+ * streaming included, until it was done.
+ */
+internal fun Flow<ServerEvent>.notificationEvents(): Flow<ServerEvent> =
+    filter { it is NotifyEvent || it is InteractionResolvedEvent }.buffer(Channel.UNLIMITED)
 
 /** Only hub-approved notify events may create alerts; raw interactions are state updates. */
 internal class NotificationDelivery(
     private val interactions: InteractionCenter,
     private val sessions: SessionsRepository,
     private val suppressed: (SessionKey) -> Boolean,
-    private val postInteraction: (Interaction) -> Unit,
+    /** The card, and whether it comes inside this device's quiet hours (the event's `quiet`: without a sound). */
+    private val postInteraction: (Interaction, Boolean) -> Unit,
     private val postNotify: (NotifyEvent) -> Unit,
     private val retract: (String) -> Unit,
     private val preferences: suspend () -> DeviceNotificationPreferences? = { DeviceNotificationPreferences() },
@@ -40,7 +54,7 @@ internal class NotificationDelivery(
                     val key = SessionKey(event.machineId, event.sessionId)
                     val ix = interactions.pending.value.firstOrNull { it.id == id && it.sessionKey == key } ?: return
                     if (NotificationPolicy.expired(ix)) { retract(id); return }
-                    if (session == null || !suppressed(session)) postInteraction(ix)
+                    if (session == null || !suppressed(session)) postInteraction(ix, event.quiet)
                 } else if (session == null || !suppressed(session)) postNotify(event)
             }
             else -> Unit

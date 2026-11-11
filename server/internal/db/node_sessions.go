@@ -13,6 +13,8 @@ import (
 // rows without a launcher or directory; newer nodes ignore those rows when loading
 // and write no rows for sessions they did not start (#5510).
 type NodeSession struct {
+	CreationID       string    `json:"creation_id,omitempty"`
+	Incarnation      string    `json:"incarnation,omitempty"`
 	Model            string    `json:"model,omitempty"`
 	ModelFingerprint string    `json:"model_fingerprint,omitempty"`
 	ModelEffort      string    `json:"model_effort,omitempty"`
@@ -41,9 +43,11 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 		tasks = []string{}
 	}
 	_, err := d.pool.Exec(ctx, `WITH saved AS (
-		INSERT INTO node_sessions (machine_id, session_id, pane, launcher, cwd, started_at, tasks, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-		ON CONFLICT (machine_id, session_id) DO UPDATE SET pane = $3, launcher = $4, cwd = $5, started_at = $6, tasks = $7, updated_at = now()
+		INSERT INTO node_sessions (machine_id, session_id, pane, launcher, cwd, started_at, tasks, updated_at, creation_id, incarnation)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $15, $16)
+		ON CONFLICT (machine_id, session_id) DO UPDATE SET pane = $3, launcher = $4, cwd = $5, started_at = $6, tasks = $7, updated_at = now(),
+		creation_id = CASE WHEN node_sessions.creation_id = '' THEN EXCLUDED.creation_id ELSE node_sessions.creation_id END,
+		incarnation = CASE WHEN node_sessions.incarnation = '' THEN EXCLUDED.incarnation ELSE node_sessions.incarnation END
 		RETURNING machine_id, session_id
 	) INSERT INTO settings (key, value, updated_at)
 		SELECT 'node_model.' || machine_id || '.' || session_id,
@@ -52,7 +56,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			'started_at_unknown', $14::bool), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
-		s.UltracodeProcess, unknownStart)
+		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation)
 	return err
 }
 
@@ -61,10 +65,10 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 // settings holds a node_model row for every session ever started, so the row is fetched per session through
 // settings_pkey: a join on the computed key lets the planner hash all of settings instead. The jsonb comes back
 // whole because extracting its fields in an outer SELECT repeats the subquery once per field.
-const nodeSessionsSQL = `SELECT n.session_id, n.pane, n.launcher, n.cwd, n.started_at, n.tasks,
+const nodeSessionsSQL = `SELECT n.session_id, n.pane, n.launcher, n.cwd, n.started_at, n.tasks, n.creation_id, n.incarnation,
 		COALESCE((SELECT s.value FROM settings s WHERE s.key = 'node_model.' || n.machine_id || '.' || n.session_id), '{}')
 		FROM node_sessions n
-		WHERE n.machine_id = $1 AND n.started_at > now() - interval '60 days'`
+		WHERE n.machine_id = $1 AND (n.started_at > now() - interval '60 days' OR n.creation_id <> '')`
 
 // nodeModel is the node_model.<machine>.<session> settings value PutNodeSession writes.
 type nodeModel struct {
@@ -91,7 +95,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		var id string
 		var s NodeSession
 		var m nodeModel
-		if err := rows.Scan(&id, &s.Pane, &s.Launcher, &s.Cwd, &s.StartedAt, &s.Tasks, &m); err != nil {
+		if err := rows.Scan(&id, &s.Pane, &s.Launcher, &s.Cwd, &s.StartedAt, &s.Tasks, &s.CreationID, &s.Incarnation, &m); err != nil {
 			return nil, err
 		}
 		s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort = m.Model, m.ModelFingerprint, m.ModelEffort, m.AppMode, m.AppEffort

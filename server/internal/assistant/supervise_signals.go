@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -15,11 +16,20 @@ import (
 const (
 	sigReview      = "review"      // the work looks finished: review it
 	sigIdle        = "idle"        // its agents stopped, and the work is not finished
+	sigUnjudged    = "unjudged"    // its agents stopped, and the judge could not say whether the work is finished
 	sigNeedsYou    = "needs_you"   // an agent waits for an answer
 	sigStalled     = "stalled"     // working, but nothing moved for long
 	sigInterrupted = "interrupted" // the model service cut its turn off
 	sigFailed      = "failed"      // its agent did not start
+	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
+	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
+	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
+	sigAsk         = "ask"         // its agent's card came to the supervisor before the user (ask_route.go)
+	sigDecide      = "decide"      // a task leader's worker needs a decision its leader cannot make: told the conversation above the leader (task_leader.go)
+	// sigLeaderStuck: a leader's task is stuck (leader_reports.go): the main conversation says so in one line, no push
+	// (the owner's ruling after H1, #3609). Detail is the direction's name and where it is stuck.
+	sigLeaderStuck = "leader_stuck"
 )
 
 var (
@@ -42,7 +52,10 @@ var (
 // superviseSignal is one thing about one task the supervisor should know. Key names the stretch of state it is about:
 // the same signal with the same key is told once.
 type superviseSignal struct {
-	Todo, Kind, Key  string
+	Todo, Kind, Key string
+	// Unreachable: this decision exists because the task leader's agent could not be reached, not because the worker
+	// waits for the user. It stays a decision even though the worker's ledger is not needs_user (task_leader.go).
+	Unreachable      bool
 	At               time.Time
 	Machine, Session string
 	Detail, Ask      string
@@ -51,6 +64,16 @@ type superviseSignal struct {
 	Report      string
 	Evidence    []string
 	Step, Steps int
+	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
+	Orphan string
+	// To is the conversation it goes to when that is not digestTo's to say: a card's rung (sigAsk), the main
+	// conversation for a leader's escalated cards.
+	To string
+	// Cards: an escalated signal's cards the user was given (ask_escalate).
+	Cards []prompts.SuperviseAsk
+	// Decision: the decision a recheck or an owner_cannot_answer signal is about, as it was asked (decision.go); for
+	// owner_cannot_answer Detail is the owner's answer (decide_yourself, not_what_i_asked, explain_first).
+	Decision *prompts.SuperviseDecision
 }
 
 const (
@@ -72,13 +95,20 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigReport {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
+	if g.Kind == sigAsk { // its cards with each rung are an entry of their own
+		return g.Todo + "|" + g.Kind + "@" + g.To
+	}
+	if g.Kind == sigEscalated && len(g.Cards) > 0 { // a leader's escalated cards, apart from its needs_user
+		return g.Todo + "|" + g.Kind + ":cards"
+	}
 	return g.Todo + "|" + g.Kind
 }
 
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigFailed, sigInterrupted:
+	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+		sigRecheck, sigUndecidable, sigOwnerCannot: // the owner waits on a decision they cannot answer as it is
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -91,21 +121,28 @@ type superviseBook struct {
 	writeMu sync.Mutex // one ledger write at a time (updateSupervision)
 	dedupMu sync.Mutex // serializes digest reservations and delivery
 	dedup   map[string]superviseFingerprint
-	pending map[string]superviseSignal // by todo|kind
-	sent    map[string]string          // todo|kind → the key last told
-	asks    map[string]string          // todo → what its agent last asked (InteractionRaised)
-	last    time.Time                  // when the last supervision message went out
-	queued  []superviseSignal          // the signals of the message still waiting in the main conversation's queue
+	pending map[string]superviseSignal   // by todo|kind
+	sent    map[string]string            // todo|kind → the key last told
+	asks    map[string]string            // todo → what its agent last asked (InteractionRaised)
+	last    time.Time                    // when the last supervision message went out
+	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	timer   *time.Timer
 	timerAt time.Time
 	hold    map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
 	visible map[string]bool      // an explicit user action makes the current triage turn visible
+	// failSeen: tasks whose failed start a supervision message carried, and when (start_remedy.go remedyTurnEnded)
+	failSeen map[string]time.Time
+	// lines are the reports being paraphrased for the Progress row (report_line.go; the tests wait on them).
+	lines sync.WaitGroup
 }
 
 func (b *superviseBook) init() {
 	if b.pending == nil {
 		b.pending, b.sent, b.asks, b.hold = map[string]superviseSignal{}, map[string]string{}, map[string]string{}, map[string]time.Time{}
 		b.visible = map[string]bool{}
+	}
+	if b.failSeen == nil {
+		b.failSeen = map[string]time.Time{}
 	}
 }
 
@@ -228,7 +265,9 @@ func (s *Service) retryDigestLocked(d time.Duration) {
 // watchSignals are what t and its agents show now that the supervisor should hear of, by their state alone: a task
 // waiting for review (told once per review: again after a restart of the assistant, which forgot what it told), an
 // agent waiting for an answer (at once for a quiet task), or working without progress for long. Nothing more for a
-// task waiting for review or for the user, and nothing for one done or not supervised.
+// task waiting for review or for the user, only that its time came for a parked one, and nothing for one done or not
+// supervised. A task nobody works on any more
+// is told from what the minute pass found (orphanSignal, tasks_orphan.go), since that asks whether its computers answer.
 func watchSignals(t Todo, agents []proto.Session, now time.Time) []superviseSignal {
 	v := t.Supervision
 	if v == nil || t.DoneAt != nil {
@@ -238,6 +277,11 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time) []superviseSign
 	case reviewPending:
 		return []superviseSignal{{Todo: t.ID, Kind: sigReview, Key: reviewKey(v)}}
 	case reviewNeedsUser:
+		return nil
+	case reviewParked: // nothing until its time, then that it came (parked.go)
+		if g, ok := parkedDueSignal(t, now); ok {
+			return []superviseSignal{g}
+		}
 		return nil
 	}
 	var out []superviseSignal
@@ -285,6 +329,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed is rehomed even with no signal of its own
 		s.superviseWatch(ctx, time.Now())
 	}
 }
@@ -293,13 +338,28 @@ func (s *Service) superviseLoop(ctx context.Context) {
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
-	for _, t := range s.todosOf(ctx, "*") {
+	s.askTick(now) // cards held past their time go up a rung (ask_route.go)
+	routed := s.routedSessions()
+	tasks := s.todosOf(ctx, "*")
+	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
+	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
+		s.remedyWatch(ctx, t, now) // a failed start's kept tab expired (start_remedy.go)
 		for _, g := range watchSignals(t, s.taskAgents(ctx, t), now) {
+			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
+				continue // its card is with the supervisor as an ask already
+			}
 			s.signal(g)
 		}
+		if g, ok := s.orphanSignal(t); ok { // nobody works on it, as the minute pass found (tasks_orphan.go)
+			s.signal(g)
+		}
+		if g, ok := s.undecidableSignal(ctx, t, now); ok { // waits for the owner with nothing to answer (decision.go)
+			s.signal(g)
+		}
+		s.briefClock(ctx, t, now) // past its brief's clock with no end (task_brief_scope.go)
 	}
 	b := &s.supervise
 	b.mu.Lock()

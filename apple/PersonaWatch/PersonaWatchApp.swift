@@ -9,7 +9,10 @@ struct PersonaWatchApp: App {
     var body: some Scene {
         WindowGroup {
             WatchRootView()
-                .onOpenURL { model.openExtensionSurface($0) }
+                .onOpenURL { url in
+                    // The Meeting Recording complication (persona://record?meeting=1): straight into a meeting recording.
+                    if WatchModel.isMeetingLink(url) { model.meetingAsked = true } else { model.openExtensionSurface(url) }
+                }
                 .environment(model)
                 .tint(Theme.accent)
         }
@@ -25,7 +28,7 @@ struct PersonaWatchApp: App {
 }
 
 /// Watch state: seeded by the phone over WatchConnectivity, refreshed from the hubs directly while open. With several
-/// groups of hubs on the phone (docs/protocol/multi-hub.md「手表」) the watch gets each group's credential and shows them merged;
+/// groups of hubs on the phone (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」) the watch gets each group's credential and shows them merged;
 /// what it does goes to the group of what it acts on.
 @Observable
 final class WatchModel {
@@ -54,6 +57,15 @@ final class WatchModel {
     var lastUpdate: Date?
     /// The persona chosen on the phone: the Milk Frog shows only for its own.
     var persona = UserDefaults.standard.string(forKey: WatchModel.personaKey)
+    /// The meetings' minutes the phone relays (`WatchMinutes`, docs/apple/recording.md「Apple Watch」).
+    var minutes = WatchMinutes()
+    /// A meeting recording asked for from outside the app (the complication): the home page opens it.
+    var meetingAsked = false
+
+    /// persona://record (the complication's link).
+    static func isMeetingLink(_ url: URL) -> Bool {
+        HubNaming.accepts(scheme: url.scheme) && url.host() == "record"
+    }
     /// The Milk Frog's files on this watch.
     let pet = WatchPetPack()
     /// The Milk Frog on the watch face.
@@ -91,12 +103,10 @@ final class WatchModel {
     init() {
         NativeStateMigration.prepare()
         seenInteractionUids = UserDefaults.standard.stringArray(forKey: Self.seenUidsKey) ?? []
-        if let data = UserDefaults.standard.data(forKey: "configs"), let all = try? JSONDecoder().decode(WatchConfigs.self, from: data) {
+        if let all = WatchConfigs.stored() {
             (configs, names, missing) = (all.configs, all.names, all.missing ?? [])
             extensionDeviceIDs = all.deviceIDs ?? [:]
             extensionCapabilities = all.features ?? [:]
-        } else if let data = UserDefaults.standard.data(forKey: "config"), let c = try? JSONDecoder().decode(ServerConfig.self, from: data) {
-            configs = ["": c]
         }
         #if DEBUG
         if let s = UserDefaults.standard.string(forKey: "pairURL"), let c = ServerConfig(pairURL: s) { configs = ["": c] }
@@ -108,6 +118,7 @@ final class WatchModel {
             missing = s.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
             missing.forEach { names[$0] = $0 }
         }
+        WatchMeetingSamples.install(self) // `-showMeetingSample recording|minutes` (screenshots)
         #endif
         WatchSync.shared.onConfig = { [weak self] c in
             guard let self else { return }
@@ -119,8 +130,7 @@ final class WatchModel {
             extensionDeviceIDs = [:]
             extensionCapabilities = [:]
             syncExtensionSurfaces()
-            UserDefaults.standard.set(try? JSONEncoder().encode(c), forKey: "config")
-            UserDefaults.standard.removeObject(forKey: "configs")
+            WatchConfigs(configs: ["": c]).store()
             Task { await self.refresh() }
             Task { await self.refreshExtensionSurfaces() }
         }
@@ -134,7 +144,7 @@ final class WatchModel {
             extensionDeviceIDs = all.deviceIDs ?? [:]
             extensionCapabilities = all.features ?? [:]
             syncExtensionSurfaces()
-            UserDefaults.standard.set(try? JSONEncoder().encode(all), forKey: "configs")
+            all.store()
             Task { await self.refresh() }
             Task { await self.refreshExtensionSurfaces() }
         }
@@ -143,6 +153,7 @@ final class WatchModel {
             UserDefaults.standard.set(id, forKey: WatchModel.personaKey)
             Task { await self?.fetchPet() }
         }
+        WatchSync.shared.onMinutes = { [weak self] m in self?.minutes = m }
         WatchSync.shared.onSummary = { [weak self] s in
             guard let self, WatchGroupRefresh.acceptsSummary(at: s.at, lastUpdate: self.lastUpdate) else { return }
             // The phone's summary is every group merged; split it back so a later failed direct fetch keeps the right
@@ -365,10 +376,12 @@ struct WatchRootView: View {
     @Environment(WatchModel.self) private var model
     @State private var openedItem: InboxItem?
     @State private var recordingOpen = false
+    @State private var meetingOpen = false
     #if DEBUG
     @State private var openedInteraction: Interaction?
     @State private var openedSession: Session?
     @State private var openedPetPage: String?
+    @State private var openedMinutes: WatchMinutes.Meeting?
     /// `-openWatchItem running`: the list without Needs You, so the running sessions are on screen (screenshots).
     private static let runningFirst = UserDefaults.standard.string(forKey: "openWatchItem") == "running"
     /// `-openWatchItem inbox`: Needs You without the agents' requests, so the inbox rows are on screen (screenshots).
@@ -403,6 +416,7 @@ struct WatchRootView: View {
                             }
                         }
                     }
+                    WatchMeetingEntries(open: { meetingOpen = true })
                     NavigationLink { WatchRecordingView() } label: {
                         Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).font(Theme.Font.secondaryMedium).lineLimit(1)
                     }.watchCard()
@@ -506,6 +520,16 @@ struct WatchRootView: View {
                 .navigationDestination(item: $openedPetPage) { page in
                     if page == "complication" { PetComplicationPreview() } else { WatchPetView() }
                 }
+                // `-openWatchItem minutes|minutes-writing` (with `-showMeetingSample minutes`): a meeting's short minutes, or
+                // one still being written.
+                .navigationDestination(item: $openedMinutes) { WatchMinutesView(meeting: $0) }
+                .task {
+                    switch UserDefaults.standard.string(forKey: "openWatchItem") {
+                    case "minutes": openedMinutes = model.minutes.meetings.first { $0.state == .ready }
+                    case "minutes-writing": openedMinutes = model.minutes.meetings.first { $0.state == .writing }
+                    default: break
+                    }
+                }
                 .task {
                     guard let want = UserDefaults.standard.string(forKey: "openWatchItem"), want == "pet" || want == "complication" else { return }
                     for _ in 0..<120 where model.petStatus == nil || (want == "complication" && WatchPetSnapshot.read() == nil) {
@@ -531,6 +555,12 @@ struct WatchRootView: View {
             }
         }
         .sheet(isPresented: $recordingOpen) { NavigationStack { WatchRecordingView() } }
+        .sheet(isPresented: $meetingOpen) { NavigationStack { WatchRecordingView(startsMeeting: true) } }
+        .onChange(of: model.meetingAsked, initial: true) { _, asked in
+            guard asked else { return }
+            model.meetingAsked = false
+            meetingOpen = true
+        }
         .sheet(item: Binding(get: { model.extensionSurface }, set: { model.extensionSurface = $0 })) { destination in
             NavigationStack { WatchExtensionSurfacePage(destination: destination) }
         }
@@ -801,7 +831,7 @@ struct WatchSessionView: View {
                         WatchSourceMessage(message: it, source: source)
                     } else if let n = it.injected {
                         // Persona's message for the model (a task's notice, a scheduled run…): its line, centered, never
-                        // its words (docs/protocol/protocol.md「Persona 注入的消息」).
+                        // its words (docs/protocol/protocol.md「Messages injected by Persona」).
                         Label { Text(n.line) } icon: { Image(systemName: InjectedLook.icon(n)).foregroundStyle(InjectedLook.tint(n)) }
                             .font(Theme.Font.caption)
                             .foregroundStyle(.secondary)
@@ -918,6 +948,10 @@ struct WatchPairView: View {
                 }
                 WatchSyncButton()
                 // In the scroll view: beside it, it squeezed the page until the sync button was out of sight.
+                NavigationLink { WatchRecordingView(startsMeeting: true) } label: {
+                    Label("Meeting Recording", systemImage: Theme.Icon.recording).lineLimit(1)
+                }
+                .padding(.top, Theme.Space.s)
                 NavigationLink { WatchRecordingView() } label: {
                     Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).lineLimit(1)
                 }

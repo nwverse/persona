@@ -220,7 +220,7 @@ func (e *Engine) judgeDuplicate(ctx context.Context, c dedupeCandidate) (same, k
 	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.dedupe").JSONMax(cctx, prompts.RenderKBDedupe(prompts.KBOwner{Owner: e.Owner}), in, 600, &d); err != nil {
+	if err := e.modelFor("kb.dedupe").JSONMax(cctx, prompts.RenderKBDedupe(prompts.KBOwner{Owner: e.ownerName()}), in, 600, &d); err != nil {
 		return false, false, "", err
 	}
 	reason = oneLine(d.Reason)
@@ -427,11 +427,17 @@ func (e *Engine) relinkRefs(p *Project, manual bool, f func(ref string, projects
 			}
 			v, t, list = c, &c.Tagging, &c.Projects
 		case KindPerson:
-			per, ok := e.Store.Person(id)
-			if !ok {
-				continue
+			// Read again under personMu: chats or handles the pipeline links meanwhile stay.
+			if _, _, err := e.Store.updatePerson(id, manual, nil, func(per *Person) bool {
+				l, changed := f(ref, per.Projects)
+				if changed {
+					per.Projects = l
+				}
+				return changed
+			}); err != nil {
+				return err
 			}
-			v, t, list = per, &per.Tagging, &per.Projects
+			continue
 		default:
 			it, ok := e.Store.Item(kind, id)
 			if !ok {

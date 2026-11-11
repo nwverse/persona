@@ -9,9 +9,12 @@ Implemented in 4 steps; after each step, the corresponding "Plan" is rewritten a
 `scripts/release/hub_release.py --config <private-config.json>` can run from a
 systemd user timer on a dedicated Linux build machine. It fetches the configured `source_branch` (default `main`) into an
 exclusive checkout (never a developer checkout), runs server vet/tests and race checks, script suites, web
-checks and the binary privacy scan, then publishes the tested commit. It reports
-`hub-release/worker` commit statuses. These are independent CI results, not GitHub
-Actions run results. This provides an execution path when hosted runner labels
+checks and the binary privacy scan, then publishes the tested commit. GitHub commit statuses are disabled by default.
+Only the JSON boolean `"report_commit_status": true` enables pending/success/failure
+reports (`hub-release/worker`, or the corresponding validation/manager context).
+Missing or false makes no status API requests; local logs, receipts and Hub
+publication metadata remain authoritative. This option does not rewrite historical
+statuses. Opted-in statuses are independent CI results, not GitHub Actions results. This provides an execution path when hosted runner labels
 have no available capacity or the operator cannot administer those runners.
 
 The private config supplies `repository`, `checkout`, `state_dir`, `update_url`
@@ -202,7 +205,7 @@ releases retain their separate publishing workflow.
     deletes broken links, and automatically moves skills an older version installed into the assistant directory (`TestSyncMovesTheOldCopy`); the gate command only appears when a skill that carries it exists (`TestGatedCommandOnlyWithTheSkill`);
     without it, the assistant's CLAUDE.md only covers MCP's `lark_*` (golden `assistant_claude_md.bare`); the hub asks node via `skills.list`;
     `GET /api/v1/skills` is the read-only list for the App. The copy of the Lark gateway skill was moved under the repo's `skills/` at the time (#1571 deleted that copy and its sync script; the skill is now provided by the Lark extension).
-  - One binary: there are no longer files that differ by `public` (`TestOneBuild`); publish.sh keeps `-tags public` only as a marker for the privacy scan (the scan uses it to recognize dependency constants it can skip).
+  - One binary: no persona file builds differently with any tag of `server/build-tags.txt` (`TestOneBuild`), the line every release build uses. Its `public` tag is only a marker for the privacy scan (the scan uses it to recognize dependency constants it can skip); its `ts_omit_` tags leave out only the tailscale.com features persona never uses (`docs/operations/release.md`).
   - Channel and build number: `main.channel`, `main.build`, `main.updateURL`; publish.sh and deploy.sh stamp `release`, Docker stamps `docker`;
     `personad version -v` shows the channel and build number; `/api/v1/health` and `hello` carry `channel`, `build`, `protocol`, `min_app_build`.
   - Version manifest: `internal/update` (manifest, `CheckNext`, no downgrade `TestNoDowngrade`), `personad release manifest|check-next`;
@@ -400,7 +403,7 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
 - **Which program the hub goes on as** (`run` in `pending.json`, `Pending.RunPath`): a hub run as `persona-hub` restarts, hands over and rolls back as the `persona-hub` the update swapped, so it stays on its own program; a hub run as `personad` stays on `personad` (no `run`).
   `target` stays `personad`, the release's main download and what the watchdog runs as `personad.prev`. A build that predates `run` (an older edge or watchdog) reads only `target` and brings the hub back as `personad hub run`, which serves the same hub; a `pending.json` an older build wrote has no `run` and goes back to `target` as before.
   A release without `persona-hub` for this platform leaves a hub run as `persona-hub` by hand on `personad` (which the update did replace), not on a `persona-hub` it did not.
-- **Which program a service runs** is its unit's (or agent's) to say: an update replaces the files and never edits a service. On Linux `hub setup` writes the hub's unit to run `persona-hub run` and the built-in manager's to run `persona-manager assistant` when each is beside `personad` and its build ([../server/server.md](../server/server.md) ("Programs")); a Mac's agents stay on `personad` for now. A unit it wrote earlier runs `personad` until setup runs again (the install command with `--hub` runs it), which moves the unit to the program and restarts it; `PERSONA_SPLIT_PROGRAMS=0` in setup's environment keeps it on `personad`, and the unit keeps the variable until setup runs again without it. A self-update alone never moves a hub between `personad` and `persona-hub`.
+- **Which program a service runs** is its unit's (or agent's) to say: an update replaces the files and never edits a service. On Linux `hub setup` writes the hub's unit to run `persona-hub run` and the built-in manager's to run `persona-manager assistant` when each is beside `personad` and its build, and on a Mac the launchd agents by the same rules, but an agent that ran `personad` before stays on it ([../server/server.md](../server/server.md) ("Programs")). A unit it wrote earlier runs `personad` until setup runs again (the install command with `--hub` runs it), which moves the unit to the program and restarts it; `PERSONA_SPLIT_PROGRAMS=0` in setup's environment keeps it on `personad`, and the unit keeps the variable until setup runs again without it. A self-update alone never moves a hub between `personad` and `persona-hub`.
 - **A release without `persona-hub` or `persona-manager` for this platform** (`hub.unreplaced`) leaves that file as it was. That is fine while nothing runs it, and the update goes ahead.
   It is not installed while a service runs that program, because the service would go on starting the old build beside the new `personad` (`hub/selfupdate_services.go`). A service here is one of:
   - A systemd unit whose `ExecStart` runs it: the last one in `[Service]`, drop-ins read after the unit, read as systemd and `hub-systemd.sh` read it. The user's units come from `~/.config/systemd/user`, `/etc/systemd/user`, `~/.local/share/systemd/user` and `/usr/lib/systemd/user`, the machine's from `/etc/systemd/system` and `/usr/lib/systemd/system`. A unit in an earlier directory shadows one by the same name in a later one, and drop-ins come from all of them. It counts when systemd says it is enabled (or static, generated…) or active; when `systemctl` cannot answer (no user manager to ask, say), every such unit counts.

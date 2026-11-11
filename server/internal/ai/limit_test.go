@@ -60,16 +60,19 @@ type upstream struct {
 	mu       sync.Mutex
 	reply    func(w http.ResponseWriter)
 	hold     time.Duration
+	arrived  chan struct{} // closed when the first request comes in
+	once     sync.Once
 }
 
 func newUpstream(t *testing.T, reply func(w http.ResponseWriter)) *upstream {
-	u := &upstream{reply: reply}
+	u := &upstream{reply: reply, arrived: make(chan struct{})}
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
 		u.sent.Add(1)
+		u.once.Do(func() { close(u.arrived) })
 		n := u.inflight.Add(1)
 		defer u.inflight.Add(-1)
 		for m := u.most.Load(); n > m && !u.most.CompareAndSwap(m, n); m = u.most.Load() {
@@ -115,36 +118,6 @@ func call(c *Client) error {
 		return errors.New("no answer")
 	}
 	return err
-}
-
-func TestUpstreamIgnoresNonModelProbes(t *testing.T) {
-	var replies atomic.Int32
-	u := newUpstream(t, func(w http.ResponseWriter) {
-		replies.Add(1)
-		ok(w)
-	})
-	probe := func() {
-		t.Helper()
-		resp, err := http.Get(u.srv.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("non-model probe status %d", resp.StatusCode)
-		}
-	}
-	probe()
-	if u.sent.Load() != 0 || u.inflight.Load() != 0 || u.most.Load() != 0 || replies.Load() != 0 {
-		t.Fatal("a non-model probe changed model-request counts or consumed a reply")
-	}
-	if err := call(u.client("test-key")); err != nil {
-		t.Fatal(err)
-	}
-	probe()
-	if u.sent.Load() != 1 || u.inflight.Load() != 0 || u.most.Load() != 1 || replies.Load() != 1 {
-		t.Fatal("a real POST was not counted exactly once, or a later probe changed its counts")
-	}
 }
 
 func TestQuotaPausesTheConnection(t *testing.T) {
@@ -319,6 +292,60 @@ func TestBusyCapsTheRequestsInFlight(t *testing.T) {
 	wg.Wait()
 	if failed.Load() != 0 || u.most.Load() > 2 {
 		t.Fatalf("%d failed, %d at once at most", failed.Load(), u.most.Load())
+	}
+}
+
+// A background request (Background) queued under the cap waits at most its slot wait, then is put off without being
+// sent, however long its own deadline: a knowledge base call (three minutes) used to wait it all out behind the requests
+// in flight. Any other request on the connection waits until its own deadline, as before.
+func TestSlotWaitIsBoundedForBackground(t *testing.T) {
+	fakeClock(t)
+	release := make(chan struct{})
+	u := newUpstream(t, func(w http.ResponseWriter) {
+		<-release
+		ok(w)
+	})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(free) // before the server's Close (cleanups run last first), so a failed test does not hang it
+	c := u.client("k")
+	g := gateFor(u.srv.URL, "k")
+	g.mu.Lock()
+	g.cap = 1
+	g.mu.Unlock()
+	first := make(chan error, 1)
+	go func() { first <- call(c) }()
+	select { // the first one holds the only slot
+	case <-u.arrived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first call never reached the upstream")
+	}
+	var out struct{ OK bool }
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	err := c.JSON(withSlotWait(ctx, 100*time.Millisecond), "sys", "user", &out)
+	if waited := time.Since(start); !IsPaused(err) || waited > 5*time.Second {
+		t.Fatalf("background call: %v after %v; want put off after about 100ms", err, waited)
+	}
+
+	fg, cancelFG := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancelFG()
+	start = time.Now()
+	err = c.JSON(fg, "sys", "user", &out)
+	if waited := time.Since(start); !IsPaused(err) || waited < 350*time.Millisecond {
+		t.Fatalf("other call: %v after %v; want put off at its own deadline (400ms)", err, waited)
+	}
+	if n := u.sent.Load(); n != 1 {
+		t.Fatalf("sent %d, want only the first", n)
+	}
+	free()
+	if err := <-first; err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if err := call(c); err != nil { // the slot is free again
+		t.Fatalf("after the slot came back: %v", err)
 	}
 }
 

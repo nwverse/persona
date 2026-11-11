@@ -19,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import persona.core.contracts.api.ManagerRoster
 import persona.core.contracts.parseTime
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -55,6 +56,8 @@ data class InboxPolicy(
     val twin: InboxPolicyTwin = InboxPolicyTwin.None,
     val createdAt: String? = null,
     val updatedAt: String? = null,
+    /** Whose rule it is (several managers: each keeps its own, and "Rules" stamps it); null: not known (one manager). */
+    val manager: String? = null,
 ) {
     val option: InboxMuteOption get() = InboxMuteOption(tag, value, name)
 
@@ -67,7 +70,7 @@ data class InboxPolicy(
 
 /**
  * What the rule sheet is about: a new rule from one of [record]'s options, or an existing [policy] from "Rules". A rule
- * from an item is its manager's, as its mute is; one from "Rules" is the default manager's.
+ * from an item is its manager's, as its mute is; one from "Rules" is the manager it was read from.
  */
 data class InboxPolicyTarget(
     val source: String,
@@ -75,6 +78,9 @@ data class InboxPolicyTarget(
     val record: InboxRecord? = null,
     val policy: InboxPolicy? = null,
 ) {
+    /** Whose rule it is: the item's manager ("" for the default's), else the rule's; null: not known (one manager). */
+    val manager: String? get() = if (record != null) record.manager.orEmpty() else policy?.manager
+
     /** The source's name for people: the item's account, else the rule's source name, else the source itself. */
     val sourceName: String get() = record?.sourceLabel?.takeIf { it.isNotBlank() } ?: policy?.sourceName?.takeIf { it.isNotBlank() } ?: source
 
@@ -248,27 +254,52 @@ internal fun InboxPolicySheet(repository: InboxRepository, target: InboxPolicyTa
 private fun PolicyChoice(title: String, selected: Boolean, enabled: Boolean, onSelect: () -> Unit) =
     JRow(title, onClick = onSelect, chevron = false, enabled = enabled, role = Role.RadioButton, trailing = { JRadio(selected, null) })
 
-/** The "Rules" list's state: every source's rules, newest first; Remove takes one off at once and puts it back on failure. */
+/**
+ * The "Rules" list's state: every source's rules, newest first, and with several managers each one's (read and removed
+ * with it named); Remove takes one off at once and puts it back on failure.
+ */
 @Stable
 class InboxRulesModel(private val repository: InboxRepository) {
     var rules by mutableStateOf<List<InboxPolicy>?>(null); private set
     /** Why the first read failed; a later one leaves the shown list and throws. */
     var failed by mutableStateOf<Throwable?>(null); private set
 
-    suspend fun load() {
+    /** Nothing to show: no rules. */
+    val isEmpty: Boolean get() = rules?.isEmpty() == true
+
+    private var reads = 0
+    private var shownOf: String? = null
+
+    /** Reads [manager]'s list (null: one manager, none named); only the newest read lands. */
+    suspend fun load(manager: String? = null) {
+        val read = ++reads
         failed = null
-        try { rules = repository.inboxPolicies() }
+        // Another assistant's rules never stay under this one's name.
+        if (manager != shownOf) { rules = null; shownOf = manager }
+        try {
+            val list = repository.inboxPolicies(manager = manager)
+            if (read != reads) return
+            rules = if (manager == null) list else list.map { it.copy(manager = manager) }
+        }
         catch (e: CancellationException) { throw e }
-        catch (e: Exception) { if (rules == null) failed = e else throw e }
+        catch (e: Exception) {
+            if (read != reads) return
+            if (rules == null) failed = e else throw e
+        }
     }
 
-    /** Removes [policy] at once; throws what the hub said, with the row back. */
+    /** Removes [policy] (on its manager) at once; throws what the hub said, with the row back. */
     suspend fun remove(policy: InboxPolicy) {
-        rules = rules?.filter { it.id != policy.id }
-        try { repository.removePolicy(policy.id) }
+        val same = { p: InboxPolicy -> p.id == policy.id && p.manager == policy.manager }
+        rules = rules?.filterNot(same)
+        try {
+            repository.removePolicy(policy.id, policy.manager)
+            // A reload read before the removal reached the hub may have brought it back.
+            rules = rules?.filterNot(same)
+        }
         catch (e: Exception) {
             // Back only this one: another remove that went through meanwhile stays gone.
-            rules = rules?.let { list -> (list.filter { it.id != policy.id } + policy).newestFirst() }
+            rules = rules?.let { list -> (list.filterNot(same) + policy).newestFirst() }
             throw e
         }
     }
@@ -280,12 +311,13 @@ internal fun InboxRulesSheet(repository: InboxRepository, onDismiss: () -> Unit)
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
     val res = LocalResources.current
+    val owner = currentAssistant().listOwner()
     val model = remember(repository) { InboxRulesModel(repository) }
     var editing by remember { mutableStateOf<InboxPolicyTarget?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     fun load() {
         scope.launch {
-            try { model.load() }
+            try { model.load(owner.id) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { feedback?.failure(e) }
         }
@@ -300,7 +332,7 @@ internal fun InboxRulesSheet(repository: InboxRepository, onDismiss: () -> Unit)
             catch (e: Exception) { failure = res.getString(R.string.inbox_rules_remove_failed, failureReasonText(e).resolve(res)) }
         }
     }
-    LaunchedEffect(model) { load() }
+    LaunchedEffect(model, owner) { load() } // another assistant, or this one back online, reads it again
     // The rule's own sheet takes the list's place; the list reads again when it closes.
     editing?.let { target ->
         InboxPolicySheet(repository, target, onDismiss = { editing = null; load() })
@@ -309,22 +341,23 @@ internal fun InboxRulesSheet(repository: InboxRepository, onDismiss: () -> Unit)
     JSheet(onDismiss, title = stringResource(R.string.inbox_rules_title), scrollable = true) {
         val list = model.rules
         val failed = model.failed
+        @Composable fun rule(p: InboxPolicy) =
+            JRow(p.name, subtitle = (listOf(p.sourceName ?: p.source, stringResource(muteTagName(p.tag))) + p.summary.map { stringResource(it) })
+                .filter { it.isNotBlank() }.joinToString(" · "),
+                leadingIcon = PhIcons.Target,
+                trailing = {
+                    Row {
+                        JTextButton(stringResource(R.string.inbox_policy_edit), { editing = InboxPolicyTarget.of(p) })
+                        JTextButton(stringResource(R.string.inbox_policy_remove), { remove(p) })
+                    }
+                })
         when {
-            failed != null -> JNotice(stringResource(R.string.inbox_rules_failed, failureReasonText(failed).text()), status = Status.NeedsYou,
+            failed != null -> JNotice(if (owner.offline) stringResource(R.string.inbox_rules_offline)
+                else stringResource(R.string.inbox_rules_failed, failureReasonText(failed).text()), status = Status.NeedsYou,
                 actionLabel = stringResource(R.string.inbox_retry), onAction = ::load)
             list == null -> JLoading()
-            list.isEmpty() -> JEmptyState(stringResource(R.string.inbox_rules_empty_title), stringResource(R.string.inbox_rules_empty_text), icon = PhIcons.Target)
-            else -> JGroup(rows = list.map { p -> {
-                JRow(p.name, subtitle = (listOf(p.sourceName ?: p.source, stringResource(muteTagName(p.tag))) + p.summary.map { stringResource(it) })
-                    .filter { it.isNotBlank() }.joinToString(" · "),
-                    leadingIcon = PhIcons.Target,
-                    trailing = {
-                        Row {
-                            JTextButton(stringResource(R.string.inbox_policy_edit), { editing = InboxPolicyTarget.of(p) })
-                            JTextButton(stringResource(R.string.inbox_policy_remove), { remove(p) })
-                        }
-                    })
-            } })
+            model.isEmpty -> JEmptyState(stringResource(R.string.inbox_rules_empty_title), stringResource(R.string.inbox_rules_empty_text), icon = PhIcons.Target)
+            else -> JGroup(rows = list.map { p -> { rule(p) } })
         }
         failure?.let { JNotice(it, Modifier.padding(top = Tokens.Space.l), status = Status.NeedsYou) }
     }

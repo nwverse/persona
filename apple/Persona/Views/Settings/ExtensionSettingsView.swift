@@ -2,24 +2,29 @@ import SwiftUI
 
 /// The host-owned settings shell on iOS and macOS. Extensions supply configuration
 /// sections only; identity and lifecycle controls cannot be replaced by extension UI.
+///
+/// These are rows of the page's List: what the page does as a whole (reading the update's metadata and the managers,
+/// the Update sheet) is `ExtensionSettingsPageWork`, on the List itself.
 struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: View {
     @Bindable var page: ExtensionModel
+    let lifecycle: ExtensionSettingsLifecycle
+    /// The managers, for whether this one is online (`ExtensionSettingsPageWork` reads them).
+    let roster: ManagerRoster?
     let detail: HubExtensionDetail
     let hasConfiguration: Bool
     @ViewBuilder var configuration: Configuration
     @ViewBuilder var advancedInformation: AdvancedInformation
-    @State private var lifecycle: ExtensionSettingsLifecycle
-    @State private var roster: ManagerRoster?
 
-    init(page: ExtensionModel, detail: HubExtensionDetail, hasConfiguration: Bool,
-         @ViewBuilder configuration: () -> Configuration,
+    init(page: ExtensionModel, lifecycle: ExtensionSettingsLifecycle, roster: ManagerRoster?, detail: HubExtensionDetail,
+         hasConfiguration: Bool, @ViewBuilder configuration: () -> Configuration,
          @ViewBuilder advancedInformation: () -> AdvancedInformation) {
         self.page = page
+        self.lifecycle = lifecycle
+        self.roster = roster
         self.detail = detail
         self.hasConfiguration = hasConfiguration
         self.configuration = configuration()
         self.advancedInformation = advancedInformation()
-        _lifecycle = State(initialValue: ExtensionSettingsLifecycle(id: page.id, manager: page.manager))
     }
 
     private var policy: ExtensionSettingsPolicy { .init(detail: detail) }
@@ -50,22 +55,19 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
             information
             advancedInformation
             updates
-            danger
-        }
-        .task(id: detail) { await lifecycle.loadMetadata(detail: detail) }
-        .task(id: AppModel.shared.managersRevision) {
-            if let api = AppModel.shared.api {
-                roster = await ManagerRoster.read(api.manager(nil), keeping: roster)
-            }
-        }
-        .sheet(isPresented: Binding(get: { lifecycle.preview != nil }, set: { if !$0 { lifecycle.dismissPreview() } })) {
-            if let preview = lifecycle.preview {
-                ExtensionInstallSheet(preview: preview, name: detail.plugin.name) {
-                    let succeeded = await lifecycle.confirmUpgrade()
-                    if succeeded { await page.load() }
-                    return succeeded
+            // Review's download, checks and install, right under the button that started it (#3692).
+            if let op = lifecycle.operation {
+                ExtensionOperationSection(operation: op, name: detail.plugin.name) {
+                    Task { if await lifecycle.retry() { await page.load() } }
+                } review: {
+                    Task {
+                        do { try await lifecycle.review(op) } catch { AppModel.shared.toast = Toast(error.localizedDescription, style: .error) }
+                    }
+                } dismiss: {
+                    Task { await lifecycle.dismissOperation() }
                 }
             }
+            danger
         }
     }
 
@@ -167,7 +169,7 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
                         Text(ExtensionText.upgradeAction(upgrade) ?? String(localized: "Update [Extensions Model 326f67]")).lineLimit(1)
                     }
                     .themedButton()
-                    .disabled(busy || !policy.canCheck)
+                    .disabled(busy || !policy.canCheck || !lifecycle.canReview)
                     .accessibilityIdentifier("plugin-upgrade")
                 }
             }
@@ -185,7 +187,9 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
                 identity("Previous Version", value: previous)
                 Text("This manager does not provide a rollback preview.").font(Theme.Font.label).foregroundStyle(.secondary)
             }
-            if lifecycle.busy { ProgressView() }
+            // The operation's card says what is going on once there is one; a spinner only while asking for it (or an
+            // older hub's synchronous preview).
+            if lifecycle.busy && lifecycle.operation == nil { ProgressView() }
             if let error = lifecycle.error {
                 Text(error).font(Theme.Font.label).foregroundStyle(Theme.danger).textSelection(.enabled)
                     .accessibilityIdentifier("extension-lifecycle-error")
@@ -206,13 +210,13 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
 
     private var autoUpgradeReason: String {
         if offline { return offlineReason }
-        if !policy.canAutoUpgrade { return policy.updateReason }
-        if detail.plugin.autoUpgradePaused == "market_removed" {
-            return String(localized: "The extension market is unavailable. Check its source and try again.")
+        if detail.plugin.marketWasRemoved {
+            return String(localized: "Auto-upgrade is paused because its market was removed. Your setting is kept and applies again once the market is added back with the same address.")
         }
         if detail.plugin.enabled == false || detail.plugin.autoUpgradePaused == "disabled" {
             return String(localized: "Auto-upgrade is paused while this extension is off.")
         }
+        if !policy.canAutoUpgrade { return policy.updateReason }
         if lifecycle.globalAuto == false { return String(localized: "Automatic upgrades are paused globally for this manager.") }
         return String(localized: "Compatible updates run automatically. Permission changes require review.")
     }
@@ -232,5 +236,49 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
         } footer: {
             Text(offline ? offlineReason : policy.uninstallReason)
         }
+    }
+}
+
+/// What an extension's settings page does as a whole, on the page's List and never on one of its rows (#2988): reading
+/// the update's metadata and the managers, and the Update sheet. A List builds its rows lazily and takes one down once
+/// it scrolls off, so a sheet on a row went with it and took Settings, the shell's sheet, along: in TestFlight 220 it was
+/// on a Group of the sections (a sheet per section, #2547), then on the first section, which a long page has off screen
+/// by the time Review is tapped at the bottom. A task on a row also runs again each time the row comes back.
+struct ExtensionSettingsPageWork: ViewModifier {
+    let page: ExtensionModel
+    let lifecycle: ExtensionSettingsLifecycle
+    @Binding var roster: ManagerRoster?
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: page.detail) {
+                if let detail = page.detail { await lifecycle.loadMetadata(detail: detail) }
+            }
+            .task(id: AppModel.shared.managersRevision) {
+                if let api = AppModel.shared.api {
+                    roster = await ManagerRoster.read(api.manager(nil), keeping: roster)
+                }
+            }
+            .task { await lifecycle.loadOperations() }
+            // One started earlier (the page left and opened again) went through while this page is up: read it again.
+            .onChange(of: lifecycle.operationState) { old, new in
+                if old == .running, new == .succeeded { Task { await page.load() } }
+            }
+            // Closed without Update: the operation waiting on this preview is canceled.
+            .sheet(isPresented: Binding(get: { lifecycle.preview != nil }, set: { if !$0 { lifecycle.dismissPreview() } })) {
+                if let preview = lifecycle.preview {
+                    ExtensionInstallSheet(preview: preview, name: page.detail?.plugin.name ?? page.id) {
+                        guard let consent = lifecycle.takeConsent() else {
+                            let succeeded = await lifecycle.confirmUpgrade()
+                            if succeeded { await page.load() }
+                            return succeeded
+                        }
+                        // The sheet closes at once; the steps show on the page. The operation is taken before it
+                        // closes, so closing does not cancel what was just agreed to.
+                        Task { if await lifecycle.confirmUpgrade(preview, consent: consent) { await page.load() } }
+                        return true
+                    }
+                }
+            }
     }
 }

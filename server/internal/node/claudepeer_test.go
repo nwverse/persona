@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,7 +34,8 @@ func TestOutsideClaudeListedLive(t *testing.T) {
 			s.LastText != "on it" || s.ReadOnlyReason != "" {
 			t.Errorf("%s: %+v", c.entrypoint, s)
 		}
-		if cp := s.Capabilities; cp == nil || !cp.Read || !cp.Send || cp.Interrupt || cp.Approve || cp.Terminal || cp.Attach {
+		if cp := s.Capabilities; cp == nil || !cp.Read || !cp.Send || cp.Interrupt || cp.Approve || cp.Terminal || cp.Attach ||
+			cp.Modes == nil || *cp.Modes {
 			t.Errorf("%s capabilities = %+v", c.entrypoint, cp)
 		}
 	}
@@ -171,7 +173,7 @@ func TestOutsideClaudeSendNotTaken(t *testing.T) {
 	shortPeerWait(t, 500*time.Millisecond)
 	p := bgTranscript(t, home, home, sidA, "plan")
 	inbox := newFakeInbox(t, p)
-	inbox.mode = "hold"
+	inbox.setMode("hold")
 	writeOutsideClaude(t, home, sidA, "cli", "idle", inbox, nil)
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "still there?", "client_msg_id": "m-1"})
@@ -291,6 +293,39 @@ func TestPeerTaken(t *testing.T) {
 	}
 }
 
+// A line longer than peerSeen decodes (a user line with pasted images inline, a large tool result) is read past: the
+// queue-operation after it still counts, and nothing is made up when none follows.
+func TestPeerSeenPastALongLine(t *testing.T) {
+	long := `{"type":"user","message":{"content":"` + strings.Repeat("A", 9<<20) + `"}}` + "\n"
+	taken := `{"type":"queue-operation","operation":"enqueue","content":"say \"hi\""}` + "\n"
+	for _, c := range []struct {
+		name, after string
+		want        bool
+	}{
+		{"taken after it", taken, true},
+		{"nothing after it", `{"type":"assistant","message":{"content":"ok"}}` + "\n", false},
+		{"taken, no newline yet", strings.TrimSuffix(taken, "\n"), true},
+	} {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		if err := os.WriteFile(p, []byte(`{"type":"summary"}`+"\n"+long+c.after), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := peerSeen(p, int64(len(`{"type":"summary"}`)+1), `say "hi"`); got != c.want {
+			t.Errorf("%s: peerSeen = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// A long line that fits is still decoded: a peer's message with a long body.
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	body := `say "hi" ` + strings.Repeat("x", 200<<10)
+	line, _ := json.Marshal(map[string]any{"type": "user", "origin": map[string]string{"kind": "peer", "body": body}})
+	if err := os.WriteFile(p, append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !peerSeen(p, 0, `say "hi"`) {
+		t.Error("a 200 KiB peer line was not decoded")
+	}
+}
+
 // A message sent through a claude's inbox comes back in its transcript as a peer's message signed Persona (a hidden
 // line when the session rested, a queued command while it worked): that line is the send's copy, tied to its
 // client_msg_id, while another Claude session's message with the same words is not.
@@ -314,4 +349,28 @@ func TestEchoTiesAPeerSend(t *testing.T) {
 	)
 	l.match("s", items)
 	sameTags(t, l.tag("s", items), map[string]string{"p1#0": "P", "q1#0": "Q"})
+}
+
+// A mode or effort change for a Claude outside Persona's terminals is refused with a reason that says where to change
+// it (#1843): the peer inbox takes messages only and no message gives it a pane, so "send a message first" was wrong.
+// A session nothing runs keeps the not-running refusal, now with a code the hub words in the request's language.
+func TestOutsideClaudeModesRefused(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	p := bgTranscript(t, home, home, sidA, "plan the release")
+	inbox := newFakeInbox(t, p)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	for _, entrypoint := range []string{"claude-desktop", "cli"} {
+		writeOutsideClaude(t, home, sidA, entrypoint, "idle", inbox, nil)
+		for _, m := range []map[string]any{{"permission_mode": "plan"}, {"effort": "high"}, {"model": "opus"}} {
+			m["session_id"] = sidA
+			if _, err := request(t, n, "session.modes", m); !isRefusal(err, proto.CodeModesOnComputer) {
+				t.Errorf("%s %v: %v", entrypoint, m, err)
+			}
+		}
+	}
+	_ = os.Remove(filepath.Join(home, ".claude", "sessions", strconv.Itoa(os.Getpid())+".json"))
+	if _, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "permission_mode": "plan"}); !isRefusal(err, proto.CodeModesNotRunning) {
+		t.Errorf("not running: %v", err)
+	}
 }

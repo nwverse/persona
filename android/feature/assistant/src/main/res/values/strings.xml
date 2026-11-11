@@ -83,6 +83,8 @@
     <string name="assistant_pinned_actions">Pinned actions</string>
     <string name="assistant_unpin_all">Unpin all</string>
     <string name="assistant_recent">Recent</string>
+    <string name="assistant_directions">Directions</string>
+    <string name="assistant_other_chats">Other chats</string>
     <string name="assistant_auto">Automatic</string>
     <string name="assistant_origin_inbox">Inbox</string>
     <string name="assistant_origin_task">Scheduled</string>
@@ -129,6 +131,7 @@
     <string name="assistant_needs_you_header">Needs you now</string>
     <string name="assistant_source_lark">Lark</string>
     <string name="assistant_source_mail">Email</string>
+    <string name="assistant_needs_you_agent">Agent</string>
     <string name="assistant_pair_first">Pair a hub first</string>
     <plurals name="assistant_show_all_recent">
         <item quantity="one">See all %1$d</item>

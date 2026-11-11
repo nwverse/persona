@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 )
 
-// Shell tabs left behind (docs/assistant/todos.md "Closing the agent of a finished task"). An agent Persona started in a tab of
+// Shell tabs left behind (docs/assistant/todos.md "Close Agents for completed tasks"). An agent Persona started in a tab of
 // its own can end without Persona closing it: /exit, an API error it gives up on, a launcher that quits. Its tab then
 // holds only the login shell, with "Resume this session with: claude --resume <id>" as its last words, and nobody
 // closes it; a busy machine collected dozens. The node closes such a tab (only the pane when the tab is split) once

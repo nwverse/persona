@@ -2,7 +2,6 @@ package hub
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -28,6 +28,9 @@ import (
 // dest=dir&dir=<folder>[&cwd=][&conflict=replace|keep] (the app's file browser, docs/protocol/protocol.md "Changing files"): the file
 // keeps its name in that folder, which must be in the home; a taken name is 409 exists unless conflict says what
 // to do, up to proto.MaxDirUploadBytes.
+// dest=inbox (a file sent to the computer to keep, docs/protocol/file-transfer.md): it keeps its name in the machine's
+// receive folder (hub.json machines[].inbox_dir), a taken name gets " 2"; up to proto.MaxInboxUploadBytes; only while
+// the machine's file transfer switch is on (403 file_transfer_disabled otherwise).
 func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
 	size := r.ContentLength
@@ -36,6 +39,8 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	case "", proto.UploadDestHealth:
 	case proto.UploadDestTerminal:
 		limit = proto.MaxTerminalUploadBytes
+	case proto.UploadDestInbox:
+		limit = proto.MaxInboxUploadBytes
 	case proto.UploadDestDir:
 		limit = proto.MaxDirUploadBytes
 		if strings.TrimSpace(r.URL.Query().Get("dir")) == "" {
@@ -56,6 +61,13 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	case size > limit:
 		writeCode(w, http.StatusRequestEntityTooLarge, proto.CodeTooLarge,
 			i18n.T(h.requestLang(r), "hub-upload.too_large", i18n.Args{"mb": limit >> 20}), map[string]any{"limit": limit})
+		return
+	}
+	// A file sent to keep needs the machine's file transfer switch on, as its manager reports it (internal/devices
+	// transfer_settings.go): off, never set, or a manager that does not know the switch is 403, before any byte.
+	if dest == proto.UploadDestInbox && !m.fileTransferOn() {
+		writeCode(w, http.StatusForbidden, proto.CodeFileTransferDisabled,
+			i18n.T(h.requestLang(r), "devices-file_transfer.disabled", i18n.Args{"name": m.name()}), map[string]any{"machine": m.cfg.ID})
 		return
 	}
 	ctx := r.Context()
@@ -90,9 +102,12 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 		q := r.URL.Query()
 		beginParams["dir"], beginParams["cwd"], beginParams["conflict"] = q.Get("dir"), q.Get("cwd"), q.Get("conflict")
 	}
+	if dest == proto.UploadDestInbox {
+		beginParams["dir"] = m.cfg.InboxDir // "": the node's default
+	}
 	if err := step("file.upload.begin", beginParams, &begin); err != nil {
 		var re *rpc.Error
-		// A node from before file.upload.*, or before dest=dir: "unknown upload destination".
+		// A node from before file.upload.*, or before dest=dir / inbox: "unknown upload destination".
 		if errors.As(err, &re) && re.Code == "" && (strings.HasPrefix(re.Message, "unknown method") || strings.HasPrefix(re.Message, "unknown upload destination")) {
 			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.name()}), nil)
 			return
@@ -103,7 +118,7 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	outdated := func() {
 		writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.name()}), nil)
 	}
-	if dest == proto.UploadDestDir && begin.Dest != dest || begin.HealthDir != space { // an old node ignored dest (or health_dir) and opened it elsewhere
+	if (dest == proto.UploadDestDir || dest == proto.UploadDestInbox) && begin.Dest != dest || begin.HealthDir != space { // an old node ignored dest (or health_dir) and opened it elsewhere
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_ = m.call(c, "file.upload.abort", map[string]any{"upload_id": begin.UploadID}, nil)
 		cancel()
@@ -158,7 +173,13 @@ func writeCode(w http.ResponseWriter, status int, code, msg string, extra map[st
 	for k, v := range extra {
 		body[k] = v
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	apierr.WriteBody(w, status, body)
+}
+
+// fileTransferOn is the machine's file transfer switch as its manager last reported it (proto.Machine.FileTransfer);
+// off until a report says it is on.
+func (m *Machine) fileTransferOn() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.snap != nil && m.snap.FileTransfer != nil && m.snap.FileTransfer.Enabled
 }

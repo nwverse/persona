@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -14,10 +15,12 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -65,7 +68,16 @@ internal fun AgentsScreen(
     val connection by model.connection.state.collectAsStateWithLifecycle()
     val group by model.group.collectAsStateWithLifecycle()
     val everyRequest by model.interactions.pending.collectAsStateWithLifecycle()
-    val pending = remember(everyRequest, group) { if (group == null) everyRequest else everyRequest.filter { group.admits(it.machineId) } }
+    // The current assistant's agents (docs/assistant/managers.md "Clients"), and the cards that are theirs.
+    val assistant = persona.core.designsystem.currentAssistant()
+    LaunchedEffect(model, assistant) { model.show(assistant) }
+    // The shell keeps the picked computer for the next launch: it follows the filter however that changes (a chip, or
+    // let go by a switch of assistant or hub group).
+    val machineSelected by androidx.compose.runtime.rememberUpdatedState(onMachineSelected)
+    LaunchedEffect(model) { model.listSettings.map { it.machineFilter }.distinctUntilChanged().collect { machineSelected(it) } }
+    val everySession by model.everySession.collectAsStateWithLifecycle()
+    val everyMachine by model.everyMachine.collectAsStateWithLifecycle()
+    val pending = remember(everyRequest, group, assistant, page.sessions) { shownRequests(everyRequest, group, assistant, page.sessions) }
     val outbox by model.sender.outbox.collectAsStateWithLifecycle()
     val delivery by model.delivery.collectAsStateWithLifecycle()
     val requestHistory by model.requestHistory.collectAsStateWithLifecycle()
@@ -93,6 +105,9 @@ internal fun AgentsScreen(
     val snackbar = remember { SnackbarHostState() }
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     var menu by remember { mutableStateOf(false) }
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    val homeChrome = LocalHomeChrome.current != null
+    val firstPageIncomplete = !page.loaded && page.list.groups.isEmpty()
     var newAgent by rememberSaveable { mutableStateOf(false) }
     var historyMachine by rememberSaveable { mutableStateOf<String?>(null) }
     var historySession by rememberSaveable { mutableStateOf<String?>(null) }
@@ -243,30 +258,50 @@ internal fun AgentsScreen(
         1 -> stringResource(R.string.agents_subtitle_one, parts[0])
         else -> stringResource(R.string.agents_subtitle_two, parts[0], parts[1])
     }
+    val searchPull = remember(listState, homeChrome) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                if (homeChrome && available.y > 0 && !listState.canScrollBackward) searchVisible = true
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+        }
+    }
+    JAgentHomeSurface(page.preferences.grouping == AgentGrouping.Repo) {
     Box(Modifier.fillMaxSize()) {
         JListPage(
             title = if (connection == ConnectionState.Online) names[page.settings.machineFilter] ?: "Agents" else connection.title,
             // The list holds text fields (search, a password card's password, #1581): it ends above the keyboard so the
             // focused one scrolls into view; the root leaves keyboard padding to each page (#867).
-            modifier = Modifier.imePadding(),
+            modifier = Modifier.imePadding().then(Modifier.nestedScroll(searchPull)),
             state = listState,
-            summary = summary, subtitle = subtitle, greet = true,
+            summary = summary, subtitle = subtitle, greet = true, largeTitle = LocalHomeChrome.current == null,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
-            onTitleClick = if (connection == ConnectionState.Online) null else connectionDetails, refreshing = refreshing, onRefresh = model::refresh,
+            onTitleClick = if (connection != ConnectionState.Online) connectionDetails else ({ menu = true }), refreshing = refreshing, onRefresh = model::refresh,
             actions = {
-                JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
-                JIconButton(PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
-                JIconButton(PhIcons.SlidersHorizontal, stringResource(R.string.agents_action_list_settings), { menu = true })
+                if (LocalHomeChrome.current == null) JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
+                JIconButton(if (homeChrome) PhIcons.NotePencil else PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
+                if (LocalHomeChrome.current == null) JIconButton(PhIcons.SlidersHorizontal, stringResource(R.string.agents_action_list_settings), { menu = true })
             },
         ) {
             item("search") {
                 val settings by model.listSettings.collectAsStateWithLifecycle()
-                JSearchField(settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
+                androidx.compose.animation.AnimatedVisibility(!homeChrome || searchVisible || settings.query.isNotBlank()) {
+                    JSearchField(settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
+                }
+            }
+            if (firstPageIncomplete) item("initial-state") {
+                if (page.pagination.failed) JNotice(
+                    text = stringResource(persona.core.designsystem.R.string.designsystem_load_failed),
+                    modifier = Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs),
+                    actionLabel = stringResource(persona.core.designsystem.R.string.designsystem_retry),
+                    onAction = model::refresh,
+                ) else JLoading()
             }
             if (groups.size > 1) item("groups") {
                 GroupFilterRow(groups, page.groupCounts, group, model::group)
             }
-            item("machines") {
+            if (!homeChrome) item("machines") {
                 // With more than one group a computer's chip says its group too (two groups can both have a MacBook).
                 val chips = if (groups.size > 1) page.machineCounts.map { it.copy(machine = it.machine.copy(name = names[it.machine.id] ?: it.machine.displayName)) }
                     else page.machineCounts
@@ -275,9 +310,15 @@ internal fun AgentsScreen(
             item("quick-filters") {
                 // "Lark groups" / "Terminal" (#2526) only while they have agents (or are chosen), as iOS and the web.
                 val shown = AgentQuickFilter.shown(page.settings.quick, page.list.counts)
-                QuickFilterBar(shown.map { filter ->
+                HomeAgentFilters(shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else page.list.counts[filter] ?: 0, filter.state?.designStatus)
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
+            }
+            if (homeChrome) item("grouping") {
+                Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
+                    JChip(stringResource(R.string.agents_grouping_current, page.preferences.grouping.label),
+                        onClick = { menu = true }, icon = PhIcons.Folder, role = Role.Button, trailingIcon = PhIcons.CaretDown)
+                }
             }
             // "botmux" (web #2786): show or hide botmux's sessions in this list, kept on this phone.
             if (page.botmuxCount > 0 || page.preferences.hideBotmux) item("botmux") {
@@ -323,7 +364,7 @@ internal fun AgentsScreen(
                 }
             }
             if (page.preferences.range != AgentRange.History) item("request-history") {
-                JTextButton(stringResource(R.string.agents_requests_history), { allRequests = true })
+                JRow(stringResource(R.string.agents_requests_history), onClick = { allRequests = true })
             }
             if (page.settings.quick == AgentQuickFilter.Unread && page.list.unreadShown.isNotEmpty()) item("mark-read") {
                 // The same set iOS counts and marks: the list's unread ids, whichever groups (or none) draw them.
@@ -340,6 +381,10 @@ internal fun AgentsScreen(
                 // Three cases, as iOS: a search with no result (no New session, which read as if the agents were gone), no
                 // sessions at all, and a quick filter with nothing left (Show all).
                 when {
+                    // An offline assistant with nothing the hub still keeps of it (no agent, no computer): out of reach, not a first run;
+                    // with a computer online it can start a session now.
+                    assistant.offline != null && page.allCount == 0 && page.settings.query.isEmpty() &&
+                        page.machines.isEmpty() && page.settings.machineFilter.isEmpty() -> JAssistantOffline(assistant)
                     page.allCount == 0 && page.settings.query.isNotEmpty() -> JEmptyState(
                         stringResource(R.string.agents_empty_search_title, page.settings.query),
                         stringResource(R.string.agents_empty_search_hint), icon = PhIcons.MagnifyingGlass)
@@ -448,9 +493,9 @@ internal fun AgentsScreen(
                     }
                 }
             }
-            if (page.pagination.paged) item("sessions-pagination", contentType = "pagination") {
+            if (page.pagination.paged && !firstPageIncomplete) item("sessions-pagination", contentType = "pagination") {
                 Column(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.m), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(stringResource(R.string.agents_page_loaded, page.sessions.size, page.pagination.total),
+                    Text(pluralStringResource(R.plurals.agents_page_loaded, page.pagination.total, page.sessions.size, page.pagination.total),
                         style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
                     if (page.pagination.loading) JSpinner()
                     else if (page.pagination.hasMore) JTextButton(stringResource(R.string.agents_page_more), model::loadMore)
@@ -459,7 +504,16 @@ internal fun AgentsScreen(
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
+    }
     if (menu) JActionSheet(buildList {
+        if (homeChrome) {
+            add(JAction(stringResource(R.string.agents_action_search), PhIcons.MagnifyingGlass, onClick = { searchVisible = true }))
+            add(JAction(stringResource(R.string.agents_chip_all_machines), PhIcons.Desktop,
+                checked = page.settings.machineFilter.isEmpty(), onClick = { model.machine(""); onMachineSelected("") }))
+            page.machineCounts.forEach { chip -> add(JAction(chip.machine.displayName, PhIcons.Desktop,
+                checked = page.settings.machineFilter == chip.machine.id,
+                onClick = { model.machine(chip.machine.id); onMachineSelected(chip.machine.id) })) }
+        }
         if (archives?.api?.supported == true) add(JAction(stringResource(R.string.agents_archives_title), PhIcons.Archive,
             onClick = { showArchives = true }))
         AgentRange.entries.forEach { range -> add(JAction(stringResource(R.string.agents_menu_range, range.label), checked = page.preferences.range == range, onClick = { model.range(range) })) }
@@ -522,7 +576,8 @@ internal fun AgentsScreen(
     operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId]) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
         TodoPickerSheet(
-            todos = todos,
+            todos = assistant.todosFor(todos, targetSession.machineId,
+                targetSession.manager ?: page.machines.firstOrNull { it.id == targetSession.machineId }?.manager),
             title = stringResource(if (targetSession.todo != null) R.string.agents_todo_move_title else R.string.agents_todo_link_title),
             currentTodoId = targetSession.todo?.id,
             sessionLookup = { k -> page.sessions.firstOrNull { it.key == k } },
@@ -540,7 +595,7 @@ internal fun AgentsScreen(
     pickingTodoForSpace?.let { (machineId, space) ->
         val current = todos.forSpace(machineId, space)
         TodoPickerSheet(
-            todos = todos,
+            todos = assistant.todosFor(todos, machineId, page.machines.firstOrNull { it.id == machineId }?.manager),
             title = stringResource(if (current != null) R.string.agents_space_todo_move else R.string.agents_space_todo_link),
             currentTodoId = current?.id,
             sessionLookup = { k -> page.sessions.firstOrNull { it.key == k } },
@@ -581,18 +636,57 @@ internal fun AgentsScreen(
         // Every group's requests: a notification's card may belong to a group the list is not showing (#4808).
         val current = everyRequest.firstOrNull { it.id == selected.id && it.sessionKey == selected.sessionKey }
         val request = current ?: selected
+        // Answered here: the sheet goes once the answer is delivered, and the page's notice says what was answered.
+        val openedWith = remember(selected.id, selected.sessionKey) { delivery[selected.id] }
+        LaunchedEffect(openedWith, delivery[selected.id]) {
+            if (RequestDeliveries.closesSheet(openedWith, delivery[selected.id])) requestDetail = null
+        }
+        val (session, machine) = cardContext(request, page.sessions, page.machines, everySession, everyMachine)
         RequestDetail(request, metadata, now, reachable(request), delivery[request.id],
             onDismiss = { requestDetail = null }, onOpenChat = {
                 requestDetail = null
                 open(it.sessionKey)
             }, onAnswer = model::answer, readOnly = current == null || delivery[request.id] == RequestDelivery.Sent,
-            onTerminal = if (page.sessions.firstOrNull { it.key == request.sessionKey }?.canTerminal == false) null else ({
+            onTerminal = if (session?.canTerminal == false) null else ({
                 requestDetail = null
                 navigator.navigate(TerminalRoute(request.machineId, request.sessionId))
-            }), machine = page.machines.firstOrNull { it.id == request.machineId },
-            blockedReason = page.sessions.firstOrNull { it.key == request.sessionKey }?.takeIf { !it.canApprove }
-                ?.let { approveBlocked },
-            terminalHelp = page.sessions.firstOrNull { it.key == request.sessionKey }?.canTerminal != false)
+            }), machine = machine,
+            blockedReason = session?.takeIf { !it.canApprove }?.let { approveBlocked },
+            terminalHelp = session?.canTerminal != false)
+    }
+}
+
+/**
+ * The session and computer a card's sheet reads, looked up in every manager's lists as the card is: a notification's
+ * card may be another assistant's, whose session and computer the page does not list. The page's own session comes
+ * first (it carries what is pending on it), and the hub's computer (the page has placeholders for unknown ones).
+ */
+internal fun cardContext(request: Interaction, pageSessions: List<Session>, pageMachines: List<Machine>,
+    everySession: List<Session>, everyMachine: List<Machine>): Pair<Session?, Machine?> =
+    (pageSessions.firstOrNull { it.key == request.sessionKey } ?: everySession.firstOrNull { it.key == request.sessionKey }) to
+        (everyMachine.firstOrNull { it.id == request.machineId } ?: pageMachines.firstOrNull { it.id == request.machineId })
+
+/**
+ * The cards the page shows: the current assistant's, of the hub group shown. A card names its manager, else it is its
+ * session's (one of a session the list no longer has: its own stamp alone; none: the default's).
+ */
+/**
+ * The to-dos an agent (or a project) on computer [machineId] stamped [manager] can be put on: its own assistant's, the
+ * ones a new to-do from the same sheet is made under (AgentsViewModel.todoOwner); every one with one assistant, and for
+ * another group's computer.
+ */
+internal fun persona.core.contracts.api.CurrentAssistant.todosFor(todos: List<persona.core.contracts.Todo>, machineId: String, manager: String?): List<persona.core.contracts.Todo> {
+    val roster = roster?.takeIf { it.isMulti } ?: return todos
+    if (persona.core.contracts.GroupKeys.namespaceOf(machineId) != group) return todos
+    val owner = roster.shownUnder(manager)
+    return todos.filter { roster.shownUnder(it.manager) == owner }
+}
+
+internal fun shownRequests(requests: List<Interaction>, group: GroupFilter?, assistant: persona.core.contracts.api.CurrentAssistant,
+    sessions: List<Session>): List<Interaction> {
+    val managers = sessions.associate { it.key to it.manager }
+    return requests.filter { request ->
+        (group == null || group.admits(request.machineId)) && assistant.ownsOn(request.machineId, request.manager ?: managers[request.sessionKey])
     }
 }
 
@@ -650,6 +744,8 @@ internal fun SlotRow(
         agent = session.agentLabel.takeIf { !session.isClaude && source == null },
         statusText = row.rowStatusText(muted),
         facts = buildList {
+            // Where its closeout stands on merged and deployed (#3612), first: the facts' line is cut at its end.
+            session.closeoutFacts.forEach { add(RowFact(it.text.text(), caution = it.contradicted)) }
             // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
             source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
             if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
@@ -677,12 +773,18 @@ internal fun SlotRow(
         flags = buildList {
             if (pinned) add(RowFlag(stringResource(R.string.agents_row_pinned), PhIcons.PushPin))
             if (muted) add(RowFlag(stringResource(R.string.agents_row_muted), PhIcons.Prohibit))
+            // Its closeout (#3612): the hub found a claim untrue (the line says which), or the turn is not finished.
+            when (session.closeoutMark) {
+                CloseoutMark.Contradicted -> add(RowFlag(stringResource(R.string.agents_row_closeout_contradicted), PhIcons.Warning, caution = true))
+                CloseoutMark.NotFinished -> add(RowFlag(stringResource(R.string.agents_row_not_finished), PhIcons.CircleDashed))
+                null -> Unit
+            }
         },
         launcher = launcher, branch = branch, source = origin,
         // Which agent runs there and in which client (#6390): its mark before the state mark.
         agentMark = session.agentMark,
-        // Its running Workflows (#2935): "Background workflow "parity-audit" · Verify 2/2 · 169/185+ · 14 min", counting as it changes (#3435).
-        note = WorkflowSummary.line(session, now)?.let { RowNote(it.text(), WorkflowIcon) },
+        // Its running Workflows (#2935) stay structured until the row lays them out beside critical facts (#3435).
+        note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
     if (menu) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)

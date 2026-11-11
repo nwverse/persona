@@ -129,7 +129,9 @@ class TaskSheetsShotsTest {
                     sheet = sheet, machines = machines, pending = pending)
                 if (scene == "plan") PlanEditSheet(plan, host, onDismiss = {}) {}
                 else Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background).padding(vertical = Tokens.Space.l)) {
-                    AssistantTaskBar(host)
+                    AssistantTrays(host, remember { AssistantTrayState().apply { expanded = AssistantTray.Running } },
+                        host.pending, emptyList(), emptyList(), persona.core.designsystem.AssistantTrayTokens.maximumHeight,
+                        busy = false, enabled = true, onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
                 }
                 AssistantTaskSheets(host)
             }
@@ -205,11 +207,11 @@ class TaskSheetsShotsTest {
     @Test fun filedBoard() = filed(AppStyle.Board, false)
     @Test fun filedBoardDark() = filed(AppStyle.Board, true)
 
-    @Test fun waitingCardSaysWhatItAsks() = card(listOf(bash), "需要授权：swift test", "有事等你回答")
-    @Test fun waitingCardWithoutACardReadsAsBefore() = card(emptyList(), "有事等你回答", "需要授权")
+    @Test fun waitingCardSaysWhatItAsks() = card(listOf(bash), "需要你授权：swift test", "有事等你回答")
+    @Test fun waitingCardWithoutACardReadsAsBefore() = card(emptyList(), "有事等你回答", "需要你授权")
 
-    @Test fun detailAsks() = shot("detail", AppStyle.Glass, false, "需要授权：swift test", listOf(bash))
-    @Test fun boardAsks() = shot("board", AppStyle.Glass, false, "需要授权：swift test", listOf(bash))
+    @Test fun detailAsks() = shot("detail", AppStyle.Glass, false, "需要你授权：swift test", listOf(bash))
+    @Test fun boardAsks() = shot("board", AppStyle.Glass, false, "需要你授权：swift test", listOf(bash))
 
     @Test fun dockGlass() = shot("dock", AppStyle.Glass, false, "全部 4")
     @Test fun dockGlassDark() = shot("dock", AppStyle.Glass, true, "全部 4")

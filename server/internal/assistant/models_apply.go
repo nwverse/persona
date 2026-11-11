@@ -9,7 +9,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // ---- what a node call runs on ----
@@ -17,17 +16,22 @@ import (
 // applyModel fills params (a node call's: session.start, assistant.send…) with what purpose id runs on; a launcher,
 // model or effort already in params is this call's own pick. The permission mode is left as it is.
 func (s *Service) applyModel(ctx context.Context, id string, params map[string]any) error {
+	p, err := s.modelPurposeDef(ctx, id)
+	if err != nil {
+		return err
+	}
 	b, err := s.resolveModel(ctx, id)
 	if err != nil {
 		return err
 	}
+	params["launch"] = p.launch() // a caller cannot override the purpose's execution form
 	if name, _ := params["launcher"].(string); name != "" && launcherProvider(name) != b.Provider {
 		b = ModelBinding{Provider: launcherProvider(name), Runtime: b.Runtime}
 	}
 	if b.Model != "" && strings.HasPrefix(b.Provider, "launcher.") && !proto.ValidModelID(b.Model) {
 		// Configured before a launcher's model was held to the model id rule (#1644; Model configuration refuses it as
 		// an edit now): the launcher's own default, rather than every run of this purpose failing, the main chat's too.
-		s.logf("model config %s: %q is no model id, running %s's default", id, textfmt.Clip(b.Model, 80), b.Provider)
+		s.logf("model config %s: %q is no model id, running %s's default", id, clip(b.Model, 80), b.Provider)
 		b.Model = ""
 	}
 	if model, _ := params["model"].(string); strings.TrimSpace(model) != "" {

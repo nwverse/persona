@@ -1,4 +1,4 @@
-// The terminal browser's tree (docs/integrations/terminal.md "Standalone terminals"): what a machine's node lists (`GET /machines/{mid}/panes`:
+// The terminal browser's tree (docs/integrations/terminal.md "Standalone terminal"): what a machine's node lists (`GET /machines/{mid}/panes`:
 // workspaces, tabs and panes of its terminal host, agent or plain shell) turned into the rows the page shows, plus the
 // Jump-To filter and which terminals the page keeps alive. Pure, so it is tested without a DOM.
 import { t } from "../i18n";
@@ -146,7 +146,9 @@ export function buildTerminalTree(res: PanesResponse | undefined, sessions: read
         .map((t) => ({
           id: t.id,
           label: t.label || t.id,
-          panes: [...(panesOf.get(t.id) ?? [])]
+          // a tab id is unique only within its workspace, and a host with no tabs (botmux) leaves it empty on every pane
+          panes: (panesOf.get(t.id) ?? [])
+            .filter((p) => p.workspace_id === w.id)
             .sort((a, b) => paneNumber(a) - paneNumber(b) || a.pane.localeCompare(b.pane))
             .map((p): TermPane => {
               const session = p.session_id ? byId.get(p.session_id) : undefined;

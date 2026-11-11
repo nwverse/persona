@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/terncli"
 )
 
 // Orca as the machine's engine (hostorca.go, engine.go), driven through the node's requests against a fake Orca
@@ -52,13 +53,24 @@ func TestMain(m *testing.M) {
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
 	botmuxBin = func() string { return "" }
+	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).
+	ternClient = func() *terncli.Client { return &terncli.Client{Bin: func() string { return "" }} }
 	// Nor the user's gh outside the test's PATH (ghpath.go).
 	ghFallbackDirs = func() []string { return nil }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
 	os.Setenv("PASEO_HOME", "/tmp/persona-test-no-paseo")
+	// Nor the user's Cindy: its home points nowhere (a test that wants one sets its own).
+	os.Setenv("CINDY_HOME", "/tmp/persona-test-no-cindy")
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
 	// session): the node's own default is then ~/.claude of the test's home (#2140; a test that wants one sets its own).
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	// Nor the user's state directory (these tests run from inside a Persona conversation, or a shell that set it): the
+	// state directory of a test's node is the one under its own home. A PERSONA_HOME, or its former name, left in the
+	// environment won over it, and the health uploads' tests wrote their fake reports into the user's real health
+	// space. A test that wants one sets its own.
+	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME")} {
+		os.Unsetenv(k)
+	}
 	// Nor the user's login shell: herdr's panes run zsh, whatever the machine's is (a test that wants another sets it).
 	herdrPaneShell = func() string { return "/bin/zsh" }
 	// A send looks at the box once after typing and confirms nothing: most fakes never write what was typed into the
@@ -563,7 +575,7 @@ func TestOrcaEngineUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, ok := n.hosts.Get(host.Orca).(*orcaHost)
-	if !ok || len(n.hosts.All()) != 1 {
+	if !ok || len(n.hosts.All()) != 2 || n.hosts.All()[1].Kind() != host.Tmux {
 		t.Fatalf("hosts %v", hostKinds(n))
 	}
 	if m := byID(listSessions(t, n)); m[sidB].PaneID != "orca:tab1:leaf1" || m[sidB].Status != proto.StatusWorking ||
@@ -950,7 +962,7 @@ func TestOrcaKeyBytes(t *testing.T) {
 		"shift+right": "\x1b[1;2C", "ctrl+up": "\x1b[1;5A", "f1": "\x1bOP", "f5": "\x1b[15~", "f12": "\x1b[24~",
 		"shift+f1": "\x1b[1;2P", "delete": "\x1b[3~", "insert": "\x1b[2~", "pageup": "\x1b[5~", "home": "\x1b[H",
 		"alt+backspace": "\x1b\x7f", "alt+space": "\x1b ", "alt+tab": "\x1b\t", "shift+a": "A", "alt+2": "\x1b2",
-		"shift+enter": "\x1b\r", "ctrl+a": "\x01", "esc": "\x1b",
+		"shift+enter": "\x1b\r", "ctrl+enter": "\x1b[13;5u", "ctrl+a": "\x01", "esc": "\x1b",
 	} {
 		if got, ok := orcaKeyBytes(k); !ok || got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)

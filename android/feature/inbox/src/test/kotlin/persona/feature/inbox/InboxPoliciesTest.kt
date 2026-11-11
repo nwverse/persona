@@ -131,12 +131,19 @@ class InboxPoliciesTest {
         var failRemove: Exception? = null
         var removeGate: CompletableDeferred<Unit>? = null
         val read = mutableListOf<InboxRecord?>()
+        /** Each read's manager, when one was named ("Rules" with several managers). */
+        val readFrom = mutableListOf<String?>()
+        /** A manager whose rules can't be read (offline). */
+        var away: String? = null
+        var byManager: Map<String, List<InboxPolicy>> = emptyMap()
         val saved = mutableListOf<Triple<InboxPolicyTarget, InboxPolicyTier, InboxPolicyTwin>>()
         val removed = mutableListOf<String>()
-        override suspend fun inboxPolicies(record: InboxRecord?): List<InboxPolicy> {
+        override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<InboxPolicy> {
             read += record
+            readFrom += manager
             failRead?.let { throw it }
-            return policies
+            if (manager != null && manager == away) throw IllegalStateException("503")
+            return manager?.let { byManager[it].orEmpty() } ?: policies
         }
         override suspend fun savePolicy(target: InboxPolicyTarget, tier: InboxPolicyTier, twin: InboxPolicyTwin): InboxPolicy? {
             saved += Triple(target, tier, twin)
@@ -144,8 +151,8 @@ class InboxPoliciesTest {
             return InboxPolicy(target.policy?.id ?: "new", target.source, tag = target.option.tag, value = target.option.value,
                 name = target.option.name, tier = tier, twin = twin)
         }
-        override suspend fun removePolicy(id: String) {
-            removed += id
+        override suspend fun removePolicy(id: String, manager: String?) {
+            removed += manager?.let { "$it:$id" } ?: id
             removeGate?.await()
             failRemove?.let { throw it }
         }
@@ -255,5 +262,50 @@ class InboxPoliciesTest {
         try { model.load(); fail("a later failure throws") } catch (e: IllegalStateException) { assertEquals("again", e.message) }
         assertEquals(listOf("a"), model.rules?.map { it.id })
         assertNull(model.failed)
+    }
+
+    @Test fun theCurrentAssistantsRulesAreReadUnderItsNameAndRemovedOnIt() = runBlocking {
+        val mine = policy("p1", "repo", "o/r").copy(createdAt = "2026-01-01T00:00:00Z")
+        val theirs = policy("p1", "sender", "u1").copy(createdAt = "2026-02-01T00:00:00Z")
+        val repository = PolicyRepository().apply { byManager = mapOf("assistant" to listOf(mine), "m-2" to listOf(theirs)); away = "m-3" }
+        val model = InboxRulesModel(repository)
+        model.load("m-2")
+        assertEquals(listOf("m-2"), repository.readFrom)
+        assertEquals(listOf(theirs.copy(manager = "m-2")), model.rules)
+        assertFalse(model.isEmpty)
+
+        // Another assistant's list replaces it; one that can't be read shows nothing and says why (a first read).
+        model.load("assistant")
+        assertEquals(listOf(mine.copy(manager = "assistant")), model.rules)
+        model.load("m-3")
+        assertNull(model.rules)
+        assertEquals("503", model.failed?.message)
+
+        // Edit from a manager's list saves on it; one from an item, on the item's ("": the default's).
+        model.load("m-2")
+        assertNull(model.failed)
+        assertEquals("m-2", InboxPolicyTarget.of(model.rules!!.single()).manager)
+        assertEquals("", InboxPolicyTarget.of(InboxRecord(InboxItem("1"), source = "github", mutes = listOf(repo)), repo).manager)
+        assertNull(InboxPolicyTarget.of(theirs).manager)
+
+        model.remove(model.rules!!.single())
+        assertEquals(listOf("m-2:p1"), repository.removed)
+        assertEquals(emptyList<InboxPolicy>(), model.rules)
+        assertTrue(model.isEmpty)
+
+        model.load("assistant")
+        repository.failRemove = IllegalStateException("offline")
+        val left = model.rules!!.single()
+        try { model.remove(left); fail("a failed remove throws") } catch (e: IllegalStateException) { assertEquals("offline", e.message) }
+        assertEquals(listOf(left), model.rules)
+    }
+
+    @Test fun withOneManagerTheRulesAreOneListAsBefore() = runBlocking {
+        val repository = PolicyRepository(listOf(policy("a", "repo", "o/r")))
+        val model = InboxRulesModel(repository)
+        model.load(null) // none named
+        assertEquals(listOf<String?>(null), repository.readFrom)
+        assertEquals(listOf("a"), model.rules?.map { it.id })
+        assertEquals(listOf<String?>(null), model.rules?.map { it.manager })
     }
 }

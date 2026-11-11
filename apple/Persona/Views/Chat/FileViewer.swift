@@ -28,7 +28,7 @@ nonisolated struct FileContent: Decodable, Sendable {
 
 extension APIClient {
     /// A file or a directory on a machine; a text file bigger than a page from `offset` (the page before's `next`).
-    /// `stream`: a binary file without its bytes (hub feature `file_stream`, docs/protocol/protocol.md「文件预览」).
+    /// `stream`: a binary file without its bytes (hub feature `file_stream`, docs/protocol/protocol.md「File preview」).
     func file(machine: String, path: String, cwd: String?, offset: Int64 = 0, stream: Bool = false) async throws -> FileContent {
         try await get("/api/v1/machines/\(machine)/file",
                       query: ["path": path, "cwd": cwd ?? "", "offset": offset > 0 ? String(offset) : "", "stream": stream ? "1" : ""])
@@ -133,7 +133,7 @@ extension View {
     func lookUpFiles(_ paths: [String]) -> some View { modifier(LookUpFiles(paths: paths)) }
 }
 
-/// Reads a file (or lists a directory) on a machine (docs/apple/ios.md「文件查看器」): code colored by its language with
+/// Reads a file (or lists a directory) on a machine (docs/apple/ios.md「File viewer」): code colored by its language with
 /// line numbers, JSON as a foldable outline, Markdown rendered (or its source), images and PDFs inline, Office and
 /// iWork documents in QuickLook (`QuickLookFileView`). Text shows
 /// at once and is colored in the background; a file bigger than a page loads the next one as the end comes near.
@@ -376,7 +376,7 @@ struct FileViewer: View {
 
 /// A Markdown file rendered, a piece at a time in a lazy stack (`MarkdownChunks`), with the chat's look
 /// (`.persona`: fitted tables, links that end where `Links` says) and colored code fences. No text selection: it made
-/// opening 40 % slower and scrolling hitch more (docs/apple/ios.md「文件查看器」); the source view copies lines.
+/// opening 40 % slower and scrolling hitch more (docs/apple/ios.md「File viewer」); the source view copies lines.
 private struct MarkdownFile: View {
     var page: FileViewerModel
     var home: String?

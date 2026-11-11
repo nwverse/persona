@@ -1,10 +1,43 @@
-# Website: hosting, Hong Kong entry point, future split routing
+# Website: home page, hosting, Hong Kong entry point, future split routing
 
 `<site-domain>` is the domain in configured `publish.site_url` (actual value in build configuration and `CLAUDE.local.md`). `<old-domain>` was hardcoded in early builds; since 2026-11-05 (#2389),
 it no longer connects to Worker and redirects the whole site with 301 to the same path on `<site-domain>` ("Old domain" below).
 
 The website (`site/`) is Cloudflare Worker `persona-site`, hosting static pages, public personad downloads (`/dl/`, archives from R2 bucket `persona-dl`; see `docs/operations/release.md`, "Publishing personad"), installer (`/install.sh`),
 and push-relay entry (`/relay/*`, `docs/operations/push-relay.md`). Deploy only through `scripts/release/publish.sh` (`docs/operations/release.md`).
+
+**The Worker's secrets belong to its name.** `RELAY_ORIGIN`, `RELAY_PROXY_SECRET` and `EDGE_SECRET` stay with the old Worker when `name` in
+`site/wrangler.jsonc` changes: the deploy creates a new Worker without them, it takes over `origin.<site-domain>`, and `/relay/*` answers 503
+"push relay not configured" (2026-11-07, #1263). Before renaming, put each secret on the new name (`npx wrangler secret put <NAME> --name <new name>`;
+a secret can't be read back, so take the values from the password manager). `publish.sh` reads `/relay/v1/health` before and after every deploy
+and fails when a relay that was healthy before the deploy no longer is.
+
+## Home page
+
+`site/public/index.html` is the whole home page (#3842): Chinese, CSS and JS inline, no build step. It leads with the
+SuperAgent, the same story as the README, then the demo-mode recording, shared context, linked computers, every
+client, extensions, privacy, getting started, an FAQ and a closing line. The privacy, terms and 404 pages keep their
+own `site/public/style.css`.
+
+- **The hero demo is scripted, with made-up data** (the task, PR numbers, test counts). What it acts out is real: main
+  chat splits a request into Agent tasks that wait for **Start**, answers an Agent's technical question itself and
+  passes a goal decision to the phone (`docs/assistant/assistant.md`). Change the story only along with the product.
+- **Facts follow the README.** When the README's runtimes, clients, extensions or install steps change, change the
+  page in the same PR. No implementation details on the page (paths, process names, databases, engine names): it is
+  for people deciding whether to try Persona; the docs are for the rest.
+- **State colors keep their app meaning**: red needs you, amber working, green done, also for the packets moving on
+  the diagrams.
+- **Assets** come from `scripts/assets/make_site_assets.py`: `site/public/img/recording.webp` (a copy of
+  `docs/assets/readme/hero-dark.zh-CN.webp`), `site/public/img/paper.webp` (the mascot cut from the Apple Vision Pro
+  icon's front layer) and `site/public/fonts/persona-serif.woff`, Noto Serif CJK SC Bold cut down to the characters of
+  `h1`, `h2` and `.hello`. **After editing any of that text, run `python3 scripts/assets/make_site_assets.py serif`**,
+  or the new characters fall back to the visitor's own serif. The source font is not in the repository; the script
+  finds a system copy or takes `--serif-font`.
+- **Motion** only starts with JavaScript; without it every section is visible and static, and with reduced motion
+  the page shows its finished state (the switches on, the underline drawn, no moving packets).
+- **The version in the top bar** is `/dl/VERSION`, written by `scripts/release/publish.sh`; the badge stays hidden
+  when the file is missing.
+- **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
 
 ## Current routing (since 2026-11-04, #1134)
 

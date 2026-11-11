@@ -53,6 +53,8 @@ type MachineConfig struct {
 	HerdrAutostart   *bool    `json:"herdr_autostart,omitempty"`
 	HerdrAutoinstall bool     `json:"herdr_autoinstall,omitempty"`
 	ClaudeStartDir   string   `json:"claude_start_dir,omitempty"`
+	// InboxDir is the receive folder transfers put files in (hub/config.go, docs/protocol/file-transfer.md).
+	InboxDir string `json:"inbox_dir,omitempty"`
 	// ClaudeGlobalHooks: the node puts report-only hooks into its default claude config directory (hub/config.go).
 	ClaudeGlobalHooks bool `json:"claude_global_hooks,omitempty"`
 	// UsageWindows false: the node does not read the agents' subscription rate-limit windows (hub/config.go, #2432).
@@ -111,10 +113,13 @@ type Machine struct {
 	timings                    tailcatTimings
 	deployRetry                time.Duration // how long a node update waits before asking a busy node again (tests: shorter)
 	reconnectGrace             time.Duration // shown as it was this long after its node disconnected (warm.go; tests: shorter)
+	storeWait                  time.Duration // how long a node event waits on the store (nodeStoreWait; tests: shorter)
 	engineMu                   sync.Mutex
 	link                       *mgrLink      // kind link: the link Persona Link keeps open, nil while there is none
 	linkDown                   error         // why the last link went away
 	linkUp                     chan struct{} // a link arrived
+	// presence: what its Persona Link last said about the user (presence.go).
+	presence *presence
 	// herdrAsked: when the node last said whether herdr's server answers (herdr.go, its row).
 	herdrAsked time.Time
 	// herdrInstall: what the node last said of installing herdr (herdr.go).
@@ -159,7 +164,7 @@ type Machine struct {
 func newMachine(d *Devices, cfg MachineConfig) *Machine {
 	m := &Machine{cfg: cfg, d: d, watched: map[string]bool{}, lastSeq: map[string]int{}, kick: make(chan struct{}, 1),
 		timings: defaultTailcatTimings, deployRetry: 2 * time.Second, reconnectGrace: reconnectGrace,
-		linkUp: make(chan struct{}, 1), first: make(chan struct{}), attWake: make(chan struct{}, 1)}
+		linkUp: make(chan struct{}, 1), first: make(chan struct{}), attWake: make(chan struct{}, 1), storeWait: nodeStoreWait}
 	m.setName(cfg.Name)
 	if dial := d.opts.DialNode; dial != nil {
 		m.dialNode = dial(cfg.ID)
@@ -213,6 +218,8 @@ func (m *Machine) snapshot() proto.Machine {
 	if m.cfg.Kind != "local" { // the hub's own machine runs the hub's binary: nothing to look up
 		version, noPackage = d.nodeTarget(info), d.packageBlocked(info)
 	}
+	clipboardOn := d.clipboardOn(m.cfg.ID)
+	fileTransferOn := d.fileTransferOn(m.cfg.ID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	engines := []proto.Engine{} // what the node found: none while offline
@@ -264,6 +271,8 @@ func (m *Machine) snapshot() proto.Machine {
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
+		Clipboard:    m.clipboardStateLocked(clipboardOn),
+		FileTransfer: m.fileTransferState(fileTransferOn),
 	}
 }
 
@@ -495,16 +504,22 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 	}
 	if p == nil && (m.waitWarm(ctx) || m.waitFirst(ctx)) { // the manager just started: its node is on its way (warm.go)
 		m.mu.Lock()
-		p = m.peer
+		p, info = m.peer, m.info
 		m.mu.Unlock()
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
+	if err := secretEnvRefusal(ctx, info, method, params); err != nil { // against the node it has, never one on its way
+		return err
+	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	default:
+	}
+	if method == "node.configure" {
+		params = m.withClaudeDirs(ctx, params)
 	}
 	return p.Call(ctx, method, params, out)
 }
@@ -572,8 +587,17 @@ func (m *Machine) noteWatch(method string, params json.RawMessage) {
 		m.watched[p.SessionID] = true
 	} else {
 		delete(m.watched, p.SessionID)
+		m.forgetSeqLocked(p.SessionID)
 	}
 	m.mu.Unlock()
+}
+
+// forgetSeqLocked drops a session's last item seq once neither the hub nor the manager watches it: the seq is only
+// read to watch it again, and a later watch catches up from the node's own to_seq. m.mu is held.
+func (m *Machine) forgetSeqLocked(id string) {
+	if !m.watched[id] && !m.followed[id] {
+		delete(m.lastSeq, id)
+	}
 }
 
 // setSessions keeps the node's session list (the hub gets it as the node sent it, devices.event).
@@ -673,7 +697,8 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 				last = max(last, *p.ToSeq)
 			}
 			m.mu.Lock()
-			if last > m.lastSeq[p.SessionID] {
+			// Only a watched session's seq is kept: a late batch after its unwatch must not bring it back.
+			if (m.watched[p.SessionID] || m.followed[p.SessionID]) && last > m.lastSeq[p.SessionID] {
 				m.lastSeq[p.SessionID] = last
 			}
 			m.mu.Unlock()
@@ -684,9 +709,13 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			State     db.NodeSession `json:"state"`
 		}
 		if s, ok := m.d.opts.Store.(nodeStateStore); ok && json.Unmarshal(params, &p) == nil && p.SessionID != "" {
-			if err := s.PutNodeSession(context.Background(), m.cfg.ID, p.SessionID, p.State); err != nil {
+			// Written here, in order (the latest put of a session wins), but bounded: a store that does not answer must
+			// not hold the node's read loop, and with it every reply and event of the node (nodeStoreWait).
+			ctx, cancel := m.storeCtx()
+			if err := s.PutNodeSession(ctx, m.cfg.ID, p.SessionID, p.State); err != nil {
 				m.d.logf("[%s] save session state: %v", m.cfg.ID, err)
 			}
+			cancel()
 		}
 		return // the manager's alone
 	case "claude.dirs":
@@ -708,6 +737,24 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		return
 	}
 	m.d.forward(m.cfg.ID, event, params)
+}
+
+// nodeStoreWait bounds a store call a node's event makes on its connection's read loop (state.put, claude.dirs):
+// while Postgres does not answer, the loop would read nothing else of the node, replies to the manager's calls
+// included. A write given up stays lost until the node sends it again, which it does not do on reconnect: a session's
+// state when it next changes (a node restarted before that loads the hub's rows without it), its config dirs when it
+// sees one it had not seen since it started or one is unblocked. Each machine copies it (Machine.storeWait), so a test
+// shortens it on its own machine.
+const nodeStoreWait = 10 * time.Second
+
+// storeCtx is the context of a store call a node event makes: not the machine's (the last put of a machine being let
+// go is still kept), only bounded. A Machine not made by newMachine waits nodeStoreWait.
+func (m *Machine) storeCtx() (context.Context, context.CancelFunc) {
+	wait := m.storeWait
+	if wait <= 0 {
+		wait = nodeStoreWait
+	}
+	return context.WithTimeout(context.Background(), wait)
 }
 
 // forgetIfStopped closes the window between onEvent's stopped check and its write: a machine is stopped before it
@@ -807,4 +854,40 @@ func (m *Machine) isOnline() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.online
+}
+
+// secretEnvRefusal refuses a hand-off (secret.stage, a session.start with a ticket) to a node that has not announced
+// secret_env: an older one would answer "unknown method", or start the Agent without the values the card gave it.
+// Announced, never assumed: a node not yet known (no handshake) is refused too.
+func secretEnvRefusal(ctx context.Context, info proto.NodeInfo, method string, params any) error {
+	if method != proto.MethodSecretStage && (method != "session.start" || !startHasSecretTicket(params)) {
+		return nil
+	}
+	if info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.SecretEnv) {
+		return nil
+	}
+	return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_env")}
+}
+
+// startHasSecretTicket: session.start params carrying a hand-off's ticket: a secret_ticket key in any letter case,
+// whatever its value (the node reads it case-insensitively, and a re-marshalled map can reorder duplicates).
+func startHasSecretTicket(params any) bool {
+	raw, ok := params.(json.RawMessage)
+	if !ok {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return true // cannot tell: treated as one, so it is refused rather than run without its values
+		}
+		raw = b
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return true
+	}
+	for k := range fields {
+		if strings.EqualFold(k, "secret_ticket") {
+			return true
+		}
+	}
+	return false
 }

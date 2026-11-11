@@ -43,7 +43,7 @@ import Testing
         let items = [input(), item(2), call, result, item(5, kind: .recap), item(6)]
         let folded = build(items)
         #expect(folded.count == 1)
-        guard case .supervision(_, let trace, _)? = quiet(folded)?.content else { return }
+        guard case .supervision(_, let trace, _, _)? = quiet(folded)?.content else { return }
         #expect(trace.contains { if case .work(_, let items, _, _, _) = $0.content { items.contains { if case .step(.call(let c)) = $0 { c.result?.text == "Synthetic result" } else { false } } } else { false } })
         #expect(trace.contains { if case .row(.recap) = $0.content { true } else { false } })
         #expect(trace.contains { if case .row(.assistant(let i)) = $0.content { i.seq == 6 } else { false } })
@@ -67,7 +67,7 @@ import Testing
         #expect(quiet(build([input(), answer])) == nil)
     }
 
-    @Test func successfulNotifyStaysOutsideOrdinaryWorkFold() {
+    @Test func successfulNotifyPromotesTheReplyButKeepsTheCallInsideWork() {
         var call = item(2, kind: .toolUse)
         call.toolName = "mcp__persona__notify_user"
         call.toolUseID = "notify"
@@ -75,7 +75,8 @@ import Testing
         result.toolUseID = "notify"
         let lines = build([input(), call, result, item(4)])
         #expect(quiet(lines) == nil)
-        #expect(lines.contains { if case .workStep(_, .step(.call(let c)), _) = $0.content { c.id == call.id } else { false } })
+        #expect(!lines.contains { if case .workStep = $0.content { true } else { false } })
+        #expect(lines.contains { if case .work(_, let items, _, _, _) = $0.content { items.contains { if case .step(.call(let c)) = $0 { c.id == call.id } else { false } } } else { false } })
     }
 
     @Test func liveTriageHidesStreamingUntilOpenedAndPendingQuestionPromotes() {
@@ -118,20 +119,79 @@ import Testing
         #expect(expanded.contains { if case .supervisionInput(let i) = $0.content { i.text?.contains("Additional synthetic") == true } else { false } })
     }
 
-    @Test func automaticLiveWorkExpansionNeverOpensAQuietRecord() {
+    @Test func openingAQuietRecordStillRequiresManualWorkExpansion() {
         var call = item(2, kind: .toolUse)
         call.toolName = "Bash"
         call.toolUseID = "synthetic-live-call"
         let blocks = ChatStore.rebuild([input(), call], settled: nil).blocks
         guard case .turn(let turn)? = blocks.last else { return }
-        var renderer = ChatLines(openWork: [], opensLive: true, foldSupervision: true, active: true)
+        var renderer = ChatLines(openWork: [], foldSupervision: true, active: true)
         let folded = renderer.build(blocks, live: turn.id)
         #expect(folded.count == 1)
         #expect(ChatLines.hidesLiveSupervision(folded, open: []))
         guard let header = quiet(folded) else { Issue.record("Expected a quiet supervision record"); return }
         renderer.openSupervision = [header.id]
         let expanded = renderer.build(blocks, live: turn.id)
-        #expect(expanded.contains { if case .workStep(_, .step(.call(let c)), _) = $0.content { c.id == call.id } else { false } })
+        #expect(!expanded.contains { if case .workStep = $0.content { true } else { false } })
+        guard let work = expanded.first(where: { if case .work = $0.content { true } else { false } }) else { Issue.record("Missing work summary"); return }
+        renderer.openWork = [work.id]
+        #expect(renderer.build(blocks, live: turn.id).contains { if case .workStep(_, .step(.call(let c)), _) = $0.content { c.id == call.id } else { false } })
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func allToolsAcrossCompactionFoldTogetherIncludingFailedVisibilityTools(compacted: Bool, failed: Bool) throws {
+        var read = item(2, kind: .toolUse)
+        read.toolName = "mcp__persona__github_read"
+        read.toolUseID = "read"
+        var readResult = item(3, role: "user", kind: .toolResult, text: "Synthetic repository")
+        readResult.toolUseID = read.toolUseID
+        var diff = item(4, kind: .toolUse)
+        diff.toolName = "mcp__persona__github_diff"
+        diff.toolUseID = "diff"
+        var diffResult = item(5, role: "user", kind: .toolResult, text: "Synthetic patch")
+        diffResult.toolUseID = diff.toolUseID
+        var boundary = item(6, kind: .notice, text: ChatStore.compactedText)
+        boundary.compact = Compaction(trigger: "auto", preTokens: 167_000)
+        var review = item(7, kind: .toolUse)
+        review.toolName = "mcp__persona__task_review"
+        review.toolUseID = "review"
+        review.toolInput = .object(["verdict": .string("accepted")])
+        var reviewResult = item(8, role: "user", kind: .toolResult, text: "Accepted synthetic change")
+        reviewResult.toolUseID = review.toolUseID
+        var finish = item(9, kind: .toolUse)
+        finish.toolName = "mcp__persona__supervision_finish"
+        finish.toolUseID = "finish"
+        var finishResult = item(10, role: "user", kind: .toolResult, text: #"{"visibility":"user"}"#)
+        finishResult.toolUseID = finish.toolUseID
+        finishResult.isError = failed
+        let items = [input(), read, readResult, diff, diffResult] + (compacted ? [boundary] : [])
+            + [review, reviewResult, finish, finishResult, item(11, text: "Final synthetic result")]
+        for foldSupervision in [false, true] {
+            // Rebuild from serialized history too: failure state and compaction metadata must survive reload.
+            for history in [items, try JSONDecoder().decode([Item].self, from: JSONEncoder().encode(items))] {
+                let blocks = ChatStore.rebuild(history, settled: nil).blocks
+                var renderer = ChatLines(openWork: [], foldSupervision: foldSupervision)
+                for live in [nil, history[0].id] {
+                    let closed = renderer.build(blocks, live: live)
+                    #expect(closed.count == 3)
+                    #expect(quiet(closed) == nil, "accepted review promotes the round, not its tool rows")
+                    #expect(!closed.contains { if case .workStep = $0.content { true } else { false } })
+                    let work = try #require(closed.first { if case .work = $0.content { true } else { false } })
+                    guard case .work(_, let steps, _, _, _) = work.content else { return }
+                    let calls = steps.compactMap { if case .step(.call(let c)) = $0 { c } else { nil } }
+                    #expect(calls.map(\.use.toolUseID) == ["read", "diff", "review", "finish"])
+                    #expect(calls.last?.result?.isError == failed)
+                    #expect(steps.filter(ChatLines.isCompaction).count == (compacted ? 1 : 0))
+                    #expect(closed.last?.holds("synthetic-11#0") == true)
+                    renderer.openWork = [work.id]
+                    let open = renderer.build(blocks, live: live)
+                    #expect(open.filter { if case .workStep = $0.content { true } else { false } }.count == (compacted ? 5 : 4))
+                    #expect(open.last?.holds("synthetic-11#0") == true)
+                    renderer.openWork = []
+                    #expect(renderer.build(blocks, live: live).count == 3)
+                }
+            }
+        }
     }
 
     @Test func agentConversationDoesNotAdoptMainConversationFolding() {

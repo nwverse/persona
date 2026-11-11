@@ -22,6 +22,11 @@ import (
 // The hub's end-to-end tests of tasks (real todos, a real node) are hub/tasks_test.go; these need the assistant's own
 // state or timing.
 
+// toolTaskPlan is task_plan from the conversation sessionID on the main machine.
+func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
+	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
+}
+
 // newTaskService is an assistant on a fake hub with machine box, whose task agents are followed at once.
 func newTaskService(t *testing.T) (*Service, *fakeHub) {
 	t.Helper()
@@ -41,7 +46,7 @@ func newTaskServiceOn(t *testing.T, st Store) (*Service, *fakeHub) {
 }
 
 func planArgs(readonly bool) json.RawMessage {
-	permission := "acceptEdits"
+	permission := "bypassPermissions"
 	if readonly {
 		permission = "plan"
 	}
@@ -747,7 +752,7 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	plan := func(requested bool) json.RawMessage {
 		raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 			"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-			"readonly": false, "user_requested": requested, "why": "这个仓库最近在 box 上",
+			"readonly": false, "permission": "bypassPermissions", "user_requested": requested, "why": "这个仓库最近在 box 上",
 		}}})
 		return raw
 	}
@@ -771,8 +776,8 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	}
 	// One inferred task keeps the whole plan waiting.
 	mixed, _ := json.Marshal(map[string]any{"tasks": []map[string]any{
-		{"title": "修登录崩溃", "prompt": "修", "machine": "box", "cwd": "/code/app", "user_requested": true, "why": "-"},
-		{"title": "顺便升级依赖", "prompt": "升级", "machine": "box", "cwd": "/code/app", "user_requested": false, "why": "-"},
+		{"title": "修登录崩溃", "prompt": "修", "machine": "box", "cwd": "/code/app", "permission": "bypassPermissions", "user_requested": true, "why": "-"},
+		{"title": "顺便升级依赖", "prompt": "升级", "machine": "box", "cwd": "/code/app", "permission": "bypassPermissions", "user_requested": false, "why": "-"},
 	}})
 	if res, err := s2.toolTaskPlan(context.Background(), "conv1", mixed); err != nil || !strings.Contains(res, "nothing has started") {
 		t.Fatalf("a mixed plan: %q %v", res, err)
@@ -808,7 +813,7 @@ func TestTaskFinishedWhileItsAgentStarts(t *testing.T) {
 	}
 	// ... and the start finishes after it.
 	s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: todo.Title, Prompt: "修好并补测试", Machine: "box",
-		Cwd: "/code/app", TodoID: todo.ID}, false)
+		Cwd: "/code/app", Permission: "bypassPermissions", TodoID: todo.ID}, false)
 
 	f.mu.Lock()
 	starts := len(f.starts)
@@ -918,7 +923,7 @@ func TestTaskStartTimingOutStillEndsTheTask(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: todo.Title, Prompt: "全仓清理", Machine: "box", Cwd: "/code/app",
-			TodoID: todo.ID}, false)
+			Permission: "bypassPermissions", TodoID: todo.ID}, false)
 		got := todoNow(s, todo.ID)
 		if got.DoneAt == nil || !strings.Contains(got.StartError, "deadline") {
 			t.Fatalf("the timed-out start left the task open: done %v, error %q", got.DoneAt, got.StartError)

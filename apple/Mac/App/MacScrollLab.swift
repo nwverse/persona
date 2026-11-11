@@ -1,7 +1,7 @@
 #if DEBUG
 import AppKit
 
-/// Scrolling the chat while it streams, on a Mac that may be locked (docs/apple/mac.md「截图」): no real trackpad and no
+/// Scrolling the chat while it streams, on a Mac that may be locked (docs/apple/mac.md「Scroll experiments」): no real trackpad and no
 /// screen recording, so the app scrolls itself and draws itself.
 ///
 /// - `-macScrollGestures "6:-300,14:120"`: at 6 s after launch a two-finger swipe of 300 pt, at 14 s one of 120 pt,

@@ -76,13 +76,13 @@ var UISlots = []UISlot{
 	// inbox_item draws the body of an inbox item from the plugin's connector (its own header stays the app's): the
 	// same items a plugin's connector brought in, with the hub's triage on them. Drawn with UI version 2's items.
 	{Name: "inbox_item", Size: SizeFull, Context: "item", Shown: true, Since: 2},
-	// widget is drawn outside the app (docs/extensions/extensions.md "System-level places"): a home screen widget, a Lock Screen or watch
+	// widget is drawn outside the app (docs/extensions/extensions.md "System-level placements"): a home screen widget, a Lock Screen or watch
 	// face complication. The size it is asked for is the family (FitWidget holds the view to it); the apps list
 	// widgets on their own (GET /api/v1/extensions/-/widgets), not with the slots drawn in the app.
 	{Name: "widget", Size: WidgetFamilySmall, Shown: true, Since: 3},
 }
 
-// Widgets: the families a widget is drawn at and how often it is drawn again (docs/extensions/extensions.md "System-level places").
+// Widgets: the families a widget is drawn at and how often it is drawn again (docs/extensions/extensions.md "System-level placements").
 const (
 	WidgetFamilySmall    = wire.WidgetFamilySmall
 	WidgetRefreshDefault = 30 // minutes
@@ -222,6 +222,10 @@ type ErrorReportsItem = wire.ErrorReportsItem
 // AuthRelayItem is a contribution to auth_relay: the authorization links (hosts and paths) it completes.
 type AuthRelayItem = wire.AuthRelayItem
 
+// SecretProviderItem is a contribution to secret_providers: the reference schemes whose values it supplies
+// (docs/extensions/secret-providers.md).
+type SecretProviderItem = wire.SecretProviderItem
+
 // Events this hub has.
 var (
 	// EventTopics are the events by topic; how the install screen says each is extension-permissions.event_<topic with
@@ -234,15 +238,19 @@ var (
 		"agent.finished":  true,
 		"todo.changed":    true,
 		"todo.decision":   true,
+		"leader.changed":  true,
+		"leader.report":   true,
 	}
 
 	// EventScopes are the hub scopes an event needs besides the subscription: only an extension granted the scope
 	// (or the legacy full-hub grant) is told. A topic not listed needs none.
 	EventScopes = map[string]string{
-		"kb.changed":    ScopeKBRead,
-		"kb.forgotten":  ScopeKBRead,
-		"todo.changed":  ScopeTodosRead,
-		"todo.decision": ScopeTodosRead,
+		"kb.changed":     ScopeKBRead,
+		"kb.forgotten":   ScopeKBRead,
+		"todo.changed":   ScopeTodosRead,
+		"todo.decision":  ScopeTodosRead,
+		"leader.changed": ScopeLeadersRead,
+		"leader.report":  ScopeLeadersRead,
 	}
 )
 
@@ -331,20 +339,3 @@ var tones = append([]string{""}, wire.Tones...)
 func CheckView(v *View) error { return wire.CheckView(v) }
 
 func Actions(v *View) []*UIAction { return wire.Actions(v) }
-
-// ParseView reads and checks a View a plugin answered with.
-func ParseView(raw json.RawMessage) (*View, error) {
-	var v View
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	if v.Sections == nil {
-		v.Sections = []Section{}
-	}
-	for i := range v.Sections {
-		if v.Sections[i].Items == nil {
-			v.Sections[i].Items = []UIElem{}
-		}
-	}
-	return &v, CheckView(&v)
-}

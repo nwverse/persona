@@ -71,6 +71,13 @@ class HttpInboxAssistantTransport private constructor(
     // Connectors' items too (`sources=all`): each opens as its connector's thread (#2726); without it the hub lists
     // Feishu and mail only.
     override suspend fun inbox() = json(url("api", "v1", "inbox").newBuilder().addQueryParameter("sources", "all").build())
+    override suspend fun doneHistory(manager: String?, before: String?, beforeId: String?, limit: Int) =
+        json(url("api", "v1", "inbox", "done").newBuilder().addQueryParameter("sources", "all").addQueryParameter("limit", limit.toString())
+            .apply { if (before != null) { addQueryParameter("before", before); beforeId?.let { addQueryParameter("before_id", it) } } }
+            .build().pinned(manager))
+    override suspend fun doneDays(manager: String?, tz: String) =
+        json(url("api", "v1", "inbox", "done", "days").newBuilder().addQueryParameter("tz", tz).addQueryParameter("sources", "all")
+            .build().pinned(manager))
     override suspend fun larkConversations(cursor: String?) = larkConversationsForAccount(null, cursor)
     override suspend fun larkConversationsForAccount(account: Int?, cursor: String?) = json(
         url("api", "v1", "lark", "conversations").newBuilder().apply {
@@ -168,6 +175,7 @@ class HttpInboxAssistantTransport private constructor(
     // `?manager=` names the manager for this request alone: the hub client sends no header over it (an empty one is
     // the default, dropped before it goes).
     override suspend fun assistantOf(manager: String?) = json(url("api", "v1", "assistant").pinned(manager))
+    override suspend fun assistantLeadersOf(manager: String?) = json(url("api", "v1", "assistant", "leaders").pinned(manager))
     override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
             put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }

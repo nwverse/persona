@@ -20,6 +20,11 @@
   "push_new": "远端还没有 {branch}：会在 origin 上建同名分支，之后跟踪它。",
   "push_gone": "远端已删除 {upstream}：推送会用 {branch} 重新建它。",
   "push_never_force": "不会强制推送：远端有更新的提交时会停下并说明。",
+  "pull": "拉取",
+  "pulling": "正在拉取",
+  "pulled": "已拉取最新提交",
+  "pull_current": "已是最新",
+  "pull_hint": "快进到上游：不会合并、变基或覆盖本地改动",
   "branches": "分支",
   "branch_search": "查找或输入新分支名",
   "branch_create": "从这里新建分支 {branch}",
@@ -74,5 +79,6 @@
   "stash_refresh": "刷新",
   "stash_old_node": "请更新此电脑上的 Persona，以安全地应用、弹出或删除储藏。",
   "refused_git_stash_stale": "储藏列表已更改。请刷新后重新选择储藏。",
+  "refused_git_stash_conflicted": "已应用，但这些文件有冲突：解决后再提交。贮藏仍保留。",
   "refused_git_stash_unsupported": "此仓库不支持安全删除储藏。"
 }

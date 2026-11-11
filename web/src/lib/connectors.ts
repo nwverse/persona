@@ -23,6 +23,12 @@ export interface HubConnector {
   account?: string;
   via?: string;
   error?: string;
+  /** Permissions the connector still needs, when the hub can name them. */
+  missing_scopes?: string[];
+  /** The open-platform page where the connector's missing permissions can be enabled (the hub sends it as guide_url). */
+  guide_url?: string;
+  /** Alias of guide_url, accepted as well. */
+  permission_url?: string;
   /** How to fix it, a step a sentence. */
   guide?: string[];
   last_sync?: string;
@@ -62,6 +68,10 @@ export interface ConnectorPrompt {
   user_code?: string;
   interval?: number;
   hint?: string;
+  /** Where this step's hint points at (the provider's console, to create the app); the page opens it in a new tab. */
+  link?: string;
+  /** link's button label (the hub localizes it). */
+  link_text?: string;
   error?: string;
   done?: boolean;
   account?: string;
@@ -191,7 +201,7 @@ export function isStarting(c?: HubConnector | null): boolean {
 /** The connectors that get rows of their own after "Mail" and Lark (those two keep their own groups; Lark's only shows on a
  * hub with feature `lark`, `larkGroup`, so without it a connector named lark is listed like any other). */
 export function otherConnectors(list: HubConnector[], larkGroup = true): HubConnector[] {
-  return list.filter((c) => c.id !== "mail" && !(larkGroup && c.id === "lark"));
+  return list.filter((c) => c.id !== "mail" && c.id !== "larkcli" && !(larkGroup && c.id === "lark"));
 }
 
 // ── brand and wording, by id ─────────────────────────────
@@ -218,6 +228,7 @@ interface ConnectorProfile {
 const PROFILES = new Map<string, ConnectorProfile>([
   ["github", { brand: "github" }],
   ["lark", { brand: "lark" }],
+  ["larkcli", { brand: "lark" }],
   [
     "telegram",
     {
@@ -277,11 +288,6 @@ export function deletedLine(r: ConnectorDeleted, withInbox = true): string {
 export function canSendStep(p: ConnectorPrompt | null, values: Record<string, string>): boolean {
   if (!p?.fields?.length) return false;
   return p.fields.every((f) => (values[f.name] ?? "").trim().length > 0);
-}
-
-/** A code to enter on a web page (GitHub's device flow), asked again until the user has. */
-export function isDeviceCode(p?: ConnectorPrompt | null): boolean {
-  return p?.kind === "device_code" && !!p.user_code;
 }
 
 /** How the page draws a sign-in step: fields to fill in, a device code, a QR code (or, without its modules, the

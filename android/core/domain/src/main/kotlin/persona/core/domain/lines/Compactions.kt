@@ -2,8 +2,6 @@ package persona.core.domain.lines
 
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
-import java.math.BigDecimal
-import java.math.RoundingMode
 
 /**
  * A compaction as the chat shows it (docs/assistant/assistant.md "Manual compaction"): one divider where the context was compacted, with
@@ -26,14 +24,11 @@ const val ContinuedNotice = "已从压缩的上下文继续" // i18n-ignore: the
 const val CompactCommandNotice = "压缩上下文" // i18n-ignore: the node's notice it matches
 
 /**
- * 181000 → "18.1" ten-thousands (181K), 150000 → "15" ten-thousands; under the language's unit the number itself. The unit (ten thousand
- * in Chinese and Japanese, a thousand in English) is the language's: [CoreText.Key.CompactCount] carries the count.
+ * 181000 → 18.1 ten-thousands in Chinese and Japanese, "181K" in English, 1200000 → "1.2M" in English; under the language's unit the number itself. The unit
+ * (ten thousand in Chinese and Japanese, a thousand in English) is the language's: [CoreText.Key.CompactCount] carries the count
+ * ([persona.core.contracts.compactCount]).
  */
 fun tokenCount(tokens: Long): CoreText = CoreText.of(Key.CompactCount, tokens)
-
-/** [tokens] in units of [unit], one decimal at most: 181000 / 10000 → "18.1". */
-fun compactUnits(tokens: Long, unit: Long): String =
-    BigDecimal(tokens).divide(BigDecimal(unit)).setScale(1, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 
 private fun LineItem.isNotice(text: String) =
     kind == "notice" && task == null && item.task == null && item.wake != true && this.text == text
@@ -50,8 +45,17 @@ private val silent = setOf("tool_result", "turn_duration", "unknown")
  * it — and they are no rows of their own. A summary whose boundary is on an older page stands in for it. Ids, texts and
  * the order of everything else stay as they were.
  */
-fun foldCompactions(items: List<LineItem>): List<LineItem> {
-    if (items.none { it.isBoundary() || it.isNotice(ContinuedNotice) }) return items
+fun foldCompactions(items: List<LineItem>): List<LineItem> = foldCompactions(items, hasCompactions(items))
+
+/** [items] have a compaction for [foldCompactions] to fold: without one, it returns them as they are. */
+internal fun hasCompactions(items: List<LineItem>): Boolean = items.any { it.isBoundary() || it.isNotice(ContinuedNotice) }
+
+/**
+ * [foldCompactions] on part of a chat ([ChatLinesMemo]): [compacting] is [hasCompactions] of the whole chat, since even
+ * a part without a boundary changes when it folds (a "Compact context" waits past the silent items after it).
+ */
+internal fun foldCompactions(items: List<LineItem>, compacting: Boolean): List<LineItem> {
+    if (!compacting) return items
     val out = ArrayList<LineItem>(items.size)
     var open: Int? = null // the boundary in `out` the notes after it still join
     var held: LineItem? = null // a "Compact context" waiting for the boundary after it

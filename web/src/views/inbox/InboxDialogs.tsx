@@ -1,29 +1,29 @@
-// What can be done with one item besides reading it (docs/assistant/inbox.md "What you can do with one item"): "AI draft reply" (a reply in the
+// What can be done with one item besides reading it (docs/assistant/inbox.md "Item actions"): "AI draft reply" (a reply in the
 // user's voice, edited and sent from here) and "Hand to AI" (the item as <persona-context> to Persona or a running agent;
 // Persona's main conversation may then write back to the item).
-import { chooseManager, noteConversation, otherManager, ownerHeaders } from "../../lib/manager-choice";
+import { ownerHeaders } from "../../lib/manager-choice";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { sessionTitle, stateOf, uuid } from "../../lib/format";
 import {
-  agentDraft, connectorReference, conversationRoute, docChangeLine, HANDOFF_PRESETS, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, sendReply,
-  setDone, unsentReplies, type DocChange, type InboxItem,
+  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges,
+  setDone, unsentReplies, type InboxItem,
 } from "../../lib/inbox";
 import { isTransient } from "../../lib/ops";
 import { machineWithHub } from "../../lib/mesh";
+import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
 import { refreshAssistant, useStore } from "../../lib/store";
-import type { Session } from "../../lib/types";
+import type { Machine, Session } from "../../lib/types";
+import { agentTarget, handOffSourceKey, recallHandOff, rememberHandOff, resolveHandOff } from "../../lib/handoff-memory";
 import { t } from "../../i18n";
 import { Button, cx, Dialog, Loading, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
 import { byTime } from "../../lib/times";
-
-const changeKey = (c: DocChange) => `${c.ref}|${c.field}`;
 
 export function draftTitle(it: InboxItem): string {
   if (it.moment) return t("inbox-inboxdialogs.title_moment");
@@ -50,13 +50,15 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   const [instruction, setInstruction] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [dropped, setDropped] = useState<Set<string>>(new Set());
+  // unticked proposed changes are kept with the text: the item's draft card shows and sends the same
+  const dropped = useDroppedChanges(key);
   const proposed = agentText ? item.agent?.changes ?? [] : [];
-  const kept = proposed.filter((c) => !dropped.has(changeKey(c)));
+  const kept = keptChanges(item, dropped);
   const generation = useRef(0);
   const agent = item.agent;
 
-  // Save as text changes: navigation can unmount without onClose, and sendReply owns clearing/restoring on send.
+  // Save as text changes (the draft card shows it): navigation can unmount without onClose, and sendReply owns
+  // clearing/restoring on send.
   const keepText = (value: string) => {
     unsentReplies.set(key, value);
     setText(value);
@@ -87,8 +89,9 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   }, [key]);
 
   const cancel = () => {
-    // Like manual mail, Cancel discards; incidental dismissal keeps the reply.
+    // Like manual mail, Cancel discards; incidental dismissal keeps the reply and the unticked changes.
     unsentReplies.delete(key);
+    keepDropped(key, []);
     onClose();
   };
 
@@ -120,7 +123,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
               onClick={() => {
                 onClose();
                 // The AI twin runs as the assistant (docs/assistant/inbox.md): its conversation is one of Persona's.
-                navigate(agent.machine_id === assistant?.machine_id ? { name: "persona", sid: agent.session_id! } : conversationRoute(agent.machine_id!, agent.session_id!, sessions, assistant));
+                navigate(agent.machine_id === assistant?.machine_id ? conversationPage(agent.session_id!, agent.machine_id, item.manager) : conversationRoute(agent.machine_id!, agent.session_id!, sessions, assistant, item.manager));
               }}
               className="mt-1.5 flex items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline"
             >
@@ -134,18 +137,13 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
         <div className="mb-3">
           <p className="mb-1 text-[11.5px] font-medium text-ink-3">{t("inbox-inboxdialogs.changes_on_send")}</p>
           {proposed.map((c) => {
-            const on = !dropped.has(changeKey(c));
+            const on = !dropped.includes(docChangeKey(c));
             return (
-              <label key={changeKey(c)} className="flex cursor-pointer items-center gap-2 py-1 text-[12.5px] text-ink">
+              <label key={docChangeKey(c)} className="flex cursor-pointer items-center gap-2 py-1 text-[12.5px] text-ink">
                 <input
                   type="checkbox"
                   checked={on}
-                  onChange={() => setDropped((d) => {
-                    const n = new Set(d);
-                    if (on) n.add(changeKey(c));
-                    else n.delete(changeKey(c));
-                    return n;
-                  })}
+                  onChange={() => keepDropped(key, on ? [...dropped, docChangeKey(c)] : dropped.filter((k) => k !== docChangeKey(c)))}
                   className="size-3.5 accent-[var(--accent)]"
                 />
                 <span className={cx("truncate", !on && "text-ink-3 line-through")}>{docChangeLine(c, item.doc)}</span>
@@ -196,15 +194,34 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
  *  kept under its client_id, so a retry after it needs a new one. */
 const mayHaveGone = (e: unknown) => isTransient(e) || (e instanceof ApiError && (e.code === "assistant_in_doubt" || e.code === "assistant_offline"));
 
+/** The agents Hand to AI offers, latest first: not Persona's own, on computers online now, not offline. */
+function handOffAgents(sessions: Record<string, Session[]>, machines: Machine[]): Session[] {
+  const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
+  return Object.values(sessions).flat()
+    .filter((s) => !s.assistant && online.has(s.machine_id) && stateOf(s) !== "offline")
+    .sort((a, b) => byTime(b.updated_at, a.updated_at));
+}
+
+/** The offered agent at "<machine>/<session>", if it is still offered. */
+function listedAgent(sessions: Record<string, Session[]>, machines: Machine[], path: string): Session | undefined {
+  return handOffAgents(sessions, machines).find((s) => `${s.machine_id}/${s.session_id}` === path);
+}
+
+const sameSession = (a: Session, b: Session) => a.machine_id === b.machine_id && a.session_id === b.session_id;
+
 /** Hands the item to Persona (its manager's main conversation by default, which may write back to the item, or a new
- *  one) or to a running agent, as a <persona-context> plus the ask. */
+ *  one) or to a running agent, as a <persona-context> plus the ask. The item's source remembers where it went (#2121). */
 export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const sessions = useStore((s) => s.sessions);
   const machines = useStore((s) => s.machines);
   const [ask, setAsk] = useState("");
-  const [target, setTarget] = useState<"main" | "new" | Session>("main");
+  // Where this item's source went last time (#2121): resolved once, against the agents listed when the dialog opened.
+  const memoryKey = handOffSourceKey(item.source, item.mutes);
+  const [last] = useState(() => resolveHandOff(memoryKey ? recallHandOff(memoryKey) : null, (path) => listedAgent(sessions, machines, path) !== undefined));
+  const lastAgent = last?.target.startsWith("agent:") ? listedAgent(sessions, machines, last.target.slice("agent:".length)) : undefined;
+  const [target, setTarget] = useState<"main" | "new" | Session>(() => lastAgent ?? (last?.target === "new" ? "new" : "main"));
   // Off for the main conversation, which may still write back to the item; on for the others. The user's own choice stays.
-  const [markDone, setMarkDone] = useState(false);
+  const [markDone, setMarkDone] = useState(() => target !== "main");
   const doneChosen = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -216,14 +233,17 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
     if (!doneChosen.current) setMarkDone(next !== "main");
   };
 
-  // The 8 agents worked on most recently, on computers that are online now.
+  // The 8 agents worked on most recently, on computers that are online now, and the one this source went to last time.
   const agents = useMemo(() => {
-    const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
-    return Object.values(sessions).flat()
-      .filter((s) => !s.assistant && online.has(s.machine_id) && stateOf(s) !== "offline")
-      .sort((a, b) => byTime(b.updated_at, a.updated_at))
-      .slice(0, 8);
-  }, [sessions, machines]);
+    const latest = handOffAgents(sessions, machines).slice(0, 8);
+    return lastAgent && !latest.some((s) => sameSession(s, lastAgent)) ? [lastAgent, ...latest] : latest;
+  }, [sessions, machines, lastAgent]);
+  const isLast = (t: "main" | "new" | Session) =>
+    !!last?.lastTime && (typeof t === "object" ? !!lastAgent && sameSession(t, lastAgent) : last.target === t);
+  // This source goes there next time.
+  const remember = () => {
+    if (memoryKey) rememberHandOff(memoryKey, typeof target === "object" ? agentTarget(target.machine_id, target.session_id) : target);
+  };
 
   const send = async () => {
     setBusy(true);
@@ -245,24 +265,27 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
           // An older hub or manager: the text goes to the main conversation as before, nothing to write back to.
           // A failure after it opens shows there with "Retry".
           const { sent } = await askPersonaOf(item.manager, text);
+          remember();
           onClose();
           void sent.then((ok) => {
             if (ok && markDone) void setDone(item, true);
           });
           return;
         }
-        // its requests (feed, stop…) go to the item's manager, whose page shows it
-        adoptConversation(item.manager, to.session_id);
+        // its requests (feed, stop…) go to the item's manager; its page opens it there, the current assistant unchanged
+        adoptConversation(item.manager, to.session_id, to.machine_id);
         noteSent(to.machine_id, to.session_id, { text });
         void refreshAssistant().catch(() => {});
+        remember();
         toast(t("inbox-inboxdialogs.handed_to_persona"), "ok");
         onClose();
-        navigate({ name: "persona", sid: to.session_id });
+        navigate(conversationPage(to.session_id, to.machine_id, item.manager));
         if (markDone) void setDone(item, true);
         return;
       }
       if (target !== "new") {
         // the conversation opens at once with the message on its way; a failure shows there with "Retry"
+        remember();
         onClose();
         navigate({ name: "session", mid: target.machine_id, sid: target.session_id });
         void sendToSession(target.machine_id, target.session_id, { text }).then((ok) => {
@@ -270,18 +293,18 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
         });
         return;
       }
-      // Persona here is the item's own manager's (docs/assistant/managers.md "Clients"), whatever the assistant page shows now;
-      // the page then shows that manager, where the conversation is
+      // Persona here is the item's own manager's (docs/assistant/managers.md "Clients"), whatever assistant is current;
+      // the conversation opens as itself and the current assistant stays
       const r = await startConversation({ prompt: text }, ownerHeaders(item.manager));
       // its requests (feed, stop…) go to that manager whatever the page shows later
-      noteConversation(r.session.session_id, otherManager(item.manager));
-      if (item.manager) chooseManager(item.manager);
+      adoptConversation(item.manager, r.session.session_id, r.session.machine_id);
       noteSent(r.session.machine_id, r.session.session_id, { text });
       void refreshAssistant().catch(() => {});
       if (markDone) void setDone(item, true);
+      remember();
       toast(t("inbox-inboxdialogs.handed_to_persona"), "ok");
       onClose();
-      navigate({ name: "persona", sid: r.session.session_id });
+      navigate(conversationPage(r.session.session_id, r.session.machine_id, item.manager));
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -340,12 +363,13 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
 
       <p className="mt-4 mb-1.5 text-[12px] font-medium text-ink-2">{t("inbox-inboxdialogs.target_label")}</p>
       <div role="radiogroup" aria-label={t("inbox-inboxdialogs.target_label")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
-        <Target on={target === "main"} onPick={() => choose("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
-        <Target on={target === "new"} onPick={() => choose("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
+        <Target on={target === "main"} last={isLast("main")} onPick={() => choose("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "new"} last={isLast("new")} onPick={() => choose("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
         {agents.map((s) => (
           <Target
             key={`${s.machine_id}/${s.session_id}`}
-            on={typeof target === "object" && target.machine_id === s.machine_id && target.session_id === s.session_id}
+            on={typeof target === "object" && sameSession(target, s)}
+            last={isLast(s)}
             onPick={() => choose(s)}
             title={sessionTitle(s)}
             sub={[machineWithHub(s.machine_id, machines), s.space_name].filter(Boolean).join(" › ")}
@@ -353,17 +377,21 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
           />
         ))}
       </div>
+      {last?.gone && <p className="mt-2 text-[12px] text-orange" data-testid="handoff-last-gone">{t("inbox-inboxdialogs.last_gone")}</p>}
       {error && <p className="mt-2 text-[12px] text-red">{error}</p>}
     </Dialog>
   );
 }
 
-function Target({ on, onPick, title, sub, icon }: { on: boolean; onPick: () => void; title: string; sub?: string; icon: React.ReactNode }) {
+function Target({ on, last, onPick, title, sub, icon }: { on: boolean; last?: boolean; onPick: () => void; title: string; sub?: string; icon: React.ReactNode }) {
   return (
     <button type="button" role="radio" aria-checked={on} onClick={onPick} className={cx("flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors", on ? "bg-accent-tint" : "hover:bg-hover")}>
       {icon}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] text-ink">{title}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[13px] text-ink">{title}</span>
+          {last && <span className="shrink-0 rounded-full bg-accent px-1.5 text-[10.5px] leading-[16px] font-medium whitespace-nowrap text-white">{t("inbox-inboxdialogs.last_time")}</span>}
+        </span>
         {sub && <span className="block truncate text-[11.5px] text-ink-3">{sub}</span>}
       </span>
       <Icon name="check" size={13} stroke={2.6} className={cx("shrink-0 text-accent-ink", !on && "invisible")} />

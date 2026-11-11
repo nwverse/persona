@@ -128,7 +128,7 @@ class LarkDeliveryProofTests(unittest.TestCase):
 
 
 class LarkMeasuringTests(unittest.TestCase):
-    """The switches docs/operations/testing.md "Measuring jank" measures the Feishu pages with (#674)."""
+    """The switches docs/operations/testing.md "Jank measurement" measures the Feishu pages with (#674)."""
 
     def test_rich_history_has_cards_pictures_and_posts(self):
         hub = MockHub(MOCK_LARK_RICH="1")

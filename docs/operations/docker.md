@@ -121,7 +121,7 @@ On first start (no `hub.json` in `data/` yet), the entry script writes a `hub.js
 | `machines` | `[]` | The image has no herdr or Claude Code; computers are all added from outside |
 
 Other notes:
-- `PERSONA_PUBLIC_URL` can also be a VPN address, or an HTTPS address from the NAS's built-in reverse proxy. The reverse proxy must forward WebSocket Upgrade / Connection, disable response buffering, and use a longer read timeout (`docs/server/server.md` ("Lightweight hub and pre-deploy checks")).
+- `PERSONA_PUBLIC_URL` can also be a VPN address, or an HTTPS address from the NAS's built-in reverse proxy. The reverse proxy must forward WebSocket Upgrade / Connection, disable response buffering, and use a longer read timeout (`docs/server/server.md` ("Lightweight hub and predeployment checks")).
 - Ports: 18660 is HTTP, 18662 is TLS; compose maps both to all NAS addresses by default. The TLS port's host port must stay 18662 (that's what the hub tells the App); to expose it on only one address, write `PERSONA_TLS_PORT=<NAS LAN address>:18662`. If 18662 is already taken on the NAS, `docker compose up` reports a port conflict: give the hub a different `public.tls_listen` port and map it the same way.
 - `PUID` / `PGID`: the container starts as root, changes the `persona` user to this uid / gid (any other user in the image with the same uid is removed first, or ssh would find that user's home directory), hands every file in `data/` it doesn't own to it (e.g. an old `~/.persona` copied in with sudo), then drops privileges;
   `docker compose exec hub personad …` also runs as this user, so the files it creates don't belong to root. It can't be 0. Don't set the user with compose's `user:`:
@@ -169,10 +169,10 @@ The native method also honors these variables (e.g. systemd's `Environment=`), b
 
 Some hosts pay heavily for every `fsync`: a NAS volume on a single SSD formatted btrfs (copy-on-write, metadata kept twice) turns each one into several metadata writes, so how often things are flushed matters more than how many bytes are written. Two flushers dominate:
 
-- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute).
+- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute). The manager groups its background writes: each 10 s tick's monitoring samples of all machines go in one commit, token usage reports of several machines that come within 5 s of each other in one, and indexing a knowledge base entity again with nothing changed writes nothing, so the number of machines no longer multiplies these commits.
 - **Health checks.** dockerd rewrites and fsyncs a container's state file on every health check run (about 1 MB a run on btrfs): the postgres check runs every 5 s, the hub's every 30 s.
 
-`compose.yaml` takes all of these from `.env`. Every default is what compose did before, or PostgreSQL's own default, so nothing changes until you set one; Postgres settings take effect when the container is recreated (`docker compose up -d`), health checks and logging likewise.
+`compose.yaml` takes all of these from `.env`. Each default is what compose did before, or PostgreSQL's own default, except two that cut the WAL Postgres writes, with the same commits and latency: `PERSONA_POSTGRES_WAL_COMPRESSION` (`auto`: lz4 where the postgres image supports it) and `PERSONA_POSTGRES_CHECKPOINT_TIMEOUT` (`15min` instead of 5). Postgres settings take effect when the container is recreated (`docker compose up -d`), health checks and logging likewise.
 
 | Variable | Default | What it does and what it costs |
 | --- | --- | --- |
@@ -182,12 +182,22 @@ Some hosts pay heavily for every `fsync`: a NAS volume on a single SSD formatted
 | `PERSONA_HUB_HEALTHCHECK_INTERVAL`, `PERSONA_HUB_HEALTHCHECK_TIMEOUT`, `PERSONA_HUB_HEALTHCHECK_RETRIES` | `30s`, `5s`, `3` | The same for the image's own hub check (its 60 s start period stays). Only `docker ps` and a separate manager container (`depends_on: hub`) look at it |
 | `PERSONA_POSTGRES_SYNCHRONOUS_COMMIT` | `on` | `off`: a commit returns before its WAL is flushed and the WAL writer flushes in batches. A crash of the machine or of Postgres can lose the last commits (at most three times `wal_writer_delay`: 0.6 s by default, 3 s with `1s`), which the hub had already answered for. The database stays consistent: nothing is corrupted or half-written, it just comes back as of slightly earlier. A clean `docker compose stop` or restart loses nothing |
 | `PERSONA_POSTGRES_WAL_WRITER_DELAY` | `200ms` | How often the WAL writer flushes. With `synchronous_commit=off` this sets how many commits share one flush and how much a crash can lose; with `on` it matters little |
-| `PERSONA_POSTGRES_CHECKPOINT_TIMEOUT` | `5min` | Longest time between checkpoints. Longer: fewer checkpoints, and fewer full page images in the WAL after each, at the cost of a longer crash recovery (replaying up to that much WAL, usually seconds on an SSD). Checkpoints still come sooner when `max_wal_size` (1 GB) fills |
-| `PERSONA_POSTGRES_WAL_COMPRESSION` | `off` | `lz4` (or `pglz`, `zstd`) compresses the full page images in the WAL: fewer bytes for a little CPU. The official `postgres:18-alpine` image is built with lz4 and zstd |
+| `PERSONA_POSTGRES_CHECKPOINT_TIMEOUT` | `15min` | Longest time between checkpoints. After each one, the first change to every page writes the whole page to the WAL (a full page image). Longer: fewer checkpoints and fewer full page images (15 minutes instead of PostgreSQL's 5 halves them on a hub's background writes), at the cost of a longer crash recovery (replaying up to that much WAL, usually seconds on an SSD). Checkpoints still come sooner when `max_wal_size` (1 GB) fills |
+| `PERSONA_POSTGRES_WAL_COMPRESSION` | `auto` | Compression of the full page images in the WAL. After a checkpoint, the first change to each page writes the whole 8 KB page to the WAL, and on a personal hub that is most writes: lz4 cuts the WAL of a write to a random page by about a fifth to a half, for a little CPU and no measurable latency. `auto` is `lz4` when the image's PostgreSQL is 15 or later and built with lz4 (`pg_config --configure` lists `--with-lz4`; the official `postgres:18-alpine` is), and `off` otherwise, since PostgreSQL 14 and older, or a build without lz4, would not start with it. `off`, `pglz`, `lz4` or `zstd` is used as given |
 | `PERSONA_LOG_DRIVER` | `json-file` | The containers' log driver: `json-file` or `local` (Docker's compact format, compressed). `docker compose logs` reads both. Other drivers reject the size options below, so the containers would not start |
 | `PERSONA_LOG_MAX_SIZE`, `PERSONA_LOG_MAX_FILE` | `10m`, `3` | Size of one log file and how many are kept per container |
 
 The Postgres settings are passed on its command line (`postgres -c …`), which wins over `ALTER SYSTEM` and `postgresql.conf`: a setting made with `ALTER SYSTEM` is ignored while compose passes the same one. Check what is in effect with `docker compose exec postgres psql -U <user> -c "SELECT name, setting, source FROM pg_settings WHERE name IN ('synchronous_commit', 'wal_compression', 'checkpoint_timeout', 'wal_writer_delay')"` (`source` says `command line`), and drop old ones with `ALTER SYSTEM RESET <name>`. An invalid value stops postgres from starting; `docker compose logs postgres` names it.
+
+**Upgrading to these defaults.** The first `docker compose up -d` with this `compose.yaml` recreates the postgres container, because its command changed: Postgres stops for a few seconds and the hub reconnects by itself. A `.env` that sets `PERSONA_POSTGRES_WAL_COMPRESSION=off` or `PERSONA_POSTGRES_CHECKPOINT_TIMEOUT=5min` keeps that. A database container made outside compose (by `scripts/deploy/db.sh`, `personad hub setup` or a manager's own database) is never recreated: those made from now on start with `-c wal_compression=lz4 -c checkpoint_timeout=15min`, and an existing one can switch without a restart:
+
+```sh
+docker exec -i <container> psql -U <user> -d <database> <<'SQL'
+ALTER SYSTEM SET wal_compression = 'lz4';
+ALTER SYSTEM SET checkpoint_timeout = '15min';
+SELECT pg_reload_conf();
+SQL
+```
 
 The logging block replaces the Docker daemon's default driver for these two containers. Synology's Container Manager defaults to its own `db` driver and its **Log** tab shows only what that driver keeps: with this compose file the tab stays empty, and `docker compose logs` (or `docker logs`) shows the logs instead. Before, the daemon's default applied, which on most Linux hosts is `json-file` without a size limit.
 
@@ -199,8 +209,6 @@ PERSONA_POSTGRES_HEALTHCHECK_RETRIES=5
 PERSONA_HUB_HEALTHCHECK_INTERVAL=60s
 PERSONA_POSTGRES_SYNCHRONOUS_COMMIT=off
 PERSONA_POSTGRES_WAL_WRITER_DELAY=1s
-PERSONA_POSTGRES_CHECKPOINT_TIMEOUT=15min
-PERSONA_POSTGRES_WAL_COMPRESSION=lz4
 PERSONA_LOG_DRIVER=local
 ```
 
@@ -251,9 +259,19 @@ A new image doesn't change how the built-in manager runs on an existing install.
   `network_mode: host` (and remove `ports`).
 - The hub is HTTP by default and should only be reached on the internal network, over VPN, or behind an HTTPS reverse proxy. Don't expose 18660 directly to the internet.
 
+### SSH tunnel to a hub on the same host
+
+The iOS and macOS apps can reach the hub through an SSH server ([network.md](network.md#经-ssh-隧道连-hub直连不通时的后备)). When that server is the Docker host itself and the tunnel target is a port compose publishes (`127.0.0.1:18660`), the connection reaches the container through docker-proxy, and the hub sees it come from the container's gateway: public, as above. The tunnel is plaintext, so every request through it gets `403 tls_required`, although **Test connection and save** succeeds; the hub logs `api: plaintext from <gateway>, this container's gateway …` (at most every 10 minutes). To let the tunnel in:
+
+1. Publish both ports on loopback only, so that nothing but the host itself reaches the gateway through them: `PERSONA_PORT=127.0.0.1:18660` and `PERSONA_TLS_PORT=127.0.0.1:18662` in `.env`, then `docker compose up -d`.
+2. Find the gateway of the hub's network: `docker network inspect jarvis_default --format '{{(index .IPAM.Config 0).Gateway}}'` (the compose project is `jarvis` unless `PERSONA_COMPOSE_PROJECT` names another). To keep it from changing when the network is recreated, give the network a fixed `subnet` in `compose.yaml` (`networks: default: ipam: config: [{subnet: …}]`).
+3. Add it as a single address to `security.trusted_cidrs` in `data/hub.json` (`"<gateway>/32"`; keep existing entries), then `docker compose restart hub`.
+
+Trusting the gateway lets in whatever reaches the published ports: with them on `127.0.0.1` that is the host's own processes, the SSH server among them, and `permitopen` limits each tunnel key to that port. Don't do this while the ports are published on other addresses: what docker-proxy relays from there (IPv6 when Docker's IPv6 is off, the internet included) comes from the gateway too. The admin UI under `PERSONA_ADMIN_ACCESS=lan` follows `security.trusted_cidrs` as well ([admin.md](admin.md) ("Docker bridge network")).
+
 ### Reverse proxy on the same machine
 
-The hub treats its own container's gateway as public internet ([network.md](network.md) ("Source checks and reverse proxies")): plaintext requests from the internet get `403 tls_required` and can't use the main token.
+The hub treats its own container's gateway as public internet ([network.md](network.md) ("Source classification and reverse proxies")): plaintext requests from the internet get `403 tls_required` and can't use the main token.
 With the two common ways of setting up a reverse proxy on a NAS, the source seen by the hub becomes the gateway, so connect as follows:
 
 - **Proxy in another container** (Caddy, nginx, Nginx Proxy Manager…): don't reach the hub through the host-mapped port (`<NAS address>:18660`). The proxy container is on a different
@@ -324,7 +342,7 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
   so it can't tell "same subnet" and is relaxed to any private address. But connections forwarded by Docker's userland proxy (docker-proxy) all show up as the gateway address (`172.x.0.1`),
   including ones from the internet (IPv6 requests when Docker has no IPv6, requests forwarded by a reverse proxy on the host), so the gateway never counts as LAN. On Linux, LAN computers come in through
   iptables DNAT, the container sees their real address, and they can open it as usual. The App's API works the same way: requests from the gateway are treated as internet (can't use the main token; plaintext APIs return `403 tls_required`),
-  see [network.md](network.md) ("Source checks and reverse proxies").
+  see [network.md](network.md) ("Source classification and reverse proxies").
 - **Docker Desktop / OrbStack**: the forwarding source may be the gateway, or a public-looking address provided by gvisor. Find the real peer as in "Plaintext connections on Docker Desktop / OrbStack" above; for local trial only, bind the port to `127.0.0.1` and put the actual source in `PERSONA_ADMIN_CIDRS`. The API allowlist needs `security.trusted_cidrs` separately.
 - **`loopback`** inside a container means the container itself: for uses like `docker compose exec hub wget -qO- http://127.0.0.1:18660/admin`; rarely useful.
 - **`any`** requires the hub to have TLS on (`public.tls_listen` in `data/hub.json`; the `hub.json` written on first start already has it, and compose maps 18662; older installs need to add it).
@@ -335,7 +353,7 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
 
 1. On the old machine, stop the hub (`systemctl --user stop personad`) and export the database:
    `docker exec persona-postgres pg_dump -U persona -Fc persona > persona.dump`, and the built-in manager's database in the same server: `docker exec persona-postgres pg_dump -U persona -Fc persona_manager > persona_manager.dump`. Both together are the hub's data ([managers.md](../assistant/managers.md) ("The built-in manager's database")); one without the other loses the manager's data or the hub's.
-2. Copy the actual runtime directory (the new default is `~/.persona`; existing deployments may still use the compatibility directory `~/.persona`) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
+2. Copy the actual runtime directory (`~/.persona` by default; an older deployment may still keep it under the old name: [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md)) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
    change it to `ssh` or `tailcat`). Leave `database_url` alone (the environment variable overrides it).
 3. `docker compose up -d postgres`, then import: `docker compose exec -T postgres pg_restore -U persona -d persona --clean --if-exists < persona.dump` (and the manager's: `docker compose exec -T postgres createdb -U persona persona_manager`, then the same `pg_restore -d persona_manager < persona_manager.dump`),
    then `docker compose up -d`. The token is unchanged; paired phones only need the address changed to the new one (or scan again).

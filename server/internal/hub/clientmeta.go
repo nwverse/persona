@@ -66,6 +66,7 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 		return
 	}
 	wasElicitation := c.has("elicitation")
+	wasDesktopsLink := c.wants(featureDesktopsLink)
 	wasLang := c.lang()
 	c.mu.Lock()
 	hb := c.meta.heartbeat
@@ -96,7 +97,10 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 	c.meta = msg.clientMeta
 	updates, done := c.meta.updates, c.meta.done
 	c.mu.Unlock()
+	// Last, after the cards it can now answer: the notify events kept while it had no ws_notify socket (notifyring.go).
+	defer h.replayNotifyRing(c)
 	go h.fleetClientsChanged() // its features (elicitation) count now (fleet_link.go)
+	h.noteClientApp(c)         // its version, for the assistant (client_apps.go)
 	if c.role == roleFull && c.hub != nil {
 		c.hub.setUserLang(i18n.Lang(msg.Locale)) // only a valid one, and only a change, is saved
 	}
@@ -105,6 +109,10 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 	}
 	if !wasElicitation && c.has("elicitation") {
 		defer h.sendPendingInteractions(c, true)
+	}
+	if wasDesktopsLink != c.wants(featureDesktopsLink) {
+		// The list it has left the Persona Link desktops out, or holds ones it will not hear end.
+		defer h.sendDesktops(c)
 	}
 	if updates == nil {
 		c.helloAck(hb)

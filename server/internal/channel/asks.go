@@ -142,7 +142,7 @@ func is(text string, words []string) bool {
 
 // IsApprovalWord says whether text is only a word that approves or refuses a card (yes, no, the plan's approve), in
 // any of the three languages: a voice conversation does not send it on while its conversation waits on such a card,
-// since a card is answered on the screen (docs/assistant/voice.md "Sending, the gate and 409").
+// since a card is answered on the screen (docs/assistant/voice.md "Sending, gates, and 409").
 func IsApprovalWord(text string) bool {
 	return is(text, yes) || is(text, no) || is(text, planApprove)
 }
@@ -325,6 +325,9 @@ func Answered(l i18n.Lang, r proto.Resolution) string {
 }
 
 func toolName(l i18n.Lang, ix proto.Interaction) string {
+	if ix.ToolTitle != "" { // the manager's own tools, by their name for people
+		return ix.ToolTitle
+	}
 	if ix.ToolName != "" {
 		return ix.ToolName
 	}

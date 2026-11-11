@@ -137,9 +137,6 @@ func (h *Hub) awaitManager(ctx context.Context, limit time.Duration) bool {
 	return h.waitDevices(ctx) == nil
 }
 
-// applyDeviceStates is applyDeviceStatesFrom the manager that carries hub.json's machines.
-func (h *Hub) applyDeviceStates(st devicewire.States) { h.applyDeviceStatesFrom(devicesOwner, st) }
-
 // applyDeviceStatesFrom takes devices.state from manager owner: every machine it carries, in the apps' order. The
 // other managers' machines stay as they were, and only the machines owner carries are taken (ownership.go
 // machineOwner: another manager's, and a mesh member's from any manager but the carrier, are dropped). The apps get
@@ -502,6 +499,11 @@ func (h *Hub) machineConnected(ctx context.Context, m *Machine, at time.Time) de
 	m.hookedAt = at
 	m.mu.Unlock()
 	out := devicewire.ConnectedReply{Configure: map[string]json.RawMessage{}}
+	// Nodes use the same explicit capability announcement as the app hello. The
+	// manager forwards this authenticated response in node.configure on reconnect.
+	if b, err := json.Marshal(h.features()); err == nil {
+		out.Configure["hub_features"] = b
+	}
 	if b, err := json.Marshal(m.codexConfig(ctx)); err == nil {
 		out.Configure["codex"] = b
 	}

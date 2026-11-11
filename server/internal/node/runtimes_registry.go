@@ -31,6 +31,9 @@ type runtimeRegistry struct {
 	// logf reports what an operator should fix (a launcher two runtimes offer); nil: nowhere. warned: said once each.
 	logf   func(format string, args ...any)
 	warned map[string]bool
+	// hostOff says a runtime is an engine host the serving node does not enable (Node.engineHostOff, set by attach):
+	// its launchers are neither listed nor started. nil: every runtime may offer launchers.
+	hostOff func(runtime string) bool
 }
 
 // knownSession is the runtime a session belongs to, by the runtime's id (a reconnect is the same runtime).
@@ -45,6 +48,13 @@ const maxKnown = 8192
 func newRuntimeRegistry() *runtimeRegistry {
 	return &runtimeRegistry{conns: map[int]*runtimeConn{}, owner: map[string]*runtimeConn{}, watching: map[string]int{},
 		known: map[string]knownSession{}, unclaimed: map[string]time.Time{}, warned: map[string]bool{}}
+}
+
+// setHostOff replaces how launcher ownership excludes engine runtimes the serving node does not enable.
+func (b *runtimeRegistry) setHostOff(off func(runtime string) bool) {
+	b.mu.Lock()
+	b.hostOff = off
+	b.mu.Unlock()
 }
 
 // warnOnce logs a message once per key. Callers hold b.mu.
@@ -373,38 +383,37 @@ func (b *runtimeRegistry) ownerOf(id string) *runtimeConn {
 	return b.owner[id]
 }
 
-// sessions lists every connected runtime's sessions, each id once.
-func (b *runtimeRegistry) sessions() []proto.Session {
+// appendSessions appends every connected runtime's sessions to dst, each id once, in the order the runtimes connected:
+// straight into the caller's list (sessionList's), not into a slice of their own grown row by row and copied again.
+// b.mu is held while each connection's rows are read under its h.mu, the order setSessions takes them in; nothing
+// here calls out of the registry.
+func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 	if b == nil {
-		return nil
+		return dst
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	conns := make([]*runtimeConn, 0, len(b.conns))
 	for _, h := range b.conns {
 		conns = append(conns, h)
 	}
-	owner := make(map[string]*runtimeConn, len(b.owner))
-	for id, h := range b.owner {
-		owner[id] = h
-	}
-	b.mu.Unlock()
 	sort.Slice(conns, func(i, j int) bool { return conns[i].serial < conns[j].serial })
-	var out []proto.Session
 	for _, h := range conns {
 		h.mu.Lock()
-		for _, s := range h.sessions {
-			if owner[s.SessionID] == h {
-				out = append(out, s)
+		for i := range h.sessions {
+			if b.owner[h.sessions[i].SessionID] == h {
+				dst = append(dst, h.sessions[i])
 			}
 		}
 		h.mu.Unlock()
 	}
-	return out
+	return dst
 }
 
 // launcherOwners maps each launcher name the runtimes offer to the one connection that answers for it: the one
 // connected first, so the form and session.start agree and do not change while both stay connected. The others'
-// launcher of that name is not offered (logged once). Callers hold b.mu.
+// launcher of that name is not offered (logged once). A disabled engine runtime (b.hostOff) is left out before it can
+// claim a name, so it never hides an enabled runtime's launcher of the same name. Callers hold b.mu.
 func (b *runtimeRegistry) launcherOwners() map[string]*runtimeConn {
 	conns := make([]*runtimeConn, 0, len(b.conns))
 	for _, h := range b.conns {
@@ -417,7 +426,7 @@ func (b *runtimeRegistry) launcherOwners() map[string]*runtimeConn {
 		h.mu.Lock()
 		rt, ok := h.hello.Runtime, h.ready && h.hello.Caps.Start
 		h.mu.Unlock()
-		if !ok {
+		if !ok || b.hostOff != nil && b.hostOff(rt) {
 			continue
 		}
 		for _, l := range h.launcherList() {

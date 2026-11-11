@@ -17,6 +17,9 @@ const market = { id: "fixture-market", name: "Synthetic market", spec: "https://
 const item = { market: market.id, market_name: market.name, id: newID, name: "Bypass auto-allow", version: "0.2.24",
   installed: "0.2.23", installed_source: "installed", from_this_market: true, upgradable: true,
   replaces: oldID, rename_from: oldID, permissions: [] };
+// The installed predecessor's own page (#2511): Check for updates must find the successor under its new ID.
+const installed = { id: oldID, name: item.name, kind: "process", source: "installed", status: "running", version: item.installed, enabled: true,
+  origin: `market:${market.id}/${oldID}`, auto_upgrade: true };
 const consent = { preview_id: "identity-preview", manifest: { id: newID, name: item.name, version: item.version },
   upgrade: true, rename_from: oldID, from: item.installed, permissions: [], permissions_digest: "a".repeat(64),
   warnings: [`This update changes the extension ID from ${oldID} to ${newID}. Explicit confirmation is required; settings and data stay with the same installation.`],
@@ -39,6 +42,8 @@ try {
       if (path === "/api/v1/admin/state") return json({ password_set: true, logged_in: true, csrf: "synthetic-csrf", hub_name: "Fixture hub" });
       if (path === "/api/v1/admin/overview") return json({ hub: { name: "Fixture hub", can_restart: false, hub_id: "fixture", started_at: "2026-11-08T00:00:00Z" }, restart: { needed: false }, tls: null });
       if (path === "/api/v1/managers") return json({ default: "assistant", managers: [{ id: "assistant", name: "Hub manager", online: true, builtin: true }] });
+      if (path === `/api/v1/extensions/${oldID}/-/`) return json(installed);
+      if (path.endsWith("/-/upgrades")) return json({ auto: true, upgrades: [] });
       if (path.endsWith("/catalog/preview")) {
         let raw = ""; for await (const chunk of req) raw += chunk;
         const body = JSON.parse(raw); assert.equal(body.extension, newID);
@@ -75,7 +80,7 @@ try {
   } }], preview: { host: "127.0.0.1", port, strictPort: true, proxy: { "/api": { target: mockURL, changeOrigin: true, ws: true } } } });
   const appURL = `http://127.0.0.1:${vite.httpServer.address().port}`;
   browser = await chromium.launch({ channel: "chrome", headless: true, args: ["--no-sandbox"] });
-  for (const surface of ["settings", "admin"]) for (const width of [1440, 390]) for (const scheme of ["light", "dark"]) {
+  for (const surface of ["settings", "updates", "admin"]) for (const width of [1440, 390]) for (const scheme of ["light", "dark"]) {
     const context = await browser.newContext({ viewport: { width, height: 1100 }, locale: "en-US", colorScheme: scheme });
     await context.addInitScript(({ scheme }) => {
       localStorage.setItem("persona.token", "synthetic-browser-token");
@@ -93,8 +98,17 @@ try {
     currentPage = page;
     page.on("pageerror", (error) => errors.push(error.message));
     const before = calls.filter((call) => call.kind === "upgrade").length;
-    await page.goto(surface === "admin" ? `${appURL}/admin/extensions` : `${appURL}/settings?tab=extensions&extension=-market/${market.id}/${oldID}`);
+    await page.goto(surface === "admin" ? `${appURL}/admin/extensions` : surface === "updates" ? `${appURL}/settings?tab=extensions&extension=${oldID}`
+      : `${appURL}/settings?tab=extensions&extension=-market/${market.id}/${oldID}`);
     await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), scheme === "dark");
+    if (surface === "updates") {
+      await page.getByRole("button", { name: "Check for updates", exact: true }).click();
+      await page.getByText("New version 0.2.24", { exact: true }).waitFor();
+      assert.equal(await page.locator('[role="alert"]').count(), 0, "A renamed extension's check must not report it missing from its market");
+      const found = `${surface}-checked-${width}-${scheme}.png`; await page.screenshot({ path: join(output, found), fullPage: true }); screenshots.push(found);
+      assert.ok((await page.locator('[data-extension-section="updates"]').textContent()).includes(`Rename ${oldID} to ${newID}`));
+      await page.getByRole("button", { name: "Review", exact: true }).click();
+    }
     await page.getByRole("button", { name: surface === "admin" ? "Upgrade" : "Update to 0.2.24", exact: true }).last().click();
     const dialog = page.getByRole("dialog");
     await dialog.getByText("Extension identity change", { exact: true }).waitFor();

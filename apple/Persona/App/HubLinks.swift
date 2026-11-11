@@ -129,12 +129,13 @@ extension AppModel {
     /// The group hub-level pages (Persona, Inbox, the hub's settings) show: the one picked, else the first.
     var hub: HubLink? { link(hubGroup) ?? links.first }
 
-    /// A client for the group a session, machine or interaction is from.
+    /// A client for the group a session, machine or interaction is from; the assistant's routes go to the manager its
+    /// Persona page shows (`APIClient.showing`).
     func api(_ group: String) -> APIClient? {
         #if DEBUG
         if let apiForTests { return apiForTests }
         #endif
-        return link(group)?.api
+        return link(group)?.api.showing(assistantPick(in: group))
     }
 
     /// Back in the app: every group's socket opens again.
@@ -152,7 +153,7 @@ extension AppModel {
             link.live.disconnect()
         }
         // iOS cuts them in the background anyway; back in front each socket picks its way again (docs/operations/network.md).
-        closeAllTunnels()
+        closeTunnelsForBackground()
     }
 
     /// A silent push in the background: the group that sent it connects for its call (nil: every group).
@@ -205,7 +206,7 @@ extension AppModel {
     }
 
     /// The group a push came from: the hub that sent it (`hub_id`), the push key that opened it, else the group that
-    /// has its session (docs/protocol/multi-hub.md「推送」).
+    /// has its session (docs/protocol/multi-hub.md「Push and notifications」).
     func pushGroup(_ info: [AnyHashable: Any]) -> String? {
         if let id = info["hub_id"] as? String, let g = registry.group(hubID: id), link(g) != nil { return g }
         if let g = PushCrypto.group(from: info), link(g) != nil { return g }
@@ -217,7 +218,7 @@ extension AppModel {
     // MARK: Routes, hellos, groups changing
 
     /// What a group's socket asks before each attempt when the group has more than one place to go: the quickest
-    /// hub that answers (HubRoute), or a tunnel when none does (`tunnelRoute`, docs/operations/network.md「经 SSH 隧道连 hub」
+    /// hub that answers (HubRoute), or a tunnel when none does (`tunnelRoute`, docs/operations/network.md「Connecting to hub through SSH」
     /// 「经 App 内隧道连 hub」). One place and no tunnel: nil, the socket goes where it was told.
     func routePicker(_ group: String) -> (@MainActor () async -> ServerConfig?)? {
         let tunneled = !hubTunnels(group).isEmpty
@@ -231,7 +232,7 @@ extension AppModel {
     }
 
     /// A hello came: remember which hub answered, its name and its group (`mesh`), and regroup the paired hubs when
-    /// that changed what belongs together (docs/protocol/multi-hub.md「分组」).
+    /// that changed what belongs together (docs/protocol/multi-hub.md「Grouping」).
     func learned(_ hello: HubHello, group: String) {
         guard let link = link(group), !link.isDemo else { return }
         defer { watchCenter(group) } // on a member now? (after the registry learned who the center is)
@@ -281,7 +282,7 @@ extension AppModel {
         pushWatchConfigs()
     }
 
-    /// The socket is on a member while the group's center is another hub (docs/protocol/multi-hub.md「选路」): ask the center
+    /// The socket is on a member while the group's center is another hub (docs/protocol/multi-hub.md「Connections and routing」): ask the center
     /// every few minutes and move there once it answers. Ends when the socket is on the center, or the group or its
     /// center is gone.
     func watchCenter(_ group: String) {
@@ -371,9 +372,21 @@ extension AppModel {
         saveRegistry(r)
     }
 
+    /// Settings › hub › Cloudflare Access saved (nil: cleared): the hub's requests carry it from now on, the group's
+    /// socket reconnects with it, and the watch and the widgets get it.
+    func setHubAccess(_ access: HubAccess?, hub id: String) {
+        guard let hub = registry.hubs.first(where: { $0.id == id }), hub.config.access != access else { return }
+        updateHub(id) { $0.config.access = access }
+        buildLinks() // the links' fallback config, and the widgets' credentials
+        pushWatchConfigs()
+        guard let link = link(hub.group), !link.isDemo else { return }
+        link.live.disconnect()
+        link.live.connect(link.fallback) // its route picks the group's hub again, from the registry
+    }
+
     // MARK: Live Activity
 
-    /// Every group's Fleet state as one (docs/protocol/multi-hub.md「实时活动」): counts added up, the requests of every group
+    /// Every group's Fleet state as one (docs/protocol/multi-hub.md「Live Activities」): counts added up, the requests of every group
     /// first, then the working and finished agents; another group's rows carry it in their ids ("group|…"), so a tap
     /// or a button reaches the right hub. One group: its state as the hub sent it.
     /// Agents of quiet tasks (#1731) are left out of each group's first: a hub that knows them never sends them, this
@@ -437,7 +450,7 @@ nonisolated struct PushRef: Sendable, Equatable {
     }
 
     /// The session in its group: the hub that sent the push, the key that opened it, else the group that has such a
-    /// session, else the first group (docs/protocol/multi-hub.md「推送」).
+    /// session, else the first group (docs/protocol/multi-hub.md「Push and notifications」).
     @MainActor func key(_ model: AppModel) -> SessionKey {
         var info: [AnyHashable: Any] = [:]
         if let hubID { info["hub_id"] = hubID }

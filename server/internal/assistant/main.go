@@ -3,13 +3,15 @@ package assistant
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -104,9 +106,8 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 		if token == "" {
 			return errors.New("no bus token: set PERSONA_ASSISTANT_TOKEN (personad hub assistant-token prints one)")
 		}
-		hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
-		if hub == "" {
-			hub = localHubURL(cfg.Listen)
+		if hub, fingerprint, err = externalHub(deploy, cfg.Listen); err != nil {
+			return err
 		}
 	}
 	home := identity.HomeDir()
@@ -182,7 +183,7 @@ func moveFiles(home string, logf func(string, ...any)) {
 }
 
 // moveConfig takes the manager's sections out of the hub.json in hubDir into its manager.json, once
-// (managerconf.Move), says what it did, and reads the configuration the extensions, connectors and bots run with
+// (managerconf.MoveExcept), says what it did, and reads the configuration the extensions, connectors and bots run with
 // (extmgr.LoadConfig), which run hands on as it is. A failed move, or a configuration that does not read, is an error
 // the manager does not start with: it would run without its sections, the user's gate rules (lark_gate,
 // connector_gate) among them, and the node would fall back to its own, which let every read through. Whatever starts
@@ -335,7 +336,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		stop()
 		<-keyDone
 	}()
-	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects the computers").
+	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects to computers").
 	var bh *BusHub
 	var svc *Service
 	var ext *extmgr.Manager
@@ -381,10 +382,12 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Assistant: func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 			return bh.Answer(ctx, method, params)
 		},
-		AssistantEvent:   func(event string, params json.RawMessage) { bh.TellLocal(event, params) },
-		AssistantTools:   func() []proto.Tool { return svc.toolsNow() },
-		AssistantMachine: func() string { return svc.mainMachine(context.Background()) },
-		Ask:              func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
+		AssistantEvent: func(event string, params json.RawMessage) { bh.TellLocal(event, params) },
+		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
+		// The model providers' keys that are references, for their provider extensions' details (launcher_secrets.go).
+		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
+		AssistantMachine:   func() string { return svc.mainMachine(context.Background()) },
+		Ask:                func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
@@ -488,16 +491,31 @@ func readHubConfig() (hubConfig, error) {
 	return cfg, nil
 }
 
-// localHubURL is the hub on this machine, from its listen address.
-func localHubURL(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return "http://127.0.0.1:18660"
+// externalHub is the hub an assistant the hub didn't bind connects to, and its TLS pin. PERSONA_ASSISTANT_HUB is the
+// hub (the one on this machine, from listen, without it). PERSONA_ASSISTANT_FINGERPRINT pins an https hub's public key,
+// the fp `personad hub pair` prints (docs/operations/network.md): what an assistant elsewhere (assistant.external)
+// needs to reach a hub with its own self-signed certificate, as a manager's manager.json has it (#1255). Without it
+// the system's CAs are trusted. The hub's own child dials its local address and takes no pin.
+func externalHub(deploy, listen string) (hub, fingerprint string, err error) {
+	hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
+	if hub == "" {
+		hub = managerconf.LocalHubURL(listen)
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
+	if deploy == "child" {
+		return hub, "", nil
 	}
-	return "http://" + net.JoinHostPort(host, port)
+	fingerprint = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_FINGERPRINT"))
+	if fingerprint == "" {
+		return hub, "", nil
+	}
+	if sum, err := base64.RawURLEncoding.DecodeString(fingerprint); err != nil || len(sum) != sha256.Size {
+		return "", "", errors.New("PERSONA_ASSISTANT_FINGERPRINT is not a hub fingerprint: 43 characters of base64url, " +
+			"the fp personad hub pair prints")
+	}
+	if u, err := url.Parse(hub); err != nil || u.Scheme != "https" {
+		return "", "", fmt.Errorf("PERSONA_ASSISTANT_FINGERPRINT pins an https hub, and PERSONA_ASSISTANT_HUB is %q", hub)
+	}
+	return hub, fingerprint, nil
 }
 
 // errorTee is the manager process's log writer: lines go to stderr, and its error lines become the manager's error

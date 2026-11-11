@@ -10,9 +10,13 @@ import { api, ApiError, enc } from "./api";
 import { itemHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
+import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
 import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
+import { SUBSCRIPTIONS_UI } from "./subscriptions-ui";
+
+export { isHttps };
 
 /** The UI version the web draws (context.ui_version). */
 export const UI_VERSION = 6;
@@ -344,7 +348,9 @@ export function placeOf(u: UIPlace & { plugin?: string; plugin_name?: string }):
   return { ...rest, extension: u.extension ?? plugin ?? "", ...((u.extension_name ?? plugin_name) ? { extension_name: u.extension_name ?? plugin_name } : {}) };
 }
 
-const uiPath = (extension: string, ui: string) => `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
+// The subscription pages (#2041) are the manager's own, drawn and pressed like an extension's page under a reserved id.
+const uiPath = (extension: string, ui: string) =>
+  extension === SUBSCRIPTIONS_UI ? "/subscriptions/-/ui" : `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
 
 /** Draws the view (no action). A view that does not read at all is an error; unknown items are left out. `manager`:
  *  whose extension it is (another manager's inbox item, or computer); none: the default's. */
@@ -381,16 +387,6 @@ export const toneOf = (t?: string): UITone => (t && TONES.includes(t) ? (t as UI
 export function percent(ratio?: number): number {
   if (typeof ratio !== "number" || !Number.isFinite(ratio)) return 0;
   return Math.round(Math.min(1, Math.max(0, ratio)) * 1000) / 10;
-}
-
-/** Only https links open (the hub checks too). */
-export function isHttps(url?: string): boolean {
-  if (!url) return false;
-  try {
-    return new URL(url).protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 /** The fields of a view, by name, as they start: what the extension filled in (never a secret's), toggles "true" / "false". */
@@ -491,7 +487,7 @@ export function pushPage(stack: readonly UIPage[], push: UIPush, ui: string): UI
 /** The icons UI version 6 adds (docs/extensions/extensions.md "UI version 6"), on a row, a metric, a tile, a row action and a nav_page. */
 export const NEW_ICONS_6 = [
   "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play",
-  "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car",
+  "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car",
   "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit",
   "refresh", "share", "info",
 ] as const;
@@ -566,8 +562,6 @@ export const KNOWN_ITEMS: readonly string[] = [
   "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", // UI version 4
   "image", "grid", "carousel", // UI version 6
 ];
-
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** An item the web can draw: a known type with what it needs to be drawn at all (a chart with points, a grid with stats). */
 function drawable(it: unknown): it is UIItem {
@@ -682,33 +676,6 @@ export function readView(raw: unknown): UIView {
     }
   }
   return view;
-}
-
-/** An action as the web uses it (an id at least), its push read too; undefined when it is not one. */
-export function readAction(raw: unknown): UIAction | undefined {
-  if (!isObject(raw) || typeof raw.id !== "string" || !raw.id) return undefined;
-  const a: UIAction = { id: raw.id };
-  if (typeof raw.confirm === "string") a.confirm = raw.confirm;
-  if (raw.submit === true) a.submit = true;
-  const p = readPush(raw.push);
-  if (p) a.push = p;
-  if (isObject(raw.values)) {
-    const values = Object.fromEntries(Object.entries(raw.values).filter((e): e is [string, string] => typeof e[1] === "string"));
-    if (Object.keys(values).length) a.values = values;
-  }
-  return a;
-}
-
-/** A push as the web keeps it: the state as text (an extension may send an object: it gets it back as JSON). */
-export function readPush(raw: unknown): UIPush | undefined {
-  if (raw === true) return {};
-  if (!isObject(raw)) return undefined;
-  const p: UIPush = {};
-  if (typeof raw.state === "string") p.state = raw.state;
-  else if (raw.state !== undefined && raw.state !== null) p.state = JSON.stringify(raw.state);
-  if (typeof raw.title === "string" && raw.title) p.title = raw.title;
-  if (typeof raw.ui === "string" && raw.ui) p.ui = raw.ui;
-  return p;
 }
 
 /** An item with its actions read; an empty's button (`action: {title, action}`) under `button`. */

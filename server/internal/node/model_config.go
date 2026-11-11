@@ -17,10 +17,19 @@ type modelExecution struct {
 	UseEffort   bool
 	Fingerprint string
 	Ultracode   *bool `json:"-"` // explicit TUI start request; never a default or execution fingerprint
+	// PlanThen: the permission mode a start in plan mode goes on in once its plan is approved (planthen.go); never
+	// part of a fingerprint.
+	PlanThen string `json:"-"`
 	// Runtime: the assistant's runtime, proto.AssistantRuntimeAgentSDK or "" (the CLI; "cli" reads as ""). Omitted
 	// when empty so a fingerprint from before #2455 stays the same.
 	Runtime string `json:",omitempty"`
 	IsMain  bool   `json:",omitempty"`
+	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
+	// background (assistant_interject.go). Per message, never part of the fingerprint.
+	Interject bool `json:"-"`
+	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
+	// part of a fingerprint, never kept for a resume.
+	SecretTicket string `json:"-"`
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
@@ -39,7 +48,7 @@ func (n *Node) executionFingerprint(launcher string, m modelExecution) string {
 		m.Runtime = ""
 	}
 	raw, _ := json.Marshal(m)
-	if l, ok := n.managedLauncher(launcher); ok {
+	if l, ok := n.managedCatalog(launcher); ok { // as named: the same before and after a withheld one's pull (its Rev)
 		v, _ := json.Marshal(l)
 		raw = append(raw, v...)
 	}

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The node menu of the Agents list (docs/integrations/terminal.md「节点菜单」, the web's #2329): what changes a computer's terminals from
+// The node menu of the Agents list (docs/integrations/terminal.md「Node menus」, the web's #2329): what changes a computer's terminals from
 // a space's ⋯ and an agent row's long press — split the agent's pane, close its tab, run an agent in a plain shell of the
 // space, fetch / pull / push. Each is a hub route only a full device may call (server/internal/hub/panes.go); the
 // request names a pane, tab or workspace the host lists and never a directory or a command.
@@ -64,10 +64,18 @@ nonisolated struct TerminalPanes: Decodable, Sendable, Equatable {
     }
 }
 
-/// What `panes/git` did: a one-line summary for the toast.
+/// What `panes/git` did: what came of it (`outcome`, said in the app's language, #1888), and the node's own one-line
+/// summary, which is all an older node sends.
 nonisolated struct PaneGitResult: Decodable, Sendable {
     var op: String?
+    var outcome: String?
     var message: String?
+}
+
+/// What `panes/agent` answers: the session it started in the pane (`docs/protocol/protocol.md`).
+nonisolated struct PaneAgentResult: Decodable, Sendable {
+    var sessionID: String?
+    enum CodingKeys: String, CodingKey { case sessionID = "session_id" }
 }
 
 extension APIClient {
@@ -78,14 +86,20 @@ extension APIClient {
     /// One of the node menu's routes, `POST /machines/{mid}/<path>`; only allowlisted fields and boolean flags reach the node.
     @discardableResult
     func nodeAction<Body: Encodable & Sendable>(machine: String, _ path: String, _ body: Body, timeout: TimeInterval = 40, opID: UUID? = nil) async throws -> Data {
-        try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        do {
+            return try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        } catch var error as APIError {
+            if error.status == 502 && error.code == "internal" { error.showsNodeReason = true }
+            throw error
+        }
     }
 }
 
 // MARK: - What the menus offer
 
 nonisolated enum NodeMenu {
-    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core and botmux are not asked.
+    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core, Tern and botmux are not
+    /// asked.
     static func canChange(hostKind: String?) -> Bool { hostKind == "herdr" }
 
     /// The pane items of an agent row: a live herdr pane the app may drive.
@@ -124,7 +138,20 @@ nonisolated enum NodeMenu {
             case .fetch: Theme.Icon.gitFetch
             }
         }
-        /// The toast after it ran: the node's one-line summary ("Already up to date"), or Done.
+        /// What came of it in the app's language (#1888); nil for an outcome this app doesn't know (an older node
+        /// sends none), which then shows the node's own words.
+        static func outcome(_ code: String?) -> String? {
+            switch code {
+            case "fetched": String(localized: "Remote updates fetched")
+            case "up_to_date": String(localized: "Already up to date")
+            case "pulled": String(localized: "Pulled the latest code")
+            case "nothing_to_push": String(localized: "No commits to push")
+            case "pushed": String(localized: "Pushed")
+            default: nil
+            }
+        }
+
+        /// The toast after it ran: what came of it, else the node's one-line summary, or Done.
         func done(_ message: String?) -> String {
             let m = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let said = m.isEmpty ? String(localized: "Done [Extension System Presentation c0b3fb]") : m
@@ -181,6 +208,13 @@ nonisolated enum NodeMenu {
 
     /// Only the agents a launcher starts without a first message: Claude Code (a Codex start needs one).
     static func launchableHere(_ l: Launcher) -> Bool { (l.agent ?? "").isEmpty || l.agent == "claude" }
+
+    /// The chat of the agent Run Agent Here started on `machine`, from what `panes/agent` answered: it opens the way New
+    /// Session opens the one it starts (#3287). nil when the answer names no session: the list stays in front.
+    static func startedChat(_ answer: Data, on machine: MachineRef) -> SessionKey? {
+        let id = (try? JSON.decoder.decode(PaneAgentResult.self, from: answer))?.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return id.isEmpty ? nil : SessionKey(group: machine.group, machineID: machine.id, sessionID: id)
+    }
 }
 
 // MARK: - Doing it
@@ -201,6 +235,18 @@ final class NodeActions {
     }
 
     var closingTab: CloseTab?
+
+    /// A push waiting for its yes (#1883): it sends the branch off the computer, so it asks first as the Git panel's
+    /// Push does; Pull and Fetch run at once.
+    struct PushAsk: Identifiable, Equatable {
+        var machine: MachineRef
+        var body: [String: String]
+        /// The folder or space it runs in, for the question ("" when unknown).
+        var place: String
+        var id: String { machine.path + "/" + (body["pane"] ?? body["workspace_id"] ?? "") }
+    }
+
+    var askingPush: PushAsk?
     /// The space whose Run Agent Here… sheet is open.
     var runningHere: SpaceGroup?
     /// The space whose New Worktree… sheet is open.
@@ -210,22 +256,33 @@ final class NodeActions {
 
     func git(_ op: NodeMenu.GitOp, session s: Session) {
         guard let pane = s.paneID, !pane.isEmpty else { return }
-        git(op, machine: s.machineRef, body: NodeMenu.gitBody(op, pane: pane))
+        git(op, machine: s.machineRef, body: NodeMenu.gitBody(op, pane: pane), place: s.folderName)
     }
 
     func git(_ op: NodeMenu.GitOp, space g: SpaceGroup) {
         guard let ws = NodeMenu.workspaceID(g) else { return }
-        git(op, machine: g.machineRef, body: NodeMenu.gitBody(op, workspaceID: ws, kind: NodeMenu.kind(g)))
+        git(op, machine: g.machineRef, body: NodeMenu.gitBody(op, workspaceID: ws, kind: NodeMenu.kind(g)), place: g.name)
     }
 
-    private func git(_ op: NodeMenu.GitOp, machine: MachineRef, body: [String: String]) {
+    /// Push once it is confirmed.
+    func push(_ a: PushAsk) { run(.push, machine: a.machine, body: a.body) }
+
+    private func git(_ op: NodeMenu.GitOp, machine: MachineRef, body: [String: String], place: String) {
+        if op == .push {
+            askingPush = PushAsk(machine: machine, body: body, place: place)
+            return
+        }
+        run(op, machine: machine, body: body)
+    }
+
+    private func run(_ op: NodeMenu.GitOp, machine: MachineRef, body: [String: String]) {
         guard let api = model.api(machine.group) else { return }
         model.toast = Toast(String(localized: "\(op.title)…"))
         Task {
             do {
                 let data = try await api.nodeAction(machine: machine.id, "panes/git", body, timeout: 100)
                 let result = try? JSON.decoder.decode(PaneGitResult.self, from: data)
-                model.toast = Toast(op.done(result?.message), style: .success)
+                model.toast = Toast(op.done(NodeMenu.GitOp.outcome(result?.outcome) ?? result?.message), style: .success)
                 Haptics.success()
             } catch {
                 fail(String(localized: "\(op.title) failed"), error)
@@ -289,14 +346,15 @@ private struct NodeActionPrompts: ViewModifier {
         content
             #if DEBUG
             // `-showRunAgentHere <machine id>`: Run Agent Here for that computer's first herdr space once its agents are
-            // in, for screenshots (#1643). It polls `sessionsNow`, which nothing watches, so the view is not redrawn on
-            // each push; without the argument it reads nothing.
+            // in, for screenshots (#1643); `-showPushAsk <machine id>`: that space's Git ▸ Push question (#1883). It polls
+            // `sessionsNow`, which nothing watches, so the view is not redrawn on each push; without either it reads nothing.
             .task {
-                guard !debugShownHere, let mid = UserDefaults.standard.string(forKey: "showRunAgentHere") else { return }
+                let here = UserDefaults.standard.string(forKey: "showRunAgentHere"), push = UserDefaults.standard.string(forKey: "showPushAsk")
+                guard !debugShownHere, let mid = here ?? push else { return }
                 for _ in 0..<60 {
                     if let g = SpaceGroup.build(model.sessionsNow).first(where: { $0.machineID == mid && NodeMenu.offersSpaceActions($0) }) {
                         debugShownHere = true
-                        actions.runningHere = g
+                        if here != nil { actions.runningHere = g } else { actions.git(.push, space: g) }
                         return
                     }
                     try? await Task.sleep(for: .milliseconds(500))
@@ -311,6 +369,15 @@ private struct NodeActionPrompts: ViewModifier {
             } message: { _ in
                 Text("Every pane in the tab closes, and the agents running in them end too.")
             }
+            .confirmationDialog("Push to the Remote?", isPresented: Binding(get: { actions.askingPush != nil }, set: { if !$0 { actions.askingPush = nil } }),
+                                titleVisibility: .visible, presenting: actions.askingPush) { a in
+                Button("Push") { actions.push(a) }
+                Button("Cancel", role: .cancel) {}
+            } message: { a in
+                Text(a.place.isEmpty
+                     ? String(localized: "The current branch goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so.")
+                     : String(localized: "The current branch in “\(a.place)” goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so."))
+            }
             .sheet(item: Binding(get: { actions.runningHere }, set: { actions.runningHere = $0 })) { g in
                 RunAgentHereSheet(group: g)
             }
@@ -322,7 +389,8 @@ private struct NodeActionPrompts: ViewModifier {
 
 // MARK: - Menu items
 
-/// The node items of an agent row's long-press menu (`AgentRowMenu`): split its pane, Git in its folder, close its tab.
+/// The node items of an agent row's long-press menu (`AgentRowMenu`): split its pane, Git in its folder (Push asks
+/// first), close its tab.
 struct AgentNodeMenuItems: View {
     var now: () -> Session?
 
@@ -513,11 +581,14 @@ struct RunAgentHereSheet: View {
         Task {
             defer { busy = false }
             do {
-                try await api.nodeAction(machine: group.machineID, "panes/agent", ["pane": pane, "launcher": name], timeout: 130)
+                let answer = try await api.nodeAction(machine: group.machineID, "panes/agent", ["pane": pane, "launcher": name], timeout: 130)
                 model.toast = Toast(String(localized: "Started \(name) in the pane"), style: .success)
                 Haptics.success()
                 dismiss()
                 await model.refresh()
+                // Into the new agent's chat (#3287), as New Worktree's sheet opens the one it starts: after the refresh,
+                // so the chat comes up with its title and its computer.
+                if let started = NodeMenu.startedChat(answer, on: group.machineRef) { model.open(started) }
             } catch {
                 failure = String(localized: "Failed to start: \(error.shown ?? error.localizedDescription)")
                 Haptics.error()
@@ -570,7 +641,7 @@ nonisolated struct WorktreeCreated: Decodable, Sendable, Equatable {
     func resolvedParent(sourceID: String) -> String { parentWorkspaceID ?? sourceID }
 }
 
-/// The dialog's logic, as the web's `lib/worktree.ts` (docs/integrations/terminal.md「新建 worktree…」): the path follows the branch
+/// The dialog's logic, as the web's `lib/worktree.ts` (docs/integrations/terminal.md「New worktree…」): the path follows the branch
 /// until it is typed by hand; the computer checks everything again.
 nonisolated enum WorktreeForm: Sendable {
     /// A retry of the same creation intent reuses its receipt, including a lost success response.
@@ -822,7 +893,7 @@ struct NewWorktreeSheet: View {
                     HStack {
                         Text("Advanced")
                         Spacer()
-                        Image(systemName: advanced ? Theme.Icon.expand : Theme.Icon.disclosure).foregroundStyle(.secondary)
+                        ThemedIcon(advanced ? Theme.Icon.expand : Theme.Icon.disclosure).foregroundStyle(.secondary)
                     }.contentShape(.rect)
                 }
                 .buttonStyle(.plain)

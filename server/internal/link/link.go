@@ -30,6 +30,13 @@ const (
 	StreamPath = "/api/v1/link/stream"
 )
 
+// StreamCompression is the permessage-deflate every stream end asks for (the hub's and the manager's, active and
+// passive Persona Link): each message compressed on its own. With context takeover each end kept a flate writer and
+// its window for the stream's life, about 0.8 MB per end while idle, to send a sixth fewer bytes. Either end asking
+// for no context takeover decides it (RFC 7692), so an older end that still asks for takeover saves too
+// (compress_interop_test.go).
+const StreamCompression = websocket.CompressionNoContextTakeover
+
 // Close codes on the link besides the standard ones (1001: the hub is stopping).
 const (
 	CloseReplaced websocket.StatusCode = 4001 // a newer link of the same machine took over
@@ -73,7 +80,7 @@ func PingTimesMS(every, timeout int64) (time.Duration, time.Duration, bool) {
 
 // Message is one JSON message on the link.
 type Message struct {
-	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention
+	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention | presence | rang
 	// hello (persona-link → hub, the first message): which machine, which build, and the hub URL it went to.
 	Machine string `json:"machine,omitempty"`
 	Version string `json:"version,omitempty"`
@@ -108,6 +115,14 @@ type Message struct {
 	ID string `json:"id,omitempty"`
 	// open_failed, node, renamed: why not.
 	Error string `json:"error,omitempty"`
+	// presence (persona-link → hub): whether the user is at this computer and its notifications show, and for how
+	// many more milliseconds an active one counts (PresenceInfo, presence.go). Left out: false. Older managers ignore it.
+	Active   bool  `json:"active,omitempty"`
+	Notifies bool  `json:"notifies,omitempty"`
+	TTLMS    int64 `json:"ttl_ms,omitempty"`
+	// rang (persona-link → hub): the menu bar app handed the notification of this card (its interaction id, as the
+	// summary names it) to Notification Center. Older managers ignore it.
+	InteractionID string `json:"interaction_id,omitempty"`
 }
 
 // Endpoint is a hub URL on its TLS port, or a reverse proxy's https URL with the path the hub sits under (no trailing
@@ -255,7 +270,7 @@ func Update(path string, change func(*Config) error) error {
 	return os.Rename(tmp, path)
 }
 
-// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route choice").
+// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route selection").
 func kindOf(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {

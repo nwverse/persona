@@ -4,7 +4,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendDraft } from "../../lib/drafts";
+import { addQuote, getQuotes, sendDraft, setQuotes } from "../../lib/drafts";
+import { toast } from "../../ui/atoms";
 import { Composer, type Outgoing } from "./Composer";
 import { t } from "../../i18n";
 
@@ -17,6 +18,8 @@ vi.mock("../../lib/attachments", async (orig) => ({
   imagePayload: () => new Promise<{ mime: string; data: string }>((resolve) => reads.push(resolve)),
   sendFile: () => new Promise<string>((resolve) => uploads.push(resolve)),
 }));
+
+vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -62,6 +65,106 @@ const pickFile = (file: File) =>
   });
 
 const trayImages = () => host.querySelectorAll("img").length;
+
+describe("double Esc recalls the last message", () => {
+  const recall = vi.fn();
+  const mount = (props: Partial<React.ComponentProps<typeof Composer>> = {}) => act(() => root.render(
+    <Composer draftKey="recall" placeholder="" onSend={async () => true} onEditLastMessage={recall} {...props} />,
+  ));
+  const key = (name = "Escape", extra: KeyboardEventInit = {}) => act(() => {
+    host.querySelector("textarea")!.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true, ...extra }));
+  });
+  beforeEach(() => recall.mockClear());
+
+  it("requires two presses within 500 ms and ignores held-key repeats", () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    try {
+      mount(); key();
+      expect(recall).not.toHaveBeenCalled();
+      now = 501; key();
+      expect(recall).not.toHaveBeenCalled();
+      now = 600; key();
+      expect(recall).toHaveBeenCalledTimes(1);
+      key("Escape", { repeat: true });
+      expect(recall).toHaveBeenCalledTimes(1);
+    } finally { clock.mockRestore(); }
+  });
+
+  it.each([
+    { working: true }, { needsYou: true }, { disabled: true }, { onEditLastMessage: undefined },
+    { blocked: { label: "Not ready" } },
+  ])("does not recall while unavailable: %j", (props) => {
+    mount(props); key(); key();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it("keeps draft text, quotes and attachments", () => {
+    mount();
+    act(() => sendDraft("recall", { type: "replace", text: "Unsent draft" }));
+    key(); key();
+    expect(recall).not.toHaveBeenCalled();
+    expect(host.querySelector("textarea")!.value).toBe("Unsent draft");
+    act(() => sendDraft("recall", { type: "replace", text: "" }));
+    act(() => addQuote("recall", { text: "Unsent quote" }));
+    key(); key();
+    expect(recall).not.toHaveBeenCalled();
+    act(() => setQuotes("recall", []));
+    putImage("recall"); key(); key();
+    expect(recall).not.toHaveBeenCalled();
+    expect(trayImages()).toBe(1);
+  });
+
+  it("does not count Escape used by IME, modifiers, menus or another key", () => {
+    mount();
+    for (const extra of [{ isComposing: true }, { ctrlKey: true }, { repeat: true }]) {
+      key("Escape", extra); key();
+      expect(recall).not.toHaveBeenCalled();
+      key("ArrowLeft");
+    }
+    key(); key("ArrowLeft"); key();
+    expect(recall).not.toHaveBeenCalled();
+    act(() => sendDraft("recall", { type: "replace", text: "/" }));
+    key();
+    act(() => sendDraft("recall", { type: "replace", text: "" })); key();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it("clears the first press when focus or the conversation changes", () => {
+    mount(); key();
+    act(() => { host.querySelector("textarea")!.focus(); host.querySelector("textarea")!.blur(); }); key();
+    expect(recall).not.toHaveBeenCalled();
+    mount({ draftKey: "another" }); key();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it("leaves Escape to an open dialog or menu", () => {
+    mount();
+    for (const role of ["dialog", "menu"]) {
+      const overlay = document.createElement("div");
+      overlay.setAttribute("role", role);
+      host.append(overlay);
+      key(); key();
+      expect(recall).not.toHaveBeenCalled();
+      overlay.remove();
+    }
+  });
+
+  it("receives the recalled draft while fetching but sends only after completion", async () => {
+    const send = vi.fn(async () => true);
+    mount({ loadingDraft: true, onSend: send });
+    act(() => sendDraft("recall", { type: "replace", text: "Restored prompt" }));
+    expect(host.querySelector("textarea")!.readOnly).toBe(true);
+    expect(host.querySelector("[inert]")).not.toBeNull();
+    expect(host.querySelector("textarea")!.value).toBe("Restored prompt");
+    key("Enter");
+    expect(send).not.toHaveBeenCalled();
+    mount({ loadingDraft: false, onSend: send });
+    expect(host.querySelector("[inert]")).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+    expect(send).toHaveBeenCalledWith({ text: "Restored prompt", images: [] });
+  });
+});
 
 describe("Composer image object URLs", () => {
   it("are freed when the box unmounts", () => {
@@ -369,6 +472,63 @@ describe("Composer draft typed just before leaving (#4591)", () => {
     act(() => root.unmount());
     root = createRoot(host);
     expect(localStorage.getItem("draft:a")).toBeNull();
+  });
+});
+
+describe("Composer Edit over unsent words (#2450)", () => {
+  const box = () => host.querySelector("textarea")!;
+  const typeInto = (text: string) =>
+    act(() => {
+      const el = box();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  const edit = (text: string) => act(() => void sendDraft("e", { type: "replace", text }));
+  const undoToast = () => vi.mocked(toast).mock.calls.find(([text]) => text === t("chat-composer.replaced"));
+  beforeEach(() => {
+    vi.mocked(toast).mockClear();
+    setQuotes("e", []);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("replaces the draft without asking, and Undo brings back the words and the quotes", () => {
+    const ask = vi.spyOn(window, "confirm");
+    render("e");
+    typeInto("half a thought");
+    act(() => void addQuote("e", { text: "the quoted reply", from: "Claude" }, false));
+    const quotes = getQuotes("e").list;
+    edit("the sent message");
+    expect(ask).not.toHaveBeenCalled();
+    expect(box().value).toBe("the sent message");
+    expect(getQuotes("e").list).toEqual([]);
+    const [, tone, action] = undoToast()!;
+    expect(tone).toBe("ok");
+    expect(action?.label).toBe(t("chat-composer.undo"));
+    act(() => action!.run());
+    expect(box().value).toBe("half a thought");
+    expect(getQuotes("e").list).toEqual(quotes);
+  });
+
+  it("says nothing when the box was empty or held the same words", () => {
+    render("e");
+    edit("the sent message");
+    expect(box().value).toBe("the sent message");
+    edit("the sent message ");
+    expect(undoToast()).toBeUndefined();
+  });
+
+  it.each([
+    ["a quote", { text: "the quoted reply", from: "Claude" }],
+    ["a comment card", { text: "fetchAll", comment: { body: "rename fetchAll before merging" } }],
+  ])("offers Undo for %s on the bar when the box is empty", (_, quote) => {
+    render("e");
+    act(() => void addQuote("e", quote, false));
+    const quotes = getQuotes("e").list;
+    edit("the sent message");
+    expect(getQuotes("e").list).toEqual([]);
+    act(() => undoToast()![2]!.run());
+    expect(getQuotes("e").list).toEqual(quotes);
+    expect(box().value).toBe("");
   });
 });
 

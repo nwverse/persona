@@ -1,9 +1,10 @@
-// "Trail" (#2128, docs/assistant/inbox.md "Trail"): under an item's summary, what it grew out of (its parent's chain, up to a todo or
+// "Trail" (#2128, docs/assistant/inbox.md "Relationships: parents and children"): under an item's summary, what it grew out of (its parent's chain, up to a todo or
 // an agent session) and what grew out of it (the items right under it). Each row opens where it lives. Nothing is
 // drawn when the item has neither.
 import { useEffect, useState } from "react";
 import { fetchInboxTree, itemRoute, parentRoute, type InboxItem, type InboxParent, type InboxTree } from "../../lib/inbox";
-import { navigate, type Route } from "../../lib/router";
+import { openFromInbox } from "../../lib/inbox-nav";
+import type { Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -37,7 +38,7 @@ export function LineList({ rows }: { rows: LineRow[] }) {
             <button
               type="button"
               disabled={!r.route}
-              onClick={() => r.route && navigate(r.route)}
+              onClick={() => r.route && openFromInbox(r.route)}
               className={cx(
                 "flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12.5px] whitespace-nowrap",
                 r.route ? "text-ink hover:bg-field" : "cursor-default text-ink-3",

@@ -39,6 +39,8 @@ nonisolated enum NotificationActions {
         // the system knows the identifiers the hub sends.
         let question = UNNotificationCategory(identifier: category(.question), actions: [], intentIdentifiers: [], options: [])
         let screen = UNNotificationCategory(identifier: category(.screen), actions: [], intentIdentifiers: [], options: [])
+        // An MCP form or link (#2433) is filled in or opened in the app: no buttons either, a tap opens its conversation.
+        let elicitation = UNNotificationCategory(identifier: category(.elicitation), actions: [], intentIdentifiers: [], options: [])
         // A message is an instruction to the agent: unlocked, like approving a plan.
         let done = UNNotificationCategory(
             identifier: doneCategory,
@@ -49,7 +51,7 @@ nonisolated enum NotificationActions {
             ],
             intentIdentifiers: [], options: [])
         // Pairing receipts (#4199): Not you? Revoke, It's Mine / Not Mine (PairReceiptActions).
-        return Set([permission, plan, question, screen, done] + PairReceiptActions.categories)
+        return Set([permission, plan, question, screen, elicitation, done] + PairReceiptActions.categories)
     }
 
     /// What a button sends to the hub, or nil for a plain tap (and anything we don't know).
@@ -76,7 +78,9 @@ nonisolated enum NotificationActions {
     static func sendReply(_ key: SessionKey, text: String) async {
         let id = UUID()
         do {
-            try await HubStore.client(group: key.group).send(key, text: text, clientMsgID: id.uuidString, opID: id)
+            try await AppModel.shared.outside(HubStore.client(group: key.group)) {
+                try await $0.send(key, text: text, clientMsgID: id.uuidString, opID: id)
+            }
         } catch {
             await reportFailure(id: id.uuidString, title: failureTitle(action: reply), error: error)
         }

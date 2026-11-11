@@ -50,12 +50,12 @@
     <string name="designsystem_processing">Working…</string>
     <string name="designsystem_with_state">%1$s, %2$s</string>
     <!-- Requests that need the user (Agents page) -->
-    <string name="designsystem_decision_command">Wants to run a command</string>
-    <string name="designsystem_decision_tool">Wants to use a tool</string>
-    <string name="designsystem_decision_plan">Plan waiting for approval</string>
-    <string name="designsystem_decision_question">Has a question for you</string>
+    <string name="designsystem_decision_command">Needs your permission</string>
+    <string name="designsystem_decision_tool">Needs your permission</string>
+    <string name="designsystem_decision_plan">Plan awaiting approval</string>
+    <string name="designsystem_decision_question">Has a question</string>
     <string name="designsystem_decision_form">Needs a few answers</string>
-    <string name="designsystem_decision_screen">Terminal is waiting for you</string>
+    <string name="designsystem_decision_screen">Terminal needs you</string>
     <string name="designsystem_decision_other">Needs you</string>
     <string name="designsystem_decision_open_chat">Open chat</string>
     <string name="designsystem_decision_open_full">Open full page</string>
@@ -359,4 +359,5 @@
     <string name="designsystem_candle_volume">Vol %1$s</string>
     <string name="designsystem_stepper_minus">Decrease</string>
     <string name="designsystem_stepper_plus">Increase</string>
+    <string name="designsystem_copy_too_large">Text too large to copy; use Share instead</string>
 </resources>

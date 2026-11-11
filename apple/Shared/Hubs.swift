@@ -47,7 +47,7 @@ nonisolated struct MeshHub: Codable, Hashable, Sendable {
 }
 
 /// Who the hub at the other end of a socket is (its hello): id, name and the group it is in (docs/protocol/multi-hub.md), and
-/// its build and protocol for the compatibility notices (docs/operations/hub-update.md「兼容」).
+/// its build and protocol for the compatibility notices (docs/operations/hub-update.md「Compatibility」).
 nonisolated struct HubHello: Hashable, Sendable {
     var features: [String] = []
     var hubID: String?
@@ -81,9 +81,9 @@ nonisolated struct PairedHub: Codable, Hashable, Sendable, Identifiable {
     /// The hubs its last hello listed in its group (itself included).
     var mesh: [MeshHub]?
     var addedAt: Date = .now
-    /// Its SSH tunnel, when the user set one up (docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// Its SSH tunnel, when the user set one up (docs/operations/network.md「Connecting to hub through SSH」).
     var ssh: SSHRoute?
-    /// Its in-app tunnel, when the hub has one (docs/operations/network.md「经 App 内隧道连 hub」).
+    /// Its in-app tunnel, when the hub has one (docs/operations/network.md「Connecting to hub through an in-app tunnel」).
     var inAppTunnel: InAppTunnelRoute?
     /// Its local SOCKS5 proxy, when the user set one up (docs/operations/network.md "Connecting to hub through a local
     /// SOCKS5 proxy").
@@ -145,7 +145,11 @@ nonisolated struct HubRegistry: Codable, Hashable, Sendable {
     func watchCredentials() -> (configs: [String: ServerConfig], missing: [String]) {
         var configs: [String: ServerConfig] = [:], missing: [String] = []
         for g in groups {
-            if let w = primary(g)?.watch { configs[g] = w } else { missing.append(g) }
+            guard let hub = primary(g), var w = hub.watch else { missing.append(g); continue }
+            // The hub's Cloudflare Access token as it is now (set or cleared since the watch's token was issued), for the
+            // same hub's address only.
+            w.access = CloudflareAccess.sameOrigin(w.url, hub.config.url) ? hub.config.access : nil
+            configs[g] = w
         }
         return (configs, missing)
     }
@@ -175,7 +179,7 @@ nonisolated struct HubRegistry: Codable, Hashable, Sendable {
     }
 }
 
-/// Which paired hubs belong together (docs/protocol/multi-hub.md「分组」). Pure, so the tests drive it.
+/// Which paired hubs belong together (docs/protocol/multi-hub.md「Grouping」). Pure, so the tests drive it.
 nonisolated enum HubGrouping {
     /// Groups the hubs by what their hellos list: two paired hubs are in one group when either lists the other, and
     /// so is everything connected to them. Group ids stay what they were: a merged group keeps the id of its
@@ -240,7 +244,7 @@ nonisolated enum HubGrouping {
     }
 }
 
-/// Where a group's connection may go (docs/protocol/multi-hub.md「选路」): every paired hub of the group with its own
+/// Where a group's connection may go (docs/protocol/multi-hub.md「Connections and routing」): every paired hub of the group with its own
 /// credential, then the addresses the group's hellos list for hubs not paired here, with the group's first credential
 /// (credentials work on every hub of a group, docs/archive/operations/plan-hub-mesh.md 2.6). The group's center comes first
 /// (docs/archive/operations/plan-hub-center.md 5): a member passes everything on to it, one hop more.
@@ -299,7 +303,7 @@ nonisolated enum HubRoute {
     }
 
     /// `pick`, but nil when none answers, and a single candidate is asked too: whether the group can be reached
-    /// directly at all (its SSH tunnel is the way when not, docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// directly at all (its SSH tunnel is the way when not, docs/operations/network.md「Connecting to hub through SSH」).
     static func answering(_ candidates: [Candidate], grace: Duration = centerGrace, probe: @escaping Probe = healthProbe) async -> Candidate? {
         guard !candidates.isEmpty else { return nil }
         enum Answer: Sendable { case reached(Candidate), missed(Candidate), graceOver }
@@ -338,7 +342,8 @@ nonisolated enum HubRoute {
         var req = URLRequest(url: APIClient(config: config).url("/api/v1/health", direct: true), timeoutInterval: 3)
         req.httpMethod = "GET"
         RequestClientMetadata.current.apply(to: &req)
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+        CloudflareAccess.apply(config.access, to: &req, hub: config.url) // Access in front would answer with its login
+        guard let (data, resp) = try? await URLSession.shared.data(for: req, delegate: HubRedirects.shared),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
         return obj["ok"] as? Bool == true

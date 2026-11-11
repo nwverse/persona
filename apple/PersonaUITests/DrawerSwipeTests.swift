@@ -1,6 +1,6 @@
 import XCTest
 
-/// The Persona tab's sidebar drag (docs/apple/ios.md「Persona 顶栏和侧边栏」): it opens from wherever a finger starts a drag to the
+/// The Persona tab's sidebar drag (docs/apple/ios.md「Persona top bar and sidebar」): it opens from wherever a finger starts a drag to the
 /// right — the middle of the chat at a slant, on a message bubble, right after the list stopped scrolling — while a
 /// code block wider than the phone still scrolls sideways under the finger.
 /// Against scripts/mock/mock_hub.py started with MOCK_DRAWER=1 (PERSONA_MOCK_HUB): the main conversation ends with a wide
@@ -139,7 +139,7 @@ final class DrawerSwipeTests: XCTestCase {
         XCTAssertTrue(agents.isHittable)
     }
 
-    /// Not a check: drags whose frames `DrawerProbe` measures (docs/operations/testing.md「侧边栏拖动」) — a slow drag open, a drag
+    /// Not a check: drags whose frames `DrawerProbe` measures (docs/operations/testing.md「Sidebar dragging」) — a slow drag open, a drag
     /// back, half way and let go (it springs back), and a quick flick open — in the long conversation.
     @MainActor func testMeasureDrags() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_DRAWER_MEASURE"] != nil else { throw XCTSkip("set PERSONA_DRAWER_MEASURE") }

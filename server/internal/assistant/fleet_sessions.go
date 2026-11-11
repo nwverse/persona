@@ -20,10 +20,7 @@ import (
 // setSessions takes a node's session list: the turns it shows starting and ending (the finished push, the
 // assistant's own business), then the list the apps get.
 func (s *Service) setSessions(machine string, list []proto.Session) {
-	before := map[string]proto.Session{}
-	for _, sess := range s.fleetPrevious(machine) {
-		before[sess.SessionID] = sess
-	}
+	before := s.fleetPrevious(machine)
 	now := time.Now()
 	for i := range list {
 		list[i].MachineID = machine
@@ -43,28 +40,39 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		}
 		switch {
 		case sess.Status == proto.StatusWorking && prev != proto.StatusWorking:
-			s.takeTaskAnswerRetry(machine, sess.SessionID)
-			s.turnsBook().working(key, now)
-			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
-			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			// A first list or an offline-to-working transition can be a
 			// reconnect to the same turn. Only a known stopped turn proves a
 			// new one and resets its persisted loop state.
 			newTurn := prev == proto.StatusDone || prev == proto.StatusIdle || prev == proto.StatusInterrupted
+			if s.meetingTurnStarted(machine, sess.SessionID, newTurn) {
+				break // a meeting's batch: a side exchange, neither the turn tracker's nor a task's or the Agents' (meeting_turns.go)
+			}
+			s.takeTaskAnswerRetry(machine, sess.SessionID)
+			s.turnsBook().working(key, now)
+			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
+			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn) }) // after the items that came before it
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
-			go s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(key, now, backgroundRunning(sess)))
+			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
+			if s.meetingTurnEnded(machine, sess.SessionID) { // no finished push, and the other turns' stay as they were
+				s.inOrder(func() { go s.turnEnded(context.Background(), ref, true) })
+				break
+			}
+			s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(key, now, backgroundRunning(sess)))
 			// A new assistant conversation is named after its first turn; a task from one may be done. After the
 			// items of the turn (a channel's answer is read from them).
-			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			s.inOrder(func() { go s.TurnEnded(context.Background(), ref) })
 		case (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle) &&
 			(sess.Status != prev || sess.Rev != was.Rev || sess.LastText != was.LastText || !sess.UpdatedAt.Equal(was.UpdatedAt)) &&
 			s.takeTaskAnswerRetry(machine, sess.SessionID):
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
-			s.inOrder(func() { go s.taskTurnEnded(context.Background(), ref.MachineID, ref.SessionID) })
+			s.inOrder(func() { s.afterSettle(context.Background(), s.taskTurnSettled, ref.MachineID, ref.SessionID) })
 		}
-		if sess.Status == proto.StatusWorking && backgroundRunning(sess) {
+		if sess.Status != prev && sess.Status != proto.StatusWorking && !(prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle)) {
+			// Stopped with no end seen (a restart, an interrupt, a card): a meeting turn there is over (meeting_turns.go).
+			s.meetingTurnStopped(machine, sess.SessionID, sess, prev == "")
+		}
+		if sess.Status == proto.StatusWorking && backgroundRunning(sess) && !s.meetingTurnNow(machine, sess.SessionID) {
 			s.turnsBook().sawBackground(key, now)
 		}
 	}
@@ -79,20 +87,39 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.inOrder(func() { s.SessionsChanged(context.Background(), d) })
 }
 
-// fleetPrevious is the list setSessions saw last for the machine (the turns' starts and ends are against it).
-func (s *Service) fleetPrevious(machine string) []proto.Session {
+// turnPrev is what setSessions reads of a session's previous row: the turn's starts and ends are against it. Only
+// these fields, not the whole row: a session is about 1.5 KB, and the manager would keep a copy of every list.
+type turnPrev struct {
+	Status     string
+	WokeByTask bool
+	Rev        int64
+	LastText   string
+	UpdatedAt  time.Time
+}
+
+// fleetPrevious is the machine's list setSessions saw last, by session id (the turns' starts and ends are against
+// it). The map is never written once kept: fleetKeepPrevious replaces it.
+func (s *Service) fleetPrevious(machine string) map[string]turnPrev {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	return s.fleet.prev[machine]
 }
 
+// fleetKeepPrevious keeps what setSessions reads of list for the machine's next one. A session id listed twice keeps
+// its later row.
 func (s *Service) fleetKeepPrevious(machine string, list []proto.Session) {
+	next := make(map[string]turnPrev, len(list))
+	for i := range list { // by index: a range value copies every (large) session it passes
+		sess := &list[i]
+		next[sess.SessionID] = turnPrev{Status: sess.Status, WokeByTask: sess.WokeByTask, Rev: sess.Rev,
+			LastText: sess.LastText, UpdatedAt: sess.UpdatedAt}
+	}
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	if s.fleet.prev == nil {
-		s.fleet.prev = map[string][]proto.Session{}
+		s.fleet.prev = map[string]map[string]turnPrev{}
 	}
-	s.fleet.prev[machine] = list
+	s.fleet.prev[machine] = next
 }
 
 func (s *Service) turnsBook() *turnTracker {
@@ -164,11 +191,24 @@ func (s *Service) publishList(machine string) []proto.Session {
 	if f.shown == nil {
 		f.shown = map[string][]proto.Session{}
 	}
-	f.shown[machine] = list
+	f.shown[machine] = awaitingReply(list)
 	f.shownMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetSessions, json.RawMessage(b))
 	s.liveChanged(false)
 	return list
+}
+
+// awaitingReply are the rows of list the reply reminders can pick (replyWaits' first check), copied: only those are read
+// of the list told last, and the whole decorated list is several KB a session. Never nil, even when none qualifies:
+// a machine told once is not decorated again for the reminders (shownList).
+func awaitingReply(list []proto.Session) []proto.Session {
+	out := []proto.Session{}
+	for i := range list {
+		if list[i].AwaitsReply && list[i].State == proto.StateIdle {
+			out = append(out, list[i])
+		}
+	}
+	return out
 }
 
 // changedWriter takes an encoding and compares it with old as it comes, copying it out only once it differs.
@@ -248,7 +288,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].Title = t // "MMDD | type | topic", the user's own, "Persona" for the main one (titles.go)
 		}
 		if ch := via[[2]string{machine, list[i].SessionID}]; len(ch) > 0 {
-			list[i].Channels = ch // where its messages came from (docs/extensions/channels.md "Source marks")
+			list[i].Channels = ch // where its messages came from (docs/extensions/channels.md "Source markers")
 		}
 		if list[i].Assistant {
 			list[i].Archived = shown[list[i].SessionID].Archived
@@ -291,8 +331,17 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	return list
 }
 
-// decoratedSession is one of the machine's sessions as the apps get it.
+// decoratedSession is one of the machine's sessions as the apps get it. Each row is decorated on its own, so the one
+// the node lists is decorated alone (as readinessMain does), not the machine's whole list for each finished turn; one
+// the node does not list may still be an archived row (archivedSessions), found in the whole list.
 func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
+	if row, ok := s.nodeSession(machine, sid); ok {
+		list, _, err := s.archivedSessions(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false))
+		if err != nil {
+			s.logf("load agent archives: %v", err)
+		}
+		return list[0], true // the row itself: the archive appends only the rows it was not given
+	}
 	for _, sess := range s.decorated(machine) {
 		if sess.SessionID == sid {
 			return sess, true

@@ -89,6 +89,18 @@ struct ComposerRow<MenuItems: View>: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .accessibilityLabel("Send")
             }
+            #if os(iOS)
+            if focused.wrappedValue {
+                Button(action: dismissKeyboard) {
+                    ThemedIcon(Theme.Icon.dismissKeyboard).font(Theme.Font.heading).frame(width: Self.glyph, height: Self.glyph)
+                }
+                .themedButton()
+                .clipShape(.circle)
+                .accessibilityLabel("Hide Keyboard")
+                .accessibilityIdentifier("composer-row-dismiss-keyboard")
+                .transition(.scale.combined(with: .opacity))
+            }
+            #endif
         }
     }
 }
@@ -103,6 +115,45 @@ extension ComposerRow {
         if let history { MacSendHistory.shared.record(history, text) }
         #endif
         send()
+    }
+
+    #if os(iOS)
+    fileprivate func dismissKeyboard() {
+        Haptics.tap()
+        if focused.wrappedValue { TypedText.commitFocused(into: $text) }
+        focused.wrappedValue = false
+        Keyboard.dismiss()
+    }
+    #endif
+}
+
+/// A chat's composer's photos, videos and file uploads (#2626): kept by `AppModel.composerAttachments(_:)` per
+/// conversation, as the text is in `drafts`, not by the composer, which is built again with the whole tree when iOS
+/// snapshots the app in another width on its way to the background (iPhone Duo open).
+@MainActor @Observable
+final class ComposerAttachments {
+    var images: [(UIImage, ImagePayload)] = []
+    let uploads = FileUploads()
+    let videos = VideoAttachments()
+}
+
+/// The new conversation's composer (#2626): its text and quotes as well, there being no conversation yet whose draft
+/// could keep them; kept by `AppModel.starterDraft(_:)` per page (the assistant's, Health's).
+@MainActor @Observable
+final class StarterDraft {
+    var text = ""
+    var quotes: [ContextRef] = []
+    let held = ComposerAttachments()
+    /// One more for each message sent: a file still uploading for one that went puts its path in no later message.
+    private(set) var generation = 0
+
+    /// The message went: an empty box for the next one.
+    func sent() {
+        text = ""
+        quotes = []
+        held.images = []
+        held.videos.sent()
+        generation += 1
     }
 }
 

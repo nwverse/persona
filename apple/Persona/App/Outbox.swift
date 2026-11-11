@@ -1,6 +1,6 @@
 import Foundation
 
-// Messages written while the hub is out of reach (docs/apple/ios.md「连接状态」): they stay in their chat as pending bubbles
+// Messages written while the hub is out of reach (docs/apple/ios.md「Connection status」): they stay in their chat as pending bubbles
 // with a clock (Sends when connected) and go out by themselves once the app is connected and caught up, in the order they
 // were written. Kept on disk too, so quitting the app (or iOS ending it in the background) does not lose them.
 // Sent bubbles live here too: they stay until the transcript's copy arrives (`settleSend`, `showSent`), on disk as well.
@@ -54,6 +54,7 @@ extension AppModel {
             }
             toast = Toast(String(localized: "Waiting messages weren't sent: their chat wasn't found on the hub."), style: .error)
         }
+        if wait.outcome == .sent { _ = completeInboxHandOff(key, store.pending[i]) }
         saveOutbox()
         switch wait.outcome {
         case .sent:
@@ -73,6 +74,25 @@ extension AppModel {
         default: break
         }
         return wait.outcome
+    }
+
+    /// Files a delivered Agent hand-off once, including one restored from disk. `filed` means the Done write was
+    /// initiated; InboxStore still rolls it back if that write fails. Returns whether this message carried a filing intent.
+    func completeInboxHandOff(_ key: SessionKey, _ msg: PendingMessage) -> Bool {
+        guard var handOff = msg.inboxHandOff else { return false }
+        if let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) {
+            if chat(key).pending[i].inboxHandOff?.filed == true { return true }
+            handOff.filed = true
+            chat(key).pending[i].inboxHandOff = handOff
+        }
+        #if DEBUG
+        if let done = inboxHandOffDoneForTests {
+            done(handOff)
+            return true
+        }
+        #endif
+        InboxStore.shared.setDone(id: handOff.itemID, manager: handOff.manager, done: true)
+        return true
     }
 
     /// The group's socket is connected and answering: a send that comes back waiting then is not an outage.

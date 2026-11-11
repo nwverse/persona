@@ -51,11 +51,12 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		return false
 	}
 	alt, note, moved := s.healthDetour(ctx, m, s.startLauncher(ctx, t.Launcher), func(alt Device) bool {
+		if t.Role == roleLeader && s.isWorkMachine(alt.ID) { // a task leader never lands on a work-trust computer
+			return false
+		}
 		return s.taskDirectoryExists(ctx, alt.ID, rehome(t.Cwd, m, alt))
 	})
-	if note != "" && !strings.Contains(t.Why, note) {
-		t.Why = strings.TrimSpace(t.Why + " (" + note + ")")
-	}
+	t.noteWhy(note)
 	if moved {
 		// Keep the machine the task was first placed on across repeated moves; each move refreshes the landing and the
 		// health-check reason. Names, not ids, go on the card/receipt (#2271).
@@ -67,6 +68,38 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
 	}
 	return moved
+}
+
+// leaderOnWorkMachine refuses a task leader placed on a work-trust computer: its agents there get only the reporting
+// tools, so the role could not work, and the privacy boundary is not widened for it.
+func (s *Service) leaderOnWorkMachine(t *PlanTask, m Device) error {
+	if t.Role == roleLeader && s.isWorkMachine(m.ID) {
+		return fmt.Errorf("role \"leader\" cannot run on %s: a work-trust computer gives its agents only the reporting tools, so it could "+
+			"not supervise workers. Put the task leader on a computer you own", m.Name)
+	}
+	return nil
+}
+
+// noteWhy adds note to t's why (once), in brackets after the assistant's reason: the card shows it.
+func (t *PlanTask) noteWhy(note string) {
+	if note != "" && !strings.Contains(t.Why, note) {
+		t.Why = strings.TrimSpace(t.Why + " (" + note + ")")
+	}
+}
+
+// fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
+// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so.
+func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) error {
+	note, err := s.fitLauncher(ctx, m, own, params)
+	if err != nil || note == "" {
+		return err
+	}
+	t.Launcher, _ = params["launcher"].(string)
+	t.Model, _ = params["model"].(string)
+	t.Effort, _ = params["effort"].(string)
+	t.Tier = ""
+	t.noteWhy(note)
+	return nil
 }
 
 // taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or
@@ -95,11 +128,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		return "", "", err
 	}
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
-	if err := s.applyStartTier(ctx, params); err != nil {
+	own, err := s.resolveStart(ctx, params)
+	if err != nil {
 		return "", "", err
 	}
-	if err := s.applyModel(ctx, "agent.new", params); err != nil {
-		return "", "", err
+	if t.defaulted || t.Launcher == "" {
+		own.launcher, t.defaulted = "", true // filled in from a default, by this try or an earlier one
 	}
 	t.Launcher, _ = params["launcher"].(string)
 	t.Model, _ = params["model"].(string)
@@ -109,8 +143,19 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !ok {
 		return "", "", fmt.Errorf("unknown machine %q", t.Machine)
 	}
+	// The last look, on the machine it will really start on (a retry, a remedy, a recovered start and a flexible task moved
+	// by the health check all pass here): a task leader never starts on a work-trust computer.
+	if err := s.leaderOnWorkMachine(t, m); err != nil {
+		return "", "", err
+	}
 	if !m.Reachable {
 		return "", "", machineOffline(m.Name)
+	}
+	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
+	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
+	// which is then about the launcher that will run.
+	if err := s.fitTaskLauncher(ctx, t, m, own, params); err != nil {
+		return "", "", err
 	}
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
@@ -126,8 +171,20 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
-	if !t.Readonly && s.doneNeedsDelivery(ctx) { // what done means: live and checked (delivery.go)
-		prompt += "\n\n" + prompts.RenderTaskDelivery()
+	switch {
+	case t.Role == roleLeader: // what it may hand out, and how its workers reach it (task_leader.go)
+		prompt += "\n\n" + prompts.RenderTaskLeader()
+	case t.Parent != "":
+		prompt += "\n\n" + prompts.RenderTaskWorker()
+	}
+	// The closeout's form, up front (agents_closeout_brief.go): after the delivery line when both are asked for.
+	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
+	brief := s.closeoutBrief(ctx, delivery)
+	if delivery { // what done means: live and checked (delivery.go)
+		prompt += "\n\n" + prompts.RenderTaskDelivery(brief != "")
+	}
+	if brief != "" {
+		prompt += "\n\n" + brief
 	}
 	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
 	// (#2820, #1618); the tab is named from the title.
@@ -142,21 +199,29 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		params["model"] = t.Model
 	}
 	mode := t.Permission
-	if mode == "" {
-		mode = s.settings(ctx).DefaultPermissionMode
-		if mode == "" {
-			mode = "default"
-		}
+	if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
+		mode = s.taskPermission(ctx, m.ID, nil)
 	}
 	params["permission_mode"] = mode
 	if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}
+	if t.inPane != "" { // a retry in the tab an earlier try did not start in (start_remedy.go)
+		params["in_pane"] = t.inPane
+	}
 	var res struct {
 		Session proto.Session `json:"session"`
 	}
 	picked, _ := params["launcher"].(string)
-	if err := s.call(ctx, m.ID, DeviceSessionStart, params, &res); err != nil {
+	s.setPlanThen(ctx, m.ID, params)
+	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+	skipped, refused := s.ultracodeRefusal(ctx, err, params)
+	if refused {
+		delete(params, "ultracode") // an extra the agent it landed on cannot have: it starts without it (#3596)
+		s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
+		err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+	}
+	if err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		return "", "", err
 	}
@@ -174,15 +239,21 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !res.Session.Starting {
 		s.recordStartSuccess(ctx, m.ID, s.startLauncher(ctx, picked))
 	}
+	if refused { // only once it started here: a task moved elsewhere after a failed start asks again
+		off := false
+		t.Ultracode = &off // a retry does not ask again
+		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
+	}
 	return m.ID, res.Session.SessionID, nil
 }
 
-// updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now.
+// updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, and its ultracode
+// when the start went without it.
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
-		pt.Reroute = t.Reroute
-		pt.Launcher, pt.Model, pt.Effort = t.Launcher, t.Model, t.Effort
+		pt.Reroute, pt.Ultracode = t.Reroute, t.Ultracode
+		pt.Launcher, pt.Model, pt.Effort, pt.Tier = t.Launcher, t.Model, t.Effort, t.Tier
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
 	}

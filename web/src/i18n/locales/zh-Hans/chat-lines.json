@@ -2,9 +2,6 @@
   "supervision_done": "督办已处理",
   "supervision_running": "督办处理中…",
   "supervision_input": "原始输入",
-  "wake_count_other": "{count} 个后台任务完成",
-  "wake_single": "后台任务完成",
-  "wake_open": "后台任务完成，查看之后的消息",
   "recap_open_many_other": "{count} 次离开期间回顾，点击查看",
   "recap_open": "离开期间回顾，点击查看",
   "recap": "离开期间回顾",
@@ -23,5 +20,7 @@
   "copy_raw": "复制原文",
   "retry": "重试",
   "copy_field": "拷贝{label}",
-  "fix_it": "去修"
+  "fix_it": "去修",
+  "background_done": "后台轮次",
+  "background_running": "后台运行中"
 }

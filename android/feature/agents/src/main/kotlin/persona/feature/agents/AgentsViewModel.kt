@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import persona.core.designsystem.Haptic
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.UUID
 
@@ -93,6 +94,30 @@ internal class AgentsViewModel(
     private val groupListCounts = MutableStateFlow<Map<String, GroupListCounts>>(emptyMap())
     private val countingGroups = mutableSetOf<Triple<String, String, SessionListFilter>>()
     private val groupFilter = MutableStateFlow<GroupFilter?>(null)
+    /** The current assistant the list is of (docs/assistant/managers.md "Clients"); null until the page says: every manager's. */
+    private val assistant = MutableStateFlow<persona.core.contracts.api.CurrentAssistant?>(null)
+    /**
+     * Lists [value]'s agents and computers: the sessions and computers stamped with it, the cards that go with them.
+     * Another assistant lets go of a computer filter on one that is not its own (else the list would be empty, with
+     * no chip picked) and of the rows kept open; the search and the quick filter stay.
+     */
+    fun show(value: persona.core.contracts.api.CurrentAssistant) {
+        val before = assistant.value
+        if (before == value) return
+        // Another assistant is another list; the same one's roster changing (a count, a name) keeps the rows in place.
+        if (before?.id != value.id) previous = null
+        assistant.value = value
+        if (before?.id != value.id) settings.update { current ->
+            // An unknown computer (the list not read yet, on a cold start) keeps the filter it was restored with.
+            val machine = repository.machines.value.firstOrNull { it.id == current.machineFilter }
+            val foreign = machine != null && !value.ownsOn(machine.id, machine.manager)
+            current.copy(machineFilter = if (foreign) "" else current.machineFilter, kept = emptySet())
+        }
+    }
+
+    /** Every manager's sessions and computers as the hub lists them: a card opened from a notification may be another assistant's. */
+    val everySession: StateFlow<List<Session>> get() = repository.sessions
+    val everyMachine: StateFlow<List<Machine>> get() = repository.machines
     /** The hub group the list shows; null is every group (AgentGroups.kt). */
     val group = groupFilter.asStateFlow()
     // Written while building [page] (on listContext) and reset from the main thread.
@@ -183,7 +208,10 @@ internal class AgentsViewModel(
     private val todosFlow = tasks?.todos ?: MutableStateFlow(emptyList())
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         preferences.snapshots(pairingScope).combine(repository.listStatus) { prefs, status -> prefs to status },
-        settings.combine(groupFilter, ::Pair), combine(operationState, todosFlow, ::Pair)) { everySession, everyMachine, (localPrefs, pagination), (settings, group), (ops, todos) ->
+        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, ::Pair)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos) ->
+        // The current assistant's (the hub's lists are every manager's, each row with its own).
+        val everySession = if (assistant == null) hubSessions else hubSessions.filter { assistant.ownsOn(it.machineId, it.manager) }
+        val everyMachine = if (assistant == null) hubMachines else hubMachines.filter { assistant.ownsOn(it.id, it.manager) }
         val source = if (group == null) everySession else everySession.filter { group.admits(it.machineId) }
         val machines = if (group == null) everyMachine else everyMachine.filter { group.admits(it.id) }
         val sessions = ops.project(source)
@@ -230,7 +258,7 @@ internal class AgentsViewModel(
             Unit
         })
     }, groupListCounts) { projected, status, _, metadata ->
-        if (!status.paged) projected.copy(pagination = status)
+        if (!status.paged) projected.copy(loaded = status.loaded, pagination = status)
         else {
             val counts = status.counts
             val machineCounts = status.machineCounts
@@ -587,11 +615,26 @@ internal class AgentsViewModel(
         }
     }
 
-    /** "Create and link" (iOS TodoLinkAgentSheet): a new to-do named [title], then this agent on it. */
+    /**
+     * The assistant a new to-do for a thing on computer [machineId] stamped [manager] is made under: the thing's own
+     * (docs/assistant/managers.md "Clients"), so it is never another assistant's to-do linked to this one's agent, whichever
+     * is current by the time it is made (`""`: the default's, naming none). Nothing with one assistant, without a roster,
+     * or for another group's computer: the request goes as before.
+     */
+    internal fun todoOwner(machineId: String, manager: String?): kotlin.coroutines.CoroutineContext {
+        val current = assistant.value ?: return kotlin.coroutines.EmptyCoroutineContext
+        val roster = current.roster?.takeIf { it.isMulti } ?: return kotlin.coroutines.EmptyCoroutineContext
+        if (persona.core.contracts.GroupKeys.namespaceOf(machineId) != current.group) return kotlin.coroutines.EmptyCoroutineContext
+        val owner = roster.shownUnder(manager)
+        return persona.core.contracts.api.RequestManager(if (owner == roster.defaultManagerId) "" else owner)
+    }
+
+    /** "Create and link" (iOS TodoLinkAgentSheet): a new to-do named [title] under the agent's assistant, then this agent on it. */
     fun createAndLinkTodo(title: String, session: Session) {
         viewModelScope.launch {
             val store = tasks ?: return@launch
-            val todo = try { store.createTodo(title.trim()) } catch (e: Exception) {
+            val owner = todoOwner(session.machineId, session.manager ?: repository.machines.value.firstOrNull { it.id == session.machineId }?.manager)
+            val todo = try { withContext(owner) { store.createTodo(title.trim()) } } catch (e: Exception) {
                 _notice.value = AgentText(R.string.agents_notice_todo_create_failed, e.message.orEmpty()); return@launch
             }
             try {
@@ -607,7 +650,8 @@ internal class AgentsViewModel(
     fun linkSpace(todoId: String?, machineId: String, space: String, newTitle: String? = null) {
         viewModelScope.launch {
             val store = tasks ?: return@launch
-            val id = todoId ?: try { store.createTodo(newTitle.orEmpty().trim()).id } catch (e: Exception) {
+            val owner = todoOwner(machineId, repository.machines.value.firstOrNull { it.id == machineId }?.manager)
+            val id = todoId ?: try { withContext(owner) { store.createTodo(newTitle.orEmpty().trim()) }.id } catch (e: Exception) {
                 _notice.value = AgentText(R.string.agents_notice_todo_create_failed, e.message.orEmpty()); return@launch
             }
             try {

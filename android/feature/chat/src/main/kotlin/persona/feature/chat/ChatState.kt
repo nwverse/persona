@@ -66,15 +66,21 @@ internal class ChatTimeline {
         expanded[item.id]?.takeIf { it.first.fold == item.fold }?.second ?: listOf(item)
     }.distinctBy { it.id }
 
-    /**
-     * [live]: the agent is at work; the running turn is then the last one (`chatLines`). [openLive]: running work lines
-     * are open unless in [liveFolded] ([WorkOpenState]).
-     */
-    @Synchronized fun lines(items: List<Item>, live: Boolean, open: Set<String>, openLive: Boolean = false,
-        liveFolded: Set<String> = emptySet()): persona.core.domain.lines.ChatSnapshot {
-        val options = if (window.isFrozen) LineOptions(liveTurnId = frozenLiveId, openWork = open, openLive = openLive, liveFolded = liveFolded)
-            else LineOptions(openWork = open, live = live, openLive = openLive, liveFolded = liveFolded)
-        return chatLines(searchItems(items).filter { it.kind != "turn_duration" }.map(Item::asLineItem), options)
+    /** Keeps the lines of turns that did not change since the last [lines]: a chat changes at its end. */
+    private val memo = ChatLinesMemo()
+
+    /** [live]: the agent is at work; [open] is the same persisted choice for live and historical lines. */
+    @Synchronized fun lines(items: List<Item>, live: Boolean, open: Set<String>): persona.core.domain.lines.ChatSnapshot {
+        val options = if (window.isFrozen) LineOptions(liveTurnId = frozenLiveId, openWork = open)
+            else LineOptions(openWork = open, live = live)
+        val foldAnchors = expanded.values.mapNotNull { (fold, page) ->
+            page.filter { it.kind != "tool_result" && !(it.kind == "image" && it.toolUseId != null) }
+                .minWithOrNull(chatItemOrder)?.let { it.id to "tools-${fold.id}" }
+        }.toMap()
+        val source = searchItems(items).filter { it.kind != "turn_duration" }.map { item ->
+            item.asLineItem().copy(exchangeId = foldAnchors[item.id])
+        }
+        return memo.lines(source, options)
             .also { if (!window.isFrozen) shownLiveId = it.liveTurnId }
     }
 }
@@ -126,6 +132,21 @@ internal fun awaitingTurn(message: Item?, status: String?, startFailed: Boolean,
 internal fun awaitingDelivered(messages: List<OutboxMessage>, status: String?, startFailed: Boolean): Boolean =
     mayBeCatchingUp(status, startFailed) && messages.any { it.state == DeliveryState.Sent }
 
+/**
+ * The session waits on you by the hub's word (#2483): its unified state says needs you, which also covers a question, plan
+ * or permission a hook holds while herdr's status stays working (docs/protocol/agent-states.md), or its status says blocked
+ * (an older hub without the state).
+ */
+internal fun Session?.needsYou(): Boolean = this?.status == "blocked" || this?.agentState == AgentState.NeedsYou
+
+/**
+ * The current turn waits on you rather than works (#2483): the session [needsYou], or one of its own requests is pending
+ * here before the hub's state says so. A task agent's request (Persona's chat lists those too) does not count: this
+ * session's own turn may still be at work. Whenever this holds, the header says "Waiting for you" too ([chatStatusState]).
+ */
+internal fun turnWaitsOnYou(session: Session?, key: SessionKey, requests: List<Interaction>): Boolean =
+    session.needsYou() || requests.any { it.sessionKey == key }
+
 internal fun chatStatusState(
     res: android.content.res.Resources,
     snapshot: persona.core.contracts.api.ChatSnapshot,
@@ -142,7 +163,7 @@ internal fun chatStatusState(
     answering = answering,
     unconfirmed = operationUnknown || messages.any { it.state.resultUnknown },
     pendingRequests = requests.size,
-    blocked = session?.status == "blocked",
+    blocked = session.needsYou(),
     requestSummary = requests.singleOrNull()?.headline?.shown,
     stopping = snapshot.stopping,
     working = session?.status == "working" || awaiting,

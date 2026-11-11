@@ -25,6 +25,10 @@ class SessionItemsCache(
     private val ledgerLock = Mutex()
     internal var onRelease: () -> Unit = {}
     internal fun activeSessions(): Set<SessionKey> = synchronized(active) { active.keys.toSet() }
+    internal val ledgerTotal: Long? get() = ledger.total
+    /** Full scans run so far (tests). */
+    internal var scans = 0
+        private set
 
     override suspend fun retain(session: SessionKey) = database.withTransaction {
         synchronized(active) { active[session] = (active[session] ?: 0) + 1 }
@@ -41,7 +45,7 @@ class SessionItemsCache(
                     val count = (active[session] ?: 1) - 1
                     if (count == 0) active.remove(session) else active[session] = count
                 }
-                trim()
+                trimIfNeeded()
             }
         } catch (closed: IllegalStateException) {
             if (database.isOpen) throw closed
@@ -52,6 +56,7 @@ class SessionItemsCache(
 
     /** The full scan: every cached session's bytes, evicting over budget; leaves [ledger] holding what stays. */
     private suspend fun trim() {
+        scans++
         val dao = database.items()
         val entries = dao.sizes(scope.path).map { BudgetEntry(SessionKey(it.machine, it.session), it.bytes, it.accessed) }
         val pinned = activeSessions()
@@ -61,6 +66,15 @@ class SessionItemsCache(
             dao.clearCursor(scope.path, it.machineId, it.sessionId)
         }
         ledger.seed(entries.filter { it.key !in evicted })
+    }
+
+    /**
+     * The full scan only when it can evict something: the total is not known yet, or it is over the budget. Opening and
+     * closing a chat ran it every time, summing every stored row inside a write transaction (#4045); at or under the
+     * budget it evicts nothing, whatever is pinned or touched, and [ledger] already knows the total.
+     */
+    private suspend fun trimIfNeeded() {
+        if (ledger.total.let { it == null || it > budget }) trim()
     }
 
     /** A transaction that uses [ledger]; when it fails, nothing it recorded is trusted and the next save scans again. */
@@ -75,7 +89,7 @@ class SessionItemsCache(
 
     override suspend fun load(session: SessionKey): CachedChat = ledgerTransaction {
         database.items().touch(scope.path, session.machineId, session.sessionId, System.currentTimeMillis())
-        trim()
+        trimIfNeeded()
         val cursor = database.items().cursor(scope.path, session.machineId, session.sessionId)
         CachedChat(observe(session).first(), cursor?.history, cursor?.covered ?: 0, cursor?.has_more)
     }
@@ -90,7 +104,27 @@ class SessionItemsCache(
         val ordered = snapshot.items.distinctBy { it.id }.sortedWith(compareBy<Item> { it.seq }.thenBy { part(it) })
         val turns = chatTurns(ordered.map { it.lineItem() })
         val first = turns.takeLast(2).firstOrNull()?.users?.firstOrNull()?.item
-        val start = first?.let { item -> ordered.indexOfFirst { it.id == item.id }.coerceAtLeast(0) } ?: 0
+        var start = first?.let { item -> ordered.indexOfFirst { it.id == item.id }.coerceAtLeast(0) } ?: 0
+        // A subagent can hand back after several user turns. Its reports cannot survive restart without the
+        // launching call: keep that exchange too, including earlier reports, rather than orphaning the result.
+        val taskCalls = persona.core.domain.lines.TaskIndex.build(ordered.map { it.lineItem() }).calls
+        val launches = ordered.withIndex().filter { it.value.kind == "tool_use" }
+            .mapNotNull { (index, item) -> item.toolUseId?.let { it to index } }.toMap()
+        var exchange = 0
+        val exchangeStarts = ordered.mapIndexed { index, item ->
+            if (item.kind == "text" && item.role == "user" && item.queued != true) exchange = index
+            exchange
+        }
+        // Walk backwards through the retained range. Lowering start also visits the newly kept reports, whose
+        // launching exchanges may precede this one: the reference closure is preserved in a single pass.
+        var inspect = ordered.lastIndex
+        while (inspect >= start) {
+            val item = ordered[inspect--]
+            if (item.task?.kind != "agent") continue
+            val call = item.toolUseId ?: item.task?.toolUseId ?: taskCalls[item.id] ?: continue
+            val launch = launches[call] ?: continue
+            if (launch < start) start = exchangeStarts[launch]
+        }
         val rows = ordered.drop(start).map { item ->
             // Inline originals belong to the display-sized image cache, not the items database.
             val cached = item.image?.let { item.copy(image = it.copy(data = "", lazy = true)) } ?: item
@@ -98,8 +132,18 @@ class SessionItemsCache(
         }
         ledgerTransaction {
             val dao = database.items()
-            dao.clear(scope.path, session.machineId, session.sessionId)
-            dao.insert(rows)
+            // The same rows as deleting the session and inserting the window, written as a difference: a streaming
+            // update changes an item or two of a window of hundreds, and rewriting every row went to the WAL each time.
+            val stored = dao.stored(scope.path, session.machineId, session.sessionId).associateBy { it.id }
+            val kept = rows.mapTo(HashSet()) { it.id }
+            stored.keys.filter { it !in kept }.chunked(DELETE_CHUNK).forEach {
+                dao.delete(scope.path, session.machineId, session.sessionId, it)
+            }
+            val changed = rows.filter { row ->
+                val old = stored[row.id]
+                old == null || old.seq != row.seq || old.part != row.part || old.json != row.json
+            }
+            if (changed.isNotEmpty()) dao.insert(changed)
             if (rows.isEmpty()) dao.clearCursor(scope.path, session.machineId, session.sessionId)
             else dao.putCursor(SessionCursorRow(scope.path, session.machineId, session.sessionId,
                 snapshot.history, snapshot.covered, snapshot.hasMore == true || start > 0,
@@ -111,6 +155,11 @@ class SessionItemsCache(
     }
 
     private fun part(item: Item): Int = item.id.substringAfterLast('#').toIntOrNull() ?: 0
+
+    private companion object {
+        /** Ids per [ItemsDao.delete]: with its three key variables, under SQLite's 999 before 3.32 (API 30). */
+        const val DELETE_CHUNK = 900
+    }
 }
 
 /**

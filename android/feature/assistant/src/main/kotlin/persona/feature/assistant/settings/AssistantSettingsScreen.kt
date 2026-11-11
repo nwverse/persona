@@ -55,15 +55,11 @@ internal fun AssistantSettingsScreen(
     onModelConfiguration: ((String, String) -> Unit)? = null,
     initialManager: String? = null,
 ) {
-    val roster = LocalManagerRoster.current
-    var owner by rememberSaveable(LocalManagerGroup.current, initialManager) {
-        mutableStateOf(initialManager?.takeIf(String::isNotBlank) ?: roster?.defaultManagerId
-            ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER)
-    }
+    // The current assistant's profile (docs/assistant/managers.md "Clients"); another one current, the page reads that one's.
+    val owner = initialManager?.takeIf(String::isNotBlank) ?: persona.core.designsystem.currentAssistant().id
     key(management, owner) {
         val scoped = remember(management, owner) { management.forManager(owner) }
-        AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration,
-            owner, { JManagerSwitcher(roster, owner, { owner = it }) })
+        AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration, owner)
     }
 }
 
@@ -71,7 +67,7 @@ internal fun AssistantSettingsScreen(
 private fun AssistantSettingsDetails(
     management: AssistantManagement, machines: List<Machine>, onBack: () -> Unit, onMoved: suspend () -> Unit,
     inPlace: Boolean, onOpenConversation: (SessionKey) -> Unit, onModelConfiguration: ((String, String) -> Unit)?,
-    owner: String, switcher: @Composable () -> Unit,
+    owner: String,
 ) {
     val context = LocalContext.current
     val moved by rememberUpdatedState(onMoved)
@@ -141,7 +137,8 @@ private fun AssistantSettingsDetails(
         SettingsPart.Home -> SettingsHome(shown, machine, machineName, controller.phoneZone, onBack, ::refresh,
             open = { part = it }, sheet = { sheet = it }, follow = { scope.launch { controller.setFollowPhone(it) } },
             quietTasks = { scope.launch { controller.setMainTasksQuiet(it) } },
-            owner = owner, switcher = switcher, permission = { scope.launch { controller.setDefaultPermission(it) } })
+            foldBackground = { scope.launch { controller.setMainBackgroundFolded(it) } },
+            owner = owner, permission = { scope.launch { controller.setDefaultPermission(it) } })
         SettingsPart.Notes -> NotesPart(shown, onBack = { part = SettingsPart.Home }) { text -> controller.saveNotes(text) }
         SettingsPart.Memory -> MemoryPart(shown, machine, machineName, onBack = { part = SettingsPart.Home },
             onRefresh = { scope.launch { controller.loadMemory() } },
@@ -211,8 +208,9 @@ private fun SettingsHome(
     onBack: () -> Unit, onRefresh: () -> Unit, open: (SettingsPart) -> Unit, sheet: (SettingsSheet) -> Unit,
     follow: (Boolean) -> Unit,
     quietTasks: (Boolean) -> Unit = {},
+    foldBackground: (Boolean) -> Unit = {},
     owner: String = persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER,
-    switcher: @Composable () -> Unit = {}, permission: (String) -> Unit = {},
+    permission: (String) -> Unit = {},
 ) {
     val config = state.config
     val ready = config != null && !state.busy
@@ -221,9 +219,6 @@ private fun SettingsHome(
         title = stringResource(R.string.assistant_settings_title), onBack = onBack, refreshing = state.loading && config != null, onRefresh = onRefresh,
         summary = config?.let { stringResource(R.string.assistant_settings_summary, machineName) },
     ) {
-        item("manager") {
-            switcher()
-        }
         if (state.loadFailed) item("load-failed") {
             JNotice(stringResource(R.string.assistant_settings_load_failed), status = Status.NeedsYou,
                 actionLabel = stringResource(R.string.assistant_settings_retry), onAction = onRefresh)
@@ -293,6 +288,15 @@ private fun SettingsHome(
                         leadingIcon = PhIcons.BellSimple, enabled = !state.busy) },
                 ))
                 item("quiet-caption") { Caption(stringResource(R.string.assistant_settings_quiet_caption)) }
+            }
+
+            // #4314: shown only by a hub that has the setting (an older one folds with no way to change it here).
+            config.mainBackgroundFolded?.let { folded ->
+                rows("background", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_background_folded), folded, foldBackground,
+                        leadingIcon = PhIcons.Stack, enabled = !state.busy) },
+                ))
+                item("background-caption") { Caption(stringResource(R.string.assistant_settings_background_folded_caption)) }
             }
 
             item("zone") { JSectionHeader(stringResource(R.string.assistant_settings_zone)) }

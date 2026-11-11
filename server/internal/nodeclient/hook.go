@@ -12,7 +12,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/procinfo"
 )
 
@@ -24,6 +23,7 @@ const (
 	HerdrCorePaneEnv  = "HC_TERMINAL_ID"    // herdr-core (Herdr App)
 	OrcaPaneEnv       = "ORCA_PANE_KEY"     // Orca
 	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE"   // older Orca
+	TernPaneEnv       = "TERN_PANE"         // Tern
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
@@ -38,8 +38,8 @@ const HomeFlag = "--persona-home"
 // HookPane is the pane a hook runs in, from its environment, as a stored PaneRef: herdr's HERDR_PANE_ID as it always
 // was in the default server, qualified with its session in a named one ("@<session>:w4:p1", herdr.PaneOf, #2196),
 // else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
-// "orca:<tabId>:<leafId>"); "" in none. A node whose own herdr server is a named session writes its panes the other
-// way round and translates (node ownPane).
+// "orca:<tabId>:<leafId>"), else Tern's TERN_PANE ("tern:<block>"); "" in none. A node whose own herdr server is a
+// named session writes its panes the other way round and translates (node ownPane).
 func HookPane(getenv func(string) string) string {
 	if p := getenv(HerdrPaneEnv); p != "" {
 		return herdr.PaneOf(p, herdr.EnvSession(getenv), "")
@@ -51,6 +51,9 @@ func HookPane(getenv func(string) string) string {
 		if k := getenv(v); k != "" {
 			return host.PaneRef{Kind: host.Orca, ID: k}.String()
 		}
+	}
+	if b := getenv(TernPaneEnv); b != "" {
+		return host.PaneRef{Kind: host.Tern, ID: b}.String()
 	}
 	return ""
 }
@@ -203,11 +206,23 @@ func ClaudeDir(home string) string {
 	return filepath.Join(home, ".claude")
 }
 
-// sessionIDRe is what a Claude Code session id looks like (a UUID).
-var sessionIDRe = lazyre.New(`^[0-9a-fA-F-]{8,64}$`)
-
-// ValidSessionID says whether id looks like a Claude Code session id (the node's validID too).
-func ValidSessionID(id string) bool { return sessionIDRe.MatchString(id) }
+// ValidSessionID says whether id looks like a Claude Code session id (a UUID; the node's validID too): 8 to 64 hex
+// digits and hyphens, as `^[0-9a-fA-F-]{8,64}$` says. Every character it allows is one byte, so counting bytes is
+// counting characters. A loop, not that regexp: the session list checks each row's id every second, and the match
+// was about 8% of a resting node's CPU.
+func ValidSessionID(id string) bool {
+	if len(id) < 8 || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		switch c := id[i]; {
+		case '0' <= c && c <= '9', 'a' <= c && c <= 'f', 'A' <= c && c <= 'F', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // ReadClaudeSessionID reads the session id out of a claude's sessions/<pid>.json ("" when missing or invalid).
 func ReadClaudeSessionID(path string) string {

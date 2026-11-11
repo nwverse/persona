@@ -1,6 +1,6 @@
 import XCTest
 
-/// The plugins' UI slots (docs/extensions/extensions.md「UI 插槽」) on the iPhone: Settings opens on the plugin's overview card (a stat
+/// The plugins' UI slots (docs/extensions/extensions.md「UI slots」) on the iPhone: Settings opens on the plugin's overview card (a stat
 /// grid and a small chart) above its main-navigation entry (with its badge); the entry opens the plugin's page (tabs,
 /// a stacked bar chart, a line chart), the card opens the same page; a machine's page ends with the plugin's section
 /// for that machine. Against scripts/mock/mock_hub.py with MOCK_EXTENSIONS=1: `TEST_RUNNER_PERSONA_EXTENSIONS_HUB=http://127.0.0.1:<port>`;

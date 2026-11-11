@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › hub (docs/protocol/multi-hub.md「设置」): every hub this device paired with, by group. Hubs that know each other (their
+/// Settings › hub (docs/protocol/multi-hub.md「What the user sees」): every hub this device paired with, by group. Hubs that know each other (their
 /// hellos list each other) are one group, reached over one connection; separate groups are shown side by side
 /// everywhere. Here: add a hub, rename a group, pick the group Persona / Inbox / the hub's settings show, disconnect a
 /// hub or a whole group.
@@ -101,8 +101,19 @@ struct HubsView: View {
         ForEach(meshOnly(g), id: \.hubID) { m in
             meshRow(m, inUse: model.isLive(g) && on.map { cfg in m.endpoints?.contains { $0.hasPrefix(cfg.url.absoluteString) } == true } == true)
         }
+        // Each paired hub's Cloudflare Access service token (docs/operations/network.md "Behind Cloudflare Access"), keyed
+        // apart from its other rows like the SSH ones.
+        ForEach(members, id: \.accessRowID) { h in
+            NavigationLink(value: SettingsPage.cloudflareAccess(h.id)) {
+                SettingsRow(title: members.count > 1 ? String(localized: "Cloudflare Access · \(h.displayName)") : String(localized: "Cloudflare Access"),
+                            symbol: Theme.Icon.cloudflareAccess, tint: Theme.Hue.orange,
+                            value: h.config.access == nil ? String(localized: "Not set") : String(localized: "Set [Hubs View 7c1e4b]"), look: .oneLine)
+            }
+            .accessibilityIdentifier("hubs.access.\(h.id)")
+        }
+        .bareListRow()
         Group {
-            // Each paired hub's SSH tunnel (docs/operations/network.md「经 SSH 隧道连 hub」). Keyed apart from the hub rows above: the
+            // Each paired hub's SSH tunnel (docs/operations/network.md「Connecting to hub through SSH」). Keyed apart from the hub rows above: the
             // same ids twice in one section, and the Mac showed only one of the two sets of rows (#1221).
             ForEach(members, id: \.sshRowID) { h in
                 NavigationLink(value: SettingsPage.sshTunnel(h.id)) {
@@ -120,7 +131,7 @@ struct HubsView: View {
                 }
                 .accessibilityIdentifier("hubs.proxy.\(h.id)")
             }
-            // Each paired hub's in-app tunnel (docs/operations/network.md「经 App 内隧道连 hub」): only a hub whose extension
+            // Each paired hub's in-app tunnel (docs/operations/network.md「Connecting to hub through an in-app tunnel」): only a hub whose extension
             // contributes one has it, titled with the tunnel's name. Keyed apart like the SSH rows.
             ForEach(members.filter { $0.inAppTunnel != nil }, id: \.inAppTunnelRowID) { h in
                 let name = h.inAppTunnel?.title ?? ""
@@ -281,4 +292,6 @@ private extension PairedHub {
     var inAppTunnelRowID: String { "tunnel." + id }
     /// The Local Proxy row's identity, apart from the hub's other rows.
     var localProxyRowID: String { "proxy." + id }
+    /// The Cloudflare Access row's identity.
+    var accessRowID: String { "access." + id }
 }

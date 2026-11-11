@@ -15,8 +15,15 @@ import (
 // testReportDelay is the tests' reportDelay: short, set on each service (never the shared constant).
 const testReportDelay = 50 * time.Millisecond
 
-// reportService is a task service whose Feishu bot is paired, with reports on (or off), recording the posts.
+// reportService is a task service whose Feishu bot is paired, with reports on (or off) and the execution steps on (the
+// card as it was before #3218), recording the posts.
 func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) {
+	t.Helper()
+	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true})
+}
+
+// reportServiceWith is reportService with the bot's switches as given.
+func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, func() []string) {
 	t.Helper()
 	s, f := newTaskService(t)
 	s.reports.mu.Lock()
@@ -26,7 +33,7 @@ func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) 
 	var posts []string
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: on}}, nil
+			Features: feats}, nil
 	})
 	f.answerApp(AppFeishu, FeishuPost, func(p json.RawMessage) (any, error) {
 		var m struct {
@@ -66,6 +73,27 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 	time.Sleep(4 * testReportDelay)
 	if n := len(posts()); n != 1 {
 		t.Fatalf("%d posts", n)
+	}
+}
+
+// A chart in the Agent's answer (persona-card, #3140) is drawn on the report card as its numbers, never cut down to
+// the title alone: the owner reads this card in Lark (#4093).
+func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
+	s, f, posts := reportService(t, true)
+	startedTask(t, s, f)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "睡眠这一周\n\n```persona-card\n"+
+		`{"type":"line","title":"Sleep this week","unit":"h","points":[{"label":"Mon","value":7.2},{"label":"Tue","value":6.5}]}`+
+		"\n```\n\n睡得比上周多点。", 0)
+	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
+	card := posts()[0]
+	for _, want := range []string{"Sleep this week", "Mon", "7.2", "Tue", "6.5", "睡得比上周多点"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the chart is not drawn as numbers: the card lacks %q:\n%s", want, card)
+		}
+	}
+	if strings.Contains(card, "persona-card") || strings.Contains(card, `\"type\"`) {
+		t.Errorf("the chart block is left on the card as it was written:\n%s", card)
 	}
 }
 
@@ -275,7 +303,7 @@ func TestTaskReportDroppedWhenBotNotReady(t *testing.T) {
 	}
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: true}}, nil
+			Features: FeishuFeatures{Main: true, Cards: true, Reports: true, ReportSteps: true}}, nil
 	})
 	time.Sleep(6 * testReportDelay)
 	if got := posts(); len(got) != 0 {

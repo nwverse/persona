@@ -52,6 +52,19 @@ nonisolated struct LauncherView: Codable, Identifiable, Hashable, Sendable {
     var stale: [String]?
     /// The built-in claude: Claude Code's version on each machine that said.
     var versions: [String: String]?
+    /// The harness a managed launcher runs in: claude (also when left out), codex, agy, omp.
+    var agent: String?
+    /// A managed provider's device scope (docs/integrations/launchers.md "Device scope and on-demand delivery"); all nil
+    /// from a hub without `launcher_scope`. `share`: all | selected | none; `scopeMachines`: the computers it runs on
+    /// (selected) or the work computers added to all; `delivery`: on_demand | push; `ownService`: skip | use.
+    var share: String?
+    var scopeMachines: [String]?
+    var delivery: String?
+    var ownService: String?
+    /// The computers with a key of their own (the keys are never sent back).
+    var keyMachines: [String]?
+    /// Saved before scopes existed: all (work computers too) + push + use, until a scope field is saved.
+    var legacyScope: Bool?
     var id: String { name }
     /// What a person reads: the display name, else the name.
     var title: String { displayName.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? name }
@@ -65,8 +78,9 @@ nonisolated struct LauncherView: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case name, source, model, args, machines, hidden, definitions, details, kind, api, auth, models, proxy, effort, origin
-        case stale, versions
+        case stale, versions, agent, share, delivery
         case rcFiles = "rc_files"
+        case scopeMachines = "scope_machines", ownService = "own_service", keyMachines = "key_machines", legacyScope = "legacy_scope"
         case baseURL = "base_url", smallModel = "small_model", hasKey = "has_key"
         case subagentModel = "subagent_model", customModel = "custom_model"
         case customModelName = "custom_model_name", customModelDescription = "custom_model_description"
@@ -104,7 +118,7 @@ nonisolated struct ProviderModel: Codable, Hashable, Sendable, Identifiable {
     var title: String { name?.isEmpty == false ? name! : id }
 }
 
-/// How one machine's launchers came in when 「设置」 › 「模型供应商」 asked (docs/integrations/launchers.md「同步状态」).
+/// How one machine's launchers came in when 「设置」 › 「模型供应商」 asked (docs/integrations/launchers.md「Sync state」).
 nonisolated struct LauncherSync: Codable, Identifiable, Hashable, Sendable {
     var machine: String
     var name: String?
@@ -244,8 +258,16 @@ nonisolated struct LauncherInput: Encodable, Sendable {
     /// The uses to put on the new provider while they are still at their default (`assistant`, `agent.new`;
     /// POST only, a hub with `builtin_presets`): the answer says which were and which were kept.
     var assign: [String]? = nil
+    /// The device scope's fields (`ProviderScopeForm.fields`): nil is left out and keeps what the hub has. `machineKeys`:
+    /// a key for single computers, "" removes that computer's.
+    var share: String? = nil
+    var scopeMachines: [String]? = nil
+    var delivery: String? = nil
+    var ownService: String? = nil
+    var machineKeys: [String: String]? = nil
     enum CodingKeys: String, CodingKey {
-        case name, model, args, kind, api, preset, auth, models, headers, env, proxy, effort, assign
+        case name, model, args, kind, api, preset, auth, models, headers, env, proxy, effort, assign, share, delivery
+        case scopeMachines = "scope_machines", ownService = "own_service", machineKeys = "machine_keys"
         case displayName = "display_name"
         case baseURL = "base_url", smallModel = "small_model", apiKey = "api_key"
         case subagentModel = "subagent_model", customModel = "custom_model"
@@ -283,7 +305,7 @@ nonisolated struct LauncherProbeResult: Decodable, Hashable, Sendable {
     var code: String? = nil
 }
 
-/// POST /api/v1/launchers' answer (docs/protocol/protocol.md「模型供应商与用途配置」): the provider as saved and, when `assign`
+/// POST /api/v1/launchers' answer (docs/protocol/protocol.md「Model providers and per-purpose configuration」): the provider as saved and, when `assign`
 /// was sent, which uses now run on it and which were kept, with why (`customized` / `incompatible` / `failed`).
 /// Older hubs answer `{"ok":true}` or `{"launcher":…}` alone.
 nonisolated struct LauncherAdded: Decodable, Hashable, Sendable {
@@ -360,7 +382,7 @@ nonisolated struct LauncherDefault: Codable, Hashable, Sendable {
     }
 }
 
-/// A model provider the hub offers (GET /api/v1/launchers/presets, docs/extensions/extensions.md「模型供应商」, docs/integrations/launchers.md
+/// A model provider the hub offers (GET /api/v1/launchers/presets, docs/extensions/extensions.md「Model providers」, docs/integrations/launchers.md
 /// 「内置预设」): its built-in ones (`plugin` "builtin") and the plugins'. A launcher added from it takes the address, kind
 /// and models from here; the user fills in only the key (and, on an older hub, the name).
 nonisolated struct LauncherPreset: Decodable, Hashable, Sendable, Identifiable {
@@ -409,8 +431,13 @@ nonisolated struct LauncherPreset: Decodable, Hashable, Sendable, Identifiable {
               let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http", u.host() != nil else { return nil }
         return u
     }
-    /// The hub's key test speaks the Messages protocol only: a Responses API cannot be tested.
-    var testable: Bool { !(kind == "api" && api == "responses") }
+    /// Claude Code needs a Messages endpoint; Responses and Chat Completions serve only the hub's direct-API calls.
+    var runsClaude: Bool { kind != "api" || api == nil || api == "" || api == "messages" }
+    /// The hub's key test supports Messages, Responses and Chat Completions (an empty protocol means Messages).
+    var testable: Bool {
+        guard let api, !api.isEmpty else { return true }
+        return ["messages", "responses", "chat"].contains(api)
+    }
     /// The host it talks to, "" when the address does not parse.
     var host: String { URL(string: baseURL)?.host() ?? "" }
 
@@ -493,7 +520,7 @@ extension APIClient {
     }
 }
 
-/// A launcher's quota at its gateway (GET /api/v1/launchers/{name}/quota, docs/integrations/launchers.md「额度」), as a quota plugin
+/// A launcher's quota at its gateway (GET /api/v1/launchers/{name}/quota, docs/integrations/launchers.md「Quota」), as a quota plugin
 /// read it; `error` when there is nothing to read (`unsupported`, no plugin knows the gateway) or the gateway said no.
 nonisolated struct LauncherQuotaAnswer: Decodable, Hashable, Sendable {
     var machine: String?

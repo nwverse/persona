@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Settings › Extensions › Extension Market (docs/extensions/extensions.md「扩展市场」): the plugins of the markets the hub has, searched and filtered by
+// Settings › Extensions › Extension Market (docs/extensions/extensions.md「Extension marketplace」): the plugins of the markets the hub has, searched and filtered by
 // market; one plugin's page with what it may do, installed or upgraded after its preview (the permissions agreed to
 // are the preview's digest) and removed when it came from that market; and the markets themselves (added with an
 // optional token that is never shown again, refreshed, removed). Only with a hub that says `markets: true`.
@@ -83,12 +83,17 @@ nonisolated struct ExtensionCatalogItem: Codable, Hashable, Sendable, Identifiab
     var installedSource: String?
     var fromThisMarket: Bool?
     var upgradable: Bool?
+    /// The ID this one takes over in its market (a rename, docs/extensions/extensions.md "Declared identity changes").
+    var replaces: String?
+    /// The installed extension this one upgrades under a new ID, once the hub checked it came from this market.
+    var renameFrom: String?
 
     var id: String { market + "/" + pluginID }
 
     enum CodingKeys: String, CodingKey {
-        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable
+        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable, replaces
         case pluginID = "id", marketName = "market_name", installedSource = "installed_source", fromThisMarket = "from_this_market"
+        case renameFrom = "rename_from"
     }
 }
 
@@ -148,8 +153,12 @@ nonisolated struct ExtensionPreview: Decodable, Hashable, Sendable, Identifiable
     var depends: [ExtensionDependencyStatus]?
     var bundle: [ExtensionPreview]?
     var unresolved: [String]?
+    /// The installed extension this upgrades under the manifest's new ID (its `warnings` say so).
+    var renameFrom: String?
 
     var canConfirm: Bool { confirmationProblem(at: .now) == nil }
+    /// Whether this previews installed extension `id`'s new version, under the same ID or a new one (#2511).
+    func upgrades(_ id: String) -> Bool { manifest.id == id || renameFrom == id }
     var expirationBoundary: Date? { ([self] + (bundle ?? [])).compactMap(\.expiresAt).min() }
 
     func confirmationProblem(at now: Date) -> String? {
@@ -176,7 +185,7 @@ nonisolated struct ExtensionPreview: Decodable, Hashable, Sendable, Identifiable
     enum CodingKeys: String, CodingKey {
         case manifest, permissions, warnings, upgrade, from, market, depends, bundle, unresolved
         case previewID = "preview_id", permissionsDigest = "permissions_digest", expiresAt = "expires_at"
-        case morePermissions = "more_permissions", addedPermissions = "added_permissions"
+        case morePermissions = "more_permissions", addedPermissions = "added_permissions", renameFrom = "rename_from"
     }
 }
 
@@ -254,7 +263,7 @@ enum ExtensionMarketText {
     /// Under a GitHub market's error when it has no token: why a token helps a public repository too.
     static let gitHubTokenHint = String(localized: "Without a token, GitHub allows only 60 reads an hour, shared by every device on your network. A GitHub token raises that to 5,000, public repos included (a fine-grained token with Public repositories and no permissions is enough).")
 
-    /// GitHub's page for a new fine-grained token, filled in for a market (docs/extensions/extensions.md「GitHub 限流」): a name, what
+    /// GitHub's page for a new fine-grained token, filled in for a market (docs/extensions/extensions.md「GitHub rate limits」): a name, what
     /// it is for, a year. No permission: such a token always reads public repositories, which is what lifts the limit.
     static let gitHubTokenURL: URL = {
         var c = URLComponents(string: "https://github.com/settings/personal-access-tokens/new")!
@@ -263,6 +272,15 @@ enum ExtensionMarketText {
                         URLQueryItem(name: "expires_in", value: "365")]
         return c.url!
     }()
+
+    /// Under a market's delete confirmation: what removing it does to the extensions installed from it.
+    static func removalReason(_ count: Int?) -> String {
+        guard let count else {
+            return String(localized: "The hub stops reading this market. Extensions installed from it stay, but stop upgrading until the market is added again with the same address.")
+        }
+        if count == 0 { return String(localized: "The hub stops reading this market. No installed extension came from it.") }
+        return String(localized: "The hub stops reading this market. \(count) extensions installed from it stay, but stop upgrading until the market is added again with the same address.")
+    }
 
     /// A market's line: how many plugins, when it was read.
     static func marketSummary(_ m: ExtensionMarket) -> String {
@@ -279,7 +297,11 @@ enum ExtensionMarketText {
         var api: () -> APIClient?
         /// The app's own (its installs go through `ExtensionOperations.shared`); a test's has a store of its own.
         var live = false
-        static var live: Deps { .init(api: { AppModel.shared.api }, live: true) }
+        /// The current roster resolves the default manager; without it, explicit ownership stamps are not guessed.
+        var roster: () -> ManagerRoster? = { nil }
+        static var live: Deps {
+            .init(api: { AppModel.shared.api }, live: true, roster: { AppModel.shared.managerRoster })
+        }
     }
 
     private(set) var items: [ExtensionCatalogItem]?
@@ -293,6 +315,10 @@ enum ExtensionMarketText {
     var market: String?
     /// A market being refreshed or removed (its spinner), by id.
     private(set) var busyMarket: String?
+    /// The removal confirmation's market and affected count (nil count: still reading, unavailable, or an older hub).
+    private(set) var removalMarket: String?
+    private(set) var removalCount: Int?
+    @ObservationIgnored private var removalRequest = 0
     /// Whether plugins from the markets upgrade themselves (nil: a hub without auto-upgrade, or not read yet).
     private(set) var autoUpgrade: Bool?
     @ObservationIgnored private let deps: Deps
@@ -359,9 +385,47 @@ enum ExtensionMarketText {
         }
     }
 
+    /// Reads the default manager's installed extensions for the confirmation. A failed or ambiguous read stays unknown.
+    /// False when a newer market's preparation superseded this one, so its stale confirmation does not open.
+    @discardableResult
+    func prepareRemoval(of id: String) async -> Bool {
+        removalRequest += 1
+        let request = removalRequest
+        removalMarket = id
+        removalCount = nil
+        let count: Int?
+        do {
+            let listed = try await api().plugins()
+            let own: [HubExtension]?
+            if let roster = deps.roster() {
+                own = listed.filter { roster.owner($0.manager) == roster.defaultID }
+            } else {
+                // An explicit manager stamp needs the roster: the built-in assistant is not necessarily the default.
+                let ownershipUnknown = listed.contains {
+                    $0.manager != nil && ($0.market == id || ($0.autoUpgrade != nil && $0.market == nil))
+                }
+                own = ownershipUnknown ? nil : listed.filter { $0.manager == nil }
+            }
+            if let own {
+                // A hub from before `market` can report auto_upgrade without saying which market it came from.
+                count = own.contains(where: { $0.autoUpgrade != nil && $0.market == nil }) ? nil : own.filter { $0.market == id }.count
+            } else {
+                count = nil
+            }
+        } catch {
+            count = nil
+        }
+        guard request == removalRequest else { return false }
+        removalCount = count
+        return true
+    }
+
     func removeMarket(_ id: String) async {
         await busy(id) {
             try await $0.deleteExtensionMarket(id)
+            self.removalRequest += 1
+            self.removalMarket = nil
+            self.removalCount = nil
             self.markets.removeAll { $0.id == id }
             if self.market == id { self.market = nil }
         }
@@ -454,7 +518,8 @@ enum ExtensionMarketText {
         defer { loading = false }
         do {
             let c = try await api().pluginCatalog(market: market)
-            guard let it = c.plugins.first(where: { $0.pluginID == pluginID }) else {
+            // A link from before a rename names the old ID; the market lists the extension under its new one (#2511).
+            guard let it = c.plugins.first(where: { $0.pluginID == pluginID }) ?? c.plugins.first(where: { $0.replaces == pluginID }) else {
                 throw APIError(status: 404, message: String(localized: "This market no longer has this extension"))
             }
             item = it

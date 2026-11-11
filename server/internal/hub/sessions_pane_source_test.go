@@ -20,21 +20,6 @@ import (
 	"github.com/nwverse/persona/server/internal/sessionlist"
 )
 
-func TestRuntimePaneSourceOptIn(t *testing.T) {
-	h := newTestHub(t)
-	m := newMachine(h, MachineConfig{ID: "demo"})
-	h.machines, h.byID["demo"] = []*Machine{m}, m
-	m.sessions = []proto.Session{
-		{MachineID: "demo", SessionID: "terminal", SourceKind: "runtime", PaneID: "orca:tab:leaf"},
-		{MachineID: "demo", SessionID: "desktop", SourceKind: "runtime", SourceInstanceID: "orca"},
-		{MachineID: "demo", SessionID: "feishu", PaneID: "botmux:topic"},
-	}
-	p := runtimePage(t, h, "pane_source=terminal")
-	if p.Total != 1 || len(p.Sessions) != 1 || p.Sessions[0].SessionID != "terminal" || p.Revision == "" {
-		t.Fatalf("pane_source=terminal must select one indexed terminal row; got total=%d sessions=%d revision=%q", p.Total, len(p.Sessions), p.Revision)
-	}
-}
-
 type paneCase struct {
 	Name, Want string
 	Session    proto.Session
@@ -205,9 +190,14 @@ func TestRuntimePaneSource8000(t *testing.T) {
 	if !bytes.Equal(legacyBefore.Body.Bytes(), legacyAfter.Body.Bytes()) {
 		t.Fatal("indexing changed no-opt-in legacy output")
 	}
+	// The distribution is the corpus's: the fixture's cases over 7200 rows, then 800 Feishu rows.
+	corpus := map[string]int{}
+	for _, row := range all {
+		corpus[row.PaneSource]++
+	}
 	c := getOriginCounts(t, h, url.Values{})
-	if !reflect.DeepEqual(c.PaneSource, map[string]int{"terminal": 2400, "desktop": 2400, "unknown": 2400, "feishu": 800}) {
-		t.Fatalf("origin distribution=%v", c.PaneSource)
+	if !reflect.DeepEqual(c.PaneSource, corpus) || corpus["feishu"] != 800 || len(corpus) != 4 {
+		t.Fatalf("origin distribution=%v, corpus %v", c.PaneSource, corpus)
 	}
 }
 

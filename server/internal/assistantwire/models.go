@@ -6,7 +6,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The model configuration is the assistant's (docs/assistant/model-config.md "Who owns the models"): the four categories' records, the
+// The model configuration is the assistant's (docs/assistant/model-config.md "Who owns models"): the four categories' records, the
 // providers added in Persona with their sealed keys, the hidden ~/.zshrc launchers, the routes of Settings › Model providers /
 // Models and "New agent"'s pickers. Every model call is made there. The hub keeps what its plugins have (their
 // providers, their voice models, their quota readers) and hands those over as data; the hub.json sections about
@@ -42,6 +42,7 @@ const (
 	DeviceLaunchersShow       = "launchers.show"        // {name} → {definition}
 	DeviceLaunchersCheck      = "launchers.check"       // {name} → proto.LauncherCheck
 	DeviceClaudeAuthStatus    = "claude.auth_status"    // {name} → proto.ClaudeAuthStatus (free: no model request)
+	DeviceClaudeSettings      = "claude.settings"       // {locale?} → {settings: [{key, value, …}]}: Settings › Claude Code
 	DeviceLaunchersHTTP       = "launchers.http"        // {name, http?, configured?} → {base_url} or quota.Response
 	DeviceLaunchersRepair     = "launchers.repair"      // {name, action: "upgrade_cli"} → proto.LauncherRepair
 )
@@ -114,8 +115,9 @@ type ModelChoice struct {
 
 // What the hub's plugins ask of the model configuration (Handler).
 const (
-	// MethodModelsUsable: {purpose} → {usable}: an API purpose resolves to an address, a model and a key (a plugin
-	// whose inbox needs message screening is switched on only then).
+	// MethodModelsUsable: {purpose} → {usable, provider?, model?}: an API purpose resolves to an address, a model and
+	// a key (a plugin whose inbox needs message screening is switched on only then). When usable, provider is the
+	// display name of the connection it runs on and model its model, for a consent that names where content goes.
 	MethodModelsUsable = "models.usable"
 	// MethodModelsLauncherHTTP: {name, machine?, http?} → {base_url, machine} without http, else the quota.Response: a
 	// request to a launcher's gateway, sent by whoever holds its key (the assistant for a provider added in Persona,

@@ -1,28 +1,29 @@
-// An exchange's work as lib/work-groups.ts groups it (cindy's WorkGroupBlock): "Working…" with a clock and its
-// newest steps peeking out while it runs, "Worked for Xs" once done; open, every step on a 2 px rail. A finished
-// exchange's outer group is a timeline: the agent's words between inner groups that stay folded.
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+// One folded execution summary while running or completed; manual expansion reveals its complete trace (#2602).
+import { lazy, memo, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useSessionLive } from "../../lib/live";
 import { useStore } from "../../lib/store";
 import { subagentFor } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
-import { groupTitle, nestedLineDefault, togglesLiveOverride, workLineOpen, workLineOpens, isAgentStep, isPlanStep, isRowStep, isWorkflowStep, planTodos, previewSteps, workDuration, type AgentStatus, type ToolStep, type WorkGroupNode, type WorkLineStyle, type WorkNode } from "../../lib/work-groups";
+import { groupTitle, nestedLineDefault, togglesLiveOverride, workLineOpen, workLineOpens, isAgentStep, isPlanStep, isRowStep, isWorkflowStep, planTodos, workDuration, type AgentStatus, type ToolStep, type WorkGroupNode, type WorkLineStyle, type WorkNode } from "../../lib/work-groups";
 import type { WorkflowCalls } from "../../lib/workflows";
 import type { Step } from "../../lib/turns";
 import { Collapse, cx, Spinner, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ActionRow } from "./ActionRow";
-import { FreshWords, LiveClockContext, useChatContext } from "./chat-context";
+import { LiveClockContext, useChatContext } from "./chat-context";
+import { useFreshWords } from "./fresh-words";
 import { inOpenedFold, openFoldRange, useExpanded, useLiveOverride } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { nodeItemIds } from "../../lib/chat-search";
 import { PlanCard } from "./PlanCard";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
-import { SubagentCard } from "./SubagentCard";
 import { WorkflowCallCard } from "./WorkflowCard";
-import { ThinkingCard, ThinkingLine } from "./ThinkingCard";
+import { ThinkingCard } from "./ThinkingCard";
 import { t } from "../../i18n";
+
+// This card is only mounted inside manually opened work; keep its report reader off the first screen.
+const SubagentCard = lazy(() => import("./SubagentCard").then((m) => ({ default: m.SubagentCard })));
 
 export interface WorkProps {
   mid: string;
@@ -64,18 +65,6 @@ function useThinkingNow(mid: string, sid: string) {
   return status?.thinking ? <ThinkingCard live={status} /> : null;
 }
 
-/** A live group's newest steps, peeking out while it is closed, and the thinking card after them. */
-function LivePreview({ preview, open, mid, sid, trace }: { preview: Step[]; open: boolean; mid: string; sid: string; trace?: boolean }) {
-  const thinkingNow = useThinkingNow(mid, sid);
-  if (!(preview.length > 0 || (thinkingNow && !open))) return null;
-  return (
-    <div className="mt-1 flex min-w-0 flex-col border-l-2 border-tool-rail py-[2px] pl-3" data-live-preview>
-      {preview.map((s) => (s.kind === "tool" ? <ActionRow key={s.id} step={s} running={!s.result} mid={mid} sid={sid} trace={trace} /> : <ThinkingLine key={s.id} item={s.item} />))}
-      {thinkingNow}
-    </div>
-  );
-}
-
 function LiveThinking({ mid, sid }: { mid: string; sid: string }) {
   return useThinkingNow(mid, sid);
 }
@@ -83,18 +72,16 @@ function LiveThinking({ mid, sid }: { mid: string; sid: string }) {
 export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p: WorkProps }) {
   // an outer group whose folded steps the reader just opened: open under whatever key it has once they are in
   const style = p.lineStyle ?? "agents";
-  const turnLive = Boolean(p.turnLive);
+  const turnLive = Boolean(p.turnLive ?? g.live) && g.live && !p.nested;
   const key = `${p.scope}${g.id}`;
   const [remembered, setRemembered] = useExpanded(key, p.nested ? nestedLineDefault(style) : inOpenedFold(p.scope, g.seq));
-  // in a running assistant exchange the reader's toggle holds only for the run (#1614): it goes elsewhere
+  // All conversation styles keep manual run toggles separately, then collapse on completion (#2602).
   const runToggle = togglesLiveOverride(style, turnLive);
   const [liveOverride, setLiveOverride] = useLiveOverride(key, runToggle);
   const setOpen = runToggle ? setLiveOverride : setRemembered;
   const [loading, setLoading] = useState(false);
   const opens = workLineOpens(g, style, turnLive);
   const open = workLineOpen({ style, turnLive, remembered, liveOverride }) && opens;
-  // a line the reader folded during a running assistant exchange is just its summary: no steps peek out (#1614)
-  const preview = g.live && !open && !(runToggle && liveOverride === false) ? previewSteps(g) : [];
   const inside = useMemo(() => ({ ...p, nested: true }), [p]);
   const toggle = () => {
     const next = !open;
@@ -141,7 +128,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
         type="button"
         onClick={opens ? toggle : undefined}
         disabled={!opens}
-        aria-expanded={opens ? open || preview.length > 0 : undefined}
+        aria-expanded={opens ? open : undefined}
         // on a touch screen 40 tall, the margin taking back what it adds, so nothing around it moves
         className={cx("flex w-full min-w-0 items-center gap-1.5 py-[2px] text-left select-none [@media(pointer:coarse)]:-my-[7.5px] [@media(pointer:coarse)]:min-h-10", opens ? "cursor-pointer transition-opacity hover:opacity-80" : "cursor-default")}
       >
@@ -158,8 +145,6 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
           <button type="button" onClick={() => setAttempt((n) => n + 1)} className="touch-hit rounded-control px-1.5 py-0.5 font-medium whitespace-nowrap text-accent-ink hover:bg-hover">{t("chat-workgroup.retry")}</button>
         </div>
       )}
-      {/* only a live group has a preview or a thinking card (previewSteps is empty otherwise) */}
-      {g.live && <LivePreview preview={preview} open={open} mid={p.mid} sid={p.sid} trace={p.trace} />}
       <Collapse open={open} lazy>
         <div className="mt-1 flex min-w-0 flex-col gap-2 border-l-2 border-tool-rail py-[2px] pl-3" data-work-detail>
           <WorkNodes nodes={g.children} p={inside} live={g.live} />
@@ -171,7 +156,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
 });
 
 /** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments. `fade`: the
- *  agent's words among them that just came in fade in (FreshWords); not inside a group. */
+ *  agent's words among them that just came in fade in (fresh-words.ts); not inside a group. */
 export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean }) {
   const runs: (WorkNode | ToolStep[] | AgentRun)[] = [];
   for (const n of nodes) {
@@ -232,18 +217,18 @@ function AgentGrid({ agents, p }: { agents: ToolStep[]; p: WorkProps }) {
       </div>
       <div className="grid min-w-0 grid-cols-1 gap-2 @[560px]:grid-cols-2">
         {agents.map((a, i) => (
-          <SubagentCard key={a.id} step={a} status={statuses[i]} mid={p.mid} scope={p.scope} />
+          <SubagentCard key={a.id} step={a} status={statuses[i]} mid={p.mid} sid={p.sid} scope={p.scope} />
         ))}
       </div>
     </div>
   );
 }
 
-/** Words that fade in if they just came in: the only reader of FreshWords, so a new reply renders these, not the chat.
- *  Memo: a streamed delta re-renders the segment, not these; FreshWords still reaches them through the context. */
+/** Words that fade in if they just came in: each reads its own id in fresh-words.ts, so a new reply renders its own
+ *  words, not the chat's. Memo: a streamed delta re-renders the segment, not these. */
 const FreshAnswer = memo(function FreshAnswer({ item, mid, sid }: { item: Item; mid: string; sid: string }) {
-  const fresh = useContext(FreshWords);
-  return <Answer item={item} mid={mid} sid={sid} fade={fresh?.has(item.id)} />;
+  const fade = useFreshWords(mid, sid, item.id);
+  return <Answer item={item} mid={mid} sid={sid} fade={fade} />;
 });
 
 /** A step on its own: in the open, or inside an open group. Memo: its props stay the same objects while the reply
@@ -252,7 +237,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
   switch (step.kind) {
     case "tool":
       if (p.trace) return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} trace />;
-      if (isAgentStep(step)) return <SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} scope={p.scope} />;
+      if (isAgentStep(step)) return <Suspense fallback={null}><SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} /></Suspense>;
       if (isPlanStep(step)) return <PlanCard id={step.id} todos={planTodos(step)} live={live} mid={p.mid} sid={p.sid} />;
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;

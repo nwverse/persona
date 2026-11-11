@@ -23,6 +23,7 @@ class LinesFixtureTest(private val name: String, private val fixture: FixtureRea
         val initial = input.items()
         val actual = if (operations == null) snapshot(initial, input) else {
             val store = LineStore()
+            val memo = ChatLinesMemo()
             store.merge(initial)
             val checkpoints = operations.map { raw ->
                 val op = raw.jsonObject
@@ -34,20 +35,27 @@ class LinesFixtureTest(private val name: String, private val fixture: FixtureRea
                         op.getValue("batches").jsonArray.forEach { batch ->
                             store.merge(batch.jsonArray.map { decodeItem(it.jsonObject) })
                             assertEquals(chatLines(store.items), store.snapshot())
+                            assertEquals(chatLines(store.items), memo.lines(store.items))
                         }
                         store.replace(op.items())
                     }
                     else -> error("Unknown operation: $op")
                 }
                 val options = JsonObject(input + op.filterKeys { it in setOf("open_work", "live_turn_id") })
-                JsonObject(snapshot(store.items, options) + ("item_ids" to json(store.items.map { it.id })))
+                JsonObject(snapshot(store.items, options, memo) + ("item_ids" to json(store.items.map { it.id })))
             }
             obj("checkpoints" to checkpoints)
         }
-        compareJson("${fixture.file}/$name", expected, actual)
+        try {
+            compareJson("${fixture.file}/$name", expected, actual)
+        } catch (failure: AssertionError) {
+            System.err.println("Actual line fixture $name: $actual")
+            throw failure
+        }
     }
 
-    private fun snapshot(items: List<LineItem>, input: JsonObject): JsonObject {
+    /** [memo]: this chat's, which drew it after each operation before this one. */
+    private fun snapshot(items: List<LineItem>, input: JsonObject, memo: ChatLinesMemo? = null): JsonObject {
         val frozen = (input["frozen"] as? JsonObject)?.let {
             Frozen(it.number("seq")!!, it.number("part")!!, it.text("live_turn_id"))
         }
@@ -62,6 +70,14 @@ class LinesFixtureTest(private val name: String, private val fixture: FixtureRea
             }
         }
         val result = chatLines(items, options)
+        memo?.let { assertEquals("$name memo", result, it.lines(items, options)) }
+        // ChatLinesMemo draws the same while the items come one by one, and with each one left out and back.
+        val fresh = ChatLinesMemo()
+        val versions = items.indices.map { items.take(it + 1) } +
+            items.indices.flatMap { i -> listOf(items.filterIndexed { k, _ -> k != i }, items) }
+        versions.forEachIndexed { k, version ->
+            assertEquals("$name memo $k", chatLines(version, options), fresh.lines(version, options))
+        }
         // The items cache finds its last two turns with chatTurns: the same turns, every fixture.
         if (frozen == null) assertEquals("$name chatTurns", result.turns, chatTurns(items))
         val projection = Projection(result.tasks, input.stringsOrNulls("menu_queries"),
