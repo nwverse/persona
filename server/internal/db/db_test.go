@@ -715,6 +715,29 @@ func TestNodeSessionsStartedIndexed(t *testing.T) {
 	}
 }
 
+// A guest conversation keeps its tools and kind across a node's restart (state.put, then state.load): a meeting's
+// room resumed after it still runs as a room.
+func TestNodeSessionsGuest(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	room := NodeSession{Launcher: "claude", Cwd: "/home/me/.persona/guest-meeting/r1", Guest: []string{"meeting_lines", "meeting_earlier"}, GuestKind: "meeting"}
+	if err := d.PutNodeSession(ctx, "server", "room", room); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "plain", NodeSession{Launcher: "claude", Cwd: "/x"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.NodeSessions(ctx, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := got["room"]; !slices.Equal(r.Guest, room.Guest) || r.GuestKind != "meeting" {
+		t.Fatalf("room = %+v", r)
+	}
+	if p := got["plain"]; p.Guest != nil || p.GuestKind != "" {
+		t.Fatalf("plain = %+v", p)
+	}
+}
+
 // A session without its node_model settings row still loads, with the model fields empty.
 func TestNodeSessionsModelRow(t *testing.T) {
 	d, ctx := open(t), context.Background()

@@ -12,6 +12,10 @@ extension Theme {
         static let errorFilled = "exclamationmark.triangle.fill"
         /// The highest alert level, above `error` (a machine's critical alert).
         static let critical = "exclamationmark.octagon.fill"
+        /// A tool call the user, a permission rule or a hook turned down (Denied, #4303): gray, not an error.
+        static let denied = "hand.raised.slash"
+        /// A tool call refused before it ran (Did not run): a skipped step.
+        static let didNotRun = skipped
         static let success = "checkmark.circle"
         static let successFilled = "checkmark.circle.fill"
         static let done = "checkmark"
