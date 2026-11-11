@@ -214,4 +214,5 @@ holds every answer to it before it reaches the manager:
 1. The iPhone app: "Use a reference" in secret fields, the hand-off card, and the provider's page listing who uses its
    references and its Always rules; then launcher keys as references in both apps. Android's part is #3986, which lists the interfaces it needs; until then an Android phone
    shows the card as the hub sends it and cannot approve it.
-2. The 1Password extension's side (`secrets.used` on its own page).
+2. The 1Password extension's side (`secrets.used` on its own page; `secrets.describe` names the item and field as the title
+   and only the vault as the detail, which the host cuts at 40 characters anyway).
