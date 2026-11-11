@@ -184,6 +184,8 @@ type Registry struct {
 	yielded map[string]*Extension
 	// devSecrets are the secrets of the extensions being written (SourceDev), in memory only.
 	devSecrets map[string]map[string]string
+	// refSchemes: the schemes each extension's secrets reference, by id (secret_refs.go), noted at each read.
+	refSchemes map[string][]string
 	// keptOff are built-in extensions held off whatever their rows say (KeepOff).
 	keptOff map[string]*keptOff
 }
@@ -267,6 +269,18 @@ func (r *Registry) AddBuiltin(m *Manifest, dir string, enabled bool) error {
 	raw, _ := json.Marshal(m)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceBuiltin, Version: m.Version, Manifest: raw,
 		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Schema: schema, Dir: dir}
+	return nil
+}
+
+// AddBuiltinTranslated is AddBuiltin for a manifest written in English, with its text in the other languages (a
+// built-in has no package to read l10n/ from).
+func (r *Registry) AddBuiltinTranslated(m *Manifest, dir string, enabled bool, ts Translations) error {
+	if err := r.AddBuiltin(m, dir, enabled); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.extensions[m.ID].L10n = ts
 	return nil
 }
 

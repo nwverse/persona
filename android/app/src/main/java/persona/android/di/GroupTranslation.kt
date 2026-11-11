@@ -97,6 +97,16 @@ internal fun ChatAppBindings.inGroup(names: GroupNames): ChatAppBindings {
         mainSender = mainSender.inGroup(names, coroutineScope),
         draftVersions = { key -> source.draftVersions(names.raw(key)) },
         ports = ports?.inGroup(names),
+        agentShares = agentShares?.let { provider -> AgentSharesProvider { session, manager ->
+            if (GroupKeys.namespaceOf(session.machineId) != names.namespace) throw AgentShareFailure("session_conflict")
+            val api = provider.forSession(names.raw(session), manager)
+            object : AgentShares by api {
+                override suspend fun create(request: ShareCreateRequest): ShareCreated {
+                    if (request.machine != session.machineId || request.sessionId != session.sessionId) throw AgentShareFailure("session_conflict")
+                    return api.create(request.copy(machine = names.rawMachine(request.machine)))
+                }
+            }
+        } },
     )
 }
 
@@ -284,7 +294,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
     val source = this
     return object : AssistantConversations {
         override val assistant = source.assistant.mapIn(scope) { snapshot ->
-            AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId)
+            AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
+                snapshot.leaders, snapshot.directionNames)
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()

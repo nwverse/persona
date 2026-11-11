@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -80,6 +82,12 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 	}
 	if compatible && p.CategoryID == "assistant" && v.Kind == "launcher" {
 		compatible = slices.Contains([]string{"", "claude", "codex", "agy", "omp"}, v.Agent)
+		// A managed Codex launcher runs through `personad launch`, which execs codex itself, past the `app-server`
+		// wrapper the assistant puts around a launcher's codex (node codexShell): the main chat would wait on an
+		// interactive Codex that never answers.
+		if v.Agent == "codex" && slices.ContainsFunc(stored, func(l storedLauncher) bool { return v.ID == "launcher."+l.Name && l.Kind != "api" }) {
+			compatible = false
+		}
 	}
 	if compatible && p.Kind == "launcher" && len(v.Machines) > 0 && p.MachineID != "" {
 		compatible = slices.Contains(v.Machines, p.MachineID)
@@ -95,6 +103,31 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 	return compatible
 }
 
+// modelLauncherCompatible applies the shared provider rule to the current, merged launcher on one machine. Unlike
+// the global discovery table, this includes new shell launchers, hub.json wrappers and a runtime's current caps.
+func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, stored []storedLauncher) bool {
+	v := ModelProvider{ID: "launcher." + l.Name, Kind: "launcher", Agent: cmp.Or(l.AgentType, l.Agent), Model: l.Model}
+	for _, managed := range stored {
+		if managed.Name == l.Name {
+			v.Kind, v.API = managed.Kind, managed.API
+			if v.Kind == "" {
+				v.Kind = "launcher"
+			}
+			break
+		}
+	}
+	source := compat.Source(l.Source)
+	runtime := source != "" && source != "persona" && source != "builtin" && !machineSource(source)
+	if p.CategoryID == "assistant" && runtime {
+		if !l.Assistant {
+			return false
+		}
+		// A runtime's assistant capability is explicit and does not depend on which agent it embeds.
+		v.Agent = ""
+	}
+	return s.modelProviderCompatible(p, v, stored)
+}
+
 func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBinding, providers []ModelProvider) error {
 	var provider *ModelProvider
 	for i := range providers {
@@ -103,11 +136,30 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			break
 		}
 	}
-	if provider == nil {
-		return i18n.Err("assistant-models.err_provider_missing")
-	}
-	if !slices.Contains(p.ProviderIDs, b.Provider) {
-		return i18n.Err("assistant-models.err_provider_unsupported")
+	if p.Kind == "launcher" && p.CategoryID == "assistant" && p.MachineID != "" {
+		// Model settings and the picker share the current machine's merged launchers, not the global discovery cache.
+		name := strings.TrimPrefix(b.Provider, "launcher.")
+		if provider == nil {
+			// Not in the global discovery table yet: only a configured wrapper or a launcher on the machine's own list.
+			_, configured := s.configuredLauncher(ctx, p.MachineID, name)
+			if _, known := s.launchersHere(ctx, p.MachineID); !configured && !known {
+				return i18n.Err("assistant-models.err_provider_missing")
+			}
+		}
+		fit, refusal := s.mainChatFit(ctx, p.MachineID, name)
+		switch fit {
+		case mainChatGone:
+			return i18n.Err("assistant-models.err_provider_missing")
+		case mainChatRefused:
+			return refusal
+		}
+	} else {
+		if provider == nil {
+			return i18n.Err("assistant-models.err_provider_missing")
+		}
+		if !slices.Contains(p.ProviderIDs, b.Provider) {
+			return i18n.Err("assistant-models.err_provider_unsupported")
+		}
 	}
 	if b.Effort != "" && !slices.Contains([]string{"low", "medium", "high", "xhigh", "max"}, b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
@@ -131,7 +183,7 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 		return nil
 	}
 	if p.Kind == "launcher" {
-		if len(provider.Machines) > 0 && p.MachineID != "" && !slices.Contains(provider.Machines, p.MachineID) {
+		if provider != nil && len(provider.Machines) > 0 && p.MachineID != "" && !slices.Contains(provider.Machines, p.MachineID) {
 			return i18n.Err("assistant-models.err_launcher_not_on_machine")
 		}
 		if b.Model != "" {
@@ -166,7 +218,8 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 	return nil
 }
 
-// providerModelUses are the current configurable purposes that run on provider: a provider in use is not deleted underneath them.
+// providerModelUses are the current configurable purposes assigned to provider: a provider in use is not deleted underneath them.
+// Automatic selection by the built-in API categories is not an assignment; current extension purposes also protect an inherited provider.
 func (s *Service) providerModelUses(ctx context.Context, provider string) ([]string, error) {
 	uses := []string{}
 	ids := slices.Clone(modelConfigIDs)
@@ -182,9 +235,27 @@ func (s *Service) providerModelUses(ctx context.Context, provider string) ([]str
 		if err != nil {
 			return nil, err
 		}
-		if b.Provider == provider {
-			uses = append(uses, p.Name)
+		if b.Provider != provider {
+			continue
 		}
+		if p.Kind == "api" && slices.Contains(modelCategoryIDs, id) {
+			// Automatic selection follows the remaining providers; only an assignment that still names this provider
+			// without its automatic fallback blocks deletion. Current extension purposes keep their inherited-use guard.
+			without := slices.DeleteFunc(slices.Clone(s.storedLaunchers(ctx)), func(l storedLauncher) bool {
+				return launcherProvider(l.Name) == provider
+			})
+			withoutCtx := withManagedSnapshot(ctx, without)
+			fallback, err := s.resolveModel(withoutCtx, id)
+			if err != nil {
+				return nil, err
+			}
+			if fallback.Provider != "" && fallback.Provider != provider {
+				if strings.HasPrefix(fallback.Provider, "launcher.") || s.legacyModelConfig(withoutCtx, fallback.Provider).BaseURL != "" {
+					continue
+				}
+			}
+		}
+		uses = append(uses, p.Name)
 	}
 	return uses, nil
 }

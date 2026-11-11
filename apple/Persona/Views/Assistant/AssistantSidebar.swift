@@ -721,6 +721,10 @@ struct AssistantSidebar: View {
     private var isShell: Bool { openInbox != nil }
     @State private var query = ""
     @State private var searchOpen = false
+    #if os(iOS)
+    /// The open iPhone Duo's search, over the whole window (`footerSearch`).
+    @State private var fullSearch = false
+    #endif
     #if os(macOS)
     /// Its header is in the title bar's row (#830): past the traffic lights when the window's sections column is hidden.
     @Environment(\.macTitleRowLeading) private var titleRowLeading
@@ -784,7 +788,7 @@ struct AssistantSidebar: View {
                         }
                         conversations(all, archived: archived)
                     } else {
-                        results(AssistantSidebarSearch.filter(all, query))
+                        results(AssistantSidebarSearch.filter(all, query, names: model.directionNames))
                     }
                 }
                 #if os(macOS)
@@ -832,6 +836,14 @@ struct AssistantSidebar: View {
                 open(key)
             }
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $fullSearch) {
+            AssistantFullSearch { key in
+                fullSearch = false
+                open(key)
+            }
+        }
+        #endif
         .background {
             if let drawer {
                 SidebarClosed(drawer: drawer) {
@@ -861,12 +873,13 @@ struct AssistantSidebar: View {
             }
         } else {
             HStack {
-                #if os(macOS)
-                // The other sections' title (`MacPageTitle`), #3179.
-                Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                #else
-                Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                #endif
+                if model.showsAssistantIdentity {
+                    #if os(macOS)
+                    Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
+                    #else
+                    Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
+                    #endif
+                }
                 Spacer(minLength: Theme.Space.s)
                 if let collapse {
                     AssistantTopBar.circle(Theme.Icon.sidebar, label: String(localized: "Hide Sidebar"), id: "assistant-sidebar-collapse") {
@@ -892,10 +905,15 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// Search at the foot, beside Persona's name, where the column has its fold at the top instead (iPhone Duo open).
+    /// Search at the foot, beside Persona's name, where the column has its fold at the top instead (iPhone Duo open): it
+    /// opens over the whole window, its field at the foot (`AssistantFullSearch`, #3705).
     private var footerSearch: (() -> Void)? {
         guard collapse != nil else { return nil }
+        #if os(iOS)
+        return { fullSearch = true }
+        #else
         return { openSearch() }
+        #endif
     }
 
     private func openSearch() {
@@ -1075,12 +1093,18 @@ struct AssistantSidebar: View {
         let radius = Theme.Sidebar.radius
         return Button { if let key { open(key) } else { newConversation() } } label: {
             HStack(spacing: Theme.Sidebar.gap) {
-                // Where the places below have their symbol, the same width (on the Mac's plain list, `macPlace`'s).
-                AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
-                // The small "Main Chat" under the name keeps the row readable as a conversation, not a heading (#6328, as the web, #6293).
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                    Text("Main Chat").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                if model.showsAssistantIdentity {
+                    AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                        Text("Main Chat").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                } else {
+                    ThemedIcon(Theme.Icon.conversation)
+                        .font(Theme.Font.body)
+                        .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                        .scaledFrame(width: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn)
+                    Text("Main Chat").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if let main { mark(main) }
@@ -1096,7 +1120,7 @@ struct AssistantSidebar: View {
         }
         .buttonStyle(.plain)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([Self.mainTitle, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityLabel([model.showsAssistantIdentity ? Self.mainTitle : nil, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-main")
         .disabled(key == nil && model.assistantConfig == nil)
@@ -1121,6 +1145,10 @@ struct AssistantSidebar: View {
 
     /// The main conversation's name in the sidebar (#2004; it was Main Chat before, and again in #4606).
     static let mainTitle = "Persona"
+
+    static func shownMainTitle(_ showsIdentity: Bool) -> String {
+        showsIdentity ? mainTitle : String(localized: "Main Chat")
+    }
 
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, run: @escaping () -> Void) -> some View {
         if AppStyle.current.usesBeautifulUI {
@@ -1158,7 +1186,15 @@ struct AssistantSidebar: View {
 
     @ViewBuilder private func conversations(_ all: [Session], archived: Int) -> some View {
         let main = model.assistantMain
-        let pinned = all.filter { isPinned($0) && $0.key != main }
+        // The leader conversations are the Directions group, first, in the hub's order, under each direction's name
+        // (docs/assistant/unified-entry.md "Leader conversations"); this phone's own pins stay Pinned, the rest are Other Chats.
+        let directions = AssistantSidebarGroups.directions(all, leaders: model.assistantLeaders, main: main)
+        let isDirection = { (s: Session) in directions.contains { $0.key == s.key } }
+        if !directions.isEmpty {
+            heading(String(localized: "Directions")) { EmptyView() }
+            ForEach(directions) { row($0, named: model.directionNames[$0.sessionID]) }
+        }
+        let pinned = all.filter { isPinned($0) && $0.key != main && !isDirection($0) }
         if !pinned.isEmpty {
             heading(String(localized: "section.pinned", defaultValue: "Pinned")) {
                 Button { unpinAll() } label: { Label("Unpin All", systemImage: Theme.Icon.unpin) }
@@ -1168,7 +1204,7 @@ struct AssistantSidebar: View {
         // The main conversation is the list's first row (`mainItem`): not here, and not in Auto Chats (`isPinned`).
         // Those Persona opened by itself are in Auto Chats (#3264); with a hub that does not say, the scheduled tasks' ones
         // are on Scheduled Tasks, under each task (#2838). The open one keeps its row.
-        let split = AutoConversations(all.filter { !isPinned($0) }, tasks: taskChats.known(on: model.api), current: current,
+        let split = AutoConversations(all.filter { !isPinned($0) && !isDirection($0) }, tasks: taskChats.known(on: model.api), current: current,
                                       hubSays: model.hubFeatures.contains(AutoConversationSource.feature))
         let rest = AssistantSidebarGroups.newestFirst(split.mine)
         if rest.isEmpty && split.auto.isEmpty {
@@ -1176,7 +1212,7 @@ struct AssistantSidebar: View {
                 .font(Theme.Font.secondary).foregroundStyle(.secondary)
                 .padding(.horizontal, Theme.Space.m).padding(.top, Theme.Space.xl)
         } else {
-            heading(String(localized: "Recent")) {
+            heading(directions.isEmpty ? String(localized: "Recent") : String(localized: "Other Chats")) {
                 Button { newConversation() } label: { Label("New Chat [Quick Actions ea4b29]", systemImage: Theme.Icon.compose) }
                 if split.supported {
                     Button { autoList = AutoConversationsRoute(source: nil) } label: { Label("All Chats", systemImage: Theme.Icon.list) }
@@ -1325,7 +1361,7 @@ struct AssistantSidebar: View {
             .padding(.top, 40)
         } else {
             heading(String(localized: "\(hits.count) Chats [Assistant Sidebar a72a2a]")) { EmptyView() }
-            ForEach(hits) { row($0) }
+            ForEach(hits) { row($0, named: model.directionNames[$0.sessionID]) }
         }
     }
 
@@ -1387,17 +1423,23 @@ struct AssistantSidebar: View {
     }
 
     /// A conversation: a round mark (Persona's face for the main one), its title on one line, its state on the right.
-    private func row(_ s: Session) -> some View {
+    /// `named`: a direction's name, shown instead of its leader conversation's title.
+    private func row(_ s: Session, named: String? = nil) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
-        let title = isMain ? Self.mainTitle : s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
+        let title = isMain ? Self.shownMainTitle(model.showsAssistantIdentity) : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         return Button { open(s.key) } label: {
             HStack(spacing: Theme.Space.m) {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
                 // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
-                if isMain {
+                if isMain && model.showsAssistantIdentity {
                     AppGlyph(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark, scaled: true)
+                } else if isMain {
+                    ThemedIcon(Theme.Icon.conversation)
+                        .font(Theme.Font.body)
+                        .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                        .scaledFrame(width: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark)
                 } else if isShell {
                     EmptyView()
                 } else {
@@ -1422,7 +1464,7 @@ struct AssistantSidebar: View {
         .buttonStyle(.plain)
         .tag(s.key)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([title, isMain && s.title != title ? s.title : nil, stateWord(s), preview.isEmpty ? nil : preview]
+        .accessibilityLabel([title, isMain && model.showsAssistantIdentity && s.title != title ? s.title : nil, stateWord(s), preview.isEmpty ? nil : preview]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(isMain ? "sidebar-main" : "sidebar-conversation")
@@ -1526,7 +1568,9 @@ struct AssistantSidebar: View {
         } else {
             #if os(macOS)
             if macPlacesGroup {
-                AssistantStatusLine(machineID: machineID, openProfile: openProfile)
+                if model.showsAssistantIdentity {
+                    AssistantStatusLine(machineID: machineID, openProfile: openProfile)
+                }
             } else {
                 AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: openSettings)
             }
@@ -1635,26 +1679,33 @@ private struct AssistantProfileFooter: View {
             HStack(spacing: Theme.Space.m) {
                 Button(action: openProfile) {
                     HStack(spacing: Theme.Space.m) {
-                        PersonaAvatar(size: Theme.Size.avatarL)
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            HStack(spacing: Theme.Space.xs) {
-                                Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
-                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                        if model.showsAssistantIdentity {
+                            PersonaAvatar(size: Theme.Size.avatarL)
+                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                HStack(spacing: Theme.Space.xs) {
+                                    Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                                }
+                                HStack(spacing: Theme.Space.xs) {
+                                    Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
+                                        .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
+                                    Text(online ? String(localized: "Online · \(machine?.name ?? machineID)") : String(localized: "Offline · \(machine?.name ?? machineID)")).lineLimit(1)
+                                }
+                                .font(Theme.Font.label)
+                                .foregroundStyle(.secondary)
                             }
-                            HStack(spacing: Theme.Space.xs) {
-                                Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
-                                    .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
-                                Text(online ? String(localized: "Online · \(machine?.name ?? machineID)") : String(localized: "Offline · \(machine?.name ?? machineID)")).lineLimit(1)
-                            }
-                            .font(Theme.Font.label)
-                            .foregroundStyle(.secondary)
+                        } else {
+                            Label("Details [Assistant Top Bar 1932da]", systemImage: Theme.Icon.person)
+                                .font(Theme.Font.bodyStrong)
+                                .lineLimit(1)
                         }
                     }
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(model.persona.name), \(state), view profile")
+                .accessibilityLabel(model.showsAssistantIdentity ? String(localized: "\(model.persona.name), \(state), view profile") : String(localized: "Details [Assistant Top Bar 1932da]"))
+                .accessibilityIdentifier("assistant-profile-footer")
                 Spacer(minLength: Theme.Space.s)
                 if let search {
                     // The shell's foot's round button (Settings beside New Chat), as the row above has it.
@@ -1749,6 +1800,12 @@ nonisolated enum AssistantSidebarGroups {
         var sessions: [Session]
     }
 
+    /// The sidebar's Directions: the listed leader conversations in `leaders`' order (the hub's), never the main one;
+    /// a leader the list does not hold (archived, another manager's) is left out.
+    static func directions(_ sessions: [Session], leaders: [String], main: SessionKey?) -> [Session] {
+        leaders.compactMap { id in sessions.first { $0.sessionID == id && $0.key != main } }
+    }
+
     /// Newest first, a fixed order for equal times (the sidebar's Recent).
     static func newestFirst(_ sessions: [Session]) -> [Session] {
         sessions.sorted {
@@ -1781,11 +1838,15 @@ nonisolated enum AssistantSidebarGroups {
 
 /// The sidebar's search: a conversation matches on its title or its last message, ignoring case and width.
 nonisolated enum AssistantSidebarSearch {
-    static func filter(_ sessions: [Session], _ query: String) -> [Session] {
+    /// `names`: the directions' names by session id; a direction is found by its name too.
+    static func filter(_ sessions: [Session], _ query: String, names: [String: String] = [:]) -> [Session] {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return sessions }
         let opts: String.CompareOptions = [.caseInsensitive, .widthInsensitive, .diacriticInsensitive]
-        return sessions.filter { $0.title.range(of: q, options: opts) != nil || ($0.lastText ?? "").range(of: q, options: opts) != nil }
+        return sessions.filter {
+            $0.title.range(of: q, options: opts) != nil || ($0.lastText ?? "").range(of: q, options: opts) != nil
+                || (names[$0.sessionID] ?? "").range(of: q, options: opts) != nil
+        }
     }
 }
 

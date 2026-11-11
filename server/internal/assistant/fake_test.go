@@ -40,6 +40,7 @@ type fakeHub struct {
 	zshrc         map[string][]proto.Launcher        // a machine\'s own launchers.list (over launcherList)
 	rcFiles       map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers map[string]bool                    // a machine whose launchers.list answers only when the call gives up
+	launcherGate  chan struct{}                      // when set, every launchers.list answer waits for this gate
 	agentModels   map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
 	modelsLocked  map[string]string                  // launchers.models's locked, by launcher
 	managed       map[string][]proto.ManagedLauncher // what each node was given (launchers.managed)
@@ -86,6 +87,8 @@ type fakeHub struct {
 	agents       int
 	offline      map[string]bool
 	failStart    error
+	refuseUltra  error                     // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
+	startFailed  string                    // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any          // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error                     // worktree.create's answer when set
 	slowStart    bool                      // session.start blocks until the call's context ends, then answers with its error (a node that builds the session before answering late)
@@ -303,6 +306,17 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		name, _ := a["name"].(string)
 		return json.Marshal(map[string]any{"agent": launcherAgent(name)})
 	case DeviceLaunchersList:
+		if f.launcherGate != nil {
+			gate := f.launcherGate
+			f.mu.Unlock()
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				f.mu.Lock()
+				return nil, ctx.Err()
+			}
+			f.mu.Lock()
+		}
 		if f.slowLaunchers[p.Device] {
 			f.mu.Unlock()
 			<-ctx.Done()
@@ -403,6 +417,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, fmt.Errorf("%s: %w", p.Device, apierr.ErrOffline)
 		}
 		f.starts = append(f.starts, a)
+		if f.refuseUltra != nil && a["ultracode"] == true {
+			return nil, f.refuseUltra
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -414,7 +431,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.failStart
 		}
 		f.agents++
-		return json.Marshal(map[string]any{"session": proto.Session{SessionID: fmt.Sprintf("s%d", f.agents), Cwd: a["cwd"].(string), Agent: "claude"}})
+		return json.Marshal(map[string]any{"session": proto.Session{SessionID: fmt.Sprintf("s%d", f.agents), Cwd: a["cwd"].(string), Agent: "claude",
+			StartError: f.startFailed}})
 	case DeviceSessionSend:
 		if f.failSend != nil {
 			return nil, f.failSend
@@ -862,6 +880,9 @@ func newServiceOn(t *testing.T, f *fakeHub, st Store) *Service {
 func withSettings(t *testing.T, f *fakeHub, s *Service) *Service {
 	t.Helper()
 	f.fakeModel(t)
+	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
+	// which turns this off.
+	s.briefsOptional = true
 	if f.settings != nil {
 		setSettings(t, s, func(v *Settings) { *v = *f.settings })
 	}
