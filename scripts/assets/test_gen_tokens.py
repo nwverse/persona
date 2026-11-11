@@ -393,6 +393,43 @@ class RepositoryTests(unittest.TestCase):
         self.assertTrue(tokens)
         self.assertEqual({name: ios.get(name) for name in tokens}, tokens, "a size in spec/tokens differs from Theme.Size")
 
+    def test_ios_type_levels_match(self):
+        # Theme.Font on the iPhone (the #else branch): each name is a Dynamic Type style, maybe with a weight or monospaced,
+        # and Theme.Level gives its size and line height. sectionHeader is the caption level in semibold.
+        font = self.swift_enum("Font")
+        iphone = font[font.index("#else"):font.index("#endif")]
+        styles = dict(re.findall(r'static let (\w+) = SwiftUI\.Font\.(\w+(?:\.[\w(.)]*)?)$', iphone, re.M))
+        theme = (gen.ROOT / "apple/Shared/Design/Theme.swift").read_text()
+        level = theme[theme.index("    enum Level {"):theme.index("var extraLeading")]
+        sizes_block = level[level.index("#else"):level.index("#endif")]
+        heights_block = level[level.index("var lineHeight"):]
+
+        def cases(block):
+            out = {}
+            for names, value in re.findall(r'case ([.\w, ]+): ([0-9.]+)', block):
+                for name in re.findall(r'\.(\w+)', names):
+                    out[name] = float(value)
+            return out
+
+        sizes, heights = cases(sizes_block), cases(heights_block)
+        weights = {"bold()": 700, "weight(.semibold)": 600, "weight(.medium)": 500}
+        expected = {}
+        for name, expr in styles.items():
+            if name in ("scale",) or name.endswith(("Strong", "Heavy", "Medium")):
+                continue
+            style, _, rest = expr.partition(".")
+            weight = weights.get(rest, 600 if style == "headline" else 400)
+            lvl = "caption" if name == "sectionHeader" else name
+            expected[name] = {"size": sizes[lvl], "weight": weight, "lineHeight": heights[lvl], "iosTextStyle": style,
+                              "family": "monospace" if rest == "monospaced()" else "system"}
+        tokens = {}
+        for key, value in self.catalog.values.items():
+            if key.startswith("type."):
+                _, name, part = key.split(".")
+                tokens.setdefault(name, {})[part] = value["value"] if isinstance(value, dict) and "value" in value else value
+        self.assertEqual(len(expected), 9)
+        self.assertEqual(expected, tokens)
+
     def test_ios_motion_durations_match(self):
         motion = self.swift_enum("Motion")
         timed = re.findall(r'static let (\w+) = Animation\.\w+\(duration: ([0-9.]+)\)', motion)

@@ -100,8 +100,10 @@ import { VoiceBar } from "./voice/VoiceBar";
 import { useVoiceEntry, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
+import { FALLBACK_UNAVAILABLE } from "../../lib/model-fallback";
+import { ModelFallbackCard } from "./ModelFallbackCard";
 import { usageLimitLabel } from "../../lib/usage-limit";
-import { displayLines, getFeedState, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
+import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark } from "../../ui/AgentMark";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
@@ -707,6 +709,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     };
   }, [follow, scrollEl]);
 
+  const loadEarlierNearTop = () => {
+    const el = scroller.current;
+    if (!el || el.scrollTop >= 300 || !tr.hasMore || tr.loadingEarlier || first.current) return;
+    before.current = { h: el.scrollHeight, top: el.scrollTop };
+    void tr.loadEarlier().finally(() => {
+      // nothing came: forget the anchor
+      requestAnimationFrame(() => (before.current = null));
+    });
+  };
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
@@ -717,14 +729,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
-    if (el.scrollTop < 300 && tr.hasMore && !tr.loadingEarlier && !first.current) {
-      before.current = { h: el.scrollHeight, top: el.scrollTop };
-      void tr.loadEarlier().finally(() => {
-        // nothing came: forget the anchor
-        requestAnimationFrame(() => (before.current = null));
-      });
-    }
+    loadEarlierNearTop();
   };
+
+  // Reaching the top only loads older pages through a scroll event, and a view that cannot scroll (a page shorter than
+  // it: the main conversation's newest rounds are often two folded background rounds) or a page that landed without
+  // moving it sends none. Each change asks again, so older pages load until the top is out of reach.
+  useEffect(() => {
+    loadEarlierNearTop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tr.items, tr.hasMore, tr.loadingEarlier]);
 
   const toEnd = () => {
     const el = scroller.current;
@@ -1192,7 +1206,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
-  const canRetry = !readOnly && lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send");
+  // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model
+  const canRetry =
+    !readOnly && lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE;
   // Claude Code's "while you were away" recap, open in full while it is the newest thing and not closed: the chat's last
   // line, in the flow with the agent's words (#1360: above the composer it covered the end of the reply)
   const recapKey = `${mid}/${sid}`;
@@ -1367,7 +1383,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             <ChatContext.Provider value={ctx}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {assistant
-                ? displayLines(lines, feed).flatMap((d) => [
+                ? displayLines(lines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined).flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
                       <FeedLineView key={d.id} item={d.item} simplified />
@@ -1477,6 +1493,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           </>
         )}
         {(!assistant || voiceState === "live") && pendingCards}
+        {!assistant && !readOnly && session?.model_fallback && <ModelFallbackCard session={session} headless={false} />}
         {assistant && session && <CompactionStrip session={session} />}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && !refusedNoRow && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />

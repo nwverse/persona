@@ -154,7 +154,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			argv = append(withoutModelArgs(argv), "--model", execution.Model)
 		}
 		if execution.Effort != "" {
-			return nil, errors.New("新建 Codex 的思考强度由其启动器管理，请将此用途的思考强度恢复继承")
+			// The purpose's explicit effort takes precedence over launcher defaults.
+			argv = append(argv, "-c", "model_reasoning_effort="+execution.Effort)
 		}
 		return n.startCodex(ctx, launch, cwd, launcher, argv, prompt, ws, tabName, mode)
 	}
