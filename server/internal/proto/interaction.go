@@ -115,8 +115,13 @@ type Interaction struct {
 	// and Agents sessions' cards, whose agent keeps it itself) the apps keep their own rule.
 	AlwaysHonored *bool `json:"always_honored,omitempty"`
 	// ToolTitle is the tool's name for people in the user's language ("iPhone control" for iphone_do), set by the
-	// manager on its own tools' cards only; the apps name the tool with it, else with ToolName as before.
+	// manager on its own tools' cards and on a node's card for one of Persona's own MCP tools ("Report to supervisor ·
+	// Done", #4966); the apps name the tool with it, else with ToolName as before.
 	ToolTitle string `json:"tool_title,omitempty"`
+	// ToolNameTitle is the tool alone, without what this call does, where ToolTitle says that too ("Report to
+	// supervisor" for "Report to supervisor · Done"): what "Always allow" covers, so a line about every call of the
+	// tool names it this way. Set by the manager only beside such a ToolTitle; otherwise ToolTitle names the tool.
+	ToolNameTitle string `json:"tool_name_title,omitempty"`
 	// Delegating: the assistant is deciding whether it may answer this question for the user (agents.delegate,
 	// docs/assistant/assistant.md "Assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
 	// given there wins.

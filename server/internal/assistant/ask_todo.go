@@ -398,7 +398,7 @@ func (s *Service) relayToAsker(ctx context.Context, a askTodo, from, text string
 	}
 	msg := relayMsg{From: a.TodoID, FromTitle: from, Tool: askAnswerTool, Text: text, At: time.Now().UTC()}
 	c, ok := s.session(ctx, machine, to)
-	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(to) > 0 {
+	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
 		if s.queueRelay(to, msg) == 0 {
 			return errors.New("the relay queue can't be read")
 		}
