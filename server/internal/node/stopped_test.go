@@ -48,12 +48,12 @@ func TestRetiredAgentRowUsesSessionHost(t *testing.T) {
 				cwd := mkdir(t, filepath.Join(home, "proj"))
 				writeTranscript(t, home, cwd, sidA, time.Now().Add(-time.Hour),
 					`{"type":"user","cwd":"`+cwd+`","message":{"role":"user","content":"hi"},"uuid":"u1"}`,
-					`{"type":"assistant","message":{"role":"assistant","content":"`+strings.Repeat("done ", 600)+`"},"uuid":"a1","parentUuid":"u1"}`)
+					`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"`+strings.Repeat("done ", 600)+`"}]},"uuid":"a1","parentUuid":"u1"}`)
 				n.agents[sidA] = host.Agent{Agent: "claude", PaneID: "w1:p1", TabID: "w1:t1", WorkspaceID: "w1", AgentStatus: proto.StatusDone}
 				if remembered == "state" {
 					n.state.put(sidA, sessionState{Pane: "w1:p1", Launcher: "cc", Cwd: cwd})
 				} else {
-					n.lastPanes[sidA] = "w1:p1"
+					n.lastPanes = map[string]string{sidA: "w1:p1"}
 				}
 				quitsOn(f, "w1:p1", sidA, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidA))
 				res, err := request(t, n, "session.retire", map[string]any{"session_id": sidA})
@@ -81,7 +81,7 @@ func TestStoppedRuntimeRowIsUnchanged(t *testing.T) {
 				cwd := mkdir(t, filepath.Join(home, "proj"))
 				writeTranscript(t, home, cwd, sidA, time.Now().Add(-time.Hour),
 					`{"type":"user","cwd":"`+cwd+`","message":{"role":"user","content":"hi"},"uuid":"u1"}`,
-					`{"type":"assistant","message":{"role":"assistant","content":"`+strings.Repeat("done ", 600)+`"},"uuid":"a1","parentUuid":"u1"}`)
+					`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"`+strings.Repeat("done ", 600)+`"}]},"uuid":"a1","parentUuid":"u1"}`)
 				// A runtime takeover can leave the old terminal in the node's state.
 				n.state.put(sidA, sessionState{Pane: "w1:p1", Launcher: "cc", Cwd: cwd})
 				n.runtimes = newRuntimeRegistry()
