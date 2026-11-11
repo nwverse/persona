@@ -136,7 +136,8 @@ func (s *Service) builtinClaude(ctx context.Context, zshrc []zshrcLaunchers) (La
 	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == "claude" }) {
 		return LauncherView{}, false
 	}
-	v := LauncherView{Name: "claude", Source: "builtin", Versions: map[string]string{}}
+	// hidden like an rc-file launcher (#4384): out of the pickers, shown under Hidden to restore
+	v := LauncherView{Name: "claude", Source: "builtin", Versions: map[string]string{}, Hidden: slices.Contains(s.hiddenLaunchers(ctx), "claude")}
 	for _, m := range zshrc {
 		listed := slices.ContainsFunc(m.Launchers, func(l proto.Launcher) bool { return l.Name == "claude" })
 		if m.ClaudeVersion == "" && !listed {
@@ -198,32 +199,71 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 	return out, nil
 }
 
-// assistantLaunchers are the machine's launchers backed by a provider the main conversation supports.
-func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]ConfiguredLauncher, error) {
-	ctx = withSettingsMemo(ctx)
+// pickerLaunchers is what machine can start, as New Agent's picker lists it: machineLaunchers with hub.json's
+// launchers for it applied (sessionLaunchers).
+func (s *Service) pickerLaunchers(ctx context.Context, machine string) ([]ConfiguredLauncher, error) {
 	ls, err := s.machineLaunchers(ctx, machine)
 	if err != nil {
 		return nil, err
 	}
+	discovered := make([]ConfiguredLauncher, 0, len(ls))
+	for _, l := range ls {
+		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+	}
+	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]), nil
+}
+
+// assistantLaunchers are the machine's launchers backed by a provider the main conversation supports.
+func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]ConfiguredLauncher, error) {
+	picker, err := s.pickerLaunchers(ctx, machine)
+	if err != nil {
+		return nil, err
+	}
+	return s.assistantLaunchersOf(ctx, machine, picker)
+}
+
+// assistantProviders are the launcher names whose current, merged configuration supports the main conversation on
+// machine. picker is the node's current list; managed and direct Messages providers are added from their stored records.
+func (s *Service) assistantProviders(ctx context.Context, machine string, picker []ConfiguredLauncher) (map[string]bool, error) {
 	p, err := s.modelPurposeDef(ctx, "assistant")
 	if err != nil {
 		return nil, err
 	}
 	p.MachineID = machine
 	stored := s.storedLaunchers(ctx)
-	allowed := map[string]bool{}
-	for _, v := range s.modelProviders(ctx) {
-		if name, ok := strings.CutPrefix(v.ID, "launcher."); ok && !v.Hidden && s.modelProviderCompatible(p, v, stored) {
-			allowed[name] = true
+	current := slices.Clone(picker)
+	for _, managed := range stored {
+		if !slices.ContainsFunc(current, func(l ConfiguredLauncher) bool { return l.Name == managed.Name }) {
+			current = append(current, ConfiguredLauncher{Launcher: proto.Launcher{
+				Name: managed.Name, BaseURL: managed.BaseURL, Model: managed.Model, Source: "persona", Agent: managed.Agent,
+			}})
 		}
 	}
-	discovered := make([]ConfiguredLauncher, 0, len(ls))
-	for _, l := range ls {
-		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+	current = sessionLaunchers(current, s.hello(ctx).Models.Launchers[machine])
+	hidden := s.hiddenLaunchers(ctx)
+	allowed := map[string]bool{}
+	for _, l := range current {
+		if l.Name == "" || slices.Contains(hidden, l.Name) && compat.Source(l.Source) != "persona" {
+			continue
+		}
+		if s.modelLauncherCompatible(p, l, stored) {
+			allowed[l.Name] = true
+		}
 	}
+	return allowed, nil
+}
+
+// assistantLaunchersOf is assistantLaunchers from the machine's picker list (pickerLaunchers).
+func (s *Service) assistantLaunchersOf(ctx context.Context, machine string, picker []ConfiguredLauncher) ([]ConfiguredLauncher, error) {
+	ctx = withSettingsMemo(ctx)
+	allowed, err := s.assistantProviders(ctx, machine, picker)
+	if err != nil {
+		return nil, err
+	}
+	stored := s.storedLaunchers(ctx)
 	out := []ConfiguredLauncher{}
 	seen := map[string]bool{}
-	for _, l := range sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]) {
+	for _, l := range picker {
 		if allowed[l.Name] {
 			out = append(out, l)
 			seen[l.Name] = true
@@ -236,16 +276,6 @@ func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]Con
 		}
 	}
 	return out, nil
-}
-
-// launcherAvailable: whether the machine can still run this launcher name (plain claude always; a deleted managed
-// launcher or a renamed ~/.zshrc one does not; one hub.json names for it does). A failed list counts as available.
-func (s *Service) launcherAvailable(ctx context.Context, machine, name string) bool {
-	if s.launcherEverywhere(ctx, name) {
-		return true
-	}
-	list, known := s.launchersHere(ctx, machine) // launcher_fit.go
-	return !known || slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
 }
 
 // launcherHasModel: whether the launcher offers model (its id or what an alias resolves to), from its list as it was

@@ -20,12 +20,19 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/terncli"
 )
 
 // Orca as the machine's engine (hostorca.go, engine.go), driven through the node's requests against a fake Orca
 // runtime socket (orcarttest) and a fake process table. No test here talks to a real Orca.
 
 func TestMain(m *testing.M) {
+	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
+		if err := Launch(context.Background(), os.Args[2], os.Args[3:], ""); err != nil {
+			panic(err)
+		}
+		os.Exit(0)
+	}
 	if mode := os.Getenv("NODE_TEST_PLUGIN"); mode != "" { // the test binary as a plugin's program (plugins_test.go)
 		runTestPlugin(mode)
 	}
@@ -52,6 +59,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
 	botmuxBin = func() string { return "" }
+	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).
+	ternClient = func() *terncli.Client { return &terncli.Client{Bin: func() string { return "" }} }
 	// Nor the user's gh outside the test's PATH (ghpath.go).
 	ghFallbackDirs = func() []string { return nil }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
@@ -121,6 +130,7 @@ func orcaNode(t *testing.T) (*Node, *fakeHerdr, *orcarttest.Fake, *fakeProcs, st
 	h.scan = procs.scan
 	n.hosts = host.NewRegistry(h)
 	n.eng.name = proto.EngineOrca
+	t.Cleanup(n.starts.close) // before the fake Orca runtime closes
 	return n, f, o, procs, home
 }
 

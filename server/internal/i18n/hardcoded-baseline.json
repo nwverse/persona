@@ -1,7 +1,8 @@
 {
   "internal/ai/ai.go": 2,
   "internal/ai/limit.go": 5,
-  "internal/assistant/acceptance.go": 2,
+  "internal/assistant/acceptance.go": 1,
+  "internal/assistant/acceptance_reply.go": 1,
   "internal/assistant/agents_start.go": 1,
   "internal/assistant/agents_triage.go": 1,
   "internal/assistant/agents_work.go": 10,
@@ -117,7 +118,6 @@
   "internal/extmgr/mail_connector.go": 4,
   "internal/extmgr/self_settings.go": 4,
   "internal/extmgr/voice_extension.go": 4,
-  "internal/extmgr/wechat.go": 1,
   "internal/feishubot/answer.go": 26,
   "internal/feishubot/events.go": 17,
   "internal/feishubot/personacard.go": 7,
@@ -133,9 +133,9 @@
   "internal/hub/proxy_protocol.go": 1,
   "internal/hub/rewind.go": 1,
   "internal/hub/self_settings.go": 1,
+  "internal/mail/account.go": 2,
   "internal/mail/auth.go": 9,
   "internal/mail/microsoft.go": 22,
-  "internal/mail/service.go": 2,
   "internal/quota/quota.go": 8,
   "internal/update/build.go": 6,
   "internal/update/image.go": 6,
@@ -147,6 +147,5 @@
   "internal/voice/session_upstream.go": 4,
   "internal/voice/target.go": 3,
   "internal/voice/tools.go": 5,
-  "internal/wechat/spec/spec.go": 2,
   "internal/workspaceboard/board.go": 4
 }

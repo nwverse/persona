@@ -23,8 +23,21 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		s.ackViewErrors(ctx, p)
 		return ContextResult{}
 	}
-	text := prompts.RenderAssistantContext(prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
-		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)})
+	c := prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
+		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)}
+	switch {
+	case c.Main:
+		cfg := s.settings(ctx)
+		names := s.leaderNames(ctx, cfg.Leaders)
+		for _, id := range cfg.Leaders {
+			if id != "" && id != cfg.Main {
+				c.Directions = append(c.Directions, prompts.ContextDirection{ID: id, Name: names[id]})
+			}
+		}
+	case c.Leader:
+		c.LeaderName = s.leaderNames(ctx, []string{p.SessionID})[p.SessionID]
+	}
+	text := prompts.RenderAssistantContext(c)
 	errs, receipts := s.viewErrors(ctx, p)
 	return ContextResult{Text: text, ViewErrors: errs, Receipts: receipts}
 }
@@ -95,8 +108,6 @@ const (
 // plan cards waiting for "Start" and the failed scheduled runs (no tool lists them), the calendar and the chats that
 // @ the user.
 var snapshotOmits = []func(*prompts.SnapshotOmit){
-	func(o *prompts.SnapshotOmit) { o.Muted = true },
-	func(o *prompts.SnapshotOmit) { o.Done = true },
 	func(o *prompts.SnapshotOmit) { o.Waiting = true },
 	func(o *prompts.SnapshotOmit) { o.Routines = true },
 	func(o *prompts.SnapshotOmit) { o.Followups = true },
@@ -147,17 +158,14 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	defer cancel()
 	loc := s.location(ctx)
 	now := time.Now().In(loc)
-	devices, phone := s.devicesAndPhone(ctx)
-	snap := prompts.Snapshot{Now: now, Zone: loc.String(), PhoneOnline: phone}
+	devices, phone, apps := s.devicesAndPhone(ctx)
+	snap := prompts.Snapshot{Now: now, Zone: loc.String(), PhoneOnline: phone, Apps: snapshotApps(apps)}
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
+	wg.Add(1)
+	go func() { // one ask for both sections: each connector builds its chats and meetings in one answer
 		defer wg.Done()
-		snap.Chats = s.snapshotChats(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		snap.Calendar = s.snapshotCalendar(ctx, now)
+		live := s.connectorSnapshots(ctx)
+		snap.Chats, snap.Calendar = snapshotChats(live), snapshotCalendar(live, now)
 	}()
 	for _, m := range devices {
 		snap.Machines = append(snap.Machines, prompts.SnapshotMachine{Name: m.Name, ID: m.ID, Online: m.Online})
@@ -202,12 +210,51 @@ func (s *Service) ProfileChanged(context.Context) {
 	s.prefs.mu.Unlock()
 }
 
+type snapshotAgentGroupKind string
+
+const (
+	snapshotAgentOutside  snapshotAgentGroupKind = ""
+	snapshotAgentNeedsYou snapshotAgentGroupKind = "needs_you"
+	snapshotAgentWorking  snapshotAgentGroupKind = "working"
+	snapshotAgentAwaiting snapshotAgentGroupKind = "awaiting"
+	snapshotAgentWaiting  snapshotAgentGroupKind = "waiting"
+	snapshotAgentDone     snapshotAgentGroupKind = "done"
+	snapshotAgentUnread   snapshotAgentGroupKind = "unread"
+)
+
+// snapshotAgentGroup is the live snapshot category a session belongs in before muted sessions are separated. The
+// empty value means it is not in the snapshot; done and the time-limited categories use UpdatedAt, as the snapshot
+// always has (not Work.TurnAt).
+func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
+	recent := now.Sub(c.UpdatedAt) < 24*time.Hour
+	w := c.Work
+	switch {
+	case c.State == proto.StateNeedsYou:
+		return snapshotAgentNeedsYou
+	case c.State == proto.StateWorking:
+		return snapshotAgentWorking
+	case c.AwaitsReply && c.State == proto.StateIdle && recent:
+		return snapshotAgentAwaiting // seen, its question unanswered (#5096)
+	// A decision with no card up (cards off, muted, "Not now") is not "Needs you": the lists, the badges and the Live
+	// Activity go by the state (docs/protocol/agent-states.md), so it stays "Unread" with what it waits for, or is seen.
+	case w != nil && w.Phase == proto.WorkBlocked && w.On != proto.WaitUser && c.State != proto.StateUnread && recent:
+		return snapshotAgentWaiting // the hub waits it out (an unread one is left for the user)
+	case w != nil && w.Phase == proto.WorkDone && recent:
+		return snapshotAgentDone
+	case c.State == proto.StateUnread && recent:
+		return snapshotAgentUnread
+	default:
+		return snapshotAgentOutside
+	}
+}
+
 // snapshotAgents sorts the agents by what they need: the work state (agents_work.go, docs/assistant/agent-work.md) says what a stopped one
 // waits for or concluded. Each has its page in the web app at web ("" for none). The muted ones (the agent or its
 // space) are in none of the others: the Live Activity, the Agents badge and the inbox leave them out
 // (docs/apple/live-activity.md), so "Needs you" here does too; they are told apart, for when the user asks about them (#4562).
 func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web string) (needs, unread, awaiting, waiting, done, muted []prompts.SnapshotAgent,
 	working []prompts.SnapshotAgent, workflows []prompts.SnapshotWorkflow) {
+	now := time.Now()
 	for _, m := range devices {
 		list, off, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
@@ -216,46 +263,40 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			a := prompts.SnapshotAgent{Label: agentLabel(c), Machine: m.ID, Session: short(c.SessionID),
 				Link: sessionLink(web, m.ID, c.SessionID, false), Ultracode: ultracodeState(c.Ultracode), Plan: snapshotPlan(c)}
-			for _, w := range runningWorkflows(c, time.Now()) {
+			for _, w := range runningWorkflows(c, now) {
 				w.Agent, w.Machine, w.Session = a.Label, a.Machine, a.Session
 				workflows = append(workflows, w)
 			}
 			w := c.Work
 			if w != nil && w.Phase != proto.WorkWorking {
-				a.Line = w.Line
+				a.Line, a.Closeout = w.Line, snapshotCloseout(w)
 			}
 			if a.Line == "" && c.AwaitsReply {
 				a.Line = c.Asks // what it asks (#5096)
 			}
 			a.Line = clip(oneLine(a.Line), 160)
-			recent := time.Since(c.UpdatedAt) < 24*time.Hour
-			var into *[]prompts.SnapshotAgent
-			switch {
-			case c.State == proto.StateNeedsYou:
-				into = &needs
-			case c.State == proto.StateWorking:
-				if !off[c.SessionID] {
-					working = append(working, a)
-					continue
-				}
-				into = &muted
-			case c.AwaitsReply && c.State == proto.StateIdle && recent:
-				into = &awaiting // seen, its question unanswered (#5096)
-			// A decision with no card up (cards off, muted, "Not now") is not "Needs you": the lists, the badges and the Live
-			// Activity go by the state (docs/protocol/agent-states.md), so it stays "Unread" with what it waits for, or is seen.
-			case w != nil && w.Phase == proto.WorkBlocked && w.On != proto.WaitUser && c.State != proto.StateUnread && recent:
-				into = &waiting // the hub waits it out (an unread one is left for the user)
-			case w != nil && w.Phase == proto.WorkDone && recent:
-				into = &done
-			case c.State == proto.StateUnread && recent:
-				into = &unread
-			default:
+			group := snapshotAgentGroup(c, now)
+			if group == snapshotAgentOutside {
 				continue
 			}
 			if off[c.SessionID] {
-				into = &muted
+				muted = append(muted, a)
+				continue
 			}
-			*into = append(*into, a)
+			switch group {
+			case snapshotAgentNeedsYou:
+				needs = append(needs, a)
+			case snapshotAgentWorking:
+				working = append(working, a)
+			case snapshotAgentAwaiting:
+				awaiting = append(awaiting, a)
+			case snapshotAgentWaiting:
+				waiting = append(waiting, a)
+			case snapshotAgentDone:
+				done = append(done, a)
+			case snapshotAgentUnread:
+				unread = append(unread, a)
+			}
 		}
 	}
 	return needs, unread, awaiting, waiting, done, muted, working, workflows
@@ -293,10 +334,10 @@ func (s *Service) connectorSnapshots(ctx context.Context) []connector.SnapshotDa
 	return res.Snapshots
 }
 
-// snapshotChats is the unread chats the connectors know of, nil when none answers.
-func (s *Service) snapshotChats(ctx context.Context) *prompts.SnapshotChats {
+// snapshotChats is the unread chats in the connectors' live states, nil when none answered.
+func snapshotChats(live []connector.SnapshotData) *prompts.SnapshotChats {
 	var out *prompts.SnapshotChats
-	for _, d := range s.connectorSnapshots(ctx) {
+	for _, d := range live {
 		if d.Chats == nil {
 			continue
 		}
@@ -313,10 +354,10 @@ func (s *Service) snapshotChats(ctx context.Context) *prompts.SnapshotChats {
 	return out
 }
 
-// snapshotCalendar is the rest of today's meetings the connectors know of, nil when none answers.
-func (s *Service) snapshotCalendar(ctx context.Context, now time.Time) *prompts.SnapshotCalendar {
+// snapshotCalendar is the rest of today's meetings in the connectors' live states, nil when none answered.
+func snapshotCalendar(live []connector.SnapshotData, now time.Time) *prompts.SnapshotCalendar {
 	var out *prompts.SnapshotCalendar
-	for _, d := range s.connectorSnapshots(ctx) {
+	for _, d := range live {
 		if d.Meetings == nil {
 			continue
 		}
@@ -351,7 +392,7 @@ func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now 
 		if !t.Enabled {
 			continue
 		}
-		if t.Repeat == repeatDaily {
+		if t.calendar() {
 			routinesTotal++
 			if len(routines) < 8 {
 				r := prompts.SnapshotRoutine{Label: clip(t.label(), 30), Rule: ruleText(t, loc)}

@@ -9,8 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// listKeyFmt is listKey as it was written with fmt.Fprintf (before #3207), kept to check that the faster one
-// changes exactly when it did.
+// listKeyFmt is the formatting reference for the fields tracked by listKey.
 func listKeyFmt(list []proto.Session) string {
 	var b strings.Builder
 	for _, s := range list {
@@ -18,6 +17,9 @@ func listKeyFmt(list []proto.Session) string {
 		fmt.Fprintf(&b, "hierarchy:%q/%q/%q/%v/%q/%q/%q/%q/%q\n", s.ParentThreadID, s.ParentSessionID, s.RootSessionID, s.IsSubagent, s.RepoRoot, s.Worktree, s.Branch, s.SpaceID, s.SpaceKind)
 		if s.Activity != "" {
 			fmt.Fprintf(&b, "activity:%s/%d\n", s.Activity, unixOf(s.ActivityAt))
+		}
+		if s.SourceKind == "runtime" {
+			fmt.Fprintf(&b, "runtime-state:%q/%q/%v\n", s.Cwd, s.Launcher, s.StartedByPersona)
 		}
 		fmt.Fprintf(&b, "attention:%q/%q/%s\n", s.AttentionReason, s.FailureReason, s.ExternalURL)
 		if s.Chat != "" || len(s.Dispatched) > 0 {
@@ -343,5 +345,17 @@ func BenchmarkListKey(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		_ = listKeySized(list, size)
+	}
+}
+
+func TestListKeyModelCapability(t *testing.T) {
+	key := func(value *bool) string {
+		return listKey([]proto.Session{{SessionID: "s1", Capabilities: &proto.SessionCapabilities{Model: value}}})
+	}
+	if key(proto.CanModes(true)) != key(proto.CanModes(true)) {
+		t.Fatal("equal model capabilities differ")
+	}
+	if key(nil) == key(proto.CanModes(false)) || key(proto.CanModes(false)) == key(proto.CanModes(true)) {
+		t.Fatal("model capability change was lost")
 	}
 }

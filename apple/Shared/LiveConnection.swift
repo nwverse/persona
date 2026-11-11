@@ -74,6 +74,9 @@ nonisolated enum ServerEvent: Sendable {
     /// The hub's roster of managers changed (docs/assistant/managers.md): Settings › Managers reads it again. Sent only to a
     /// socket that asked for feature `managers` (`queryItems`).
     case managers
+    /// The direction tree changed on the hub (#4352): a to-do, an Agent's session, a direction or its name. No payload:
+    /// the clients read `GET /api/v1/assistant/directions/tree` again, and on every (re)connect.
+    case directions
     case assistantFeed(FeedItem)
     case assistantView(ExtensionAssistantView)
     case assistantViewAction(conversation: String, action: ExtensionViewAction)
@@ -269,6 +272,7 @@ nonisolated enum ServerEvent: Sendable {
             guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
             return .look(id: e.id, effective: e.effective)
         case "managers": return .managers
+        case "directions": return .directions
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
             guard let view = e.view, !view.id.isEmpty, view.version > 0,
@@ -330,7 +334,7 @@ nonisolated extension ServerEvent {
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .look, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth: return self
         }
     }
@@ -842,11 +846,12 @@ final class LiveConnection {
     /// notices and errors on it, and the user's language for what it produces later, match the app. The naming
     /// contract and MCP forms and links are advertised here (`helloFeatures`), with the platform and version this app's
     /// requests carry (`X-Persona-Client`): the hub lists those cards in a REST answer only to a client whose hello
-    /// matches it. Older hubs ignore unknown fields and keep their existing defaults.
+    /// matches it. The version ("1.4.0+52": the app's version and build) and `os` are also what the hub keeps of this
+    /// device for the assistant (`AppVersion`). Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
         let client = RequestClientMetadata.current
         send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
-              "platform": client.platform, "version": client.version])
+              "platform": client.platform, "version": client.version, "os": AppVersion.helloOS])
     }
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS

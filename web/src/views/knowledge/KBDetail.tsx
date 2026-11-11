@@ -6,8 +6,11 @@ import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCrede
 import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
 import { RecordingMinutes } from "./RecordingMinutes";
+import { RecordingAsks } from "./RecordingAsks";
+import { MeetingPrivate, RecordingConversation, useRecordingMeeting } from "./RecordingConversation";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Relationships } from "./Relationships";
+import { TopicPoints } from "./TopicPoints";
 import { ago, sessionPreview, sessionTitle, shortPath, stateOf, tabLabel } from "../../lib/format";
 import {
   agentPreset,
@@ -37,7 +40,8 @@ import {
 } from "../../lib/kb";
 import { machineWithHub } from "../../lib/mesh";
 import { openPanel } from "../../lib/panel";
-import { href, onLinkClick } from "../../lib/router";
+import { href, onLinkClick, type Route } from "../../lib/router";
+import { conversationRoute } from "../../lib/inbox";
 import { getState, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { Button, Collapse, copyText, cx, IconButton, Loading, StatePill, toast } from "../../ui/atoms";
@@ -176,8 +180,11 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
 
   const facts = d ? factsOf(d.kind, d.meta) : null;
   const rec = d ? recordingView(d.kind, d.meta, d.segments) : null;
+  // The meeting conversation (#3862): its private mark, room and follow-up, on a hub that lists meeting_conversation.
+  const meeting = useRecordingMeeting(d, rec, auth, current, manager);
   const log = timeline(d?.log);
-  const prof = profile(d?.summary, e.one_line, e.name);
+  // A topic's summary is its points as Markdown (for search and Persona): the page shows the points themselves.
+  const prof = d?.kind === "topics" ? "" : profile(d?.summary, e.one_line, e.name);
   const dirs = dirsOf(d?.meta);
   const recent = d?.kind === "chats" ? parseRecent(d.recent) : [];
   const into = typeof d?.meta?.merged_into === "string" ? d.meta.merged_into : "";
@@ -266,7 +273,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 </section>
               )}
 
-              {rec && <RecordingFacts rec={rec} />}
+              {rec && <RecordingFacts rec={rec} roomMeeting={meeting.roomMeeting} />}
+              {rec && <MeetingPrivate meeting={meeting} />}
               {rec && <RecordingMinutes
                 detail={d}
                 rec={rec}
@@ -275,6 +283,14 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 refresh={load}
                 onSaved={onSaved}
                 onJump={jumpToTranscript}
+              />}
+              {rec && <RecordingConversation detail={d} rec={rec} meeting={meeting} auth={auth} current={current} manager={manager} />}
+              {/* A room meeting's questions are in its thread; a #2981 meeting's stay here. */}
+              {rec && !meeting.roomMeeting && <RecordingAsks
+                detail={d}
+                rec={rec}
+                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                current={current}
               />}
 
               {query && resp?.matches && (
@@ -332,6 +348,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 refresh={load}
                 onSaved={onSaved}
               />}
+
+              {d.kind === "topics" && <TopicPoints detail={d} onOpen={onOpen} />}
 
               {prof && (
                 <section>
@@ -549,13 +567,15 @@ function Agents({ agents }: { agents: Session[] }) {
   );
 }
 
-/** A recording's when, how long, where it was made; and whether its transcript is still coming. */
-function RecordingFacts({ rec }: { rec: RecordingView }) {
+/** A recording's when, how long, where it was made; and whether its transcript is still coming. A room meeting (#3862) is
+ *  attended by its own room, which its Conversation section shows, not by a session named here. */
+function RecordingFacts({ rec, roomMeeting }: { rec: RecordingView; roomMeeting: boolean }) {
   const rows: [string, string][] = [];
   if (rec.startedAt) rows.push([t("knowledge-kbdetail.recording_started"), formatAt(rec.startedAt)]);
   if (rec.duration) rows.push([t("knowledge-kbdetail.recording_duration"), rec.duration]);
   rows.push([t("knowledge-kbdetail.recording_device"), rec.device]);
   if (rec.language) rows.push([t("knowledge-kbdetail.recording_language"), rec.language]);
+  if (rec.attendance) rows.push([t("knowledge-kbdetail.recording_persona"), t(rec.attendance === "participant" ? "knowledge-kbdetail.recording_participant" : "knowledge-kbdetail.recording_listener")]);
   return (
     <section>
       <Card>
@@ -565,9 +585,41 @@ function RecordingFacts({ rec }: { rec: RecordingView }) {
             <span className="whitespace-nowrap text-ink tabular-nums">{v}</span>
           </div>
         ))}
+        {rec.attendance && !roomMeeting && (
+          <div className="flex items-center gap-3 px-4 py-2.5 text-[13px]">
+            <span className="flex-1 whitespace-nowrap text-ink-2">{t("knowledge-kbdetail.recording_attending")}</span>
+            <AttendingSession session={rec.attendingSession} />
+          </div>
+        )}
       </Card>
       {rec.partial && <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.recording_partial")}</p>}
     </section>
+  );
+}
+
+/** The session attending a meeting, opening its chat: a Persona conversation, an Agent, or the main chat when none was
+ *  named (docs/assistant/meeting-minutes.md "Attendance fields"). */
+function AttendingSession({ session }: { session?: RecordingView["attendingSession"] }) {
+  const sessions = useStore((s) => s.sessions);
+  const assistant = useStore((s) => s.assistant);
+  const machines = useStore((s) => s.machines);
+  let to: Route | null = null;
+  let label = t("knowledge-kbdetail.recording_main_chat");
+  if (session) {
+    const { machineId: mid, sessionId: sid } = session;
+    const row = (sessions[mid] ?? []).find((x) => x.session_id === sid)
+      ?? (assistant?.machine_id === mid ? assistant.conversations.find((c) => c.session_id === sid) : undefined);
+    to = conversationRoute(mid, sid, sessions, assistant);
+    label = row ? sessionTitle(row) : t("knowledge-kbdetail.recording_attending_on", { machine: machineWithHub(mid, machines) });
+  } else if (assistant?.main) {
+    to = { name: "persona", sid: assistant.main };
+  }
+  if (!to) return <span className="min-w-0 truncate text-ink">{label}</span>;
+  const route = to;
+  return (
+    <a href={href(route)} onClick={(ev) => onLinkClick(ev, route)} title={label} className="min-w-0 truncate font-medium text-accent-ink hover:underline">
+      {label}
+    </a>
   );
 }
 
@@ -577,7 +629,8 @@ function Transcript({ rec, query, highlighted }: { rec: RecordingView; query?: s
     <section>
       <SectionTitle title={t("knowledge-kbdetail.transcript")} count={rec.lines.filter((l) => !l.bookmark).length} />
       <Card>
-        {!rec.lines.length && <p className="px-4 py-2.5 text-[12.5px] text-ink-3">{t("knowledge-kbdetail.transcript_empty")}</p>}
+        {/* Trimmed: the bookmarks (in its metadata) are all that is left of it. */}
+        {(rec.trimmedAt || !rec.lines.length) && <p className="px-4 py-2.5 text-[12.5px] text-ink-3">{t(rec.trimmedAt ? "knowledge-kbdetail.transcript_expired" : "knowledge-kbdetail.transcript_empty")}</p>}
         <ol className="px-4 py-1.5">
           {rec.lines.map((l, i) => (
             <li key={i} id={transcriptLineId(l.seconds, l.bookmark)} tabIndex={-1} className={cx("flex gap-3 rounded-control py-1.5 text-[13px] leading-relaxed transition-colors", highlighted === transcriptLineId(l.seconds, l.bookmark) && "bg-accent-tint")}>

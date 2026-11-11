@@ -74,12 +74,30 @@ type SnapshotMachine struct {
 	Online   bool
 }
 
+// SnapshotApp is the Persona app on one kind of device as it last said its version (assistant/snapshot_app). No
+// time: the node sends only the snapshot's changed lines, and a reconnect must not make this one change.
+// Platform: ios | ipados | watchos | macos | visionos | android.
+type SnapshotApp struct {
+	Platform, Version, Build, OS string // Build, OS: "" when not said
+	Simulator                    bool
+}
+
 type SnapshotAgent struct {
 	Label, Machine, Session string             // Session: the short id
 	Line                    string             // what it waits for, or what it concluded ("" when not known)
 	Link                    string             // its page in the hub's web app ("" when the hub has no public_url)
 	Ultracode               string             // "on" / "off"; empty when the node does not know
 	Plan                    *SnapshotAgentPlan // its own task list (Session.Plan), nil when it keeps none
+	// Closeout: what its closeout says of merging and deploying, nil when it wrote none or says neither.
+	Closeout *SnapshotAgentCloseout
+}
+
+// SnapshotAgentCloseout is the tail of an agent's line (assistant/snapshot_closeout): Merged and Deployed as the
+// agent claimed them ("yes", "no", "" when unsaid), FoundMerged and FoundDeployed what the hub found where that
+// differs from the claim ("" where it agrees or could not tell).
+type SnapshotAgentCloseout struct {
+	Merged, Deployed           string
+	FoundMerged, FoundDeployed string
 }
 
 // SnapshotAgentPlan is an agent's own task list (TodoWrite / TaskCreate, docs/integrations/agent-goal.md "Plan"): Done of Total
@@ -164,6 +182,10 @@ type SnapshotTask struct {
 	// accepted; #3124), "" for any other; DoneWhen how many criteria it has.
 	Health   string
 	DoneWhen int
+	// Orphan: why nobody works on an open task any more (error: its agent ended on a model error and is closed;
+	// closed: its agent's tab was closed; offline: its computer is away), "" while an agent is at it or will be woken
+	// (docs/assistant/todos.md "Nobody is working on this").
+	Orphan string
 	// Delivery: how far its finished work was delivered when that is short of live ("stopped at the PR, stuck on 'CI queued'"), ""
 	// otherwise (docs/assistant/todos.md "Delivery").
 	Delivery string
@@ -215,7 +237,7 @@ type Snapshot struct {
 	Machines      []SnapshotMachine
 	Needs, Unread []SnapshotAgent
 	// Waiting: stopped on something the hub waits out for them (a retry, a deploy, another agent); Done: finished
-	// within a day, with the conclusion (docs/assistant/agent-work.md "What Persona knows").
+	// within a day. Their details stay out of the snapshot; Done renders only a count and agents_list state=done.
 	Waiting, Done []SnapshotAgent
 	// Awaiting: stopped on a question to the user, who looked at it and has not answered (docs/protocol/agent-states.md
 	// "Awaiting your reply", #5096).
@@ -226,6 +248,7 @@ type Snapshot struct {
 	Working        []SnapshotAgent
 	Workflows      []SnapshotWorkflow // background workflow runs still running, newest first
 	PhoneOnline    bool
+	Apps           []SnapshotApp      // one per kind of device, the user's own before a simulator
 	KB             string             // RenderKBDigest, "" leaves it out
 	Chats          *SnapshotChats     // nil: Feishu did not answer in time
 	Calendar       *SnapshotCalendar  // nil: the calendar did not answer in time
@@ -256,7 +279,7 @@ type Snapshot struct {
 // and its count, with the tool that lists it, never as empty: the node sends only the sections that changed, so a
 // section that went missing would read as unchanged, and one rendered without its items as "none".
 type SnapshotOmit struct {
-	Muted, Done, Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+	Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
 }
 
 // SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).
@@ -316,7 +339,14 @@ type AssistantContext struct {
 	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
 	Owner    string
 	Snapshot string
+	// Directions: for the main conversation, the current leaders it hands work to (task_plan supervisor, #3609);
+	// LeaderName: for a leader, its direction's name.
+	Directions []ContextDirection
+	LeaderName string
 }
+
+// ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
+type ContextDirection struct{ ID, Name string }
 
 func RenderAssistantContext(c AssistantContext) string { return render("assistant/context", c) }
 
@@ -325,10 +355,12 @@ type TaskRun struct {
 	Label          string
 	Once, Interval bool   // neither: daily
 	Every          string // interval: "30 minutes"
-	Late           string // "" when on time; else how late ("25 minutes")
-	Due            time.Time
-	Prompt         string
-	KBHint         bool // daily runs with the knowledge base on
+	// Accelerated: a leader's open supervised todos shortened this run's interval.
+	Accelerated bool
+	Late        string // "" when on time; else how late ("25 minutes")
+	Due         time.Time
+	Prompt      string
+	KBHint      bool // daily runs with the knowledge base on
 	// KnowledgeDir: the knowledge base directory the hint names; "" is the default ~/.persona/data.
 	KnowledgeDir string
 	// Continued: it goes into the task's own conversation, which got the background on the first run.
@@ -344,6 +376,8 @@ func RenderTaskRun(t TaskRun) string { return render("assistant/task_run", t) }
 // BriefFacts are the facts of a morning or evening routine's run, as the model is given them (assistant/routine_facts):
 // the lines are ready to read; the totals count more than the lines when the lists were cut.
 type BriefFacts struct {
+	ConfirmationSummary                                              string
+	Confirmations                                                    []string
 	Hours                                                            int // how far back "done" and "not through" look
 	WaitingTotal, DoneTotal, FailedTotal, AcceptTotal, ProgressTotal int
 	WaitingUnknown                                                   bool // the cards waiting were not read yet: say nothing of whether any waits
@@ -354,6 +388,39 @@ type BriefFacts struct {
 	Failed                                                           []BriefFailed
 	Accept                                                           []BriefAccept
 	Progress                                                         []BriefProgress
+	Leaders                                                          []BriefLeader // one per direction (#3609)
+	// Briefs: the open pieces of work that need the owner or changed since the last briefing, in their own words;
+	// BriefsDone: those that ended since, once, with each criterion's result (#3822).
+	Briefs, BriefsDone []BriefTask
+}
+
+// BriefTask is one piece of work in the briefing, told from its brief: Date and Words are when the owner asked and
+// what they wrote (Words "" when they did not ask: then By says who started it, and Goal what for); Now is where it
+// stands in a line, Need what is wanted from the owner, Scope the scope changes since the last briefing, Result each
+// criterion's outcome for one that ended.
+type BriefTask struct {
+	Date, Words, By, Goal string
+	Now, Need             string
+	// Status: the closeout's status when Now is the agent's own account (done, not_done, blocked). Decide: it waits
+	// for the owner's decision and no ask words it. Cancelled: one that ended by being cancelled.
+	Status          string
+	Decide, Overdue bool
+	Cancelled       bool
+	// Parked: it is parked waiting for the owner's priority call, and this is the reason in one sentence ("" otherwise).
+	Parked          string
+	Scope, AlsoDone []string
+	Result          []BriefCriterion
+}
+
+// BriefCriterion is one criterion's result in the briefing: met, not_met, unchecked, or dropped by scope change Change.
+type BriefCriterion struct{ Criterion, State, Change string }
+
+// BriefLeader is one direction in the briefing's facts: its name, its open tasks, those waiting for the owner, those
+// stuck over a day, and its leader's latest summary of the day (empty parts: none).
+type BriefLeader struct {
+	Name                     string
+	Open, Waiting, Stuck     int
+	Reached, Doing, NeedsYou string
 }
 
 // BriefFailed is one thing that did not go through: a task whose agent did not start, a scheduled run that failed
@@ -452,20 +519,32 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
+	LeaderStuck bool
+	// Overdue: an entry is a task past its brief's clock (#3822).
+	Overdue bool
+	// ParkedDue: an entry is a parked task whose time came (#3804).
+	ParkedDue bool
 	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
+	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
+	// owner_cannot_answer; #3804).
+	Decisions bool
+	// Inbox: an entry is new Inbox messages from other people about the task (#4293).
+	Inbox bool
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
-// started, escalated, ask).
+// started, escalated, ask, inbox…).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
 	Minutes         int                // how long it has waited (needs_you) or not moved (stalled)
 	Ask             string             // needs_you: what it asks
 	Recommend       string             // escalated: the option the leader recommends
+	LeaderGone      bool               // decide: its task leader agent cannot be reached, so the supervisor takes the task over
 	DoneWhen        []string           // what done means
 	Round           int                // reworks so far
 	Machine         string             // where its agent runs (a name)
@@ -475,6 +554,7 @@ type SuperviseEntry struct {
 	Closeout        *SuperviseCloseout // the closeout its agent ended the turn with (#3612), nil when it wrote none
 	Link            string             // the task's page ("" when the hub has no public_url)
 	Quiet           bool               // the user was not pushed about it
+	Orphan          string             // orphaned: why nobody works on it (error, closed, offline)
 	Review          *SuperviseReviewed // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
 	Report      string
@@ -489,7 +569,50 @@ type SuperviseEntry struct {
 	// cards a leader gave the user.
 	Asks      []SuperviseAsk
 	Decisions string
+	// recheck and owner_cannot_answer: the decision as it was asked; owner_cannot_answer: the owner's answer
+	// (decide_yourself, not_what_i_asked, explain_first).
+	Decision *SuperviseDecision
+	Response string
+	// parked_due: what the task was parked for.
+	Parked *SuperviseParked
+	// From the task's brief (#3822): Asked is the owner's message that led to the work (clipped) and AskedAt its day;
+	// Started says who started it when it was not the owner; Dropped are the criteria scope changes took out.
+	// (assistant, leader, routine, hub) and StartedWhy the reason given.
+	Asked, AskedAt, Started, StartedWhy string
+	Dropped                             []string
+	// inbox: the Inbox item the new messages came in, the newest when several did.
+	Inbox *SuperviseInbox
 }
+
+// SuperviseInbox is the Inbox item an inbox entry names (#4293): its id, title (the chat's name or the mail's subject),
+// who wrote the newest message, a one-line preview, and how many messages from other people came in about the task
+// since its supervisor last heard (the newest item's, and any other item's linked to the same task meanwhile).
+type SuperviseInbox struct {
+	Item, Title, Sender, Preview string
+	Count                        int
+}
+
+// SuperviseParked is what a task was parked for (task_review parked), as its parked_due entry repeats it: the reason,
+// what kind of thing it waits on, until when (local), how many times in a row it was parked with no agent turn in
+// between, and how many more times it can be.
+type SuperviseParked struct {
+	Reason, WaitingOn, Until string
+	Count, Left              int
+}
+
+// SuperviseDecision is a decision a task's supervisor put to the owner (task_review needs_user), as a supervision
+// entry repeats it: why only the owner can decide, the question, the options with what each leads to, the one
+// recommended, what waiting costs, and whether it is never taken by default.
+type SuperviseDecision struct {
+	WhyOwner, Question, Recommend, Cost string
+	Options                             []SuperviseOption
+	NeverDefault                        bool
+	// Background: where the task came from and where it stood, as the hub told the owner.
+	Background string
+}
+
+// SuperviseOption is one option of a SuperviseDecision.
+type SuperviseOption struct{ Label, LeadsTo string }
 
 // SuperviseAsk is one card of a task's agent on its way to the user: its interaction id, kind (question, permission,
 // plan), the agent's machine (a name) and short session id, what it asks, and whether the rung below did not handle it in time.
@@ -615,8 +738,11 @@ type TaskDone struct {
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
 
 // RenderTaskDelivery is the delivery standard a task's agent is handed after its prompt (assistant/task_delivery,
-// docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got.
-func RenderTaskDelivery() string { return render("assistant/task_delivery", nil) }
+// docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got. closeout: the
+// closeout's form follows in the same prompt (agents/closeout_brief), so the line goes before that block, not last.
+func RenderTaskDelivery(closeout bool) string {
+	return render("assistant/task_delivery", struct{ Closeout bool }{closeout})
+}
 
 // TaskAttachments ends a message to an agent with the files and pictures the user gave the assistant for it (#2437):
 // where they are on the agent's computer (Copied: copied there from the assistant's), and those that could not come.
@@ -643,8 +769,12 @@ func RenderSideConversation(in SideConversation) string {
 // TaskDoneInput is the task as it was handed out and what its agents said when they stopped (assistant/task_done_input).
 type TaskDoneInput struct {
 	Title, Prompt string
-	Replies       []TaskDoneReply
-	Criteria      []string `json:"criteria,omitempty"`
+	// From the task's brief (#3822): Asked is the owner's message that led to the work, verbatim, and AskedAt its day;
+	// Dropped the criteria logged scope changes took out. Criteria are the brief's as those changes left them.
+	Asked, AskedAt string
+	Dropped        []string
+	Replies        []TaskDoneReply
+	Criteria       []string `json:"criteria,omitempty"`
 	// Hints the hub found in the replies: a merged pull request, a TestFlight build number.
 	MergedPR, Build bool
 }

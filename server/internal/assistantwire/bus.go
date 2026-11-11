@@ -1,5 +1,7 @@
 package assistantwire
 
+import "github.com/nwverse/persona/server/internal/devicewire"
+
 // ---- the bus ----
 
 // AssistantID is the bus identity the assistant connects as (a manager's token, hub/bustokens.go).
@@ -20,6 +22,15 @@ const (
 	// of it (devicewire MethodMachinesPut / Remove / Get) once the hub hands it MachinesOwn
 	// (docs/assistant/managers.md "Each manager's computers").
 	CapabilityMachinesOwn = "machines.own"
+	// CapabilityMeetingAttendance: the manager attends recorded meetings (the recordings' attendance fields, …/live,
+	// …/ask and meeting_attendance_default; docs/assistant/meeting-minutes.md "Attending a meeting"). The hub lists the
+	// meeting_attendance feature only while the default manager names it.
+	CapabilityMeetingAttendance = "meeting_attendance"
+	// CapabilityMeetingConversation: the manager takes the meeting conversation's phase 1 (the upload's room and
+	// private, the room conversation, …/ask answered by it, …/just-me, …/private, …/followup, the meeting_live event;
+	// docs/assistant/meeting-minutes.md "Meeting conversation (#3862)"). The hub lists meeting_conversation only while
+	// the default manager names it. A manager that names it names CapabilityMeetingAttendance too.
+	CapabilityMeetingConversation = "meeting_conversation"
 )
 
 // The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
@@ -68,23 +79,29 @@ const (
 	// CodeChatDenied: the hub refused to send into a chat or to reply to a message in one, because the bot may only use
 	// the owner's private chat and the group chats the owner opted in. Nothing was sent.
 	CodeChatDenied = "chat_denied"
+	// CodeMeetingEnded: a message into a meeting's room that ended (docs/assistant/meeting-minutes.md "Messages from
+	// elsewhere"): the hub answers 409 meeting_ended, and the apps write in the follow-up instead.
+	CodeMeetingEnded = "meeting_ended"
 )
 
 // HTTPRequest is http.request's params: an app's request on one of Routes, with an escaped URL path (header without
 // the hub's credentials and hop-by-hop headers, the asking device's role in RoleHeader; body as base64).
 type HTTPRequest struct {
-	Method string              `json:"method"`
-	Path   string              `json:"path"`
-	Query  string              `json:"query,omitempty"`
-	Header map[string][]string `json:"header,omitempty"`
-	Body   []byte              `json:"body,omitempty"`
+	Caller         *devicewire.Caller         `json:"caller,omitempty"`
+	ShareAuthority *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	Method         string                     `json:"method"`
+	Path           string                     `json:"path"`
+	Query          string                     `json:"query,omitempty"`
+	Header         map[string][]string        `json:"header,omitempty"`
+	Body           []byte                     `json:"body,omitempty"`
 }
 
 // HTTPResponse is http.request's answer, written back to the app unchanged.
 type HTTPResponse struct {
-	Status int                 `json:"status"`
-	Header map[string][]string `json:"header,omitempty"`
-	Body   []byte              `json:"body,omitempty"`
+	ShareAuthority *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	Status         int                        `json:"status"`
+	Header         map[string][]string        `json:"header,omitempty"`
+	Body           []byte                     `json:"body,omitempty"`
 }
 
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
@@ -96,11 +113,14 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/archive",
 	"GET /api/v1/assistant/conversations/{id}/always",
+	"GET /api/v1/assistant/standing-authorizations",
+	"DELETE /api/v1/assistant/standing-authorizations/{id}",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
 	"DELETE /api/v1/assistant/directions/offers/{id}",
 	"POST /api/v1/assistant/directions/{id}/start",
@@ -110,9 +130,12 @@ var Routes = []string{
 	"POST /api/v1/assistant/agents/{mid}/{sid}/supervisor",
 	"PUT /api/v1/assistant/directions/{id}/name",
 	"GET /api/v1/assistant/conversations/{id}/feed",
+	"POST /api/v1/assistant/feed/{id}/dismiss",
+	"POST /api/v1/assistant/feed/{id}/undo-dismiss",
 	"POST /api/v1/assistant/conversations/{id}/route",
 	"POST /api/v1/assistant/conversations/{id}/today",
 	"GET /api/v1/assistant/tasks",
+	"GET /api/v1/assistant/tasks/cron",
 	"POST /api/v1/assistant/tasks",
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
@@ -131,6 +154,7 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/followups/{id}",
 	"GET /api/v1/task-plans/{id}",
 	"POST /api/v1/task-plans/{id}/start",
+	"POST /api/v1/task-plans/{id}/workspace-preview",
 	"POST /api/v1/task-plans/{id}/dismiss",
 	"GET /api/v1/task-trust",
 	"DELETE /api/v1/task-trust",
@@ -185,6 +209,9 @@ var Routes = []string{
 	"GET /api/v1/kb/{kind}",
 	"GET /api/v1/kb/{kind}/{id}",
 	"PUT /api/v1/kb/{kind}/{id}",
+	"DELETE /api/v1/kb/projects/{id}",
+	"GET /api/v1/kb-trash",
+	"POST /api/v1/kb-trash/{id}/restore",
 	"GET /api/v1/kb/moments/{id}",
 	"GET /api/v1/kb/chats/{id}/context",
 	"GET /api/v1/kb/chats/{id}/days/{day}",
@@ -199,4 +226,12 @@ var Routes = []string{
 	"GET /api/v1/recordings",
 	"POST /api/v1/recordings/{id}/minutes",
 	"POST /api/v1/recordings/{id}/minutes/todos",
+	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").
+	"POST /api/v1/recordings/{id}/live",
+	"GET /api/v1/recordings/{id}/live",
+	"POST /api/v1/recordings/{id}/ask",
+	// The meeting conversation (meeting_room.go there, docs/assistant/meeting-minutes.md "Meeting conversation (#3862)").
+	"PUT /api/v1/recordings/{id}/private",
+	"POST /api/v1/recordings/{id}/just-me",
+	"POST /api/v1/recordings/{id}/followup",
 }

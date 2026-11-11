@@ -2,7 +2,18 @@
 import { t } from "../i18n";
 import type { Interaction } from "./types";
 
-export function alwaysScope(ix: Pick<Interaction, "agent" | "tool_name" | "always_label" | "always_keys">): string {
+type AlwaysCard = Pick<Interaction, "agent" | "tool_name" | "always_label" | "always_keys" | "always_honored">;
+
+/** Whether a permission card offers "Always allow": as the manager says when it does (always_honored, #3590: its own
+ *  cards keep nothing), else Claude's, and another agent's (Codex, an agent runtime) only when it says what always
+ *  allows. */
+export function offersAlways(ix: AlwaysCard): boolean {
+  if (ix.always_honored !== undefined) return ix.always_honored;
+  return !ix.agent || ix.agent === "claude" || !!ix.always_label;
+}
+
+export function alwaysScope(ix: AlwaysCard): string {
+  if (!offersAlways(ix)) return "";
   if (ix.always_label) return t("chat-interactions.always_scope_named", { scope: ix.always_label });
   if (ix.agent && ix.agent !== "claude") return "";
   const keys = ix.always_keys ?? [];

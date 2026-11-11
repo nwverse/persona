@@ -49,7 +49,7 @@ func (n *Node) assistantRuntime(launcher string) *runtimeConn {
 			return h
 		}
 	}
-	h := n.runtimes.launcherRuntime(launcher)
+	h := n.runtimeOf(launcher)
 	if h == nil || !h.assistant() {
 		return nil
 	}
@@ -140,6 +140,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		st.Launcher, st.Cwd = launcher, cwd
 		n.state.put(id, st)
 	}
+	n.persistModes(id, mode, pickedEffort)
 	live, commit := n.turnContext(id, n.assistantContext(id))
 	if instructions != "" {
 		live = strings.TrimSpace(instructions + "\n" + live)

@@ -11,6 +11,9 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// assistantHome is where the node's sessions are the assistant's conversations.
+const assistantHome = "/home/u/.persona/assistant"
+
 // routeEnv is a manager with one task, "修登录崩溃", handed out by leader conversation lead1 (unless leaders is false: then
 // the main conversation conv1 supervises it and no leader is configured), its agents s1 and s2 on mac.
 type routeEnv struct {
@@ -29,6 +32,7 @@ func newRouteEnv(t *testing.T, st Store, leaders bool) *routeEnv {
 	}
 	s, f := ft.s, ft.f
 	shortSupervise(t, s)
+	noDirectionsTimers(s)
 	old := askHoldFor
 	askHoldFor = time.Hour // tests move cards up by hand (askTick)
 	t.Cleanup(func() { askHoldFor = old })
@@ -36,9 +40,8 @@ func newRouteEnv(t *testing.T, st Store, leaders bool) *routeEnv {
 	f.hello.Assistant.MachineID = "server"
 	f.known["conv1"], f.known["lead1"] = true, true
 	ft.d.add("server", "Server")
-	const home = "/home/u/.persona/assistant" // where the node's sessions are the assistant's conversations
-	convs := []proto.Session{{SessionID: "conv1", MachineID: "server", Cwd: home, Assistant: true, Status: proto.StatusIdle},
-		{SessionID: "lead1", MachineID: "server", Cwd: home, Assistant: true, Status: proto.StatusIdle}}
+	convs := []proto.Session{{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+		{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle}}
 	ft.sessions("server", convs...)
 	f.setSessions("server", convs...)
 	agents := []proto.Session{
@@ -109,14 +112,25 @@ func (e *routeEnv) pushesOf(ids ...string) int {
 	return n
 }
 
-// lastShown is the card id as the apps were told of it last.
-func (e *routeEnv) lastShown(id string) proto.Interaction {
+// shown is the card id as the apps were told of it last, and whether they were told of it at all: a waitFor check
+// asks this one, as a card not shown yet is "not yet" there, not a failure (#4407).
+func (e *routeEnv) shown(id string) (proto.Interaction, bool) {
 	df := &delegateFleet{fleetTest: e.fleetTest}
 	list := df.shownAs(id)
 	if len(list) == 0 {
+		return proto.Interaction{}, false
+	}
+	return list[len(list)-1], true
+}
+
+// lastShown is the card id as the apps were told of it last, for a card that must have been shown by now.
+func (e *routeEnv) lastShown(id string) proto.Interaction {
+	e.t.Helper()
+	ix, ok := e.shown(id)
+	if !ok {
 		e.t.Fatalf("card %s was never shown", id)
 	}
-	return list[len(list)-1]
+	return ix
 }
 
 // noticeWith waits for a message into conversation to that says want, and answers it.
@@ -135,11 +149,42 @@ func (e *routeEnv) noticeWith(to, want string) string {
 	return got
 }
 
-// settle lets the supervision messages due go out.
+// settleService waits until s's supervision messages due have gone out: nothing pending and no digest armed, then the
+// one being delivered (sendDigest holds dedupMu while it delivers) done. Left running past its test, one logs through
+// that test's T after it ended.
+func settleService(t *testing.T, s *Service) {
+	t.Helper()
+	b := &s.supervise
+	waitFor(t, "the supervision messages due to go out", func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.pending) == 0 && b.timer == nil
+	})
+	b.dedupMu.Lock()
+	b.dedupMu.Unlock()
+}
+
+// settle is settleService for e's own manager.
 func (e *routeEnv) settle() {
-	time.Sleep(10 * shortSuperviseTimings.gather)
-	e.s.supervise.dedupMu.Lock()
-	e.s.supervise.dedupMu.Unlock()
+	e.t.Helper()
+	settleService(e.t, e.s)
+}
+
+// noDirectionsTimers keeps s's directions comparison from running at all: it is a timer of its own, and one left armed
+// past its test logs through that test's T (a database already closed) after it ended. The route tests do not read
+// what it compares.
+func noDirectionsTimers(s *Service) {
+	s.directions.after = func(time.Duration, func()) {}
+}
+
+// supervisorState says what the apps see the two assistant conversations in: the main conversation and the leader in
+// their statuses (working while on a turn).
+func (e *routeEnv) supervisorState(main, lead string) {
+	convs := []proto.Session{
+		{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: main},
+		{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: lead}}
+	e.sessions("server", convs...)
+	e.f.setSessions("server", convs...)
 }
 
 // A worker's question goes to its leader, not the user: no push, the card shown as delegating, the main
@@ -324,6 +369,206 @@ func TestUnhandledAskGoesUp(t *testing.T) {
 	}
 }
 
+// A leader (and then the main conversation) on a long turn has not neglected the card: its hold does not count while
+// the conversation works, so a card does not climb to the user merely because the turn is long; its time starts when
+// the turn ends. A conversation still on a turn askBusyMax after the card came is stuck instead, and the card climbs.
+func TestAskHoldWaitsForABusySupervisor(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	oldHold, oldBusy := askHoldFor, askBusyMax
+	askHoldFor, askBusyMax = time.Minute, 10*time.Minute
+	t.Cleanup(func() { askHoldFor, askBusyMax = oldHold, oldBusy })
+	e.raise(askPermission("ix1", "worker-1"))
+	e.noticeWith("lead1", "interaction_id=ix1")
+	start := time.Now()
+
+	e.supervisorState(proto.StatusIdle, proto.StatusWorking) // the leader is on a long turn
+	e.s.askTick(start.Add(2 * time.Minute))
+	e.s.askTick(start.Add(5 * time.Minute))
+	e.settle()
+	if got := e.f.noticesTo("conv1"); len(got) != 0 {
+		t.Fatalf("the card climbed while its leader worked: %q", got)
+	}
+	if _, ok := e.s.routedTo("ix1", "lead1"); !ok {
+		t.Fatal("the card left its leader")
+	}
+
+	e.supervisorState(proto.StatusIdle, proto.StatusIdle) // the turn ended: the hold starts now
+	e.s.askTick(start.Add(6*time.Minute + 30*time.Second))
+	e.noticeWith("conv1", "interaction_id=ix1") // its time was up: the main conversation has it
+
+	e.supervisorState(proto.StatusWorking, proto.StatusIdle) // and it is on a long turn too
+	e.s.askTick(start.Add(8 * time.Minute))
+	e.settle()
+	if got := e.pushesOf("ix1"); got != 0 {
+		t.Fatalf("the card reached the user while the main conversation worked (%d)", got)
+	}
+	if _, ok := e.s.routedTo("ix1", "conv1"); !ok {
+		t.Fatal("the card left the main conversation")
+	}
+
+	e.s.askTick(start.Add(17 * time.Minute)) // busy for longer than askBusyMax: stuck, not working
+	waitFor(t, "the push", func() bool { return e.pushesOf("ix1") == 1 })
+	e.settle()
+}
+
+// A manager that restarts finds the cards it left pending on their way to the task's supervisor again: the leader can
+// still answer one and escalate another.
+func TestRestoredAskFindsItsSupervisorAgain(t *testing.T) {
+	database := todoTestDB(t)
+	e := newRouteEnv(t, database, true)
+	ask := askQuestion("ix1", "worker-1")
+	ask.Resumable, ask.ExpiresAt = true, time.Now().Add(time.Hour).UTC()
+	approve := askPermission("ix2", "worker-2")
+	approve.Resumable, approve.ExpiresAt = true, time.Now().Add(time.Hour).UTC()
+	ctx, gone := context.WithCancel(context.Background())
+	waits := make(chan proto.Resolution, 2)
+	for _, ix := range []proto.Interaction{ask, approve} {
+		go func() { r, _ := e.s.waitInteraction(ctx, ix); waits <- r }()
+		e.waitPendingID(ix.ID)
+	}
+	e.noticeWith("lead1", "interaction_id=ix2")
+	gone() // the manager went: its hooks' waits end and their cards stay pending for the next one
+	for range 2 {
+		<-waits
+	}
+
+	e.f.mu.Lock()
+	e.f.sends, e.f.told, e.f.pushes = nil, nil, nil // what the first manager told and pushed
+	e.f.mu.Unlock()
+	s2 := New(Options{Hub: e.f, Store: func() Store { return database }, Logf: t.Logf, Devices: e.d})
+	shortSupervise(t, s2)
+	noDirectionsTimers(s2)
+
+	// A node may claim a card before the hub's handshake restores the others: it finds its route then too.
+	answer := make(chan proto.Resolution, 1)
+	go func() { r, _ := s2.waitInteraction(context.Background(), ask); answer <- r }()
+	waitFor(t, "the hook waiting again", func() bool {
+		s2.fleet.mu.Lock()
+		defer s2.fleet.mu.Unlock()
+		p := s2.fleet.interactions[ask.ID]
+		return p != nil && p.resolved != nil // await made its channel: the wait is on the card
+	})
+	if got, ok := s2.routedTo("ix1", "lead1"); !ok || got != e.todo.ID {
+		t.Fatalf("the card its node claimed before the handshake: route to its leader = %q, %v", got, ok)
+	}
+
+	s2.FleetUp(context.Background())
+	for _, id := range []string{"ix1", "ix2"} {
+		if got, ok := s2.routedTo(id, "lead1"); !ok || got != e.todo.ID {
+			t.Fatalf("restored card %s: route to its leader = %q, %v", id, got, ok)
+		}
+		if ix, ok := s2.pendingIx(id); !ok || !ix.Delegating {
+			t.Fatalf("restored card %s: %+v %v, want it shown delegating", id, ix, ok)
+		}
+	}
+	// The hooks reconnect through the next node; the leader answers the question...
+	if _, err := runJSON(t, s2, "lead1", "interaction_answer", map[string]any{"machine": "mac", "session_id": "worker-1",
+		"interaction_id": "ix1", "answers": map[string]any{"用哪个分支？": "main"}, "reason": "任务就在 main 上"}); err != nil {
+		t.Fatalf("the leader could not answer the restored card: %v", err)
+	}
+	if r := answerOf(t, answer); r.Answers["用哪个分支？"] != "main" || r.AnsweredBy != proto.AnsweredByAssistant {
+		t.Fatalf("the agent got %+v", r)
+	}
+	var list []db.TodoDecisionRow
+	waitFor(t, "the decision", func() bool {
+		list, _ = database.ListTodoDecisions(context.Background(), e.todo.ID, false)
+		return len(list) == 1
+	})
+	if d := list[0]; d.Source != db.DecisionAgent || d.SourceSession != "lead1" || d.SourceMessage != "ix1" {
+		t.Fatalf("decision = %+v", d)
+	}
+	// ...and escalates the approval it cannot give.
+	if _, err := runJSON(t, s2, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "要推到远端", "recommend": "允许"}); err != nil {
+		t.Fatalf("the leader could not escalate the restored card: %v", err)
+	}
+	waitFor(t, "the push", func() bool { return e.pushesOf("ix2") == 1 })
+	if ix := e.lastShown("ix2"); ix.Delegating || ix.Delegate == nil || ix.Delegate.Reason != "要推到远端" {
+		t.Fatalf("the user's card: %+v %+v", ix, ix.Delegate)
+	}
+	if n := e.pushesOf("ix1"); n != 0 {
+		t.Fatalf("the answered card was pushed %d times", n)
+	}
+	settleService(t, s2)
+}
+
+// An approval card restored after a restart that its supervisor does not settle rings the user when its time is up:
+// it is not left waiting on the apps for nobody. The timeout neither approves it nor makes it a decision, and the
+// supervisor still cannot answer it for the user.
+func TestRestoredApprovalReachingTheUserRings(t *testing.T) {
+	database := todoTestDB(t)
+	e := newRouteEnv(t, database, true)
+	ix := askPermission("ix1", "worker-1")
+	ix.Resumable, ix.ExpiresAt = true, time.Now().Add(time.Hour).UTC()
+	ctx, gone := context.WithCancel(context.Background())
+	wait := make(chan proto.Resolution, 1)
+	go func() { r, _ := e.s.waitInteraction(ctx, ix); wait <- r }()
+	e.waitPendingID(ix.ID)
+	gone()
+	<-wait
+
+	s2 := New(Options{Hub: e.f, Store: func() Store { return database }, Logf: t.Logf, Devices: e.d})
+	shortSupervise(t, s2)
+	noDirectionsTimers(s2)
+	s2.FleetUp(context.Background())
+	if _, ok := s2.routedTo("ix1", "lead1"); !ok {
+		t.Fatal("the restored card has no route to its leader")
+	}
+	s2.askTick(time.Now().Add(2 * askHoldFor)) // its leader has had its time
+	s2.askTick(time.Now().Add(3 * askHoldFor)) // the main conversation too
+	waitFor(t, "the user told", func() bool { return e.pushesOf("ix1") == 1 })
+	if e.lastShown("ix1").Delegating {
+		t.Fatal("the card is still shown as the supervisor's")
+	}
+	if _, err := runJSON(t, s2, "lead1", "interaction_answer", map[string]any{"machine": "mac", "session_id": "worker-1",
+		"interaction_id": "ix1", "answers": map[string]any{"x": "y"}}); err == nil || !strings.Contains(err.Error(), "only the user") {
+		t.Fatalf("the supervisor approved an approval: %v", err)
+	}
+	if _, pending := s2.pendingIx("ix1"); !pending {
+		t.Fatal("the timeout resolved the approval")
+	}
+	if list, _ := database.ListTodoDecisions(context.Background(), e.todo.ID, false); len(list) != 0 {
+		t.Fatalf("the timeout became a decision: %+v", list)
+	}
+	s2.askTick(time.Now().Add(4 * askHoldFor)) // the user's now: no second ring
+	if n := e.pushesOf("ix1"); n != 1 {
+		t.Fatalf("the card rang %d times", n)
+	}
+	settleService(t, s2)
+}
+
+// A question restored after a restart may have rung the user before: when its time is up it only goes back on the
+// apps, without a second push, and stays pending for the user (or the supervisor, before then).
+func TestRestoredQuestionReachingTheUserDoesNotRing(t *testing.T) {
+	database := todoTestDB(t)
+	e := newRouteEnv(t, database, true)
+	ix := askQuestion("ix1", "worker-1")
+	ix.Resumable, ix.ExpiresAt = true, time.Now().Add(time.Hour).UTC()
+	ctx, gone := context.WithCancel(context.Background())
+	wait := make(chan proto.Resolution, 1)
+	go func() { r, _ := e.s.waitInteraction(ctx, ix); wait <- r }()
+	e.waitPendingID(ix.ID)
+	gone()
+	<-wait
+
+	s2 := New(Options{Hub: e.f, Store: func() Store { return database }, Logf: t.Logf, Devices: e.d})
+	shortSupervise(t, s2)
+	noDirectionsTimers(s2)
+	s2.FleetUp(context.Background())
+	if _, ok := s2.routedTo("ix1", "lead1"); !ok {
+		t.Fatal("the restored card has no route to its leader")
+	}
+	s2.askTick(time.Now().Add(2 * askHoldFor)) // its leader has had its time
+	s2.askTick(time.Now().Add(3 * askHoldFor)) // the main conversation too
+	waitFor(t, "the card the user's", func() bool { ix, ok := e.shown("ix1"); return ok && !ix.Delegating })
+	if n := e.pushesOf("ix1"); n != 0 {
+		t.Fatalf("a restored question was pushed again %d times", n)
+	}
+	if _, pending := s2.pendingIx("ix1"); !pending {
+		t.Fatal("the timeout resolved the question")
+	}
+	settleService(t, s2)
+}
+
 // Without leaders nothing changes: the card is the user's at once.
 func TestAskWithoutLeadersIsTheUsers(t *testing.T) {
 	e := newRouteEnv(t, nil, false)
@@ -384,7 +629,7 @@ func TestQuietTaskAskIsNotPushedOnTimeout(t *testing.T) {
 		t.Fatalf("the main conversation's message:\n%s", n)
 	}
 	e.s.askTick(time.Now().Add(2 * askHoldFor))
-	waitFor(t, "the card the user's", func() bool { return !e.lastShown("ix1").Delegating })
+	waitFor(t, "the card the user's", func() bool { ix, ok := e.shown("ix1"); return ok && !ix.Delegating })
 	e.settle()
 	if n := e.pushesOf("ix1"); n != 0 {
 		t.Fatalf("a quiet task's card was pushed %d times", n)
@@ -407,7 +652,7 @@ func TestEscalateLeavesADelegatedCard(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.raise(askQuestion("ix1", "worker-1"))
-	waitFor(t, "the delegation", func() bool { return e.lastShown("ix1").Delegating })
+	waitFor(t, "the delegation", func() bool { ix, ok := e.shown("ix1"); return ok && ix.Delegating })
 	if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "x"}); err == nil {
 		t.Fatal("escalated a card the assistant is deciding on")
 	}

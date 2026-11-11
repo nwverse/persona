@@ -40,13 +40,22 @@ func (s *Service) briefCard(f *briefFacts, label, answer string) (card *feishubo
 	c := feishubot.NewCard(label, color, f.countsText())
 	plain := []string{label}
 	if answer = strings.TrimSpace(answer); answer != "" {
-		c.Markdown(feishubot.CardMarkdown(clip(answer, briefAnswerRunes)))
+		// Charts become text first, as the bot's answers do (feishu_answer.go): clipMarkdown drops a persona-card block
+		// it cannot draw down to its title, so a chart on a long answer would lose its numbers.
+		c.Markdown(feishubot.CardMarkdown(clipMarkdown(feishubot.PersonaCards(answer), briefAnswerRunes)))
 		plain = append(plain, clip(answer, briefAnswerRunes))
 		if len([]rune(answer)) > briefAnswerRunes {
 			c.Note(i18n.T(l, "assistant-briefing.answer_clipped"))
 		}
 	}
 	room := briefBudget{bytes: reportCardMaxBytes - briefTailBytes - len(c.JSON()), els: reportCardMaxElements - briefSpareEls - len(c.Body.Elements)}
+
+	var confirmations []briefBlock
+	confirmations = append(confirmations, briefBlock{md: feishubot.EscapeMarkdown(f.Confirmations.summary(l)), plain: f.Confirmations.summary(l)})
+	for _, line := range f.ConfirmationLines {
+		confirmations = append(confirmations, briefBlock{md: feishubot.EscapeMarkdown(line), plain: line})
+	}
+	room.section(c, &plain, l, i18n.T(l, "assistant-confirmations.heading"), confirmations, len(confirmations))
 
 	// Waiting for you: the board's rows that hold an Agent up.
 	var waiting []briefBlock

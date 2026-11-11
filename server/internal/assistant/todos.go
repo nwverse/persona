@@ -107,6 +107,10 @@ type Todo struct {
 	// Kind: "concern" for something the owner raised in the main conversation (#3561, concerns.go), which closes only
 	// once its outcome was reported to them; left out for a to-do or a task. Set when it is made, never changed.
 	Kind string `json:"kind,omitempty"`
+	// Brief: what was asked when the work was handed out, with its log, and Lineage: the to-dos that carried the work
+	// (#3822, task_brief.go). Filled in where the apps read the to-dos (withBrief); absent for a to-do with no brief.
+	Brief   *TaskBrief    `json:"brief,omitempty"`
+	Lineage []LineageStep `json:"lineage,omitempty"`
 }
 
 // todoStore is what the todos keep in the database (internal/db). A Store without it (the unit tests' memStore) keeps
@@ -336,6 +340,9 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 			}
 		}
 	}
+	if err := s.loadTaskBriefs(ctx); err != nil {
+		return err
+	}
 	threads, err := st.ListTodoThreads(ctx)
 	if err != nil {
 		return err
@@ -379,8 +386,10 @@ func (s *Service) todosLoaded() bool {
 func (s *Service) todosChanged(ctx context.Context) {
 	s.event(ctx, map[string]any{"type": "todos"})
 	s.todoChangedSoon()
-	s.remindSoon()   // a reminder set, moved or done (todo_plan.go)
-	s.boardChanged() // a to-do closed, reopened or gone leaves "Please verify"
+	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
+	s.boardChanged()      // a to-do closed, reopened or gone leaves "Please verify"
+	s.interruptsSoon()    // an interrupted receipt of it may read cancelled, rerouted or done now (interruptions.go)
+	s.directionTreeSoon() // its direction's tasks and counts (direction_tree.go)
 }
 
 // linksChanged: which todo an agent works for changed (or a todo's title, or whether it is done): the hub is told
@@ -444,8 +453,12 @@ func (s *Service) createTodo(ctx context.Context, title, notes, origin, planID s
 
 // createTaskTodo is createTodo for a plan's task, in the knowledge-base project the task names (a slug; "" for none).
 func (s *Service) createTaskTodo(ctx context.Context, title, notes, origin, planID, project string) (Todo, error) {
+	return s.createTaskTodoAs(ctx, "todo_"+randomHex(8), title, notes, origin, planID, project)
+}
+
+func (s *Service) createTaskTodoAs(ctx context.Context, id, title, notes, origin, planID, project string) (Todo, error) {
 	now := time.Now().UTC()
-	return s.insertTodo(ctx, db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
+	return s.insertTodo(ctx, db.TodoRow{ID: id, Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
 		Origin: origin, PlanID: planID, Quiet: s.quietTask(ctx, origin), Project: project})
 }
 
@@ -618,7 +631,7 @@ func (s *Service) todoView(ctx context.Context, id string) (json.RawMessage, err
 	if !ok {
 		return nil, db.ErrTodoNotFound
 	}
-	return json.Marshal(formatTodo(t))
+	return json.Marshal(s.withBrief(formatTodo(t)))
 }
 
 // taskOf is the task (a todo opened from an assistant conversation, still open) the agent mid/sid works for.
@@ -731,7 +744,7 @@ func (s *Service) todoRoutes() {
 	s.todoThreadRoutes()
 	s.todoRetitleRoute()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
-	// waiting for the owner carries its ask (todo_ask.go)
+	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -745,8 +758,12 @@ func (s *Service) todoRoutes() {
 		s.todos.mu.RUnlock()
 		asks := s.todoAsks(r.Context()) // once the todos are let go: it reads them itself
 		for i := range list {
+			list[i].Todo = s.withBrief(list[i].Todo) // what was asked and who carried it (task_brief.go)
 			if a, ok := asks[list[i].ID]; ok {
 				list[i].Ask = &a
+			}
+			if o, ok := s.orphanOf(list[i].ID); ok && list[i].DoneAt == nil {
+				list[i].Orphaned = &o
 			}
 		}
 
@@ -990,6 +1007,7 @@ func (s *Service) todoRoutes() {
 			todoErr(w, err)
 			return
 		}
+		s.superviseLinkedTodo(r.Context(), todoID) // the user's own todo gets a supervisor (agent_tasks.go)
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 
@@ -1194,6 +1212,10 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	t.Notes = row.Notes
 	becameDone := t.DoneAt == nil && row.DoneAt != nil
 	reopened := t.DoneAt != nil && row.DoneAt == nil
+	var reopenedEvent map[string]any
+	if reopened {
+		reopenedEvent = reopenedDetail(t, row) // before t changes: who had closed it, and when
+	}
 	t.DoneAt = row.DoneAt
 	t.StartError = row.StartError
 	t.DoneBy, t.DoneReason, t.ReopenedAt = row.DoneBy, row.DoneReason, row.ReopenedAt
@@ -1222,6 +1244,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	if reopened {
 		s.dropSourcePlan(id) // what was planned to be told may not be what it comes to now (todo_source.go)
 		s.dropReopenedCheck(id)
+		s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
 	}
 	if closing != nil {
 		s.threadPost(id, *closing) // after the lock: it looks the todo up again
@@ -1779,6 +1802,7 @@ func (s *Service) TodoLink(ctx context.Context, p TodoLinkParams) (TodoLinkResul
 	if err := s.linkTodoAgent(ctx, p.TodoID, p.MachineID, p.SessionID, title, p.Cwd, p.Agent); err != nil {
 		return TodoLinkResult{}, err
 	}
+	s.superviseLinkedTodo(ctx, p.TodoID) // the user's own todo gets a supervisor (agent_tasks.go)
 	res := TodoLinkResult{Title: title}
 	if t, ok, err := s.todo(ctx, p.TodoID); err == nil && ok {
 		res.Title = t.Title

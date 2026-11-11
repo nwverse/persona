@@ -34,6 +34,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
 	"github.com/nwverse/persona/server/internal/subscriptions"
+	"github.com/nwverse/persona/server/internal/subscriptionsui"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -91,6 +92,8 @@ type Options struct {
 	AssistantMachine func() string
 	// AssistantTools are the assistant's tools now (a connector's tool may not shadow one).
 	AssistantTools func() []proto.Tool
+	// LauncherReferences are the model providers' keys that hold references, for their providers' details (nil: none).
+	LauncherReferences func(ctx context.Context) []LauncherReference
 	// Lang and Timezone are the user's language and zone ("" when not known).
 	Lang     func() i18n.Lang
 	Timezone func() string
@@ -100,6 +103,8 @@ type Options struct {
 type Manager struct {
 	// errReports: the error reports' pipeline (error_reports.go).
 	errReports errorReports
+	// iphoneTurns: one iphone_do at a time per iPhone, across conversations (iphone.go, iphoneTurn).
+	iphoneTurns sync.Map
 	// serving: the requests the hub relayed to the extensions being served now, a WebSocket (a voice call, an
 	// extension's live view) for as long as it is open (Serving).
 	serving atomic.Int64
@@ -114,14 +119,22 @@ type Manager struct {
 
 	ctx context.Context
 
-	mail          Mail
-	connectors    *connector.Registry
-	subs          *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
+	mail               Mail
+	connectors         *connector.Registry
+	imessageSettingsMu imessageContextLock
+	imessageArchive    imessageArchiveFence
+	imessageAIPending  atomic.Bool
+	subs               *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
+	// subDrafts are the model drafts the subscription pages started (#2040, subscriptions_ui.go), made on first use.
+	subDrafts     *subscriptionsui.Drafts
+	subDraftsOnce sync.Once
 	connectorsOff map[string]bool
 	migrated      sync.Map
 	media         mediaCache
 	recalls       recallLocks
 	extensions    *extensions
+	hostCLIMu     sync.Mutex
+	hostCLIState  *hostCLIState
 	extTokens     extTokens
 	legacyCalls   legacyCalls
 	uiPages       pageSessions

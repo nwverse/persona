@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -44,6 +47,10 @@ func (c *ownChange) card(l i18n.Lang) string {
 func (s *Service) ownSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
+		{Setting: Setting{Key: standingAuthorizationsKey, Title: "Standing authorizations", Actions: getSet,
+			About: "user-confirmed actions for one computer and absolute directory tree; only the main conversation may set them, and every change requires the user’s own permission approval",
+			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible}]}; get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
+			get: s.getStandingAuthorizations, set: s.setStandingAuthorizations},
 		{Setting: Setting{Key: "assistant.notes", Title: "关于我", Actions: getSet,
 			About: "what Persona knows about the user (设置 › 助手 › 关于我), Markdown appended to the assistant's instructions; new conversations read it",
 			Value: "a string (Markdown; the whole text)"},
@@ -62,12 +69,51 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.startRequestedTasks(ctx)), nil },
 			set: s.setStartRequestedTasks},
+		{Setting: Setting{Key: "assistant.task_workspace_preference", Title: "Task workspace preference", Actions: getSet,
+			About: "prefer-existing (default): reuse the task directory if free; prefer-new: isolate writable Git tasks. Read-only defaults to none, busy directories to new; explicit task workspace wins. Paths come from the machine engine",
+			Value: "prefer-existing or prefer-new"},
+			get: func(ctx context.Context) (string, error) { return s.taskWorkspacePreference(ctx), nil },
+			set: s.setTaskWorkspacePreference},
 		{Setting: Setting{Key: "assistant.recording_days", Title: "录音在知识库里保留", Actions: getSet,
 			About: "how many days the phone's and watch's recording transcripts stay in the knowledge base (kind recordings); older " +
-				"ones are deleted from it (the audio and the recordings on the phone are not touched). 14 by default",
+				"transcripts are deleted from it, and the phone deletes its local recordings too (audio and text). " +
+				"Meeting minutes follow assistant.minutes_days instead. 14 by default",
 			Value: "a whole number of days, 1–365"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
 			set: s.setRecordingDays},
+		{Setting: Setting{Key: "assistant.minutes_days", Title: "Keep meeting minutes", Actions: getSet,
+			About: "how many days a meeting recording's minutes stay in the knowledge base. Past assistant.recording_days its " +
+				"transcript, summary and live log are deleted and only the minutes (and the recording's metadata) stay, still " +
+				"searchable and readable with kb_get, until this many days after the meeting; then the rest goes too. Never " +
+				"fewer than assistant.recording_days for finite windows. 0 (or forever) keeps minutes until the user deletes them, " +
+				"which is the default",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.minutesDays(ctx)), nil
+			},
+			set: s.setMinutesDays},
+		{Setting: Setting{Key: "assistant.kb_topics", Title: "Organize knowledge points by topic", Actions: getSet,
+			About: "on (the default): the knowledge base pulls durable knowledge (concepts, decisions, practices, pitfalls, facts, open " +
+				"questions) out of the projects' timelines and the chats' summaries and files it by topic (kind topics), a few model calls " +
+				"a round on the knowledge base's model; off: no more calls, the topics already written stay",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.kbTopics(ctx)), nil },
+			set: s.setKBTopics},
+		{Setting: Setting{Key: "assistant.main_background_folded", Title: "Fold background rounds", Actions: getSet,
+			About: "on (the default): in the apps, a main-conversation round the user did not start (another conversation's " +
+				"conversation_send / conversation_new message, a scheduled task or follow-up) is one line that opens on request, and " +
+				"a scheduled task's prompt is not shown; rounds that asked or told the user something (ask_user, notify_user, a " +
+				"task_review verdict card) stay shown. Off: every round is shown in full. Display only: what runs is unchanged",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
+			set: s.setMainBackgroundFolded},
+		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
+			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
+				"default) only records and makes minutes afterwards; listener follows the meeting in a session and answers questions " +
+				"on the phone's screen; participant also says the answers aloud. Applies to recordings started from now on",
+			Value: "off, listener or participant"},
+			get: func(ctx context.Context) (string, error) { return s.meetingAttendanceDefault(ctx), nil },
+			set: s.setMeetingAttendanceDefault},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
 			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
 				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
@@ -98,6 +144,27 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
 			set: s.setInterjectBackground},
+		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
+			About: "off (the default): only tasks the main conversation or a leader hands out are supervised; an agent started from an " +
+				"app or by agent_start from another conversation is on no task. on: every agent Persona starts gets a quiet to-do (no " +
+				"pushes or badges for it) supervised by the conversation that started it when that is the main conversation or a leader, " +
+				"else by the main conversation: an app's agent once a turn of it did work (edits, commands), a to-do the user made when " +
+				"an agent is linked to it, and report_to_supervisor from an agent on any open to-do reaches its supervisor. Agents " +
+				"started by hand in a terminal are left alone. Costs model calls (the done judge, supervision turns). Applies from the " +
+				"next start, turn end and report",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
+			set: s.setAgentTasks},
+		{Setting: Setting{Key: "assistant.inbox_signals", Title: "Tell a task's supervisor about new Inbox messages on it", Actions: getSet,
+			About: "off (the default): an Inbox message the AI twin's judge links to a task only reaches the twin's handling chat " +
+				"(and a message card once it drafts a reply). on: new messages from other people linked to a supervised task also " +
+				"reach the task's supervisor (its leader conversation, else the main conversation) as an inbox entry of the next " +
+				"supervision message, several collapsed into one per task with their count. Needs the Inbox AI twin, which makes the " +
+				"link; Persona's own sends, bot chats and tasks waiting for the user's decision never raise one. Costs supervisor " +
+				"turns. Applies from the next new message",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
+			set: s.setInboxSignals},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -121,6 +188,9 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return proto.TextResult(fmt.Sprintf("invalid arguments: %v", err), true)
+	}
+	if a.Key == standingAuthorizationsKey && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main || call.MachineID != s.settings(ctx).MachineID) {
+		return proto.TextResult("only the main conversation may change standing authorizations", true)
 	}
 	own := s.ownSettings()
 	if a.Action == "" || a.Action == "list" {
@@ -169,6 +239,9 @@ func (s *Service) listSettings(ctx context.Context, own []ownSetting) (string, e
 	return b.String(), nil
 }
 
+// settingCardWait is how long a change's approval card waits for the user before it expires (and changes nothing).
+var settingCardWait = 15 * time.Minute
+
 // ownSettingAction reads one of the assistant's settings, or changes it once the user approves on the phone.
 func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage) (string, error) {
 	switch action {
@@ -194,14 +267,17 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	now := time.Now().UTC()
 	r, err := s.ask(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: change.card(l), ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)})
+		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)})
 	if err != nil {
 		return "", err
 	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
+	switch { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
+	case r.UserAllowed():
+		return change.apply(ctx)
+	case r.UserDenied():
+		return "The user declined the change: nothing changed.", nil
 	}
-	return change.apply(ctx)
+	return prompts.RenderSettingUnanswered(), nil
 }
 
 func orNone(s string) string {
@@ -213,11 +289,14 @@ func orNone(s string) string {
 
 // settingTitles are the settings' titles for the card the user approves on, in this file's namespace (Title stays
 // what the assistant reads).
-var settingTitles = map[string]string{"assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
-	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
+var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
+	"assistant.task_workspace_preference": "title_task_workspace_preference",
+	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"assistant.interject_background": "title_interject_background", "model_profiles.tiers": "title_model_tiers"}
+	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "assistant.inbox_signals": "title_inbox_signals", "model_profiles.tiers": "title_model_tiers",
+	"assistant.meeting_attendance_default": "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
+	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -293,6 +372,46 @@ func (s *Service) setStartRequestedTasks(ctx context.Context, v json.RawMessage)
 		"assistant.start_requested_tasks is %v for plans from now on.")
 }
 
+func (s *Service) setTaskWorkspacePreference(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || !validWorkspacePreference(value) {
+		return nil, fmt.Errorf("value must be prefer-existing or prefer-new")
+	}
+	before := s.taskWorkspacePreference(ctx)
+	if before == value {
+		return &ownChange{summary: "assistant.task_workspace_preference is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, fmt.Errorf("no database on this manager")
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return i18n.T(l, "assistant-settings_tool.change_task_workspace_preference", i18n.Args{"before": before, "after": value})
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.TaskWorkspacePreference = value; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return "assistant.task_workspace_preference is " + value + " for new task plans", nil
+		},
+	}, nil
+}
+
+func (s *Service) setMainBackgroundFolded(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.mainBackgroundFolded, "assistant.main_background_folded is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_main_background_folded", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.MainBackgroundFolded },
+		"assistant.main_background_folded is %v; the apps redraw the main conversation with it.")
+}
+
+func (s *Service) setKBTopics(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.kbTopics, "assistant.kb_topics is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_kb_topics", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.KBTopics },
+		"assistant.kb_topics is %v from the knowledge base's next round on.")
+}
+
 func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var days int
 	if err := json.Unmarshal(v, &days); err != nil || days < minRecordingDays || days > maxRecordingDays {
@@ -315,6 +434,80 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 			s.settingsChanged(ctx)
 			s.kbWake() // a shorter retention prunes now
 			return fmt.Sprintf("assistant.recording_days is %d: recordings older than that leave the knowledge base.", days), nil
+		}}, nil
+}
+
+// minutesDaysLabel spells out the forever sentinel instead of showing a misleading zero-day retention.
+func minutesDaysLabel(l i18n.Lang, days int) string {
+	if days == 0 {
+		return i18n.T(l, "assistant-settings_tool.minutes_forever")
+	}
+	return i18n.T(l, "assistant-settings_tool.minutes_days_value", i18n.Args{"days": days})
+}
+
+// setMinutesDays compares the saved setting, not its recording_days floor. A finite value below that floor is saved
+// for when recording_days becomes shorter. Unset and 0 both mean forever; the card names the effective before/after.
+func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var days int
+	var word string
+	forever := json.Unmarshal(v, &word) == nil && strings.EqualFold(strings.TrimSpace(word), "forever")
+	if !forever && (strings.TrimSpace(string(v)) == "null" || json.Unmarshal(v, &days) != nil || days < minMinutesDays || days > maxMinutesDays) {
+		return nil, i18n.Err("assistant-profile.bad_minutes_days")
+	}
+	cur := s.settings(ctx)
+	saved, recording := minutesDaysSetting(cur), recordingDaysOf(cur)
+	before, after := kb.MinutesDaysFor(saved, recording), kb.MinutesDaysFor(days, recording)
+	args := func(l i18n.Lang) i18n.Args {
+		return i18n.Args{"before": minutesDaysLabel(l, before), "after": minutesDaysLabel(l, after),
+			"saved": minutesDaysLabel(l, days), "previous": minutesDaysLabel(l, saved)}
+	}
+	if days == saved {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.minutes_unchanged", args(s.lang(ctx)))}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		if after == before {
+			return i18n.T(l, "assistant-settings_tool.change_minutes_days_saved", args(l))
+		}
+		return i18n.T(l, "assistant-settings_tool.change_minutes_days", args(l))
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MinutesDays = &days; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.kbWake() // a shorter retention prunes now
+			return i18n.T(s.lang(ctx), "assistant-settings_tool.minutes_applied", args(s.lang(ctx))), nil
+		}}, nil
+}
+
+// setMeetingAttendanceDefault changes the role meeting recordings pre-select; the card names the roles in the
+// user's language.
+func (s *Service) setMeetingAttendanceDefault(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var role string
+	if err := json.Unmarshal(v, &role); err != nil || !slices.Contains(meetingRoles, strings.TrimSpace(role)) {
+		return nil, errors.New("value must be off, listener or participant")
+	}
+	role = strings.TrimSpace(role)
+	before := s.meetingAttendanceDefault(ctx)
+	if role == before {
+		return &ownChange{summary: "assistant.meeting_attendance_default is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	name := func(l i18n.Lang, role string) string { return i18n.T(l, "assistant-settings_tool.meeting_role_"+role) }
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_meeting_attendance_default", i18n.Args{"before": name(l, before), "after": name(l, role)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MeetingAttendanceDefault = &role; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.meeting_attendance_default is %s for meeting recordings started from now on.", role), nil
 		}}, nil
 }
 
@@ -354,6 +547,20 @@ func (s *Service) setInterjectBackground(ctx context.Context, v json.RawMessage)
 		return i18n.T(l, "assistant-settings_tool.change_interject_background", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InterjectBackground },
 		"assistant.interject_background is %v from the next message on.")
+}
+
+func (s *Service) setAgentTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.agentTasks, "assistant.agent_tasks is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_agent_tasks", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AgentTasks },
+		"assistant.agent_tasks is %v from the next start, turn end and report on (to-dos made before keep what they have).")
+}
+
+func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.inboxSignalsOn, "assistant.inbox_signals is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_inbox_signals", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.InboxSignals },
+		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.

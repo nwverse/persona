@@ -101,9 +101,8 @@ fun ChatTopBar(
         }
         AppStyle.Board -> Column(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                back()
-                if (status != null) { JStatusMark(status); Spacer(Modifier.width(8.dp)) }
-                titleBlock(); actions()
+                // The state is said once, in the title's line (#3957, as iOS #3719): no second mark before the title.
+                back(); titleBlock(); actions()
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.line))
         }
@@ -524,8 +523,10 @@ fun SendButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Bool
     val fill = when { kind == SendKind.Stop -> palette.danger.dot; enabled -> palette.action; else -> palette.surfaceStrong }
     val ink = when { kind == SendKind.Stop -> palette.danger.onDot; enabled -> palette.onAction; else -> palette.ink3 }
     val spoken = stringResource(if (kind == SendKind.Stop) R.string.designsystem_send_stop else R.string.designsystem_send)
+    // Send and Stop are felt, as on iOS (DESIGN_SYSTEM.md 4.3).
+    val haptics = rememberHaptics()
     Box(
-        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = onClick)
+        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = haptics.tapped(onClick))
             .semantics { contentDescription = spoken },
         contentAlignment = Alignment.Center,
     ) {

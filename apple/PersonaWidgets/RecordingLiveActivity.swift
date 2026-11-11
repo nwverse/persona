@@ -35,10 +35,11 @@ struct RecordingLiveActivity: Widget {
                     VStack(alignment: .leading, spacing: IslandMetrics.rowGap) {
                         VStack(alignment: .leading, spacing: IslandMetrics.smallGap) {
                             Text(state.title).font(.headline).lineLimit(1)
-                            RecordingSubtitle(state: state).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                            RecordingSubtitle(state: state).font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                         }
                         .padding(.horizontal, IslandMetrics.gap)
-                        RecordingButtons(id: id, onDark: true)
+                        RecordingAnswer(state: state).foregroundStyle(.white.opacity(0.85)).padding(.horizontal, IslandMetrics.gap)
+                        RecordingButtons(id: id, onDark: true, attends: state.persona != nil, recording: state.phase == .recording)
                     }
                     .environment(\.locale, LanguageStore.drawingLocale)
                 }
@@ -74,7 +75,7 @@ struct RecordingMark: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(Palette.recordingRed.opacity(phase == .recording ? 1 : 0.35))
+            Circle().fill(Palette.recordingRed.opacity(phase == .recording ? 1 : 0.6))
             Image(systemName: phase == .recording ? RecordingSymbol.recording : RecordingSymbol.paused)
                 .font(.system(size: size * 0.48, weight: .bold))
                 .foregroundStyle(.white)
@@ -112,7 +113,11 @@ struct RecordingSubtitle: View {
         case .interrupted: Text("Paused by a call · Open Persona to continue")
         case .paused: Text("Paused")
         case .recording:
-            if state.marks > 0 {
+            if let persona = state.persona {
+                // Persona attends (#2981): said in place of what it is, so whoever sees the phone knows (the bookmarks
+                // stay on the recording's page).
+                Text(persona == "participant" ? "Persona taking part" : "Persona listening")
+            } else if state.marks > 0 {
                 Text(state.meeting ? "Meeting · \(state.marks) bookmarks" : "Recording · \(state.marks) bookmarks")
             } else {
                 Text(state.meeting ? "Meeting recording" : "Recording on iPhone")
@@ -121,17 +126,35 @@ struct RecordingSubtitle: View {
     }
 }
 
-/// Bookmark and Stop: neutral and red, white words on the red (as the Fleet activity's Allow on blue).
+/// Bookmark and Stop: neutral and red, white words on the red (as the Fleet activity's Allow on blue). A meeting Persona
+/// attends (#2981) leads with Ask Persona (a tap asks about what was just said), and Bookmark, Turn Off (Persona stops
+/// attending) and Stop give up their words for their marks so the four fit; each keeps its name for VoiceOver.
 struct RecordingButtons: View {
     var id: String
     var onDark = false
+    /// Persona attends: Turn Off joins the row, and while it records, Ask Persona.
+    var attends = false
+    var recording = true
 
     var body: some View {
         HStack(spacing: IslandMetrics.buttonGap) {
-            Button(intent: AddRecordingBookmarkIntent(recordingID: id)) { label("Bookmark", RecordingSymbol.bookmark) }
+            if attends && recording {
+                Button(intent: AskPersonaInMeetingIntent(recordingID: id)) { label("Ask Persona", RecordingSymbol.ask) }
+                    .buttonStyle(.bordered)
+                    .tint(onDark ? .white : .primary)
+                    .layoutPriority(1)
+            }
+            Button(intent: AddRecordingBookmarkIntent(recordingID: id)) { label("Bookmark", RecordingSymbol.bookmark, iconOnly: attends) }
                 .buttonStyle(.bordered)
                 .tint(onDark ? .white : .primary)
-            Button(intent: StopRecordingIntent(recordingID: id)) { label("Stop", RecordingSymbol.stop) }
+            if attends {
+                Button(intent: TurnOffMeetingAttendanceIntent(recordingID: id)) {
+                    label("Turn Off Persona", RecordingSymbol.attendanceOff, iconOnly: true)
+                }
+                .buttonStyle(.bordered)
+                .tint(onDark ? .white : .primary)
+            }
+            Button(intent: StopRecordingIntent(recordingID: id)) { label("Stop", RecordingSymbol.stop, iconOnly: attends) }
                 .buttonStyle(.borderedProminent)
                 .tint(Palette.recordingButton)
                 .foregroundStyle(.white)
@@ -139,12 +162,39 @@ struct RecordingButtons: View {
         .buttonBorderShape(.capsule)
     }
 
-    private func label(_ text: LocalizedStringKey, _ symbol: String) -> some View {
-        Label(text, systemImage: symbol)
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .frame(maxWidth: .infinity)
+    @ViewBuilder private func label(_ text: LocalizedStringKey, _ symbol: String, iconOnly: Bool = false) -> some View {
+        if iconOnly {
+            Label(text, systemImage: symbol)
+                .labelStyle(.iconOnly)
+                .font(.subheadline.weight(.semibold))
+                .frame(minWidth: IslandMetrics.recordingIconButton)
+        } else {
+            Label(text, systemImage: symbol)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+/// Persona in a meeting it attends, under the name: its latest answer (the hub posts no notification for answers), or,
+/// while the recording is paused and the subtitle says why, that Persona still attends.
+struct RecordingAnswer: View {
+    var state: RecordingActivityAttributes.ContentState
+
+    var body: some View {
+        if let persona = state.persona {
+            if let answer = state.answer, !answer.isEmpty {
+                Label { Text(answer).lineLimit(2) } icon: { Image(systemName: RecordingSymbol.persona) }
+                    .font(.caption.weight(.medium))
+            } else if state.phase != .recording {
+                Label { Text(persona == "participant" ? "Persona taking part" : "Persona listening").lineLimit(1) } icon: {
+                    Image(systemName: RecordingSymbol.persona)
+                }
+                .font(.caption.weight(.medium))
+            }
+        }
     }
 }
 
@@ -177,14 +227,15 @@ struct RecordingLockScreen: View {
                 RecordingMark(phase: state.phase, size: IslandMetrics.recordingMark)
                 VStack(alignment: .leading, spacing: IslandMetrics.smallGap) {
                     Text(state.title).font(.headline).lineLimit(1)
-                    RecordingSubtitle(state: state).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    RecordingSubtitle(state: state).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: IslandMetrics.gap)
                 RecordingTime(state: state)
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(state.phase == .recording ? Palette.recordingRed : .secondary)
             }
-            RecordingButtons(id: id)
+            RecordingAnswer(state: state).foregroundStyle(.secondary)
+            RecordingButtons(id: id, attends: state.persona != nil, recording: state.phase == .recording)
         }
         .padding(IslandMetrics.lockPadding)
     }
@@ -200,4 +251,10 @@ enum RecordingSymbol {
     /// The app's bookmark (`Theme.Icon.pin`).
     static let bookmark = "pin"
     static let stop = "stop.fill"
+    /// The app's question (`Theme.Icon.question`): Ask Persona in a meeting it attends.
+    static let ask = "questionmark.bubble"
+    /// The app's Persona stops attending (`Theme.Icon.attendanceOff`).
+    static let attendanceOff = "waveform.slash"
+    /// The app's Persona (`Theme.Icon.persona`): its answer.
+    static let persona = "sparkle"
 }

@@ -361,6 +361,7 @@ func herdrNode(t *testing.T) (*Node, *fakeHerdr, string) {
 	withFirstPromptWaits(t, 400*time.Millisecond, 3*time.Second)
 	t.Cleanup(n.firstWait.Wait) // before the waits are put back: a check still going reads them
 	t.Cleanup(n.engLists.Wait)  // before the caches are reset: an engine switch's list, still being built, reads them
+	t.Cleanup(n.starts.close)   // before firstWait, caches and the fake socket: starts can still use all of them
 	return n, f, home
 }
 
@@ -470,7 +471,7 @@ type hubPush struct {
 // a cold Git lookup can produce an unrelated sessions.changed on the next tick.
 func pollRepo(t *testing.T) string {
 	t.Helper()
-	cwd := t.TempDir()
+	cwd := physicalTempDir(t)
 	writeGitFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
 	if got := awaitGitPlace(t, gitPlaces, cwd); got != (gitPlace{cwd, cwd, "main"}) {
 		t.Fatalf("poll repository: %+v", got)

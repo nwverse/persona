@@ -19,6 +19,24 @@ import (
 // only to the carrier.
 func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	out := devicewire.Config{Machines: []json.RawMessage{}, HubID: h.hubID(), HubName: h.hubName(), HubVersion: h.version}
+	if h.cfg != nil && h.publicShareBuildExists() {
+		out.SharePublicOrigin = h.sharingOrigin()
+	}
+	out.ShareAuthorities = map[string]devicewire.ShareAuthority{}
+	for _, mc := range h.cfgEntries() {
+		if h.entryOwner(mc.ID) != id {
+			continue
+		}
+		if store := h.shareRoutingStore(); store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			route, err := store.ShareRouting(ctx, h.hubID(), mc.ID, id)
+			cancel()
+			if err == nil {
+				out.ShareRoutingHandle = route.Handle
+				out.ShareAuthorities[mc.ID] = route.Authority
+			}
+		}
+	}
 	out.AutoUpdateNodes = h.upd.nodesEnabled()
 	for _, mc := range h.cfgEntries() {
 		if h.entryOwner(mc.ID) != id {
@@ -75,8 +93,9 @@ func (h *Hub) webURL() string {
 	return ""
 }
 
-// nodePackages is where the manager fetches node builds (hub.json's node_packages): its url, else this build's update
-// URL (a release hub's, a Docker image built with one); "off" none.
+// nodePackages is where the manager fetches node builds (hub.json's node_packages): its url, else the hub's update
+// source (hub.json's update.url, else the build's: a release hub's, a Docker image built with one), then through
+// update.proxy unless node_packages.proxy names one; "off" none.
 func (h *Hub) nodePackages() (url, proxy string) {
 	if h.cfg != nil {
 		url, proxy = h.cfg.NodePackages.URL, h.cfg.NodePackages.Proxy
@@ -85,7 +104,10 @@ func (h *Hub) nodePackages() (url, proxy string) {
 	case "off":
 		return "", ""
 	case "":
-		url = h.build.UpdateURL
+		url = h.updateURL()
+		if strings.TrimSpace(proxy) == "" && h.cfg != nil {
+			proxy = h.cfg.Update.Proxy // as written: the manager's netproxy refuses one that does not read, never goes around it
+		}
 	}
 	return strings.TrimRight(strings.TrimSpace(url), "/"), proxy
 }
@@ -248,6 +270,9 @@ func (h *Hub) addMachineLive(mc MachineConfig) {
 // removeMachineLive takes a hub.json entry out of what the manager connects: it lets the computer go now. A hub that
 // is not running (tests) does not read it again.
 func (h *Hub) removeMachineLive(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = h.retireShareMachine(ctx, id)
+	cancel()
 	d := &h.devices
 	d.mu.Lock()
 	if !d.started {

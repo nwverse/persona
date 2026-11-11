@@ -96,6 +96,13 @@ struct AgentListRows {
         }
     }
 
+    /// By App: per app, its projects' rows (running and offline, the latest first) while the section and the project are open.
+    func apps(_ groups: [AppGroup]) -> [Session] {
+        groups.flatMap { app in
+            folded(app.id) ? [] : app.showsProjects ? app.projects.flatMap { folded($0.id) ? [] : $0.sessions } : app.sessions
+        }
+    }
+
     /// By To-do: a section per todo, Unassigned last; `isFolded` per group (Unassigned has its own default, `TodoAgentGroup.folded`).
     func todos(_ groups: [TodoAgentGroup], isFolded: (TodoAgentGroup) -> Bool) -> [Session] {
         groups.flatMap { g in !searching && isFolded(g) ? [] : g.sessions }

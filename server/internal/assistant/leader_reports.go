@@ -114,6 +114,7 @@ func (s *Service) leaderReportsLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			s.leaderReportsSync(ctx, time.Now(), true)
+			s.directionTreeSoon() // a task of the tree may be stuck now with nothing else changing (direction_tree.go)
 		}
 	}
 }
@@ -166,6 +167,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		look, reached = s.leaderSessions(ctx, tasks)
 	}
 	l, loc := s.lang(ctx), s.location(ctx)
+	names := s.leaderNames(ctx, leads) // before the book's lock: it reads the titles and the knowledge base
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -174,6 +176,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	}
 	told := &b.told
 	var out []assistantwire.LeaderReportEvent
+	var stuckSigs []superviseSignal // the main conversation's one line for each (sigLeaderStuck)
 	for _, t := range tasks {
 		lead := t.Supervision.Supervisor
 		if r := triageLatestReview(t.Supervision); r != nil && !r.At.Before(told.Since) && now.Sub(r.At) < leaderReportsKeep {
@@ -197,13 +200,15 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		if a, ok := asks[t.ID]; ok {
 			lt.Ask = &a
 		}
-		tr := triageTodo(lt, look, now, time.Time{}, loc)
-		stuck := !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderStuckAfter && t.DoneAt == nil &&
-			slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
+		tr := triageTodo(lt, look, now, time.Time{}, loc, false) // a failed start is closed: never stuck
+		stuck := taskStuck(t, tr, reached[t.ID], now)
 		if last, ok := told.Stuck[t.ID]; stuck && (!ok || now.Sub(last) >= leaderStuckAfter) {
 			told.Stuck[t.ID] = now
 			key := "stuck|" + t.ID + "|" + now.UTC().Format(time.RFC3339Nano)
-			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section), now))
+			text := leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section)
+			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, text, now))
+			stuckSigs = append(stuckSigs, superviseSignal{Todo: t.ID, Kind: sigLeaderStuck, Key: key,
+				Detail: clip(names[lead]+" · "+oneLine(text), 200)})
 		}
 	}
 	for _, lp := range plans {
@@ -243,6 +248,13 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	}
 	for _, r := range out {
 		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
+	}
+	if len(stuckSigs) > 0 {
+		go func() { // not under the book's lock
+			for _, g := range stuckSigs {
+				s.signal(g)
+			}
+		}()
 	}
 }
 
@@ -307,9 +319,31 @@ func (s *Service) openPlans(ctx context.Context, conversation string, since time
 	return out
 }
 
+// taskStuck is the one stuck rule (#3485, #4352): by the To-dos SOP it sits in Waiting on you, or stopped unfinished
+// (PR to merge, Other open, Shelved), and nothing of it moved for leaderStuckAfter. reached: every machine its agents are
+// on answered (one that did not may be running it). leader.report kind stuck and the direction tree's stuck both read it.
+func taskStuck(t Todo, tr todoTriage, reached bool, now time.Time) bool {
+	return reached && t.DoneAt == nil && !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderStuckAfter &&
+		slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
+}
+
 // leaderSessions finds the sessions of the tasks' agents as the apps get them, asking each machine once; reached says,
 // by to-do id, whether every machine its agents are on answered.
 func (s *Service) leaderSessions(ctx context.Context, tasks []Todo) (triageLookup, map[string]bool) {
+	lists, reached := s.agentSessionLists(ctx, tasks)
+	return func(machine, id string) (proto.Session, bool) {
+		for _, c := range lists[machine] {
+			if c.SessionID == id {
+				return c, true
+			}
+		}
+		return proto.Session{}, false
+	}, reached
+}
+
+// agentSessionLists are the session lists, by machine, of the machines the tasks' active agents are on, each asked
+// once; reached says, by to-do id, whether every machine its agents are on answered.
+func (s *Service) agentSessionLists(ctx context.Context, tasks []Todo) (map[string][]proto.Session, map[string]bool) {
 	lists := map[string][]proto.Session{}
 	failed := map[string]bool{}
 	reached := map[string]bool{}
@@ -331,14 +365,7 @@ func (s *Service) leaderSessions(ctx context.Context, tasks []Todo) (triageLooku
 		}
 		reached[t.ID] = ok
 	}
-	return func(machine, id string) (proto.Session, bool) {
-		for _, c := range lists[machine] {
-			if c.SessionID == id {
-				return c, true
-			}
-		}
-		return proto.Session{}, false
-	}, reached
+	return lists, reached
 }
 
 // leaderReport is one report, named by its key.

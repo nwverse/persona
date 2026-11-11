@@ -171,6 +171,79 @@ class AssistantTraysShotsTest {
         return image.getPixel(2, 2)
     }
 
+    @Test
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h1000dp-xhdpi")
+    fun backgroundWorkUsesOneSpinnerAndRealWaitUsesClockInEveryStyle() {
+        val at = "2026-11-10T08:00:00Z"
+        val flow = Workflow(taskId = "workflow-fixture", status = "running", running = true, phase = "Adversarial review",
+            agentsDone = 5, agentsStarted = 6, agentsRunning = 1, startedAt = at)
+        val workers = listOf(
+            running.copy(title = "Background checks", plan = null, waiting = true, backgroundWorking = true, backgroundTasksCount = 2),
+            blocked.copy(title = "Workflow review", state = "working", status = "working", pendingInteractions = 0,
+                waiting = true, backgroundWorking = true, backgroundTasksCount = 0, runningWorkflowsCount = 1, workflowProgress = flow),
+        )
+        val fixture = Fixture().apply {
+            requests.value = emptyList(); drafts.value = emptyList()
+            returnedTodos = workers.mapIndexed { i, agent -> Todo("background-$i", agent.title, origin = "main", createdAt = at, updatedAt = at,
+                agents = listOf(TodoAgent(agent.machineId, agent.sessionId))) }
+            sessionRows.value = listOf(Session(main.machineId, main.sessionId, title = "Persona", assistant = true, state = "idle", status = "idle")) + workers
+            tasks.reloadTodos()
+        }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var large by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                fontScale = if (large) 1.6f else 1f
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            val density = androidx.compose.ui.unit.Density(androidx.compose.ui.platform.LocalDensity.current.density, if (large) 1.6f else 1f)
+            CompositionLocalProvider(LocalConfiguration provides configuration, androidx.compose.ui.platform.LocalDensity provides density) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        HomeNavigation(listOf(NavItem("assistant", "Assistant", PhIcons.Sparkle), NavItem("agents", "Agents", PhIcons.Robot)), "assistant", {},
+                            leading = { JAppMark(Tokens.Space.xl) })
+                        Box(Modifier.weight(1f)) {
+                            ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
+                                chrome = ChatChromeBindings(tasks = fixture.tasks, inboxTrays = fixture.inbox, inboxScope = "fixture", onOpenSession = { fixture.opened += it }),
+                                renderStyle = ChatRenderStyle.Assistant, embedded = true, showTopBar = false)
+                        }
+                    }
+                }
+            }
+        }
+        settle()
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+        for (s in AppStyle.entries) for (big in listOf(false, true)) {
+            val corners = mutableListOf<Int>()
+            for (d in listOf(false, true)) {
+                style = s; dark = d; large = big
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key) workers[0] else it }
+                settle()
+                rule.onAllNodes(hasTestTag("assistant-work-spinner") and hasAnyAncestor(hasTestTag("assistant-progress-todo:background-0")), useUnmergedTree = true).assertCountEquals(1)
+                rule.onNodeWithText("后台任务 2 个在跑").assertIsDisplayed() // i18n-ignore: localized screenshot assertion
+                rule.onAllNodes(hasTestTag("assistant-work-spinner") and hasAnyAncestor(hasTestTag("assistant-progress-todo:background-1")), useUnmergedTree = true).assertCountEquals(1)
+                rule.onNodeWithText("Adversarial review").assertIsDisplayed()
+                rule.onNodeWithText(" · 5/6+").assertIsDisplayed()
+                // Capture the actual ChatScreen with both requested activity rows in its tray.
+                corners += shot("background-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
+                    workers[0].copy(backgroundTasksCount = 0, runningSubagents = 3) else it }; settle()
+                rule.onNodeWithText("子 Agent 3 个在跑").assertIsDisplayed() // i18n-ignore: localized screenshot assertion
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
+                    workers[0].copy(state = "idle", status = "idle", backgroundWorking = false, backgroundTasksCount = 0,
+                        work = persona.core.contracts.WorkState(phase = "blocked", on = "external", wait = "Wait for deployment")) else it }; settle()
+                shot("waiting-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
+                rule.onNodeWithTag("assistant-wait-clock", useUnmergedTree = true).assertIsDisplayed()
+                rule.onAllNodesWithTag("assistant-agent-manual").assertCountEquals(0)
+            }
+            assertNotEquals("Light and dark captures must differ", corners[0], corners[1])
+        }
+        assertTrue(fixture.approvals.isEmpty()); assertTrue(fixture.sends.isEmpty())
+    }
+
     @Test fun allStylesAndAppearancesRenderActualAssistantPageAndMutuallyExclusiveTrays() {
         val fixture = Fixture()
         var style by mutableStateOf(AppStyle.Glass)
@@ -186,7 +259,7 @@ class AssistantTraysShotsTest {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                     Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
                         HomeNavigation(listOf(NavItem("assistant", "Assistant", PhIcons.Sparkle), NavItem("agents", "Agents", PhIcons.Robot)), tab,
-                            { tab = it }, leading = { JAppMark(Tokens.Space.xxl) })
+                            { tab = it }, leading = { JAppMark(Tokens.Space.xl) })
                         Box(Modifier.weight(1f)) {
                             ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
                                 chrome = ChatChromeBindings(tasks = if (tab == "assistant") fixture.tasks else null,
@@ -299,6 +372,81 @@ class AssistantTraysShotsTest {
                 hasAnyAncestor(hasTestTag("assistant-progress-todo:task-d")), useUnmergedTree = true).assertCountEquals(0)
             rule.onNodeWithTag("assistant-progress-todo:task-a").assert(hasText(runningLabel))
             shot("$name-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
+    }
+
+    /**
+     * Agents another agent created (#4494) are in their creator's row, not rows of their own (#4769): the orchestrator
+     * says how many it runs, the one that asks for you is in Needs you, and one whose creator stopped is its own row.
+     * Each capture comes before its checks, so the same test run on the code before shows what it changed.
+     */
+    @Test fun subtasksAreInTheirCreatorsRowInEveryStyle() {
+        // The card's headline in English too, as the app words it (CoreText falls back to Chinese in unit tests).
+        val words = CoreText.words
+        CoreText.words = { it.resolve(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()) }
+        try { subtaskShots() } finally { CoreText.words = words }
+    }
+
+    private fun subtaskShots() {
+        val lead = Session("computer-a", "lead", title = "Review the release branch", state = "working", status = "working",
+            sourceKind = "runtime", agent = "claude", activity = "Waiting for the reviewers",
+            background = (1..3).map { BackgroundTask("reviewer-$it", kind = "agent") })
+        fun created(id: String, title: String, by: String, state: String = "working", status: String = "working") = Session("computer-a", id,
+            title = title, state = state, status = status, sourceKind = "runtime", agent = "claude", isSubagent = true, parentSessionId = by,
+            activity = "Reading the diff")
+        val thread = Session("computer-b", "codex", title = "Fix the flaky test", state = "working", status = "working", agent = "codex",
+            sourceKind = "codex_app_server", sourceThreadId = "thread-codex", activity = "Running the tests")
+        val subagent = Session("computer-b", "probe", title = "Explore the test logs", state = "working", status = "working", agent = "codex",
+            sourceKind = "codex_app_server", sourceThreadId = "thread-probe", parentThreadId = "thread-codex", isSubagent = true)
+        val deploy = created("deploy", "Deploy to staging", "lead", state = "needs_you", status = "blocked")
+        val planner = Session("computer-a", "planner", title = "Plan the migration", state = "idle", status = "idle", sourceKind = "runtime", agent = "claude")
+        val fixture = Fixture().apply {
+            returnedTodos = emptyList(); tasks.reloadTodos()
+            requests.value = listOf(Interaction("deploy-card", machineId = deploy.machineId, sessionId = deploy.sessionId, kind = "permission",
+                toolName = "Bash", summary = "Deploy the build to staging"))
+            drafts.value = emptyList()
+            sessionRows.value = listOf(Session(main.machineId, main.sessionId, title = "Persona", assistant = true, state = "idle", status = "idle"),
+                lead, created("review-api", "Review the API changes", "lead"), created("review-ui", "Review the UI changes", "lead"), deploy,
+                thread, subagent, planner, created("writer", "Write the migration", "planner"), manual)
+        }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            CompositionLocalProvider(LocalConfiguration provides configuration) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
+                            chrome = ChatChromeBindings(tasks = fixture.tasks, assistantManagement = fixture.management, inboxTrays = fixture.inbox,
+                                inboxScope = "fixture", onOpenSession = { fixture.opened += it }),
+                            renderStyle = ChatRenderStyle.Assistant, embedded = true, showTopBar = false)
+                    }
+                }
+            }
+        }
+        settle()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d; settle()
+            val suffix = "${s.name.lowercase()}-${if (d) "dark" else "light"}"
+            rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+            shot("subtasks-running-$suffix")
+            rule.onNodeWithTag("assistant-tray-running").assertIsDisplayed()
+            // the orchestrator, the Codex thread, the agent whose creator stopped and the one opened by hand: four rows
+            for (id in listOf("lead", "codex", "writer", "manual")) rule.onNodeWithTag("assistant-agent-$id").assertExists()
+            for (id in listOf("review-api", "review-ui", "probe", "deploy")) rule.onNodeWithTag("assistant-agent-$id").assertDoesNotExist()
+            rule.onNodeWithText("4 items").assertIsDisplayed()
+            rule.onNodeWithText("Subagents running: 3").assertIsDisplayed()
+            rule.onNodeWithText("All 5").assertIsDisplayed()
+            rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
+            shot("subtasks-needs-$suffix")
+            rule.onNodeWithTag("assistant-needs-agent-deploy").assertIsDisplayed()
+            rule.onNodeWithText("1 item").assertIsDisplayed()
+            rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         }
     }
 

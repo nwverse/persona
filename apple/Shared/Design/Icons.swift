@@ -12,6 +12,10 @@ extension Theme {
         static let errorFilled = "exclamationmark.triangle.fill"
         /// The highest alert level, above `error` (a machine's critical alert).
         static let critical = "exclamationmark.octagon.fill"
+        /// A tool call the user, a permission rule or a hook turned down (Denied, #4303): gray, not an error.
+        static let denied = "hand.raised.slash"
+        /// A tool call refused before it ran (Did not run): a skipped step.
+        static let didNotRun = skipped
         static let success = "checkmark.circle"
         static let successFilled = "checkmark.circle.fill"
         static let done = "checkmark"
@@ -28,6 +32,8 @@ extension Theme {
         static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
         static let byState = "circle.grid.2x1"
+        /// Agents grouped by the app they run in (the Agents list's By App, #3756).
+        static let byApp = "macwindow"
         static let muted = "bell.slash.fill"
         static let notifications = "bell.badge"
         /// The hours this device's notifications keep quiet (Settings › Notifications).
@@ -327,6 +333,8 @@ extension Theme {
         static let context = "gauge.with.dots.needle.33percent"
         /// A piece of context a message carries (a page excerpt, a part of a Feishu /agent request's context).
         static let quote = "text.quote"
+        /// The mark at the top of a quote in a reply (#2984).
+        static let quoteMark = "quote.closing"
         /// The context a message carries, folded into one row.
         static let contexts = "rectangle.stack"
         static let space = "square.stack.3d.up"
@@ -423,6 +431,9 @@ extension Theme {
         /// A hub behind Cloudflare Access and the service token that lets the app through (Settings › hub › Cloudflare
         /// Access, docs/operations/network.md "Behind Cloudflare Access").
         static let cloudflareAccess = "person.badge.shield.checkmark"
+        /// A paired hub's other addresses, tried after its paired one (Settings › hub › Addresses, docs/operations/network.md
+        /// "Client-added candidates").
+        static let hubAddresses = "signpost.right.and.left"
         /// This device's own SSH key (its public half, to copy onto the server).
         static let sshKey = "key.horizontal"
         /// The SSH server's key fingerprint, confirmed and pinned.
@@ -451,6 +462,8 @@ extension Theme {
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
         static let phone = "iphone"
+        /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
+        static let phoneControl = "iphone.radiowaves.left.and.right"
         static let watch = "applewatch"
         static let handoff = "iphone.and.arrow.forward"
         /// The default web browser (open a link outside the app).
@@ -586,6 +599,8 @@ extension Theme {
         static let findFiles = "folder.badge.questionmark"
         /// Text searched for inside files (Grep).
         static let findText = "text.magnifyingglass"
+        /// A command watched in the background, each line it prints an event (Claude Code's Monitor, its task notes).
+        static let monitor = "waveform.path.ecg"
         /// A subagent the agent started (the Agent / Task tool, a session's subagents); one at work.
         static let subagent = "person.2"
         static let subagentWorking = "person.2.badge.gearshape"
@@ -593,6 +608,8 @@ extension Theme {
         static let agentChat = "bubble.left.and.text.bubble.right"
         /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
         static let meeting = "person.2.wave.2"
+        /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
+        static let attendanceOff = "waveform.slash"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).

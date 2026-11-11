@@ -178,6 +178,8 @@ nonisolated enum AssistantEntries {
         var folded = Set<String>()
         var asking: [(row: Row, first: Date?)] = []
         var deciding: [Ranked] = [], open: [Ranked] = [], shelved: [Ranked] = []
+        // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
+        let superseded = TodoTriageLogic.supersededFailedStarts(todos)
         for todo in todos {
             guard let when = at[todo.id] else { continue }
             let status = status(todo, lookup: lookup, plans: plans)
@@ -185,7 +187,8 @@ nonisolated enum AssistantEntries {
             let asks = active.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
             let row = Row.task(id: todo.id, status: status, agents: active.count)
             let listed = { folded.formUnion(active.map { pair($0.machineID, $0.sessionID) }) }
-            let bucket = TodoTriageLogic.bucket(todo, lookup: lookup, now: now, restoredAt: restored[todo.id])
+            let bucket = TodoTriageLogic.bucket(todo, lookup: lookup, now: now, restoredAt: restored[todo.id],
+                                                superseded: superseded.contains(todo.id))
             // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
             let waits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
             if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
@@ -253,10 +256,22 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
         }
     }
 
+    /// Needs You's rows from one supervising conversation (docs/apple/ios.md "Background rounds").
+    struct NeedsYouGroup: Equatable, Sendable, Identifiable {
+        /// The supervising conversation's id; "" for the conversation's own group.
+        var id: String
+        /// Its header; nil for the conversation's own group, which comes first.
+        var title: String?
+        var rows: [Row]
+    }
+
     var needsYou: [Row] = []
     var running: [Row] = []
     /// Folded under In Progress, not counted.
     var shelved: [AssistantEntries.Row] = []
+    /// Needs You's rows grouped by supervising conversation (`grouped`); empty when the tray is one list, as it always
+    /// was. Grouping never changes the rows or the count.
+    var needsYouGroups: [NeedsYouGroup] = []
 
     init() {}
 
@@ -275,6 +290,35 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
 
     /// The number its entry shows: its rows (shelved ones are not counted).
     func count(_ tray: ActionTray) -> Int { rows(tray).count }
+
+    /// Groups Needs You (`grouped`) when `enabled` (the main conversation folding background rounds); otherwise one list.
+    mutating func groupNeedsYou(_ enabled: Bool, conversation: String, origin: (String) -> String?, title: (String) -> String?) {
+        needsYouGroups = enabled ? Self.grouped(needsYou, conversation: conversation, origin: origin, title: title) : []
+    }
+
+    /// Needs You's rows by the conversation that supervises each task (its `origin`), the conversation's own group first
+    /// and the others in the order their first row comes. Rows that are not tasks (asks, agents, plans, messages) and
+    /// tasks without another origin are the conversation's own. Within a group rows keep their order. Empty with only
+    /// one group: the tray then looks as it always did. `title` names another conversation; "Another conversation"
+    /// when it has no name.
+    static func grouped(_ rows: [Row], conversation: String, origin: (String) -> String?,
+                        title: (String) -> String?) -> [NeedsYouGroup] {
+        var order: [String] = [""]
+        var byGroup: [String: [Row]] = [:]
+        for row in rows {
+            var group = ""
+            if case .entry(.task(let id, _, _)) = row, let o = origin(id), !o.isEmpty, o != conversation { group = o }
+            if byGroup[group] == nil, !group.isEmpty { order.append(group) }
+            byGroup[group, default: []].append(row)
+        }
+        let ids = order.filter { byGroup[$0]?.isEmpty == false }
+        guard ids.count > 1 else { return [] }
+        return ids.map { id -> NeedsYouGroup in
+            guard !id.isEmpty else { return NeedsYouGroup(id: id, title: nil, rows: byGroup[id] ?? []) }
+            let name = title(id)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return NeedsYouGroup(id: id, title: name.isEmpty ? String(localized: "Another conversation") : name, rows: byGroup[id] ?? [])
+        }
+    }
 }
 
 extension ActionTray {
@@ -327,6 +371,13 @@ struct AssistantActionBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil }
+        #if DEBUG
+        .onAppear {
+            if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
+                open = tray
+            }
+        }
+        #endif
         .confirmTaskRemoval($removing)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("action-bar")
@@ -345,11 +396,20 @@ struct AssistantActionBar: View {
             feed: store.feed(conversation), restored: TodoRestores.load(), going: model.goingAgents,
             // the hub's fields, the inbox's word on the item, and Later
             messageWaits: { item in
-                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(id) else { return false }
+                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(item.id) else { return false }
                 return store.messageState(item, itemID: id) == .open
             })
         let asks = (key.map { model.interactions(for: $0) } ?? []).sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
-        return ActionTrayContent(entries, asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title) })
+        var content = ActionTrayContent(entries, asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title) })
+        // The main conversation, while it folds background rounds, groups Needs You by supervising conversation.
+        content.groupNeedsYou(conversation == model.assistantMain?.sessionID && model.mainBackgroundFolded,
+                              conversation: conversation, origin: { store.todos[$0]?.origin },
+                              title: { id in
+                                  if let name = model.directionNames[id] { return name }
+                                  let title = model.assistantConfig?.conversations.first(where: { $0.sessionID == id })?.title
+                                  return title == "Claude Code" ? nil : title
+                              })
+        return content
     }
 
     private func entry(_ tray: ActionTray, count: Int) -> some View {
@@ -412,7 +472,21 @@ struct AssistantActionBar: View {
                 // As tall as its rows; past the cap they scroll inside the tray, the bar stays where it is.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(rows) { row($0) }
+                        if tray == .needsYou, !content.needsYouGroups.isEmpty {
+                            ForEach(content.needsYouGroups) { group in
+                                if let title = group.title {
+                                    // The tray's own header style: a group reads as a section of the tray.
+                                    Text(title).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                                        .padding(.horizontal, Theme.Space.m)
+                                        .padding(.top, Theme.Space.s)
+                                        .accessibilityAddTraits(.isHeader)
+                                        .accessibilityIdentifier("action-tray.group")
+                                }
+                                ForEach(group.rows) { row($0) }
+                            }
+                        } else {
+                            ForEach(rows) { row($0) }
+                        }
                         if tray == .running, !content.shelved.isEmpty { shelvedLine(content.shelved.count) }
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
@@ -450,6 +524,7 @@ struct AssistantActionBar: View {
         case .task(let id, let status, let agents):
             if let todo = store.todos[id] {
                 let state = status.taskState
+                let activity = AssistantTrayActivity(sessions: store.sessions(todo))
                 if let ask = todo.openAsk, todo.doneAt == nil {
                     BriefAcceptRow(row: ask.row(for: todo), group: AppModel.shared.hub?.group ?? "")
                         .padding(.horizontal, Theme.Space.m)
@@ -458,8 +533,18 @@ struct AssistantActionBar: View {
                         open = nil
                         store.detailTask = id
                     } label: {
-                        line(title: todo.title, detail: detail(todo, status: status, agents: agents), waiting: open == .needsYou) {
-                            TaskMark(state: state)
+                        line(title: todo.title,
+                             detail: activity.isActive && status == .waiting ? StateName.working.text : detail(todo, status: status, agents: agents),
+                             waiting: open == .needsYou, activity: activity) {
+                            if open != .needsYou && (activity.isActive || status == .working) {
+                                WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
+                            } else if status == .waiting {
+                                ThemedIcon(Theme.Icon.backgroundWaiting).font(Theme.Font.labelStrong)
+                                    .foregroundStyle(StatusPalette.backgroundWaiting.dot)
+                                    .accessibilityIdentifier("action-tray.waiting-mark")
+                            } else {
+                                TaskMark(state: state)
+                            }
                         }
                     }
                     .buttonStyle(.plain)
@@ -472,8 +557,15 @@ struct AssistantActionBar: View {
                 open = nil
                 store.detailAgent = agent.key
             } label: {
-                line(title: agent.title, detail: agent.isWaiting ? StateName.needsYou.text : StateName.working.text, waiting: agent.isWaiting) {
-                    StatusDot(state: agent.state, size: Theme.Size.dotL)
+                line(title: agent.title,
+                     detail: agent.isWaiting ? StateName.needsYou.text : (agent.backgroundWaiting && !agent.activity.isActive ? StateName.taskWaiting.text : StateName.working.text),
+                     waiting: agent.isWaiting, activity: agent.activity) {
+                    if !agent.isWaiting && (agent.activity.isActive || !agent.backgroundWaiting) {
+                        WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
+                    } else {
+                        StatusDot(state: agent.state, size: Theme.Size.dotL, waiting: agent.backgroundWaiting)
+                            .accessibilityIdentifier(agent.backgroundWaiting ? "action-tray.waiting-mark" : "action-tray.state-mark")
+                    }
                 }
             }
             .buttonStyle(.plain)
@@ -527,17 +619,74 @@ struct AssistantActionBar: View {
         return parts.joined(separator: " · ")
     }
 
-    private func line<Mark: View>(title: String, detail: String, waiting: Bool, @ViewBuilder mark: () -> Mark) -> some View {
+    private func line<Mark: View>(title: String, detail: String, waiting: Bool,
+                                  activity: AssistantTrayActivity = .init(), @ViewBuilder mark: () -> Mark) -> some View {
         HStack(spacing: Theme.Space.s) {
             mark().scaledFrame(width: Theme.Size.markM)
-            Text(title).font(Theme.Font.body).lineLimit(1)
-            Spacer(minLength: Theme.Space.s)
-            Text(detail).font(Theme.Font.caption).lineLimit(1).fixedSize()
-                .foregroundStyle(waiting ? AnyShapeStyle(AgentState.needsYou.tone.text) : AnyShapeStyle(.secondary))
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                HStack(spacing: Theme.Space.s) {
+                    Text(title).font(Theme.Font.body).lineLimit(1)
+                    Spacer(minLength: Theme.Space.s)
+                    Text(detail).font(Theme.Font.caption).lineLimit(1).fixedSize()
+                        .foregroundStyle(waiting ? AnyShapeStyle(AgentState.needsYou.tone.text) : AnyShapeStyle(.secondary))
+                }
+                if activity.isActive {
+                    AssistantTrayActivityLine(activity: activity)
+                }
+            }
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s)
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension AssistantTrayActivity {
+    /// Workflow phase first, with other work on a separate line when activity is mixed.
+    var subtitle: String { [workflowSubtitle, otherSubtitle].filter { !$0.isEmpty }.joined(separator: " · ") }
+
+    var workflowSubtitle: String {
+        guard workflowCount > 0 else { return "" }
+        return ([String(localized: "Background workflow")] + (workflows.first.map { [$0.phase ?? $0.title] } ?? []))
+            .joined(separator: " · ")
+    }
+
+    var otherSubtitle: String {
+        var parts: [String] = []
+        if backgroundTasks > 0 { parts.append(String(localized: "\(backgroundTasks) background tasks running")) }
+        if subagents > 0 { parts.append(String(localized: "\(subagents) subagents running")) }
+        if parts.isEmpty, workflowCount == 0, reportedBackgroundWork { return String(localized: "Working (Background)") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// A tray's activity subtitle: even a long phase cannot cut the workflow's done/started counts.
+struct AssistantTrayActivityLine: View {
+    var activity: AssistantTrayActivity
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            if activity.workflowCount > 0 {
+                HStack(spacing: Theme.Space.xs) {
+                    Text(activity.workflowSubtitle).lineLimit(1).truncationMode(.tail)
+                    if let counts = activity.workflows.first?.counts {
+                        Text("· " + counts).monospacedDigit().lineLimit(1).fixedSize()
+                            .layoutPriority(1)
+                            .accessibilityIdentifier("action-tray.workflow-progress")
+                    }
+                    if activity.workflowCount > 1 {
+                        Text(String(localized: " · and \(activity.workflowCount - 1) more")).lineLimit(1).fixedSize()
+                    }
+                }
+            }
+            if !activity.otherSubtitle.isEmpty {
+                Text(activity.otherSubtitle).lineLimit(1)
+            }
+        }
+        .font(Theme.Font.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("action-tray.activity")
     }
 }

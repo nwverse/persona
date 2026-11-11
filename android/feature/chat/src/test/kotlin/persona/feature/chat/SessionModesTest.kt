@@ -17,13 +17,15 @@ import org.junit.Test
 @Config(sdk = [35])
 class SessionModesTest {
     private val res = ApplicationProvider.getApplicationContext<Context>().resources
+    private fun claude(mode: String?) = Session(sessionId = "s", agent = "claude", permissionMode = mode)
+
     @Test fun runningSessionsCannotPickBypassButShowItWhenOn() {
-        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable("default").map { it.id })
-        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable(null).map { it.id })
-        assertEquals("bypassPermissions", SessionModes.switchable("bypassPermissions").last().id)
-        assertEquals("全部放行", SessionModes.switchable("bypassPermissions").last().title(res))
+        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable(claude("default")).map { it.id })
+        assertEquals(listOf("default", "acceptEdits", "plan", "auto"), SessionModes.switchable(claude(null)).map { it.id })
+        assertEquals("bypassPermissions", SessionModes.switchable(claude("bypassPermissions")).last().id)
+        assertEquals("全部放行", SessionModes.switchable(claude("bypassPermissions")).last().title(res))
         // A newer Claude Code's mode is listed by its raw name, so the current one still shows as picked.
-        assertEquals("future", SessionModes.switchable("future").last().title(res))
+        assertEquals("future", SessionModes.switchable(claude("future")).last().title(res))
         assertEquals("手动确认", SessionModes.modeLabel("default", res))
         assertEquals("很高", SessionModes.effortLabel("xhigh", res))
         assertEquals("future", SessionModes.modeLabel("future", res))
@@ -119,5 +121,17 @@ class SessionModesTest {
         assertEquals("自动改文件，思考很高", chatModeHint(session.copy(permissionMode = "acceptEdits", effort = "xhigh"), res))
         assertEquals("全部放行", chatModeHint(session.copy(permissionMode = "bypassPermissions"), res))
         assertEquals("future", chatModeHint(session.copy(permissionMode = "future"), res))
+    }
+
+    /** #582: the after-resume notice shows while it was on before a resume and nothing turned it back on. */
+    @Test fun theAfterResumeNoticeShowsUntilItIsOnAgain() {
+        val lost = persona.core.contracts.Session(machineId = "m", sessionId = "s", agent = "claude", status = "idle",
+            ultracode = false, ultracodeLostAt = "2026-11-11T12:00:00Z")
+        val features = setOf(Ultracode.FEATURE)
+        org.junit.Assert.assertTrue(Ultracode.lostShown(lost, features))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost.copy(ultracode = true), features))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost.copy(ultracodeLostAt = null), features))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost, emptySet()))
+        org.junit.Assert.assertFalse(Ultracode.lostShown(lost.copy(assistant = true), features))
     }
 }

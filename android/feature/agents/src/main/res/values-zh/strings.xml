@@ -69,10 +69,12 @@
     <string name="agents_range_all">全部</string>
     <string name="agents_range_history">历史</string>
     <string name="agents_grouping_current">分组：%1$s</string>
+    <string name="agents_only_machine">只看 %1$s</string>
+    <string name="agents_only_machine_hint">显示全部机器</string>
     <string name="agents_grouping_repo">按仓库</string>
     <string name="agents_grouping_state">按状态</string>
     <string name="agents_grouping_todo">按待办</string>
-    <string name="agents_grouping_machine_space">按电脑和空间</string>
+    <string name="agents_grouping_project">按项目</string>
     <string name="agents_menu_compact">细列表</string>
     <string name="agents_menu_detailed">详细列表</string>
     <string name="agents_menu_collapse_all">全部折叠</string>
@@ -120,6 +122,8 @@
     <string name="agents_row_draft_attachments_text">草稿含附件：%1$s</string>
     <string name="agents_row_pinned">已置顶</string>
     <string name="agents_row_muted">已屏蔽</string>
+    <string name="agents_row_closeout_contradicted">hub 查到它的收尾说法不属实</string>
+    <string name="agents_row_not_finished">没做完</string>
     <string name="agents_action_open_read_only">只读打开</string>
     <string name="agents_action_delete_chat">删除对话</string>
     <string name="agents_action_unpin">取消置顶</string>
@@ -141,14 +145,13 @@
     <string name="agents_repo_repository">仓库</string>
     <string name="agents_repo_main_checkout">主工作树</string>
     <string name="agents_repo_worktree">工作树</string>
-    <string name="agents_card_question">有问题等你回答</string>
-    <string name="agents_card_question_by">%1$s 有问题等你回答</string>
-    <string name="agents_card_permission">请求使用 %1$s</string>
-    <string name="agents_card_permission_by">%1$s 请求使用 %2$s</string>
-    <string name="agents_card_tool">工具</string>
-    <string name="agents_card_plan">计划等你批准</string>
-    <string name="agents_card_screen">终端里有对话框等你处理</string>
-    <string name="agents_card_other">需要你处理</string>
+    <string name="agents_card_question">Claude 在问你</string>
+    <string name="agents_card_question_by">%1$s 在问你</string>
+    <string name="agents_card_permission">需要你授权</string>
+    <string name="agents_card_permission_by">%1$s 需要你授权</string>
+    <string name="agents_card_plan">计划等你审批</string>
+    <string name="agents_card_screen">终端等你处理</string>
+    <string name="agents_card_other">需要你</string>
     <string name="agents_card_open_session">打开会话查看请求</string>
     <string name="agents_space_index">空间 %1$d</string>
     <string name="agents_space_missing">未提供空间</string>
@@ -233,9 +236,12 @@
     <string name="agents_dialog_delete">删除</string>
     <string name="agents_dialog_rename_space">重命名空间</string>
     <string name="agents_dialog_rename_space_text">同时改 herdr 里这个 workspace 的名字。</string>
+    <string name="agents_dialog_rename_space_text_tern">同时改 Tern 里这个 session 的名字。</string>
     <string name="agents_dialog_rename_text">标签名同步到 herdr；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
+    <string name="agents_dialog_rename_text_tern">标签名同步到 Tern；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
     <string name="agents_dialog_save">保存</string>
     <string name="agents_dialog_tab_name">标签名（herdr tab）</string>
+    <string name="agents_dialog_tab_name_tern">标签名（Tern tab）</string>
     <string name="agents_dialog_space_name">空间名</string>
     <string name="agents_dialog_session_name">会话名</string>
     <string name="agents_space_actions">空间操作</string>
@@ -344,6 +350,7 @@
     <string name="agents_todo_delete_action">删除</string>
     <string name="agents_todo_done_failed">完成待办失败：%1$s</string>
     <string name="agents_todo_delete_failed">删除待办失败：%1$s</string>
+    <string name="agents_todo_state_didnt_start">没开起来</string>
     <string name="agents_todo_start_failed">启动失败：%1$s</string>
     <string name="agents_todo_in_progress">正在进行</string>
     <plurals name="agents_todo_agents">
@@ -493,7 +500,9 @@
     <string name="agents_herdr_why_timeout">等了很久 herdr 还没起来，稍后再看看</string>
     <string name="agents_empty_no_computer_title">还没有电脑</string>
     <string name="agents_empty_no_computer_hint">添加一台，Persona 就能在上面替你干活。</string>
-    <string name="agents_page_loaded">已加载 %1$d / %2$d 个会话</string>
+    <plurals name="agents_page_loaded">
+        <item quantity="other">已加载 %1$d / %2$d 个会话</item>
+    </plurals>
     <string name="agents_page_more">加载更多</string>
     <string name="agents_page_previous">加载之前的会话</string>
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
@@ -503,12 +512,57 @@
     <string name="agents_todos_section_pr">PR 待合并</string>
     <string name="agents_todos_section_other">其他未完成</string>
     <string name="agents_todos_section_shelved">已搁置</string>
-    <string name="agents_todos_summary">%1$d 个未完成 · %2$d 个搁置 · %3$d 个已完成</string>
+    <string name="agents_todos_filter_button">筛选和排序</string>
+    <string name="agents_todos_filter_show">显示</string>
+    <string name="agents_todos_sort_by">排序方式</string>
+    <string name="agents_todos_filter_all">全部</string>
+    <string name="agents_todos_filter_no_due">无截止日期</string>
+    <string name="agents_todos_filter_today">今天</string>
+    <string name="agents_todos_filter_week">本周</string>
+    <string name="agents_todos_filter_month">本月</string>
+    <string name="agents_todos_sort_recent">最近动过</string>
+    <string name="agents_todos_sort_due">截止时间</string>
+    <string name="agents_todos_sort_priority">优先级</string>
+    <string name="agents_todos_filter_clear">清除「%1$s」筛选</string>
+    <string name="agents_todos_filter_hidden_waiting">另有 %1$d 项需要你，不在「%2$s」里</string>
+    <string name="agents_todos_filter_show_all">看全部</string>
+    <string name="agents_todos_filter_empty_today">今天没有到期的待办</string>
+    <string name="agents_todos_filter_empty_week">本周没有到期的待办</string>
+    <string name="agents_todos_filter_empty_month">本月没有到期的待办</string>
+    <string name="agents_todos_filter_empty_no_due">所有待办都有截止日期</string>
+    <string name="agents_todos_filter_empty_hint">换个筛选看看。</string>
+    <plurals name="agents_todos_filter_count">
+        <item quantity="other">%d 条</item>
+    </plurals>
     <string name="agents_todo_restore">恢复</string>
     <string name="agents_todo_pr_moved">%1$s · %2$s有动静</string>
     <string name="agents_todo_pr">PR</string>
     <string name="agents_todo_state_accepted">已验收</string>
     <plurals name="agents_todos_related">
         <item quantity="other">%1$d 个相关</item>
+    </plurals>
+    <!-- The to-dos' month (#2046) -->
+    <string name="agents_todos_view_list">列表</string>
+    <string name="agents_todos_view_calendar">日历</string>
+    <string name="agents_todo_calendar_options">日历选项</string>
+    <string name="agents_todo_calendar_show_done">显示已完成</string>
+    <string name="agents_todo_calendar_today">今天</string>
+    <string name="agents_todo_calendar_previous">上个月</string>
+    <string name="agents_todo_calendar_next">下个月</string>
+    <string name="agents_todo_calendar_more">+%1$d</string>
+    <string name="agents_todo_calendar_see_list">看列表</string>
+    <string name="agents_todo_calendar_nothing_due">这天没有到期的待办</string>
+    <string name="agents_todo_calendar_all_day">全天</string>
+    <string name="agents_todo_calendar_reminder">有提醒</string>
+    <string name="agents_todo_calendar_moved">已移到 %1$s</string>
+    <string name="agents_todo_calendar_undo">撤销</string>
+    <string name="agents_todo_calendar_move_failed">没能改截止时间：%1$s</string>
+    <string name="agents_todo_calendar_change_due">改截止时间</string>
+    <string name="agents_todo_calendar_change_due_action">改截止时间…</string>
+    <string name="agents_todo_calendar_change_due_of">改截止时间：%1$s…</string>
+    <string name="agents_todo_calendar_date">日期</string>
+    <string name="agents_todo_calendar_time">时间</string>
+    <plurals name="agents_todo_calendar_undated">
+        <item quantity="other">%1$d 条没有截止</item>
     </plurals>
 </resources>

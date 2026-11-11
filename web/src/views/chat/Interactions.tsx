@@ -7,13 +7,14 @@ import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
 import { allowBody, denyBody } from "../../lib/quick-answers";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
+import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import type { Interaction } from "../../lib/types";
 import { defaults, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, urlHost, urlTarget, validate, type ElicitationAction, type Field, type Values } from "../../lib/elicitation";
 import { answerLines } from "../../lib/answered";
 import { interactionCanAnswer, sessionTitle } from "../../lib/format";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
-import { mcpServerLabel, toolDisplayName } from "../../lib/turns";
+import { cardToolName, mcpServerLabel } from "../../lib/turns";
 import { isSecretRun, optionDisplay, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
@@ -26,7 +27,7 @@ import { cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnswered } from "./dock
 import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
-import { alwaysScope } from "../../lib/always-scope";
+import { alwaysScope, offersAlways } from "../../lib/always-scope";
 import { StatusMark } from "../../ui/StatusMark";
 import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
@@ -454,7 +455,7 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   return (
     <Card
       kicker={t("chat-interactions.permission_kicker")}
-      title={t("chat-interactions.permission_title", { tool: toolDisplayName(ix.tool_name) })}
+      title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })}
       cardKeys={keys}
       onDismiss={() => go({ dismiss: true })}
       busy={busy}
@@ -464,8 +465,8 @@ function PermissionCard({ ix }: { ix: Interaction }) {
             {t("chat-interactions.deny")}
           </Button>
           <span className="flex gap-1.5">
-            {/* Claude's "Always allow"; another agent's card (Codex, an agent runtime) only when it says what always allows. */}
-            {(!ix.agent || ix.agent === "claude" || ix.always_label) && (
+            {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
+            {offersAlways(ix) && (
               <Button tone="secondary" disabled={busy} onClick={() => go({ allow: true, always: true })}>
                 {t("chat-interactions.always_allow")}
               </Button>
@@ -639,6 +640,28 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
   );
 }
 
+function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolean }) {
+  const session = useStore(() => getSession(ix.machine_id, ix.session_id));
+  const [confirming, setConfirming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  if (!session || session.assistant || session.status !== "blocked") return null;
+  const close = async () => {
+    if (closing) return;
+    setClosing(true);
+    await archiveAgent(session, true, { ...appArchiveDeps, archive: s => archiveSession(s, true, true) });
+    setClosing(false);
+    setConfirming(false);
+  };
+  if (!confirming) return <Button className="min-h-11" disabled={disabled} onClick={() => setConfirming(true)}>{t("chat-interactions.close_agent")}</Button>;
+  return <div className="flex min-w-0 flex-col gap-2">
+    <p className="text-ink-2">{t("chat-interactions.close_agent_hint")}</p>
+    <div className="flex flex-wrap gap-2">
+      <Button className="min-h-11" disabled={disabled || closing} onClick={() => setConfirming(false)}>{t("chat-interactions.close_agent_cancel")}</Button>
+      <Button className="min-h-11" tone="danger" busy={closing} disabled={disabled || closing} onClick={() => void close()}>{t("chat-interactions.close_agent_confirm")}</Button>
+    </div>
+  </div>;
+}
+
 function ScreenCard({ ix }: { ix: Interaction }) {
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
@@ -679,8 +702,9 @@ function ScreenCard({ ix }: { ix: Interaction }) {
       cardKeys={keys}
       onDismiss={() => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
-      footer={
-        d?.options?.length ? (
+      footer={<div className="flex w-full min-w-0 flex-col gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+        {d?.options?.length ? (
           <span className="text-[11.5px] text-ink-3">{t("chat-interactions.screen_hint")}</span>
         ) : (
           <>
@@ -701,8 +725,10 @@ function ScreenCard({ ix }: { ix: Interaction }) {
               {keys.focused && <Kbd>Enter</Kbd>}
             </Button>
           </>
-        )
-      }
+        )}
+        </div>
+        <CloseBlockedAgent ix={ix} disabled={busy !== null} />
+      </div>}
     >
       {d?.detail && <p className="mb-2 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2">{d.detail}</p>}
       {d?.options?.length ? (

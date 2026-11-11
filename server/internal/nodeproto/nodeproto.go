@@ -37,6 +37,9 @@ const (
 	// ModelConfiguration: assistant.send / assistant.warm / session.start / session.send take a launcher's model and
 	// model_fingerprint (docs/assistant/model-config.md). Older nodes said so with node.info's model_configuration.
 	ModelConfiguration = "model_configuration"
+	// AssistantConfigDir: assistant.send / assistant.warm / session.send honor an explicit
+	// config_dir and preserve the selected Claude profile when resuming a conversation.
+	AssistantConfigDir = "assistant_config_dir"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -61,6 +64,9 @@ const (
 	// SecretRun: secret.run, commands the user approved on the password card run with the password they typed on
 	// their stdin (docs/assistant/assistant.md "Password card"). A node on Windows announces it and refuses the run.
 	SecretRun = "secret_run"
+	// SecretEnv: secret.stage and session.start's secret_ticket, values the user approved on the hand-off card put
+	// in one Agent start's environment (docs/extensions/secret-providers.md "The hand-off to one Agent run").
+	SecretEnv = "secret_env"
 	// Clipboard: clipboard.get / clipboard.set and node.info's clipboard (docs/operations/clipboard.md).
 	Clipboard = "clipboard"
 )
@@ -87,4 +93,10 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv}
+
+// ShareProjection is the bounded complete-source sharing projection, not light Items.
+const ShareProjection = "share_projection.v1"
+
+// CreationReceipt preserves opaque creation IDs on every ordinary new-start path.
+const CreationReceipt = "creation_receipt.v1"

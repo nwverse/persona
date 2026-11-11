@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -188,7 +189,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	var d chatDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.Owner}), in, 4000, &d); err != nil {
+	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.ownerName()}), in, 4000, &d); err != nil {
 		return e.compressFailed(ctx, c, err)
 	}
 	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back
@@ -215,6 +216,10 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	written, err := e.putCompressed(c, func(cur *Chat) {
 		cur.Tagging, cur.OneLine, cur.TagRev = c.Tagging, c.OneLine, tagRev
 		for _, slug := range c.Projects {
+			// A project deleted while the model ran (project_trash.go) is not linked again.
+			if !slices.Contains(cur.Projects, slug) && !e.Store.projectLive(slug) {
+				continue
+			}
 			cur.Projects = addUnique(cur.Projects, slug)
 		}
 		// New IDs can share a timestamp or minute with the snapshot. Keep the

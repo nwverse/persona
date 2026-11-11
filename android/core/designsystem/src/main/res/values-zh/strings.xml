@@ -43,13 +43,13 @@
     <string name="designsystem_loading">加载中</string>
     <string name="designsystem_processing">正在处理…</string>
     <string name="designsystem_with_state">%1$s，%2$s</string>
-    <string name="designsystem_decision_command">想运行一条命令</string>
-    <string name="designsystem_decision_tool">想用一个工具</string>
-    <string name="designsystem_decision_plan">计划等你批准</string>
-    <string name="designsystem_decision_question">有个问题问你</string>
+    <string name="designsystem_decision_command">需要你授权</string>
+    <string name="designsystem_decision_tool">需要你授权</string>
+    <string name="designsystem_decision_plan">计划等你审批</string>
+    <string name="designsystem_decision_question">在问你</string>
     <string name="designsystem_decision_form">要你填几项</string>
-    <string name="designsystem_decision_screen">终端在等你</string>
-    <string name="designsystem_decision_other">等你处理</string>
+    <string name="designsystem_decision_screen">终端等你处理</string>
+    <string name="designsystem_decision_other">需要你</string>
     <string name="designsystem_decision_open_chat">打开对话</string>
     <string name="designsystem_decision_open_full">打开完整页</string>
     <string name="designsystem_decision_previous">上一项</string>
@@ -319,4 +319,6 @@
     <string name="designsystem_candle_volume">量 %1$s</string>
     <string name="designsystem_stepper_minus">减少</string>
     <string name="designsystem_stepper_plus">增加</string>
+    <string name="designsystem_copy_too_large">文本过大无法复制，请使用分享</string>
+    <string name="designsystem_copied">已拷贝</string>
 </resources>

@@ -1,4 +1,9 @@
 {
+  "draft_changed": "This draft has changed or is no longer pending. Refresh before trying again.",
+  "draft_dismissed": "You chose not to handle this draft. Undo that decision before sending it.",
+  "draft_decision_question": "Reply drafted from the task’s progress",
+  "draft_decision_ignore": "Do not handle this draft; do not send a reply. Keep the task and agent open.",
+  "draft_decision_undo": "Undo the decision not to handle this draft; return it to pending without sending a reply.",
   "plan_waiting": "{n} things are waiting for you to start",
   "plan_waiting_single": "Something is waiting for you to start",
   "list_sep": ", ",
@@ -10,6 +15,7 @@
   "start_identity_conflict": "The start response did not identify a session on the requested computer.",
   "start_interrupted": "The hub restarted while this task’s agent was starting. The earlier request may still finish. Check the computer’s sessions after it reconnects before retrying to avoid starting a second agent.",
   "failed_start": "Didn’t start: {reason}",
+  "ultracode_skipped": "started without ultracode: {reason}",
   "task_failed_title": "“{name}” couldn’t be started",
   "task_failed_title_health": "Task couldn’t be started",
   "task_failed_body": "{reason}. Open the conversation to tap “Retry”, or assign to another computer",

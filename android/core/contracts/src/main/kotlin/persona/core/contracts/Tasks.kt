@@ -61,7 +61,7 @@ data class FeedItem(
     val id: String,
     val conversation: String = "",
     @WireTime val at: String? = null,
-    @WireEnum("plan", "task", "answered", "receipt", "review", "report", "routed", "today", "message", "view", "unknown")
+    @WireEnum("plan", "task", "answered", "receipt", "review", "report", "routed", "today", "brief", "message", "view", "unknown")
     val kind: String = "unknown",
     val ref: String? = null,
     val body: JsonElement? = null,
@@ -85,8 +85,11 @@ data class FeedItem(
      */
     val filedAt: String? get() = if (sent != null) null else field("filed_at")?.takeIf(String::isNotEmpty)
 
-    /** `message`: the card still offers its draft to send (neither sent nor filed elsewhere). */
-    val canSend: Boolean get() = sent == null && filedAt == null
+    /** `message`: this particular draft was dismissed without sending or closing its task. */
+    val dismissedAt: String? get() = field("dismissed_at")?.takeIf(String::isNotEmpty)
+
+    /** `message`: the card still offers its draft to send. */
+    val canSend: Boolean get() = sent == null && filedAt == null && dismissedAt == null
 
     /**
      * `answered`: every question of the card with the user's answer in full, newlines kept (#1231). A record from
@@ -165,6 +168,9 @@ data class Todo(
     /** When it is due (#1683): a moment, or a day ("yyyy-MM-dd", due by its end in the user's zone); at most one. */
     @WireTime @SerialName("due_at") val dueAt: String? = null,
     @SerialName("due_date") val dueDate: String? = null,
+    /** Where its work stands (#2776, docs/assistant/todos.md "Delivery"): plan, develop, review, merge, deploy or verify; the hub
+     *  merges it from `assistant.todo_stages`. Null when none, and a name this build doesn't know draws nothing. */
+    val stage: String? = null,
     /** When the phone is pushed about it, and when that was done. */
     @WireTime @SerialName("remind_at") val remindAt: String? = null,
     @WireTime @SerialName("reminded_at") val remindedAt: String? = null,
@@ -176,6 +182,9 @@ data class Todo(
     @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
     /** The manager it belongs to, as the merged list stamps it (docs/assistant/managers.md "Ownership"); null: the default manager's. */
     val manager: String? = null,
+    /** Nobody is working on it (#3618): every agent of this open to-do is gone and nothing brings one back; null otherwise
+     *  and from an older hub. */
+    val orphaned: TodoOrphaned? = null,
 ) {
     val isDone: Boolean get() = doneAt != null
     val activeAgents get() = agents.filter { it.releasedAt == null }
@@ -196,15 +205,63 @@ data class Todo(
     /** Open, and its due moment has passed. */
     fun isOverdue(now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): Boolean =
         !isDone && (dueBy(zone)?.isBefore(now) ?: false)
+
+    /** Its due date as a write sets it: its moment, else its day; null without either. */
+    val due: TodoDue? get() = parseTime(dueAt)?.let { TodoDue.At(it) } ?: dueDay?.let { TodoDue.Day(it) }
+
+    /** The to-do due at [due] instead, as the hub keeps it: a moment or a day, one replacing the other (#2045). */
+    fun withDue(due: TodoDue): Todo = when (due) {
+        is TodoDue.At -> copy(dueAt = due.at.toString(), dueDate = null)
+        is TodoDue.Day -> copy(dueAt = null, dueDate = due.day.toString())
+    }
 }
 
+/** A to-do's due date as `PATCH /api/v1/todos/{id}` sets it: a moment (`due_at`) or a day in the user's time zone (`due_date`). */
+sealed interface TodoDue {
+    data class At(val at: Instant) : TodoDue
+    data class Day(val day: LocalDate) : TodoDue
+}
+
+/**
+ * A to-do's due date, reminder and priority as the detail page sets them together (#4636, iOS `TodoPlanChange`,
+ * docs/assistant/todos.md PATCH): [due] null clears it, [remindAt] null clears it, [priority] "" normal, "high" or "low".
+ */
+data class TodoPlan(val due: TodoDue?, val remindAt: Instant?, val priority: String)
+
+/**
+ * Why an open to-do has nobody working on it (docs/assistant/todos.md "Nobody is working on this"): [reason] error (closed
+ * after a model error), offline (its computer is not connected) or closed, kept as sent; [since] when the hub first saw it.
+ */
+@Serializable
+data class TodoOrphaned(val reason: String? = null, @WireTime val since: String? = null)
+
+/**
+ * What a to-do waits on from the owner (docs/assistant/todos.md "Waiting for the owner"). A decision (#3804, "Decisions the
+ * owner can answer") also carries what is to be decided ([question]), why only the owner can ([whyOwner]), its
+ * [options] with the recommended one first, where the task came from and stands in one line ([background]), what waiting
+ * costs, whether the recommendation is taken at [deadline] ([default] "taken") or never ("never"), the fixed answers the
+ * hub takes ([responses]) and the one already given while it still waits ([response]). All absent from an older hub.
+ */
 @Serializable
 data class TodoAsk(
     val outcome: String? = null,
     val verdict: String = "",
     val recommend: String? = null,
     @WireTime @SerialName("asked_at") val askedAt: String = "",
+    val question: String? = null,
+    @SerialName("why_owner") val whyOwner: String? = null,
+    val options: List<AskOption>? = null,
+    @SerialName("cost_of_waiting") val costOfWaiting: String? = null,
+    val background: String? = null,
+    @WireTime val deadline: String? = null,
+    val default: String? = null,
+    val responses: List<String>? = null,
+    val response: String? = null,
 )
+
+/** One option of a decision: its [label], which is the answer, and what choosing it leads to. */
+@Serializable
+data class AskOption(val label: String = "", @SerialName("leads_to") val leadsTo: String? = null)
 
 /**
  * How far a task's finished work went out (#3306, docs/assistant/todos.md"Delivery"): [state] live, pr, merged, off or none (kept as
@@ -406,6 +463,8 @@ data class FeedResponse(
     @SerialName("view_blocks") val viewBlocks: List<String> = emptyList(),
     /** Null on older hubs or a failed projection read; an empty incremental page removes nothing. */
     @SerialName("task_cards") val taskCards: List<AssistantTaskCard>? = null,
+    /** Stable pagination: null on older hubs, empty at EOF, otherwise an opaque continuation cursor. */
+    @SerialName("next_cursor") val nextCursor: String? = null,
 )
 
 /** The todos changed: pull them again. */
@@ -415,7 +474,7 @@ class TodosEvent : ServerEvent
 
 @KeepGeneratedSerializer
 @Serializable(with = AssistantFeedEventSerializer::class)
-data class AssistantFeedEvent(val conversation: String = "", val item: FeedItem) : ServerEvent
+data class AssistantFeedEvent(val conversation: String = "", val item: FeedItem, val manager: String? = null) : ServerEvent
 
 @KeepGeneratedSerializer
 @Serializable(with = TaskPlanEventSerializer::class)

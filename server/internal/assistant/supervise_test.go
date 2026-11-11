@@ -255,8 +255,16 @@ func TestSupervisedTaskRound(t *testing.T) {
 		agentTurn(s, f, proto.StatusDone, "补了深色截图", 0)
 		waitFor(t, "the review again", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	}
-	if res := review("rework", "还是不对"); !strings.Contains(res, "waits for the user") {
-		t.Fatalf("third rework: %s", res)
+	// A third rework goes to the owner, and only as a decision they can answer (#3804): without one it is refused.
+	raw3, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "还是不对"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw3); err == nil || !strings.Contains(err.Error(), "sent back 2 times") {
+		t.Fatalf("third rework with no decision: %v", err)
+	}
+	raw3, _ = json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "还是不对", "why_owner": "priority",
+		"reason": "两轮返工后截图还是不对，怎么办", "recommend": "再返工一轮", "cost_of_waiting": "PR 一直开着",
+		"options": []map[string]string{{"label": "再返工一轮", "leads_to": "再等半小时"}, {"label": "不做了", "leads_to": "关掉任务"}}})
+	if res, err := s.runTool(ctx, "server", "conv1", "task_review", raw3); err != nil || !strings.Contains(res, "waits for the user") {
+		t.Fatalf("third rework: %s %v", res, err)
 	}
 	if v := todoNow(s, todo.ID).Supervision; v.State != reviewNeedsUser || v.Round != maxReworkRounds || len(sentToAgent(f)) != maxReworkRounds {
 		t.Fatalf("after the third: %+v, sent %d", v, len(sentToAgent(f)))
@@ -345,6 +353,7 @@ func TestTaskHealth(t *testing.T) {
 		{Todo{Supervision: &Supervision{State: reviewNeedsUser}}, nil, "等你决定"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}, DoneAt: &done}, nil, "已验收"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}}, nil, "正常"}, // reopened by the user
+		{Todo{Supervision: &Supervision{Waits: &OwnerWait{At: now}}}, nil, "停下等用户拍板，别直接验收"},
 	} {
 		if got, _ := taskHealth(c.todo, c.agents, now); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.todo.Supervision, got, c.want)
@@ -453,6 +462,11 @@ func TestGoldenSupervise(t *testing.T) {
 			Screen: "Last login: Mon Nov  9 22:01:13 on ttys004\n[oh-my-zsh] Would you like to update? [Y/n]", RetriesLeft: 3},
 		{ID: "todo_8", Title: "跑基准", Kind: sigFailed, Detail: "新开的终端标签两次都没接住启动命令", Machine: "box"},
 		{ID: "todo_9", Title: "整理日志", Kind: sigStarted, Detail: "新标签里的 shell 停在一个提问上", Machine: "box"},
+		// #3618: nobody works on it any more: closed after a model error, closed, its computer away
+		{ID: "todo_10", Title: "升级依赖", Kind: sigOrphaned, Orphan: orphanError, Detail: "API Error: 400 prompt is too long", Machine: "box", Session: "c3d4e5f6",
+			Last: "API Error: 400 prompt is too long", DoneWhen: []string{"CI 通过"}},
+		{ID: "todo_11", Title: "清理旧分支", Kind: sigOrphaned, Orphan: orphanClosed, Machine: "box", Session: "d4e5f6a7", Last: "删了 12 个，还剩 3 个要确认"},
+		{ID: "todo_12", Title: "跑回归", Kind: sigOrphaned, Orphan: orphanOffline, Machine: "laptop"},
 	})}))
 	golden(t, "supervise.rework", prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: 1, Max: 2, Note: "补深色截图",
 		Checks: []prompts.SuperviseCheck{{Criterion: "PR 合并到 master", Met: true, Evidence: "pull/901 merged"}, {Criterion: "浅色 / 深色截图贴进 PR", Evidence: "只有浅色"}}}))
@@ -465,5 +479,8 @@ func TestGoldenSupervise(t *testing.T) {
 		{ID: "todo_4", Title: "迁移数据库", State: "在做", Health: "正常", DoneWhen: 1,
 			Reported: &prompts.SnapshotReport{Kind: "progress", Step: 3, Steps: 5, Text: "在跑迁移脚本", Minutes: 4}},
 		{ID: "todo_5", Title: "整理文档", State: "停着", Health: "正常", Reported: &prompts.SnapshotReport{Kind: "question", Text: "放 docs 还是 wiki？"}},
+		{ID: "todo_6", Title: "升级依赖", State: "被打断了", Health: "没人在做", Orphan: orphanError, Machine: "box", Session: "c3d4e5f6", Last: "API Error: 400 prompt is too long"},
+		{ID: "todo_7", Title: "清理旧分支", State: "停着", Orphan: orphanClosed},
+		{ID: "todo_8", Title: "跑回归", State: "停着", Orphan: orphanOffline},
 	}}))
 }

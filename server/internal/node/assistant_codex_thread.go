@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 // start does the handshake and opens the thread: thread/start for a new conversation (Codex picks the id),
 // thread/resume for an existing one.
-func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) error {
+func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, startupMode ...string) error {
 	n := c.p.ownerOr(c.n)
 	var init struct {
 		CodexHome string `json:"codexHome"`
@@ -32,6 +33,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 		n.logger.Printf("assistant codex: skills root: %v", err)
 	}
 	mode := n.codexPermissionMode(id)
+	if len(startupMode) > 0 && startupMode[0] != "" {
+		mode = startupMode[0]
+	}
 	params := map[string]any{"cwd": cwd}
 	if mode != "" {
 		approval, sandbox := codexPolicy(mode)
@@ -43,7 +47,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	// The same on every start of the thread, apart from the memory index: the live snapshot goes with each message.
 	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir))
 	var res struct {
-		Thread struct {
+		Model       string          `json:"model"`
+		ServiceTier json.RawMessage `json:"serviceTier"`
+		Thread      struct {
 			ID   string `json:"id"`
 			Path string `json:"path"`
 		} `json:"thread"`
@@ -62,6 +68,8 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	}
 	c.mu.Lock()
 	c.threadID = res.Thread.ID
+	c.speedModel = res.Model
+	c.serviceTier = codexServiceTier(res.ServiceTier)
 	c.mu.Unlock()
 	n.mu.Lock()
 	c.p.id = res.Thread.ID
@@ -73,6 +81,7 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 		n.pathsAt[res.Thread.ID] = time.Now()
 	}
 	n.mu.Unlock()
+	c.loadSpeedModels(ctx)
 	if c.nameGates != nil { // larkCheck records what it confirmed under this id (p.id): the addresses stand for it from now on
 		c.nameGates(res.Thread.ID)
 	}
