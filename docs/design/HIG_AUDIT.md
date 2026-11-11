@@ -102,7 +102,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-002 Tap gestures used as buttons on agent cards and other rows
 - **Severity**: P1. **Platform**: iOS.
-- **Location**: agent question and permission card, loop bar, calendar. `apple/Persona/Views/Interactions/InteractionViews.swift:373`, `apple/Persona/Views/Interactions/InteractionViews.swift:545`, `apple/Persona/Views/Interactions/InteractionViews.swift:1113`, `apple/Persona/Views/Session/SessionPanes.swift:1221`, `apple/Persona/Views/Todos/Calendar/TodoCalendarGrids.swift:432`.
+- **Location**: agent question and permission card, loop bar, calendar. `apple/Persona/Views/Interactions/InteractionViews.swift:373`, `apple/Persona/Views/Interactions/InteractionViews.swift:545`, `apple/Persona/Views/Interactions/InteractionViews.swift:1113`, `apple/Persona/Views/Session/SessionPanes.swift:1221`, `apple/Persona/Views/Todos/Calendar/TodoCalendarGrids.swift:440`.
 - **Violates**: [VoiceOver][vo]: label all key and custom elements; [Accessibility][a11y]: label elements so Voice Control and Switch Control work.
 - **Problem**: `onTapGesture` on a non-Button view with no `isButton` trait, label or action, so VoiceOver reads static text. The "Other answer" rows are the only route to the free-text answer on the Needs You flow. Other sites do it right (`apple/Persona/Views/Assistant/AssistantSidebar.swift:370`). A repo grep shows 42 `onTapGesture` uses; the exact count of unlabeled ones was not established (one cited site, `apple/Persona/Views/Chat/ToolViews.swift:1099`, is fine).
 - **Evidence**: `.contentShape(.rect).onTapGesture { withAnimation(Theme.Motion.standard) { collapsed.toggle() } }`.
