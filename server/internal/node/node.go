@@ -628,10 +628,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ResumeOnly     bool            `json:"resume_only"`
 		IsMain         bool            `json:"is_main"`
 		Interject      bool            `json:"interject_background"`
-		AtItemID       string          `json:"at_item_id"` // session.fork: the reply to branch off at
-		Refresh        bool            `json:"refresh"`    // launchers.models: ask again, not the kept list
-		Configured     bool            `json:"configured"` // launchers.models, .probe, .http, .model.check: hub.json names this launcher
-		Guest          *guestParams    `json:"guest"`      // assistant.send: a new guest conversation (assistant_guest.go)
+		AtItemID       string          `json:"at_item_id"`     // session.fork: the reply to branch off at
+		Refresh        bool            `json:"refresh"`        // launchers.models: ask again, not the kept list
+		Configured     bool            `json:"configured"`     // launchers.models, .probe, .http, .model.check: hub.json names this launcher
+		Guest          *guestParams    `json:"guest"`          // assistant.send: a new guest conversation (assistant_guest.go)
+		NewSessionID   string          `json:"new_session_id"` // assistant.send: start the new conversation under this id
 		Raw            json.RawMessage `json:"-"`
 
 		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
@@ -1002,6 +1003,17 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
 		}
 		sctx := ctx
+		if p.NewSessionID != "" {
+			// A start under a given id (a meeting's room, its follow-up: made once, also across a restart). One the
+			// node has already is that conversation: nothing is sent again.
+			if p.SessionID != "" || !validID(p.NewSessionID) {
+				return nil, errors.New("bad new_session_id")
+			}
+			if n.knowsConversation(p.NewSessionID) {
+				return map[string]any{"session_id": p.NewSessionID, "existed": true}, nil
+			}
+			sctx = withNewID(sctx, p.NewSessionID)
+		}
 		if p.Guest != nil {
 			if p.SessionID != "" {
 				return nil, errors.New("only a new conversation can be started as a guest")
@@ -1009,12 +1021,39 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if err := checkGuestTools(p.Guest.Tools); err != nil {
 				return nil, err
 			}
-			sctx = withGuest(ctx, p.Guest.Tools)
+			switch p.Guest.Kind {
+			case "", guestMeeting:
+			default:
+				return nil, fmt.Errorf("unknown guest kind %q", p.Guest.Kind)
+			}
+			sctx = withGuestKind(sctx, p.Guest.Tools, p.Guest.Kind)
 		}
-		id, err := n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
+		send := func() (string, error) {
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
+		}
+		var opts sendOpts
+		_ = json.Unmarshal(params, &opts)
+		if p.NewSessionID == "" || opts.ClientMsgID == "" {
+			id, err := send()
+			return map[string]any{"session_id": id}, err
+		}
+		// A start under a given id with its first message's client_msg_id (a meeting's room, its follow-up, Just me's
+		// new main chat): sent once, and its transcript item carries the id, as a session.send's (echo.go).
+		var id string
+		err := n.sends.once(opts.ClientMsgID, func() error {
+			return n.sendEchoed(p.NewSessionID, opts.ClientMsgID, p.Text, len(p.Images), 0, func() (err error) {
+				id, err = send()
+				return err
+			})
+		})
+		if err == nil && id == "" {
+			id = p.NewSessionID // the same start asked again while it went: that conversation
+		}
 		return map[string]any{"session_id": id}, err
 	case "assistant.guest_prepare": // a guest conversation's directory (assistant_guest.go)
 		return n.assistantGuestPrepare(params)
+	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)
+		return n.assistantGuestDelete(params)
 	case "session.modes":
 		return ok(n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort)) // model: model_switch.go
 	case "assistant.compact": // the user compacting an assistant conversation (assistant_compact.go)
