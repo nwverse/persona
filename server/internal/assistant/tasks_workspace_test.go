@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func workspaceTaskService(t *testing.T) (*Service, *fakeHub) {
@@ -381,15 +382,19 @@ func TestTaskWorkspaceSettingsHTTPAndApproval(t *testing.T) {
 	}
 }
 
-// herdrCoreService is a machine whose default engine cannot prepare a checkout (herdr-core), with /code/app already
-// written in by another task. The error is the node's text as it crosses the wire.
-func herdrCoreService(t *testing.T, supportsPrepare bool) (*Service, *fakeHub) {
+// cannotPrepare is the node's answer to worktree.prepare on an engine without checkouts, as it crosses the wire:
+// the default engine is the Paseo runtime (no terminal host on the node) or a host such as herdr-core.
+func cannotPrepare(kind string) error {
+	return &rpc.Error{Code: "worktree_unsupported", Message: "unsupported: " + kind + " cannot do this"}
+}
+
+// busyCwdService is a machine whose worktree.prepare answers prepareErr (nil: it prepares checkouts), with /code/app
+// already written in by another task.
+func busyCwdService(t *testing.T, prepareErr error) (*Service, *fakeHub) {
 	t.Helper()
 	s, f := workspaceTaskService(t)
-	if !supportsPrepare {
-		f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) {
-			return nil, errors.New("unsupported: herdr-core cannot do this")
-		}
+	if prepareErr != nil {
+		f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) { return nil, prepareErr }
 	}
 	owner, err := s.createTodo(context.Background(), "Other writer", "", "other-chat", "")
 	if err != nil {
@@ -402,35 +407,37 @@ func herdrCoreService(t *testing.T, supportsPrepare bool) (*Service, *fakeHub) {
 }
 
 func TestTaskWorkspaceInferredFallsBackToCwdWhenEngineCannotPrepare(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		s, f := herdrCoreService(t, false)
-		p := workspacePlan(t, s, "")
-		if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
-		saved, _ := s.loadPlan(context.Background(), p.ID)
-		task := saved.Tasks[0]
-		if task.Error != "" || len(f.starts) != 1 || f.starts[0]["cwd"] != "/code/app" {
-			t.Fatalf("inferred task did not start in its cwd: error=%q starts=%v", task.Error, f.starts)
-		}
-		if task.Workspace.Mode != workspaceNone || task.WorkspaceResolved == nil || !task.WorkspaceResolved.Shared ||
-			task.WorkspaceResolved.Path != "/code/app" || task.WorkspaceResolved.Created {
-			t.Fatalf("fallback not recorded as a shared cwd: workspace=%+v resolved=%+v", task.Workspace, task.WorkspaceResolved)
-		}
-		for _, call := range f.worktrees {
-			if call["method"] == DeviceWorktreeCreate {
-				t.Fatalf("created a checkout on an engine that cannot: %v", f.worktrees)
-			}
-		}
-	})
+	for _, kind := range []string{"paseo", "herdr-core"} {
+		t.Run(kind, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s, f := busyCwdService(t, cannotPrepare(kind))
+				p := workspacePlan(t, s, "")
+				if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				saved, _ := s.loadPlan(context.Background(), p.ID)
+				task := saved.Tasks[0]
+				if task.Error != "" || len(f.starts) != 1 || f.starts[0]["cwd"] != "/code/app" {
+					t.Fatalf("inferred task did not start in its cwd: error=%q starts=%v", task.Error, f.starts)
+				}
+				if task.Workspace.Mode != workspaceNone || task.WorkspaceResolved == nil || !task.WorkspaceResolved.Shared ||
+					task.WorkspaceResolved.Path != "/code/app" || task.WorkspaceResolved.Created {
+					t.Fatalf("fallback not recorded as a shared cwd: workspace=%+v resolved=%+v", task.Workspace, task.WorkspaceResolved)
+				}
+				for _, call := range f.worktrees {
+					if call["method"] == DeviceWorktreeCreate {
+						t.Fatalf("created a checkout on an engine that cannot: %v", f.worktrees)
+					}
+				}
+			})
+		})
+	}
 }
 
 func TestTaskWorkspaceInferredPreferNewFallsBackToFreeCwd(t *testing.T) {
 	s, f := workspaceTaskService(t)
-	f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) {
-		return nil, errors.New("unsupported: herdr-core cannot do this")
-	}
+	f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) { return nil, cannotPrepare("paseo") }
 	setSettings(t, s, func(v *Settings) { v.TaskWorkspacePreference = preferNew })
 	task := PlanTask{Machine: "box", Cwd: "/code/app"}
 	if err := s.resolveTaskWorkspace(context.Background(), &task); err != nil {
@@ -442,9 +449,23 @@ func TestTaskWorkspaceInferredPreferNewFallsBackToFreeCwd(t *testing.T) {
 	}
 }
 
+// Only the node's "cannot" code falls back: any other failure to prepare (a host missing from the machine, an old node
+// that sends no code) still stops the task rather than silently sharing a directory.
+func TestTaskWorkspaceInferredOtherPrepareFailuresStillFail(t *testing.T) {
+	for _, prepareErr := range []error{errors.New("no orca host on this machine"), errors.New("unsupported: herdr-core cannot do this")} {
+		s, f := workspaceTaskService(t)
+		f.nodes[DeviceWorktreePrepare] = func(string, json.RawMessage) (any, error) { return nil, prepareErr }
+		setSettings(t, s, func(v *Settings) { v.TaskWorkspacePreference = preferNew })
+		task := PlanTask{Machine: "box", Cwd: "/code/app"}
+		if err := s.resolveTaskWorkspace(context.Background(), &task); err == nil || !strings.Contains(err.Error(), prepareErr.Error()) {
+			t.Fatalf("%v: fell back instead of failing: err=%v workspace=%+v", prepareErr, err, task.Workspace)
+		}
+	}
+}
+
 func TestTaskWorkspaceExplicitNewStillFailsWhenEngineCannotPrepare(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		s, f := herdrCoreService(t, false)
+		s, f := busyCwdService(t, cannotPrepare("paseo"))
 		args := `{"tasks":[{"title":"Fix login","prompt":"Fix login and add tests","machine":"box","cwd":"/code/app","permission":"bypassPermissions","workspace":"new"}]}`
 		_, err := s.toolTaskPlan(context.Background(), "workspace-chat", json.RawMessage(args))
 		reason := ""
@@ -459,7 +480,7 @@ func TestTaskWorkspaceExplicitNewStillFailsWhenEngineCannotPrepare(t *testing.T)
 			saved, _ := s.loadPlan(context.Background(), p.ID)
 			reason += saved.Tasks[0].Error
 		}
-		if len(f.starts) != 0 || !strings.Contains(reason, "unsupported: herdr-core cannot do this") {
+		if len(f.starts) != 0 || !strings.Contains(reason, "unsupported: paseo cannot do this") {
 			t.Fatalf("explicit new did not refuse: reason=%q starts=%v", reason, f.starts)
 		}
 	})
@@ -467,7 +488,7 @@ func TestTaskWorkspaceExplicitNewStillFailsWhenEngineCannotPrepare(t *testing.T)
 
 func TestTaskWorkspaceInferredBusyStillCreatesWhenEngineCanPrepare(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		s, f := herdrCoreService(t, true)
+		s, f := busyCwdService(t, nil)
 		p := workspacePlan(t, s, "")
 		if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
 			t.Fatal(err)

@@ -57,8 +57,8 @@ Settings › Assistant › Dispatch tasks offers **When dispatching tasks, prefe
 `task_workspace_preference: "prefer-existing"` (default) reuses an available source directory;
 `"prefer-new"` gives each writable Git task a new checkout. A read-only task defaults to `none`.
 A writable Git task whose directory is occupied defaults to `new`, regardless of preference.
-When that inferred `new` meets an engine that cannot prepare checkouts (`worktree.prepare` answers `unsupported`, as herdr-core
-does), the task runs in its `cwd` as tasks did before workspaces: a free directory becomes `existing`, an occupied one becomes
+When that inferred `new` meets an engine that cannot prepare checkouts (`worktree.prepare` fails with code `worktree_unsupported`:
+the Paseo or Cindy runtime, or herdr-core), the task runs in its `cwd` as tasks did before workspaces: a free directory becomes `existing`, an occupied one becomes
 `none` with `workspace_resolved.shared: true` and no claim. An explicit `new` still fails on such an engine.
 An explicit `workspace` overrides inference. When a caller means a particular branch/PR/checkout, it should name that checkout with `existing`.
 Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.

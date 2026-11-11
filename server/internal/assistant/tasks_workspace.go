@@ -13,9 +13,9 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/herdr"
-	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 const (
@@ -185,8 +185,8 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		res.Branch = firstNonEmpty(t.Workspace.Branch, "task/"+firstNonEmpty(t.TodoID, t.ReservedTodoID))
 		var prep proto.WorktreePrepare
 		if err := s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd}, &prep); err != nil {
-			if t.WorkspaceInferred && sourceCwd != "" && engineUnsupported(err) {
-				// An engine without checkouts (herdr-core) runs the task in its cwd, as tasks did before
+			if t.WorkspaceInferred && sourceCwd != "" && engineCannotPrepare(err) {
+				// An engine without checkouts (Paseo, Cindy, herdr-core) runs the task in its cwd, as tasks did before
 				// workspaces: a busy cwd is shared rather than claimed, a free one is reused.
 				res.Branch = ""
 				if busy {
@@ -209,10 +209,11 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	return nil
 }
 
-// engineUnsupported: the machine's engine lacks the capability. Node errors cross the wire as text, so the
-// "unsupported" prefix host.ErrUnsupported promises is what the hub can rely on.
-func engineUnsupported(err error) bool {
-	return errors.Is(err, host.ErrUnsupported) || strings.HasPrefix(err.Error(), host.ErrUnsupported.Error())
+// engineCannotPrepare: the machine's engine has no checkouts to prepare (a runtime such as Paseo, or herdr-core), as
+// the node's error code says; any other failure, a missing host included, stays an error.
+func engineCannotPrepare(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == proto.CodeWorktreeUnsupported
 }
 
 // taskWorkspaceOwner checks durable active task links, and the gap between
