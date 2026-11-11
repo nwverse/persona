@@ -38,8 +38,7 @@ struct AnswerPartsLookTests {
 
     /// The view at the chat's width on white, drawn once its height stops changing.
     private func draw(_ view: some View) async throws -> Drawn {
-        final class Box { var height: CGFloat = 0 }
-        let box = Box()
+        let box = HeightBox()
         let content = view
             .frame(width: Self.width, alignment: .topLeading)
             .fixedSize(horizontal: false, vertical: true)
@@ -102,5 +101,10 @@ struct AnswerPartsLookTests {
         let differing = zip(whole.pixels, drawn.pixels).reduce(0) { $0 + ($1.0 == $1.1 ? 0 : 1) }
         #expect(differing == 0, "\(differing) of \(whole.pixels.count) pixel bytes differ")
     }
+}
+
+/// The drawn height, written by the view's geometry callback without redrawing anything.
+private final class HeightBox {
+    var height: CGFloat = 0
 }
 #endif
