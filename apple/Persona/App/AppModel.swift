@@ -2465,9 +2465,26 @@ final class AppModel {
         }
     }
 
+    /// Deletes a message only on this phone (`PendingMessage.onlyHere`: failed, or waiting for the network), from its
+    /// mark's menu or its long press: the bubble and its outbox entry go and nothing is sent. Undo in the toast puts it
+    /// back where it was (#4626).
     func discard(_ key: SessionKey, _ msg: PendingMessage) {
-        chat(key).pending.removeAll { $0.id == msg.id }
+        let store = chat(key)
+        guard let i = store.pending.firstIndex(where: { $0.id == msg.id }) else { return }
+        let gone = store.pending.remove(at: i)
         saveOutbox()
+        toast = .messageDeleted { [weak self] in self?.undoDiscard(key, gone, at: i) }
+    }
+
+    /// `discard`'s Undo: the message comes back as it was, where it was; a waiting one goes out once the app is
+    /// connected. Not when its transcript copy came in meanwhile (one that may have arrived after all).
+    func undoDiscard(_ key: SessionKey, _ msg: PendingMessage, at i: Int) {
+        let store = chat(key)
+        guard !store.pending.contains(where: { $0.id == msg.id }),
+              !store.items.contains(where: { PendingMessage.tied($0, to: msg.id) == true }) else { return }
+        store.pending.insert(msg, at: min(i, store.pending.count))
+        saveOutbox()
+        if msg.state == .waiting { flushOutbox() }
     }
 
     private func deliver(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
@@ -3525,6 +3542,11 @@ struct Toast: Identifiable, Equatable {
     }
 
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }
+
+    /// A message only on this phone was deleted (#4626): Undo brings it back.
+    static func messageDeleted(undo: @escaping @MainActor () -> Void) -> Toast {
+        Toast(String(localized: "Message deleted"), style: .success, action: Action(title: String(localized: "Undo"), run: undo))
+    }
 }
 
 #if os(visionOS)
