@@ -166,11 +166,25 @@ export function formatDuration(seconds: number): string {
   return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
 }
 
+// The node's <persona-view-errors> feedback after the assistant's snapshot (its last rich views failed their check):
+// for the model, never the user's words. A hub before #4315 gave it as a user item of its own, or before the message.
+const VIEW_ERRORS_RE = /<persona-view-errors\b[^>]*>[\s\S]*?<\/persona-view-errors>\s*/g;
+
+/** What a user line says without the view feedback the node put before it (#4315). */
+export function withoutViewErrors(raw: string): string {
+  return raw.includes("<persona-view-errors") ? raw.replace(VIEW_ERRORS_RE, "") : raw;
+}
+
+/** An older hub's user item holding nothing but that feedback: no message of the user's. */
+export function viewFeedbackOnly(it: Item): boolean {
+  return it.role === "user" && it.kind === "text" && !!it.text?.includes("<persona-view-errors") && !withoutViewErrors(it.text).trim();
+}
+
 export function parseUserText(raw: string): { text: string; contexts: Context[]; files: AttachedFile[]; photos: string[] } {
   const contexts: Context[] = [];
   const files: AttachedFile[] = [];
   const photos: string[] = [];
-  let text = raw.replace(CONTEXT_RE, (_, attrs: string, body: string) => {
+  let text = withoutViewErrors(raw).replace(CONTEXT_RE, (_, attrs: string, body: string) => {
     const a = tagAttrs(attrs);
     contexts.push({ kind: a.kind ?? "context", title: a.title, url: a.url, text: body.trim() });
     return "";
@@ -219,6 +233,7 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
   for (const it of items) {
     if (attached.has(it.id)) continue;
     const entry = it.id.split("#")[0];
+    if (viewFeedbackOnly(it)) continue;
     if (isUserMessage(it)) {
       if (cur?.user?.injected && entry === lastUserEntry && !cur.steps.length && !cur.answer && !cur.user.rawInput!.some((i) => i.id === it.id)) {
         cur.user.rawInput!.push(it);
@@ -729,6 +744,7 @@ export function buildBlocks(items: Item[]): Block[] {
   };
 
   for (const [i, it] of items.entries()) {
+    if (viewFeedbackOnly(it)) continue;
     if (isUserInput(it)) {
       const entry = it.id.split("#")[0];
       const prev: Item | undefined = cur ? cur.ordered[cur.ordered.length - 1] : undefined;
