@@ -553,6 +553,8 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// Side: it goes to an ordinary side conversation, for the tasks that conversation handed out itself.
+	Side bool
 	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
 	// Overdue: an entry is a task past its brief's clock (#3822).

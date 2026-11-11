@@ -756,7 +756,10 @@ final class AppModel {
         phoneConfirmations.denyAll()
         toolResults.forget(groups: Set(links.map(\.group)))
         // Where Hand to AI sent each source's items: ids on a hub that is gone (#2121).
-        for group in Set(links.map(\.group)).union([hubGroup]) { InboxHandOffMemory.forget(group: group) }
+        for group in Set(links.map(\.group)).union([hubGroup]) {
+            InboxHandOffMemory.forget(group: group)
+            ForwardMemory.forget(group: group) // and where forwards went (#3807)
+        }
         LarkDrafts.shared.forget()
         pairingEngineMachine = nil
         checklistPending = false
@@ -966,6 +969,12 @@ final class AppModel {
         return assistantLists.group == group && assistantLists.shown == shown ? assistantLists : AssistantLists(allSessions, group: group, shown: shown)
     }
 
+    /// Whether this device writes its time zone to the hub: when it differs, and the user did not pick one by hand
+    /// (#1855, on Android); a hub that never says follows the devices, as before.
+    nonisolated static func syncsZone(_ st: APIClient.AssistantState, device zone: String) -> Bool {
+        st.timezonePicked != true && !zone.isEmpty && st.timezone != zone
+    }
+
     /// Loads the assistant config; with no remembered conversation, picks up the newest one.
     func refreshAssistant() async {
         guard let api else { return }
@@ -984,9 +993,9 @@ final class AppModel {
                 }
             }
             // Routines and the assistant's sense of "now" follow this device's time zone (the Mac app writes its
-            // own too; the hub keeps whichever came last).
+            // own too; the hub keeps whichever came last), unless the user picked one by hand (#1855): then it stays.
             let tz = TimeZone.current.identifier
-            if st.timezone != tz, let updated = try? await api.setAssistant(timezone: tz) {
+            if Self.syncsZone(st, device: tz), let updated = try? await api.setAssistant(timezone: tz) {
                 guard showsPage(of: api) else { return }
                 assistantConfig = updated
             }
@@ -1606,6 +1615,8 @@ final class AppModel {
         registerPhone(link)
         // Phone tool results answered while the socket was down: the hub matches them to their calls by call_id (#4456).
         toolResults.flush(group: group, on: link.live)
+        // Items the Handle Notification shortcut kept while this hub could not be reached (#3848).
+        if let api = api(group) { Task { await ShortcutItemFlow.flush(api) } }
         // The hub resumed its broadcasts (docs/operations/hub-restart.md): what this app missed follows the hello, and the
         // connection's snapshot (machines, sessions, pending interactions) is whole: nothing to fetch again, no Updating….
         let plan = ReconnectPlan(resumed: link.live.resumed)
@@ -3125,6 +3136,7 @@ final class AppModel {
             defaultAssistantReads.remove(g)
             assistantItemManagers = assistantItemManagers.filter { $0.key.group != g }
             InboxHandOffMemory.forget(group: g)
+            ForwardMemory.forget(group: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
         }
         if links.contains(where: { $0.fleet != nil }) { LiveActivityController.shared.apply(mergedFleet()) }
