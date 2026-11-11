@@ -341,5 +341,18 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	if res.Models == nil {
 		res.Models = []proto.AgentModel{}
 	}
-	return s.presetModels(ctx, machine, name, res), nil
+	res = s.presetModels(ctx, machine, name, res)
+	for i, m := range res.Models {
+		if m.Price != nil {
+			continue
+		}
+		id := m.ID
+		if m.Resolved != "" {
+			id = m.Resolved
+		}
+		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
+			res.Models[i].Price = c.Price
+		}
+	}
+	return res, nil
 }

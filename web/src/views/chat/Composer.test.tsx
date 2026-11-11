@@ -664,3 +664,15 @@ describe("the trailing slot", () => {
     expect(row.closest("[class*='@container/composer']")).not.toBeNull();
   });
 });
+
+describe("the usage row", () => {
+  it("draws below the composer card, outside its model-pill container", () => {
+    act(() => root.render(<Composer draftKey="usage" placeholder="" onSend={async () => true} usage={<span data-usage>61%</span>} />));
+    const row = host.querySelector("[data-composer-usage]")!;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toBe("61%");
+    expect(row.querySelector("[data-usage]")).not.toBeNull();
+    expect(row.previousElementSibling).toBe(host.querySelector("[class*='@container/composer']"));
+    expect(row.querySelector("[class*='@container/composer']")).toBeNull();
+  });
+});

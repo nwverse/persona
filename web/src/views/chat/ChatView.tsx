@@ -55,6 +55,7 @@ import { CloseoutCard } from "./CloseoutCard";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
+import { contextUsage } from "../../lib/context-usage";
 import { ContextMeter } from "./ContextMeter";
 import { AgentModelPill } from "./ModelPill";
 import { NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
@@ -1408,6 +1409,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
   // an Agent's model pill (#5032); a Persona conversation keeps its launcher chip in the footer for now (#5033)
   const trailing = useMemo(() => (session && !assistant ? <AgentModelPill session={session} /> : null), [session, assistant]);
+  const usage = useMemo(() => (session && !assistant && contextUsage(session) !== null ? <ContextMeter session={session} /> : null), [session, assistant]);
 
   const pendingCards = (
     <PendingCards
@@ -1658,6 +1660,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           blocked={gate.blocked ?? noRowBlock}
           footer={footer}
           trailing={trailing}
+          usage={usage}
           voice={voiceEntry.offer}
         />
         )}
@@ -2049,12 +2052,6 @@ export const Header = memo(function Header({
           {/* a panel is a phone's width: the dot says the state there too. Wide, the pill gives the dot's state its words, not
               a second dot (#3956: the state is said once) */}
           {session && !assistant && !chrome && (state !== "idle" || awaiting) && <span className="hidden @min-[800px]:contents"><StatePill state={state} awaiting={awaiting} waiting={Boolean(session && backgroundWaiting(session))} dot={false} /></span>}
-          {/* narrow: the context bar gives way to the title too (#3532); "Session info" still has the token count. The header's own
-              width decides (a container), so a side panel beside the chat narrows it as a phone does; the pill and the
-              bar go below 800px, the chips' words below 640px, so the title keeps room in between (#3670) */}
-          {session && !assistant && <span className="hidden @min-[800px]:contents"><ContextMeter session={session} /></span>}
-          {/* 680–800px (an iPad in landscape with the sidebar open, #4443): the share alone, so what is left stays in sight */}
-          {session && !assistant && <span className="hidden @min-[680px]:contents @min-[800px]:hidden"><ContextMeter session={session} compact /></span>}
         </div>
         {sub && !todoLine && <div title={sub} className="truncate text-[11.5px] text-ink-3">{sub}</div>}
         {/* the todo it works for, up top (#1836): opens the todo, "Change to-do…" picks another */}

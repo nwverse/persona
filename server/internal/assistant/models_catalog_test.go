@@ -148,6 +148,24 @@ func TestCatalogExactEntriesDoNotInherit(t *testing.T) {
 	}
 }
 
+func TestCatalogPricesAreExactOnly(t *testing.T) {
+	exact, ok := catalogModel("claude-opus-5-5")
+	if !ok || exact.Price == nil || exact.Price.Input != 4 || exact.Price.Output != 20 || exact.Price.CacheRead == nil || *exact.Price.CacheRead != 0.2 {
+		t.Fatalf("exact catalog price: %+v", exact)
+	}
+	inherited, ok := catalogModel("claude-opus-5-6")
+	if !ok || inherited.InheritedFrom == "" || inherited.Price != nil {
+		t.Fatalf("a different model must not inherit a price: %+v", inherited)
+	}
+	if got := enrichModel(proto.ProviderModel{ID: "claude-opus-5-6"}); got.Price != nil {
+		t.Fatalf("enrichment inherited a price: %+v", got)
+	}
+	own := &proto.ModelPrice{Input: 9, Output: 99}
+	if got := enrichModel(proto.ProviderModel{ID: "claude-opus-5-5", Price: own}); got.Price != own {
+		t.Fatalf("the gateway's own price was replaced: %+v", got)
+	}
+}
+
 func TestEnrichModelGeneration(t *testing.T) {
 	got := enrichModel(proto.ProviderModel{ID: "claude-opus-5-6"})
 	if got.Name != "" || got.InheritedFrom != "claude-opus-5-5" || got.ContextWindow != 1000000 || got.DefaultEffort != "medium" || len(got.Efforts) != 5 {

@@ -3,13 +3,16 @@
 // ink; the others are quiet and light up under the pointer. It scrolls on its own, without a bar.
 import { t } from "../../i18n";
 import { sameView, type PanelProvider, type PanelView } from "../../lib/model-panel";
+import { quotaReset, weeklyQuota, type LauncherQuotaAnswer } from "../../lib/quota";
 import { cx } from "../atoms";
 import { Icon } from "../icons";
 import { ProviderMark } from "./ProviderMark";
 
-export function Rail({ providers, view, onView, disabled }: { providers: PanelProvider[]; view: PanelView; onView: (v: PanelView) => void; disabled?: boolean }) {
+export function Rail({ providers, view, onView, disabled, quotas }: { providers: PanelProvider[]; view: PanelView; onView: (v: PanelView) => void; disabled?: boolean; quotas?: Readonly<Record<string, LauncherQuotaAnswer>> }) {
   const cell = (v: PanelView, label: string, icon: React.ReactNode) => {
     const on = sameView(v, view);
+    const quota = v.kind === "provider" ? weeklyQuota(quotas?.[v.provider]) : undefined;
+    const detail = quota ? [t("ui-modelpanel.weekly_left", { label: quota.window.label, percent: quota.remaining }), quotaReset(quota.window.resets_at ?? "")].filter(Boolean).join("\n") : "";
     return (
       <button
         key={v.kind === "provider" ? `provider:${v.provider}` : v.kind}
@@ -17,7 +20,8 @@ export function Rail({ providers, view, onView, disabled }: { providers: PanelPr
         disabled={disabled}
         aria-label={label}
         aria-pressed={on}
-        title={label}
+        title={[label, detail].filter(Boolean).join("\n")}
+        aria-description={detail || undefined}
         data-rail-cell={v.kind === "provider" ? v.provider : v.kind}
         onClick={() => onView(v)}
         className={cx(
@@ -27,6 +31,15 @@ export function Rail({ providers, view, onView, disabled }: { providers: PanelPr
         )}
       >
         <span className="flex h-6 items-center justify-center">{icon}</span>
+        {quota && (
+          <span aria-hidden className="absolute bottom-[3px] h-[3px] w-[22px] overflow-hidden rounded-full" style={{ backgroundColor: "color-mix(in srgb, currentColor 18%, transparent)" }}>
+            <span
+              data-weekly-remaining={quota.remaining}
+              className={cx("block h-full rounded-full", quota.tone === "red" ? "bg-red" : quota.tone === "orange" ? "bg-orange" : "bg-current")}
+              style={{ width: `${quota.remaining}%` }}
+            />
+          </span>
+        )}
       </button>
     );
   };

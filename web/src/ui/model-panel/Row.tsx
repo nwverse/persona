@@ -5,7 +5,7 @@
 // check mark. Enter or Space picks it, ← or a right-click opens its setup flyout.
 import type { ButtonHTMLAttributes, KeyboardEvent, MouseEvent } from "react";
 import { t } from "../../i18n";
-import { shownEffort, type PanelRow } from "../../lib/model-panel";
+import { priceTier, shownEffort, type PanelRow } from "../../lib/model-panel";
 import { effortTitle } from "../../lib/session-actions";
 import { agentName } from "../../lib/agent-kind";
 import { AgentMark } from "../AgentMark";
@@ -62,6 +62,7 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
   const { model, provider } = row;
   const name = row.kind === "typed" ? t("ui-modelpanel.use_typed", { id: model.id }) : model.name;
   const effort = model.efforts.length ? shownEffort(row.setup, model) : "";
+  const tier = priceTier(model.price);
   // what the right side says, in words: "Claude Code · High · Fast"
   const setupTitle = [agentName(provider.engine), effort && effortTitle(effort), row.setup.fast && t("ui-modelpanel.fast_short")].filter(Boolean).join(" · ");
   const off = Boolean(blocked) || Boolean(frozen);
@@ -113,6 +114,11 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
           <ProviderMark name={provider.name} />
         </span>
         <span title={row.kind === "typed" ? model.id : name} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && row.kind !== "typed" && "font-mono")}>{name}</span>
+        {tier && (
+          <span data-price-tier={tier} aria-label={t("ui-modelpanel.price_tier", { tier })} title={t("ui-modelpanel.price_tier", { tier })} className="shrink-0 text-[11px] leading-none font-semibold tracking-[0.5px] text-ink-2">
+            {"$".repeat(tier)}
+          </span>
+        )}
         {row.kind !== "typed" && (
           <RowButton
             icon="star"

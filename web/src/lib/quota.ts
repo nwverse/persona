@@ -123,6 +123,28 @@ export function quotaPercent(ratio: number): number {
   return Math.round(Math.min(Math.max(ratio, 0), 1) * 100);
 }
 
+export interface WeeklyQuota {
+  window: QuotaWindow;
+  /** Whole percent left, clamped to 0…100. */
+  remaining: number;
+  tone: QuotaTone;
+}
+
+/** The rail's one weekly number: the most constrained weekly window in the launcher's existing cached answer. */
+export function weeklyQuota(answer: LauncherQuotaAnswer | undefined): WeeklyQuota | undefined {
+  const q = answer?.quota;
+  if (!q) return undefined;
+  const windows = [...(q.budget ?? []), ...(q.pools ?? []).flatMap((p) => p.windows ?? [])];
+  let found: QuotaWindow | undefined;
+  for (const w of windows) {
+    if (!/week|周|週/i.test(w.label) || w.used_ratio === undefined || !Number.isFinite(w.used_ratio)) continue;
+    if (!found || (w.exhausted && !found.exhausted) || (w.exhausted === found.exhausted && w.used_ratio > (found.used_ratio ?? -Infinity))) found = w;
+  }
+  if (!found) return undefined;
+  const used = found.used_ratio!;
+  return { window: found, remaining: 100 - quotaPercent(used), tone: quotaTone(used, found.exhausted) };
+}
+
 /** Nothing to show beyond the key's use: the key has no ceiling. */
 export function quotaUnlimited(q: LauncherQuota): boolean {
   return !q.pools?.length && !q.budget?.length && !q.note;

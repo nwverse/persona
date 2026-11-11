@@ -217,6 +217,9 @@ func enrichModel(m proto.ProviderModel) proto.ProviderModel {
 		if m.Name == "" && c.InheritedFrom == "" {
 			m.Name = c.Name
 		}
+		if m.Price == nil && c.InheritedFrom == "" {
+			m.Price = c.Price
+		}
 		window := c.ContextWindow
 		if c.InheritedFrom != "" && idHas1M(m.ID) {
 			window = 0

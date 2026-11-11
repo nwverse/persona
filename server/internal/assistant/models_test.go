@@ -1119,6 +1119,25 @@ func mustManagedForNodes(t *testing.T, s *Service, ctx context.Context) []proto.
 	return list
 }
 
+func TestAskLauncherModelsAddsOnlyExactCatalogPrices(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.agentModels = map[string][]proto.AgentModel{"relay": {
+		{ID: "opus", Resolved: "claude-opus-5-5"},
+		{ID: "claude-opus-5-6"},
+		{ID: "private-model"},
+	}}
+	res, err := s.askLauncherModels(context.Background(), "server", "relay", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Models) != 3 || res.Models[0].Price == nil || res.Models[0].Price.Input != 4 || res.Models[0].Price.Output != 20 {
+		t.Fatalf("exact model price: %+v", res.Models)
+	}
+	if res.Models[1].Price != nil || res.Models[2].Price != nil {
+		t.Fatalf("an inherited or unknown model gained a price: %+v", res.Models)
+	}
+}
+
 // A managed provider's own models are listed after Claude Code's /model entries (which already resolve to some of them)
 // and count for a send's check: one picked in "New Agent" is not dropped.
 func TestProviderModelsListedAndCountForTheSendCheck(t *testing.T) {

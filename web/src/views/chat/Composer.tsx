@@ -115,6 +115,7 @@ export const Composer = memo(function Composer({
   autoFocus,
   footer,
   trailing,
+  usage,
   suggestion,
   mention,
   onFocusChange,
@@ -149,6 +150,8 @@ export const Composer = memo(function Composer({
    *  itself by the card's width (the card is the `composer` container); keep it the same object while nothing in it
    *  changes, as `footer`. */
   trailing?: React.ReactNode;
+  /** A separate row below the composer card (an Agent's context meter, #5056); null while unknown, so no empty gap. */
+  usage?: React.ReactNode;
   suggestion?: string;
   /** Turns on the @ menu: the chat's files and folder, and other sessions. */
   mention?: MentionSource;
@@ -1056,6 +1059,7 @@ export const Composer = memo(function Composer({
           )}
         </div>
       </div>
+      {usage && <div data-composer-usage className="flex items-center justify-end px-2 pt-0.5">{usage}</div>}
       {expanded && (
         <ExpandedComposer
           value={draft}
