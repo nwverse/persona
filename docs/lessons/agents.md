@@ -877,3 +877,19 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
 `command_lifecycle` lines for it instead (queued, started, cancelled, completed). Take one back with `cancel_async_message`, and treat
 `cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
 `claude -p` script before building on it; the requests are not in the public docs.
+
+## A `-c` moves a Codex into the pane's environment (2026-11-12, #4860, codex-cli 0.167.1)
+
+- From 0.163, `codex` with any `-c` override other than a feature switch runs its own app-server in the pane instead
+  of joining the shared daemon (`codex-rs/tui/src/daemon_startup.rs`, `config_exclusion`). The tier effort
+  (`-c model_reasoning_effort=…`) counts. Besides the terminal-only route, Codex then makes its startup requests
+  with the pane's environment rather than the daemon's.
+- One computer reached `chatgpt.com` only through a proxy. The user's `codex` shell function set the proxy, and the
+  daemon had inherited it. `personad codex-start` runs the `codex` on `PATH`, so a tier with an effort made every
+  start fail with `account/read failed during TUI bootstrap: … workspace routing discovery timed out`. The same
+  launcher with no effort worked, and so did a manual `codex`.
+- To tell the two modes apart, look in Codex's log database (`<CODEX_HOME>/logs_2.sqlite`, table `logs`). The span
+  for `account/read` says `rpc.transport="in-process"` (its own app-server) or `unix_socket` (the daemon). The TUI
+  also shows a warning that it runs without the shared background server.
+- An effort the Codex already runs at is now left out (`node/codex_start_effort.go`). A different effort still needs
+  `-c`, and that start still runs with the pane's environment.

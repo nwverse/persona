@@ -212,7 +212,14 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   Launchers with `-c` / `--profile` / `--enable` / `--disable` / `--oss` / `--strict-config` / `--no-daemon` run in their own process using the terminal route (#214).
   "Connection" explains "Started with launcher 'X': it includes -c, so Codex runs in its own process, not the shared app-server". Version 0.153 has no daemon and also uses the terminal route.
 - **Read-only tasks**: a terminal start with `permission_mode: plan` adds `--sandbox read-only --ask-for-approval never`. Conflicting launcher permission flags are refused before creating a tab; other modes preserve launcher arguments. See [To-dos](../assistant/todos.md#read-only-planned-tasks).
-- **Creation defaults**: Codex uses launcher arguments and `~/.codex/config.toml`. A model purpose's explicitly configured thinking effort is forwarded as `-c model_reasoning_effort=...` after launcher defaults; an inherited/empty effort leaves those arguments unchanged. The creation UI still offers no permission mode / thinking effort selector; effort can be changed in-chat after joining app-server (see "Thinking effort"). Resuming an existing session: see "Resuming from the phone" below.
+- **Creation defaults**: Codex uses launcher arguments and `~/.codex/config.toml`. A model purpose's explicitly configured thinking effort is forwarded as `-c model_reasoning_effort=...` after launcher defaults; an inherited/empty effort leaves those arguments unchanged.
+  Any `-c` takes the start off the shared daemon (see "Route"), and Codex then starts up with the pane's environment instead of the daemon's.
+  So the node leaves the flag out when the Codex already runs at that effort. It does so only when all of these hold:
+  - the launcher runs `codex` itself, would join the shared app-server, and sets no `CODEX_HOME`;
+  - `config.toml` sets that effort at the top level, selects no profile and changes no project markers;
+  - no project `.codex/config.toml` from the start's directory up to its `.git` names an effort or a profile.
+
+  Otherwise the flag stays (`node/codex_start_effort.go`, #4860). The creation UI still offers no permission mode / thinking effort selector; effort can be changed in-chat after joining app-server (see "Thinking effort"). Resuming an existing session: see "Resuming from the phone" below.
 - **Tests**: `node/codex_start_test.go` (fake herdr: pane command only `codex-start <file>`, file contains launcher words and message, exactly one session, route note, rejection, timeout and startup failure errors, trust dialogs,
   `codex-start` subprocess receives message byte-for-byte, Codex aliases in `~/.zshrc`). Real Codex: `TestLiveCodexStart` in `scripts/test/test-codex.sh`
   (0.163 connected with `--remote` to the test's own app-server, 0.153, 0.163 with `-c`; each round in a fresh git repository, so Codex asks to trust it and the start must answer;

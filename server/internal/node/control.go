@@ -158,8 +158,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if execution.Model != "" {
 			argv = append(withoutModelArgs(argv), "--model", execution.Model)
 		}
-		if execution.Effort != "" {
-			// The purpose's explicit effort takes precedence over launcher defaults.
+		if execution.Effort != "" && !n.codexEffortInherited(argv, cwd, execution.Effort) {
+			// The purpose's explicit effort takes precedence over launcher defaults. One Codex already runs at is left
+			// out: the flag would only take the start off the shared app-server (codex_start_effort.go).
 			argv = append(argv, "-c", "model_reasoning_effort="+execution.Effort)
 		}
 		return n.startCodex(ctx, launch, cwd, launcher, argv, prompt, ws, tabName, mode)
