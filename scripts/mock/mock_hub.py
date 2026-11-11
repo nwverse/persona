@@ -4099,9 +4099,11 @@ def photos_route(h, method, p):
             return h.send_json({"mode": PHOTO_MODE, "on": meeting_photos_on(),
                                 "photos": {k: {"next": v["next"], "deleted": v["deleted"], "photos": [photo_view(k, x) for x in v["photos"]]}
                                            for k, v in PHOTO_STORE.items()}}) or True
-    hit = re.fullmatch(r"/api/v1/recordings/([^/]+)/photos(?:/([^/]+))?", p)
+    hit = re.fullmatch(r"/api/v1/recordings/([^/]+)/photos(?:/(.*))?", p)
     if not hit: return False
     rid, num = hit.group(1).lower(), hit.group(2)
+    if num is not None and num.endswith("/"): num = num[:-1]  # a trailing slash names the same photo, never the recording
+    if num == "": num = None
     if not meeting_photos_on(): return h.send_json({"error": "404 page not found"}, 404) or True
     if method not in (("GET", "DELETE") if num is not None else ("POST", "GET")): return h.send_json({"error": "method"}, 405) or True
     if is_read_only(h): return h.send_json({"error": "only devices with full credentials can do this", "code": "forbidden"}, 403) or True
@@ -4115,7 +4117,7 @@ def photos_route(h, method, p):
             cited = photos_cited(rid)
             return h.send_json({"photos": [photo_view(rid, x, cited) for x in photos_listed(rid)]}) or True
     if method == "POST": return photo_post(h, rid, raw)
-    n = int(num) if num.isdigit() and len(num) < 9 else 0
+    n = int(num) if num.isdigit() and len(num) < 9 else 0  # anything else (another path below it too) is no photo
     if method == "GET":
         with PHOTO_LOCK:
             x = next((y for y in (photos_of(rid) or {"photos": []})["photos"] if y["n"] == n), None)
@@ -4244,6 +4246,8 @@ def recordings_route(h, method, p):
         detail.pop("minutes", None); detail.setdefault("meta", {})["minutes_state"] = "pending"
         return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
+    if p.rstrip("/") != "/api/v1/recordings/" + p.split("/")[4]:  # a path below a recording that no route took
+        return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
         existed = rid in RECORDINGS
         RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None)

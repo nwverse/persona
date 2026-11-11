@@ -224,8 +224,12 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
         self.assertEqual((status, kind, raw), (200, "image/jpeg", base64.b64decode(body["data"])))
         for n in ("2", "0", "x"):
             self.assertEqual(self.call("GET", f"/api/v1/recordings/{rid}/photos/{n}")[1]["code"], "photo_not_found")
+        # A path below the recording that is no photo never deletes the recording.
+        for bad in ("photos/1/x", "photos/x/", "nothing"):
+            self.assertEqual(self.call("DELETE", f"/api/v1/recordings/{rid}/{bad}")[0], 404, bad)
+        self.assertEqual(self.image(rid, 1)[0], 200)
         ws = self.websocket()
-        self.assertEqual(self.call("DELETE", f"/api/v1/recordings/{rid}/photos/1"), (200, {"deleted": True}))
+        self.assertEqual(self.call("DELETE", f"/api/v1/recordings/{rid}/photos/1/"), (200, {"deleted": True}))  # the trailing slash names it too
         self.assertEqual(self.call("DELETE", f"/api/v1/recordings/{rid}/photos/1"), (200, {"deleted": False}))  # a repeat
         self.assertEqual(self.call("GET", f"/api/v1/recordings/{rid}/photos/1")[1]["code"], "photo_not_found")
         self.assertEqual(self.photos(rid), [])
