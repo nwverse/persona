@@ -249,14 +249,30 @@ final class ScrollToBottomTests: XCTestCase {
         guard let field = composer() else { throw XCTSkip("the composer is not in the accessibility tree (#1006)") }
         field.tap()
         let up = record("4 keyboard up", seconds: 3, shots: 1)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap() // a tap on the page closes it
+        XCTAssertTrue(hideKeyboard(), "the composer's Hide Keyboard button")
         let down = record("4 keyboard down", seconds: 3, shots: 1)
         for (name, s) in [("up", up), ("down", down)] {
             let r = try XCTUnwrap(s.last?.r)
             XCTAssertTrue(r.newest && r.mode == "following", "keyboard \(name): at the newest end, following:\n\(describe(s))")
             XCTAssertEqual(flashes(s), 0, "keyboard \(name): the arrow flashed")
+            XCTAssertFalse(s.contains { $0.r.mode == "holding" }, "keyboard \(name): a row was opened:\n\(describe(s))")
             consistent("4 \(name)", s)
         }
+        XCTAssertEqual(app.keyboards.count, 0, "the keyboard went down")
+    }
+
+    /// Closes the keyboard with the composer's own Hide Keyboard button. A tap on the page closes it too, but the page
+    /// is rows: one at a quarter of the screen's height landed on a running turn's work line and opened it, and the
+    /// chat then held that header instead of following (#4813).
+    private func hideKeyboard() -> Bool {
+        for id in ["shell-composer-dismiss-keyboard", "composer-row-dismiss-keyboard"] {
+            let button = app.buttons[id].firstMatch
+            if button.waitForExistence(timeout: 2), button.isHittable {
+                button.tap()
+                return true
+            }
+        }
+        return false
     }
 
     /// 5. A message sent while reading history: back to the newest, following.

@@ -315,7 +315,7 @@ The behavior before #1046 (several separate truths), its measurements and the pl
 | 1 | Streaming at latest: drag up about 40 pt and release | Stays within 100 pt and keeps following; nothing withheld, no ↓, the stream keeps arriving |
 | 2 | Flick toward latest | From a screen up, the glide reaches latest and follows, ↓ doesn't flash; a short flick from far up stays in history: reading, ↓, withheld |
 | 3 | At latest, expand the running turn's work row, then collapse it | The heading moves under the top bar (#1173) and stays still while the turn grows below it: holding, never withheld. Collapsed: at latest, following, no ↓ |
-| 4 | Keyboard opens / closes at latest | At latest, following, ↓ doesn't flash |
+| 4 | Keyboard opens, then closes with the composer's Hide Keyboard (a tap on the page could open the row under it, #4813), at latest | At latest, following, ↓ doesn't flash, nothing opened |
 | 5 | Send a message while reading history | At latest, following, nothing withheld |
 | 6 | Pushes while reading history, then tap ↓ | While reading, ↓ stays and new content is withheld; after ↓: at latest, following, no ↓ |
 | 7 | Leave the chat and open it again | At latest, following, ↓ doesn't flash on entry |
