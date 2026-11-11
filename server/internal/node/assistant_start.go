@@ -262,7 +262,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		if n.guestOf(id) == nil {
 			return nil, errRoomRecord // never with the assistant's tools
 		}
-		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, settings, hooks == ""); settingsErr != nil {
+		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
 			return nil, settingsErr
 		}
 		args = append(args, meetingRoomArgs()...)

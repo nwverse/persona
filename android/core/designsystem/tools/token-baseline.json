@@ -12,7 +12,7 @@
       "material3": 3
     },
     "android/app/src/main/java/persona/android/ui/Root.kt": {
-      "dp": 4,
+      "dp": 3,
       "icon": 6,
       "material3": 2
     },
@@ -187,7 +187,7 @@
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/StatusComponents.kt": {
       "color": 2,
-      "dp": 54
+      "dp": 53
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/StatusPalette.kt": {
       "color": 233
@@ -238,8 +238,7 @@
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsScreen.kt": {
       "dp": 1,
-      "icon": 45,
-      "material3": 1
+      "icon": 45
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsTree.kt": {
       "icon": 3
@@ -249,6 +248,10 @@
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/HubNoticeRow.kt": {
       "icon": 4
+    },
+    "android/feature/agents/src/main/kotlin/persona/feature/agents/LauncherAvailability.kt": {
+      "dp": 5,
+      "icon": 1
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/NewAgentDialog.kt": {
       "dp": 5,
@@ -262,8 +265,7 @@
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/SpaceScreen.kt": {
       "dp": 1,
-      "icon": 3,
-      "material3": 1
+      "icon": 3
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/TodoCalendar.kt": {
       "icon": 6
@@ -293,8 +295,7 @@
     },
     "android/feature/assistant/src/main/kotlin/persona/feature/assistant/AssistantScreen.kt": {
       "dp": 19,
-      "icon": 44,
-      "material3": 1
+      "icon": 44
     },
     "android/feature/assistant/src/main/kotlin/persona/feature/assistant/CompactionStatusLine.kt": {
       "icon": 1

@@ -127,7 +127,7 @@ func TestMeetingRoomStarts(t *testing.T) {
 	guest, _ := start["guest"].(map[string]any)
 	text, _ := start["text"].(string)
 	if start["new_session_id"] != sid || start["client_msg_id"] != "meeting-"+meetingRec || guest["kind"] != "meeting" || len(guest["tools"].([]any)) != 2 || start["is_main"] != false ||
-		!strings.Contains(text, "Title: Design review") || !strings.Contains(text, `"kind":"meeting"`) || !strings.Contains(text, "Role: participant") {
+		start["config_dir"] != meetingProfile || !strings.Contains(text, "Title: Design review") || !strings.Contains(text, `"kind":"meeting"`) || !strings.Contains(text, "Role: participant") {
 		t.Fatalf("start %v", start)
 	}
 	if rec, ok, err := r.s.roomOf(context.Background(), "server", sid); err != nil || !ok || rec != meetingRec {
@@ -457,6 +457,56 @@ func TestMeetingRoomAsk(t *testing.T) {
 	}
 	// The same id with another spoken flag is another request.
 	wantCode(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusConflict), codeOpIDReused)
+}
+
+// A main chat on the Agent SDK does not keep its room from starting: the room takes the main chat's launcher and model
+// on the CLI, the only runtime a guest conversation runs on.
+func TestMeetingRoomRunsOnTheCLI(t *testing.T) {
+	r := newRoomFixture(t)
+	if err := r.s.saveModelRecord(context.Background(), "assistant", 0, ModelBinding{Runtime: proto.AssistantRuntimeAgentSDK}); err != nil {
+		t.Fatal(err)
+	}
+	main := map[string]any{}
+	if err := r.s.applyModel(context.Background(), "assistant", main); err != nil || main["runtime"] != proto.AssistantRuntimeAgentSDK {
+		t.Fatalf("the main chat's runtime %v %v", main, err)
+	}
+	r.roomUp(meetingRec, "participant")
+	sends := r.sends()
+	if len(sends) != 1 || sends[0]["runtime"] != nil || sends[0]["launcher"] != main["launcher"] || sends[0]["model_fingerprint"] == main["model_fingerprint"] {
+		t.Fatalf("room start %v, main chat %v", sends, main)
+	}
+}
+
+// A room whose turn ended in Claude Code's own words for a failed request (signed out) gives no answer: the ask fails
+// with model_error, never "Not logged in · Please run /login" as the room's reply, and the room turns unavailable so
+// the next ask is answered from meeting material.
+func TestMeetingRoomAskTurnError(t *testing.T) {
+	r := newRoomFixture(t)
+	sid := r.roomUp(meetingRec, "participant")
+	signedOut := "Not logged in · Please run /login"
+	r.f.mu.Lock()
+	r.f.items = []proto.Item{
+		{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "Who owns the test?", ClientMsgID: askMsgID(askOne, 1)},
+		{ID: "a1", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: signedOut},
+	}
+	for i, c := range r.f.sessions["server"] {
+		if c.SessionID == sid {
+			c.Status, c.State, c.TurnError, c.TurnErrorKind = proto.StatusDone, proto.StateUnread, signedOut, proto.TurnErrorUser
+			r.f.sessions["server"][i] = c
+		}
+	}
+	r.f.mu.Unlock()
+	a := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusOK))
+	if a["state"] != "failed" || a["error"] != askModelError || a["via"] != "room" || a["answer"] != nil && a["answer"] != "" {
+		t.Fatalf("ask %v", a)
+	}
+	if m := r.meeting(meetingRec); m.Room.State != kb.RoomUnavailable || m.Room.Problem != kb.RoomStartFailed || m.Room.RetryAt.IsZero() {
+		t.Fatalf("room %+v", m.Room)
+	}
+	b := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askTwo, "question": "Anything else?"}, http.StatusOK))
+	if b["via"] != "material" || b["state"] != "answered" || len(r.model.called()) != 1 {
+		t.Fatalf("material %v", b)
+	}
 }
 
 // After a restart an ask pending in the room is taken up again, not failed: its message is found in the room and its

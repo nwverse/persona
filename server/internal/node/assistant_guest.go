@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/compat"
@@ -181,14 +182,24 @@ func (n *Node) assistantGuestDelete(params json.RawMessage) (any, error) {
 	case transcript != "" && filepath.Base(filepath.Dir(transcript)) != claudeProjectName(dir):
 		return nil, errors.New("not this meeting's room")
 	}
-	n.stopAssistant(a.SessionID)
+	// Claude Code writes its last lines into the transcript as it exits (the last prompt, its costs): removed before
+	// then, the file came back with the owner's last question in it (#4665). One still running is asked again.
+	n.cancelAssistantRecovery(a.SessionID)
+	if p := n.takeAssistant(a.SessionID); p != nil && stopAndWait([]*assistantProc{p}) > 0 {
+		return nil, errors.New("the room's process is still running")
+	}
 	if transcript != "" {
 		if err := os.Remove(transcript); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		// What Claude Code keeps beside it (tool results, subagents).
+		// What Claude Code keeps beside it (tool results, subagents), and its folder for the session in the profile.
 		if err := os.RemoveAll(strings.TrimSuffix(transcript, ".jsonl")); err != nil {
 			return nil, err
+		}
+		if projects := filepath.Dir(filepath.Dir(transcript)); filepath.Base(projects) == "projects" {
+			if err := os.RemoveAll(filepath.Join(filepath.Dir(projects), "session-env", a.SessionID)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
@@ -261,8 +272,8 @@ func meetingRoomArgs() []string {
 }
 
 // meetingRoomSettings adds to a room's settings s what keeps the owner's instructions out: the CLAUDE.md files of
-// every directory above cwd excluded, no auto-memory.
-func meetingRoomSettings(s map[string]any, cwd, home string) {
+// every directory above cwd and of its profile (configDir, "" for none) excluded, no auto-memory.
+func meetingRoomSettings(s map[string]any, cwd, home, configDir string) {
 	var excludes []string
 	for dir := filepath.Dir(filepath.Clean(cwd)); ; dir = filepath.Dir(dir) {
 		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", filepath.Join(".claude", "CLAUDE.md")} {
@@ -275,8 +286,10 @@ func meetingRoomSettings(s map[string]any, cwd, home string) {
 	if home != "" {
 		excludes = append(excludes, filepath.Join(home, ".claude", "CLAUDE.md"))
 	}
-	if cfg := os.Getenv("CLAUDE_CONFIG_DIR"); cfg != "" {
-		excludes = append(excludes, filepath.Join(cfg, "CLAUDE.md"))
+	for _, cfg := range []string{os.Getenv("CLAUDE_CONFIG_DIR"), configDir} {
+		if f := filepath.Join(cfg, "CLAUDE.md"); cfg != "" && !slices.Contains(excludes, f) {
+			excludes = append(excludes, f)
+		}
 	}
 	s["claudeMdExcludes"] = excludes
 	env, _ := s["env"].(map[string]any)
@@ -287,31 +300,66 @@ func meetingRoomSettings(s map[string]any, cwd, home string) {
 	s["env"] = env
 }
 
-// meetingRoomKeys are what a room's settings keep of the start's (a launcher's own --settings merged with Persona's):
-// the launcher's environment, its login and its model. Never the rest of that file: it is a user settings file
-// (`claude --settings ~/.claude/settings.work.json`) whose hooks, plugins, output style, status line or permissions
-// would reach the room, since flag settings load whatever --setting-sources says.
+// meetingRoomKeys are what a room's settings keep of the start's (a launcher's own --settings merged with Persona's)
+// and of its profile's own settings.json: the environment, the login and the model. Never the rest of those files:
+// they are user settings files (`claude --settings ~/.claude/settings.work.json`, ~/.claude/settings.json) whose
+// hooks, plugins, output style, status line or permissions would reach the room, since flag settings load whatever
+// --setting-sources says.
 var meetingRoomKeys = []string{"env", "model", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod", "forceLoginOrgUUID",
 	"enableArtifact"}
 
-// meetingRoomSettingsFile writes room id's settings: meetingRoomKeys of settings (a file or JSON, "" for none), Persona's
-// own hooks when they go in --settings (personaHooks: no plugin carries them) and meetingRoomSettings.
-func (n *Node) meetingRoomSettingsFile(id, cwd, settings string, personaHooks bool) (string, error) {
-	start := map[string]any{}
-	if settings != "" {
-		var err error
-		if start, err = readLauncherSettings(settings, cwd, n.home); err != nil {
-			if !os.IsNotExist(err) {
-				return "", err
-			}
-			start = map[string]any{}
-		}
+// meetingRoomProfile is the profile a new room of a node with no session scope signs in with when its start names
+// none: the one the assistant's conversations had before each new one got a private profile (assistant_config_dir.go
+// "legacy"). A private profile is a new config directory with no login in it (no credentials, no settings.json with a
+// gateway's token), and the room answered every question "Not logged in".
+const meetingRoomProfile = "legacy"
+
+// startProfile is the profile (config_dir) a start asks assistantProfileSelection for: asked, or meetingRoomProfile for
+// a new conversation of guest kind guestKind that is a room and names none.
+func (n *Node) startProfile(asked, guestKind string, resume bool) string {
+	if !resume && asked == "" && n.sessionScope == nil && guestKind == guestMeeting {
+		return meetingRoomProfile
 	}
+	return asked
+}
+
+// meetingRoomSettingsFile writes room id's settings: meetingRoomKeys of its profile's settings.json (configDir's,
+// "" for none), which --setting-sources project leaves out (a gateway and its token in its env, an apiKeyHelper), with
+// those of settings (a file or JSON, "" for none) over them as Claude Code ranks them (env merged by name), Persona's
+// own hooks when they go in --settings (personaHooks: no plugin carries them) and meetingRoomSettings.
+func (n *Node) meetingRoomSettingsFile(id, cwd, configDir, settings string, personaHooks bool) (string, error) {
 	s := map[string]any{}
-	for _, k := range meetingRoomKeys {
-		if v, ok := start[k]; ok {
+	keep := func(from map[string]any) {
+		for _, k := range meetingRoomKeys {
+			v, ok := from[k]
+			if !ok {
+				continue
+			}
+			if env, isEnv := v.(map[string]any); isEnv && k == "env" {
+				merged, _ := s["env"].(map[string]any)
+				if merged == nil {
+					merged = map[string]any{}
+				}
+				for name, value := range env {
+					merged[name] = value
+				}
+				v = merged
+			}
 			s[k] = v
 		}
+	}
+	if configDir != "" {
+		// Anything wrong with it: none of it, as Claude Code would start without it too.
+		if user, err := readLauncherSettings(filepath.Join(configDir, "settings.json"), cwd, n.home); err == nil {
+			keep(user)
+		}
+	}
+	if settings != "" {
+		start, err := readLauncherSettings(settings, cwd, n.home)
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		keep(start)
 	}
 	if personaHooks { // from Persona's own file: the merged one holds the launcher's hooks too
 		if ours, err := readLauncherSettings(filepath.Join(n.dir, "assistant-settings.json"), cwd, n.home); err == nil && ours["hooks"] != nil {
@@ -320,7 +368,7 @@ func (n *Node) meetingRoomSettingsFile(id, cwd, settings string, personaHooks bo
 			return "", err
 		}
 	}
-	meetingRoomSettings(s, cwd, n.home)
+	meetingRoomSettings(s, cwd, n.home, configDir)
 	b, err := json.Marshal(s)
 	if err != nil {
 		return "", err
