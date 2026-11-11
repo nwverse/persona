@@ -172,6 +172,7 @@ func TestRewindWaitsForALateRestoredPrompt(t *testing.T) {
 			sim := newClaudeSim(c.prompts...)
 			sim.restoreGate = make(chan struct{})
 			sim.restoreSeenEmpty = make(chan struct{})
+			empty := sim.restoreSeenEmpty
 			n := rewindNode(t, sim, "claude", proto.StatusIdle)
 			type answer struct {
 				res map[string]any
@@ -189,7 +190,7 @@ func TestRewindWaitsForALateRestoredPrompt(t *testing.T) {
 				}
 			}()
 			select {
-			case <-sim.restoreSeenEmpty:
+			case <-empty:
 			case <-time.After(2 * time.Second):
 				t.Fatal("the rewind never read the empty box after confirming")
 			}
@@ -440,9 +441,10 @@ func TestRewindLeavesALateOtherDraftInTheBox(t *testing.T) {
 	sim.boxAfter = "typed meanwhile"
 	sim.restoreGate = make(chan struct{})
 	sim.restoreSeenEmpty = make(chan struct{})
+	gate, empty := sim.restoreGate, sim.restoreSeenEmpty
 	go func() {
-		<-sim.restoreSeenEmpty
-		close(sim.restoreGate)
+		<-empty
+		close(gate)
 	}()
 	n := rewindNode(t, sim, "claude", proto.StatusIdle)
 	res, err := n.rewind(context.Background(), "s1", rewindOpts{Prompt: "Reply with only: ok5", Occurrence: 1, Restore: RestoreConversation})
