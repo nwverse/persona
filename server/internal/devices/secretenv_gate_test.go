@@ -30,6 +30,7 @@ func TestSecretHandOffNeedsANodeWithSecretEnv(t *testing.T) {
 	m.mu.Unlock()
 	outdated("secret.stage", m.call(context.Background(), proto.MethodSecretStage, proto.SecretStageParams{Check: true}, nil))
 	outdated("a start with a ticket", m.call(context.Background(), "session.start", map[string]any{"cwd": "/tmp", "secret_ticket": "t"}, nil))
+	outdated("a ticket hidden by its case", m.call(context.Background(), "session.start", json.RawMessage(`{"cwd":"/tmp","secret_ticket":"t","SECRET_TICKET":""}`), nil))
 	if calls := f.seen(); len(calls) != 0 {
 		t.Fatalf("sent to the old node: %v", calls)
 	}
@@ -56,6 +57,9 @@ func TestSecretHandOffIsTheManagersOwn(t *testing.T) {
 	for what, c := range map[string]devicewire.NodeCall{
 		"secret.stage":          {MachineID: m.cfg.ID, Method: proto.MethodSecretStage, Params: json.RawMessage(`{"check":true}`)},
 		"a start with a ticket": {MachineID: m.cfg.ID, Method: "session.start", Params: json.RawMessage(`{"cwd":"/tmp","secret_ticket":"t"}`)},
+		// a case variant after it: a struct decode would see "", the re-marshalled map put "t" last
+		"a ticket hidden by its case": {MachineID: m.cfg.ID, Method: "session.start", Params: json.RawMessage(`{"cwd":"/tmp","launcher":"claude","secret_ticket":"t","SECRET_TICKET":""}`)},
+		"only a case variant":         {MachineID: m.cfg.ID, Method: "session.start", Params: json.RawMessage(`{"cwd":"/tmp","Secret_Ticket":"t"}`)},
 	} {
 		var rerr *rpc.Error
 		if _, err := d.Call(context.Background(), c); !errors.As(err, &rerr) || rerr.Code != devicewire.CodeHandoffRefused {

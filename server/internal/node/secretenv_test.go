@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -84,6 +87,8 @@ func TestSecretStageAndTake(t *testing.T) {
 		"a NUL":         {envVar("GITHUB_TOKEN", "abcdefghijklmnop\x00q")},
 		"twice":         {envVar("A_TOKEN", handoffTestValue), envVar("A_TOKEN", handoffTestValue)},
 		"nine":          nine,
+		// a value where the name goes: never said back
+		"swapped": {envVar(handoffTestValue, "GITHUB_TOKEN-is-the-name")},
 	} {
 		if _, err := stageForTest(t, n, env...); err == nil || strings.Contains(err.Error(), handoffTestValue) {
 			t.Errorf("%s: %v", what, err)
@@ -121,6 +126,14 @@ func TestSecretStageAndTake(t *testing.T) {
 	}
 	if !n.handoffs().has(res.Ticket) {
 		t.Fatal("a refused caller used the ticket up")
+	}
+	// Fetched before a start named it: refused, and gone (whoever asked was not that start).
+	if resp := ask(res.Ticket, key); resp["error"] == nil || resp["env"] != nil || n.handoffs().has(res.Ticket) {
+		t.Fatalf("fetched before its start: %v", resp)
+	}
+	res, _ = stageForTest(t, n, envVar("GITHUB_TOKEN", handoffTestValue))
+	if !n.handoffs().reserve(res.Ticket) || n.handoffs().reserve(res.Ticket) || n.handoffs().has(res.Ticket) {
+		t.Fatal("reserved once, and only once")
 	}
 	if resp := ask(res.Ticket, key); fmtEnv(resp) != "GITHUB_TOKEN="+handoffTestValue {
 		t.Fatalf("with the key and the ticket: %v", resp)
@@ -168,6 +181,7 @@ func TestSecretEnvOverTheSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	n.handoffs().reserve(res.Ticket) // its start named it
 	env, err := fetchSecretEnv(ctx, res.Ticket)
 	if err != nil || strings.Join(env, " ") != "GITHUB_TOKEN="+handoffTestValue+" NPM_TOKEN="+handoffTestValue+"-2" {
 		t.Fatalf("fetched: %v %v", env, err)
@@ -381,5 +395,107 @@ func TestSecretStartCommand(t *testing.T) {
 	}
 	if err := LaunchWithSecrets(context.Background(), res.Ticket, []string{"sh", "-c", "env"}); err == nil || !strings.Contains(err.Error(), "only -- claude") {
 		t.Fatalf("another command: %v", err)
+	}
+}
+
+// A value handed over again is the newest: it stays hidden after secretScrubMost others.
+func TestSecretScrubberMovesAValueHandedAgain(t *testing.T) {
+	s := &secretScrubber{}
+	first := "synthetic-value-first-padding"
+	s.add([]byte(first))
+	for i := range secretScrubMost - 1 {
+		s.add([]byte(fmt.Sprintf("synthetic-value-%04d-padding", i)))
+	}
+	s.add([]byte(first)) // again
+	s.add([]byte("synthetic-value-newer-padding"))
+	if got := s.line(jsonLine(map[string]any{"a": first}, false)); bytes.Contains(got, []byte(first)) {
+		t.Fatalf("handed again, then dropped: %s", got)
+	}
+	if got := s.line(jsonLine(map[string]any{"a": "synthetic-value-0000-padding"}, false)); !bytes.Contains(got, []byte("synthetic-value-0000-padding")) {
+		t.Fatalf("the least recent should have gone: %s", got)
+	}
+}
+
+// A value of several lines (a PEM key) is found as a terminal shows it, with CRLF, and in a transcript, with LF.
+func TestSecretScrubberMultiLineValues(t *testing.T) {
+	s := &secretScrubber{}
+	pem := "-----BEGIN SYNTHETIC KEY-----\nAAAAsyntheticline1\nBBBBsyntheticline2\n-----END SYNTHETIC KEY-----"
+	s.add([]byte(pem))
+	crlf := strings.ReplaceAll(pem, "\n", "\r\n")
+	if got := s.bytes([]byte("$ cat key\r\n" + crlf + "\r\n$ ")); bytes.Contains(got, []byte("AAAAsyntheticline1")) {
+		t.Fatalf("terminal: %q", got)
+	}
+	if got := s.line(jsonLine(map[string]any{"text": "key:\n" + pem}, false)); bytes.Contains(got, []byte("AAAAsyntheticline1")) {
+		t.Fatalf("transcript: %s", got)
+	}
+}
+
+// Whatever the value and wherever it sits, the line stays valid JSON and no string value carries it.
+func TestSecretScrubberKeepsLinesValid(t *testing.T) {
+	r := rand.New(rand.NewPCG(1, 2))
+	alphabet := []rune("ab01/+=_-\"\\<>&\u2028\n\t éu")
+	word := func(n int) string {
+		var b strings.Builder
+		for range n {
+			b.WriteRune(alphabet[r.IntN(len(alphabet))])
+		}
+		return b.String()
+	}
+	for range 2000 {
+		value := "v" + word(16+r.IntN(12))
+		s := &secretScrubber{}
+		s.add([]byte(value))
+		texts := []any{}
+		for range 1 + r.IntN(4) {
+			texts = append(texts, word(r.IntN(6))+value+word(r.IntN(6)), word(r.IntN(10)))
+		}
+		v := map[string]any{"method": "session.items", word(3): texts, "b64": base64.StdEncoding.EncodeToString([]byte(word(2) + value))}
+		got := s.line(jsonLine(v, r.IntN(2) == 0))
+		var back any
+		if err := json.Unmarshal(got, &back); err != nil {
+			t.Fatalf("value %q: not JSON: %s", value, got)
+		}
+		var walk func(any)
+		walk = func(x any) {
+			switch x := x.(type) {
+			case string:
+				if strings.Contains(x, value) {
+					t.Fatalf("value %q left in %q", value, x)
+				}
+			case []any:
+				for _, e := range x {
+					walk(e)
+				}
+			case map[string]any:
+				for _, e := range x {
+					walk(e)
+				}
+			}
+		}
+		walk(back)
+	}
+}
+
+// secret_env comes only from a resident node: a node that serves one connection forgets what it hides.
+func TestSecretEnvOnlyFromAResidentNode(t *testing.T) {
+	if caps := (&Node{}).capabilities(); slices.Contains(caps, nodeproto.SecretEnv) || !slices.Contains(caps, nodeproto.SecretRun) {
+		t.Fatalf("one connection's node: %v", caps)
+	}
+	if caps := (&Node{keeper: newAssistantKeeper()}).capabilities(); !slices.Contains(caps, nodeproto.SecretEnv) {
+		t.Fatalf("a resident node: %v", caps)
+	}
+}
+
+// BenchmarkSecretScrubberLine is one 1 MiB line holding a value, with 64 values kept.
+func BenchmarkSecretScrubberLine(b *testing.B) {
+	s := &secretScrubber{}
+	for i := range secretScrubMost {
+		s.add([]byte(fmt.Sprintf("synthetic-value-%04d-padding", i)))
+	}
+	text := strings.Repeat("ordinary transcript text, nothing secret here. ", 1<<20/48) + "synthetic-value-0042-padding"
+	line := jsonLine(map[string]any{"result": map[string]any{"text": text}}, false)
+	b.SetBytes(int64(len(line)))
+	for b.Loop() {
+		_ = s.line(line)
 	}
 }

@@ -66,12 +66,17 @@ Values handed to one Agent start after the user approves a card (#3962). The com
 - **Staged on the computer, sealed on the way**: after the approval the manager that connects the computer resolves the
   references (purpose `agent_run`), asks the node for a one-time key (`secret.stage {check}`), seals the values to it (HPKE)
   and stages them (`secret.stage {key_id, sealed}`), over its own connection to the node. The hub relays that connection for a
-  Persona Link or a mesh computer and sees only the key, the sealed bytes and the ticket. Only that manager may stage or start
+  Persona Link or a mesh computer and sees only the key, the sealed bytes and the ticket: this keeps the values from a relay
+  that reads what passes, not from one that changes it (the key is not signed; such a hub could already type into the
+  computer's terminals). Only that manager may stage or start
   with a ticket: the hub's and other managers' calls of either are refused (`handoff_refused`). A computer this manager does
-  not connect, or a node without `secret_env`, is refused before the card.
+  not connect, or a node without `secret_env`, is refused before the card. Only a resident node (Persona Link, `personad node
+  --attach`) announces `secret_env`: one that serves a single connection (`--stdio`) would forget what it hides when that
+  connection ends while its Agents still run.
 - **A one-time ticket**: the node keeps the values in memory for at most 2 minutes under a random ticket; the start carries
   only the ticket (`session.start`'s `secret_ticket`, [protocol.md](../protocol/protocol.md) "hub ↔ node"). The first start
-  that names it takes it (another is refused with `secret_env_gone`), and the first fetch uses it up.
+  that names it takes it (another is refused with `secret_env_gone`), only that start's fetch gets the values, and the first
+  fetch uses it up; a start that fails drops it.
 - **Into the process, not the pane**: the node starts Claude Code through `personad launch --ticket <ticket> <provider> …` (or
   `-- claude …` for plain claude), which fetches the values from node.sock with the machine's launch key and the ticket,
   checks their names again, then execs claude with them in its environment. They are never typed into a terminal, put on a
@@ -79,21 +84,26 @@ Values handed to one Agent start after the user approves a card (#3962). The com
   key and once used. A value never replaces the provider's own settings (the start fails instead). An engine's resume after a
   restart starts without them (its resume command has no ticket). Only a new Claude Code start whose command personad can
   exec takes one: a Persona-managed Claude provider or plain `claude`, not a launcher defined in the shell's rc file, Codex,
-  other agents or a runtime (`secret_env_agent`). Every program the Agent starts inherits its environment, its MCP servers and
-  hooks included.
+  other agents or a runtime (`secret_env_agent`). For plain `claude` the wrapper runs the `claude` on the PATH, not a shell
+  alias or function of that name: whoever's `claude` is a shell function should add the provider in Persona. Every program the
+  Agent starts inherits its environment, its MCP servers and hooks included.
 - **Names and values**: 1 to 8 variables, environment variable names that are not the computer's, Persona's or the Agent's own
   and that do not change how programs load, run or connect (`PATH`, `HOME`, `LD_*`, `DYLD_*`, `PERSONA_*`, `ANTHROPIC_*`,
   `CLAUDE_*`, `GIT_*`, `XDG_*`, proxies, CA bundles, `EDITOR` and the like); values of 16 bytes to 16 KiB, so they can be told
   apart from ordinary text where they are hidden. Not on Windows yet.
 - **Hidden in what the computer sends**: from staging on, the node process (every connection it makes to its manager, so a
   reconnect keeps them) replaces each value with `***` in what it sends: inside every JSON string value (transcript items,
-  live text, screens, cards and their tool input), in terminal frames and the full herdr view (decoded, hidden, encoded
-  again), and its base64 anywhere (as base64 of the same length, so a payload around it still decodes). It keeps the last 64
-  values. This is best effort: a value split across two pieces of live text or terminal output is not found, object keys are
-  never changed, files fetched from the computer are not scrubbed, a node restart forgets them, and an Agent that prints a
-  value still writes it into its own transcript file on that computer (as the node's queue of events kept while its manager
-  is away does, before they are sent). Go cannot reliably wipe memory: the node zeroes the copies it holds when they are no
-  longer needed, but other copies may stay in its memory until it is reused.
+  live text, screens, text files read from the computer, cards and their tool input, and the Agent's own requests to Persona,
+  so a value passed to a Persona tool arrives as `***`), and in terminal frames and the full herdr view (decoded, hidden,
+  encoded again; a value of several lines with either line ending). A value's own base64 standing alone (`base64` of the
+  value in the output) becomes base64 of the same length. It keeps the 64 values most recently handed over. This is best
+  effort, and does not catch: a value split across two pieces of live text or terminal output, or wrapped across a screen's
+  rows; a value inside a larger base64 payload (binary file chunks, forwarded ports, the clipboard), where its base64 lines up
+  only sometimes; other encodings (a JSON number, `\/` escapes, URL encoding); object keys, which are never changed; and
+  anything after a node restart. An Agent that prints a value still writes it into its own transcript file on that computer
+  (as the node's queue of events kept while its manager is away does, before they are sent). Go cannot reliably wipe memory:
+  the node zeroes the copies it holds when they are no longer needed, but other copies may stay in its memory until it is
+  reused.
 
 ## What comes next (#3962)
 

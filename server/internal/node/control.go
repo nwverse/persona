@@ -32,7 +32,7 @@ func newUUID() string {
 // tabName names the herdr tab (hub picks one from the first message when the user gave none); empty: agent-<n>.
 // newID is the id a new session gets (startAsync picked it already); empty: a fresh one.
 // agentType is the agent the user picked for the launcher (claude, codex, traex, omp); empty: what the launcher runs.
-func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (*proto.Session, error) {
+func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (_ *proto.Session, startErr error) {
 	execution := executionOption(options)
 	if err := execution.check(); err != nil {
 		return nil, err
@@ -65,6 +65,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if err := n.secretStartProblem(kind, launcher, resume, execution.SecretTicket); err != nil {
 			return nil, err
 		}
+		defer func() { // this start took the ticket: failed, nothing else may fetch its values (secretenv.go)
+			if startErr != nil {
+				n.handoffs().take(execution.SecretTicket, false)
+			}
+		}()
 	}
 	if kind == ompAgent { // start_agent.go: omp's own command, and none of a Claude start's options
 		if launcher != ompAgent {

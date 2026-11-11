@@ -498,9 +498,6 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
-	if err := secretEnvRefusal(ctx, info, method, params); err != nil {
-		return err
-	}
 	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
 		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
@@ -509,12 +506,12 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		m.mu.Lock()
 		p, info = m.peer, m.info
 		m.mu.Unlock()
-		if err := secretEnvRefusal(ctx, info, method, params); err != nil { // checked against the node it got
-			return err
-		}
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
+	}
+	if err := secretEnvRefusal(ctx, info, method, params); err != nil { // against the node it has, never one on its way
+		return err
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
@@ -872,15 +869,25 @@ func secretEnvRefusal(ctx context.Context, info proto.NodeInfo, method string, p
 	return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_env")}
 }
 
-// startHasSecretTicket: session.start params carrying a hand-off's ticket.
+// startHasSecretTicket: session.start params carrying a hand-off's ticket: a secret_ticket key in any letter case,
+// whatever its value (the node reads it case-insensitively, and a re-marshalled map can reorder duplicates).
 func startHasSecretTicket(params any) bool {
-	raw, err := json.Marshal(params)
-	if err != nil {
-		return true // cannot tell: treated as one, so an older node is refused rather than run without it
+	raw, ok := params.(json.RawMessage)
+	if !ok {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return true // cannot tell: treated as one, so it is refused rather than run without its values
+		}
+		raw = b
 	}
-	var fields struct {
-		Ticket string `json:"secret_ticket"`
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return true
 	}
-	_ = json.Unmarshal(raw, &fields)
-	return fields.Ticket != ""
+	for k := range fields {
+		if strings.EqualFold(k, "secret_ticket") {
+			return true
+		}
+	}
+	return false
 }

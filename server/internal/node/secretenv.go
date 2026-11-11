@@ -13,12 +13,14 @@ import (
 	"io"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -36,8 +38,12 @@ import (
 // secretScrubMost, to hide them in everything it sends: a best-effort guard, since the Agent may still write a value
 // into its own files on this computer.
 
-// secretScrubMost is how many handed-over values the process keeps hiding; the oldest go first.
-const secretScrubMost = 64
+// secretScrubMost is how many handed-over values the process keeps hiding; the least recently handed over go first.
+// secretStageMost bounds the keys and the tickets waiting at once.
+const (
+	secretScrubMost = 64
+	secretStageMost = 32
+)
 
 type stagedSecrets struct {
 	env      []proto.SecretEnvVar
@@ -100,6 +106,13 @@ func (n *Node) secretStageCall(params json.RawMessage) (any, error) {
 	s := n.handoffs()
 	now := time.Now()
 	if p.Check {
+		s.mu.Lock()
+		s.dropExpired(now)
+		busy := len(s.keys) >= secretStageMost
+		s.mu.Unlock()
+		if busy {
+			return nil, errors.New("secret.stage: too many hand-offs at once")
+		}
 		priv, err := ecdh.P256().GenerateKey(rand.Reader)
 		if err != nil {
 			return nil, err
@@ -141,6 +154,11 @@ func (n *Node) secretStageCall(params json.RawMessage) (any, error) {
 	}
 	s.mu.Lock()
 	s.dropExpired(now)
+	if len(s.staged) >= secretStageMost {
+		s.mu.Unlock()
+		clearEnv(env)
+		return nil, errors.New("secret.stage: too many hand-offs at once")
+	}
 	s.staged[ticket] = stagedSecrets{env: env, expires: expires}
 	s.mu.Unlock()
 	time.AfterFunc(proto.SecretStageKeep, func() { s.take(ticket, false) }) // not used in time: gone
@@ -152,16 +170,20 @@ func checkSecretEnv(env []proto.SecretEnvVar) error {
 		return errors.New("secret.stage: 1 to 8 variables")
 	}
 	seen := map[string]bool{}
-	for _, v := range env {
+	for i, v := range env {
+		label := v.Name // said only when it reads as a name: never what could be a value put in its place
+		if !proto.IsSecretEnvName(v.Name) {
+			label = "variable " + strconv.Itoa(i+1)
+		}
 		if why := compat.SecretEnvNameProblem(v.Name); why != "" {
-			return errors.New("secret.stage: " + v.Name + ": " + why)
+			return errors.New("secret.stage: " + label + ": " + why)
 		}
 		if seen[v.Name] {
-			return errors.New("secret.stage: " + v.Name + " twice")
+			return errors.New("secret.stage: " + label + " twice")
 		}
 		seen[v.Name] = true
 		if len(v.Value) < proto.SecretEnvValueLeast || len(v.Value) > proto.SecretEnvValueMost || bytes.IndexByte(v.Value, 0) >= 0 {
-			return errors.New("secret.stage: " + v.Name + ": a value of 16 bytes to 16 KB without NUL")
+			return errors.New("secret.stage: " + label + ": a value of 16 bytes to 16 KB without NUL")
 		}
 	}
 	return nil
@@ -188,7 +210,8 @@ func (s *secretStage) dropExpired(now time.Time) {
 }
 
 // take removes ticket's values and returns them (use: the caller zeroes them after use); nil when it is unknown,
-// used or expired. Without use they are zeroed here.
+// used, expired or no start's yet (a ticket fetched before its start named it was not fetched by that start). Without
+// use, or with nothing returned, they are zeroed here.
 func (s *secretStage) take(ticket string, use bool) []proto.SecretEnvVar {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,7 +220,7 @@ func (s *secretStage) take(ticket string, use bool) []proto.SecretEnvVar {
 	if !ok {
 		return nil
 	}
-	if !use || time.Now().After(st.expires) {
+	if !use || !st.reserved || time.Now().After(st.expires) { // only for the start that named it
 		clearEnv(st.env)
 		return nil
 	}
@@ -280,6 +303,9 @@ func fetchSecretEnv(ctx context.Context, ticket string) ([]string, error) {
 	for _, kv := range resp.Env {
 		name, _, _ := strings.Cut(kv, "=")
 		if why := compat.SecretEnvNameProblem(name); why != "" {
+			if !proto.IsSecretEnvName(name) {
+				name = "a variable"
+			}
 			return nil, errors.New(name + ": " + why)
 		}
 	}
@@ -288,20 +314,23 @@ func fetchSecretEnv(ctx context.Context, ticket string) ([]string, error) {
 
 // ---- hiding them ----
 
-// secretScrubber hides handed-over values in what the node sends: inside JSON strings as JSON writes them, in raw
-// bytes as they are, and their base64 anywhere.
+// secretScrubber hides handed-over values in what the node sends: inside JSON string values as JSON writes them, in
+// raw bytes as they are, and their base64 anywhere. Each value comes in several forms (scrubForms); every form is
+// found in one pass over what is sent (scrubIndex), whatever the number of values.
 type secretScrubber struct {
-	mu     sync.RWMutex
-	values [][]byte // oldest first, at most secretScrubMost
-	json   [][]byte // each value as it reads inside a JSON string (both HTML escapings), longest first
-	raw    [][]byte // each value as it is, longest first
-	b64    [][]byte // each value's base64 (standard and URL, padded and not), longest first
+	mu      sync.RWMutex
+	values  [][]byte    // least recently handed over first, at most secretScrubMost
+	lineIdx *scrubIndex // forms inside JSON strings, and base64
+	rawIdx  *scrubIndex // forms in raw bytes, and base64
 }
 
 func (s *secretScrubber) add(value []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if slices.ContainsFunc(s.values, func(v []byte) bool { return bytes.Equal(v, value) }) {
+	if i := slices.IndexFunc(s.values, func(v []byte) bool { return bytes.Equal(v, value) }); i >= 0 {
+		// Handed over again: the newest now, the last to go (its forms are the same).
+		v := s.values[i] // read before Delete shifts the slice
+		s.values = append(slices.Delete(s.values, i, i+1), v)
 		return
 	}
 	s.values = append(s.values, bytes.Clone(value))
@@ -309,32 +338,44 @@ func (s *secretScrubber) add(value []byte) {
 		clear(s.values[0])
 		s.values = s.values[1:]
 	}
-	s.json, s.raw, s.b64 = nil, nil, nil
+	var inJSON, raw, b64 []scrubForm
 	for _, v := range s.values {
-		s.raw = appendForm(s.raw, v)
-		for _, html := range []bool{false, true} { // the node's own lines leave < > & as they are; other encoders escape them
-			var j bytes.Buffer
-			enc := json.NewEncoder(&j)
-			enc.SetEscapeHTML(html)
-			if enc.Encode(string(v)) == nil {
-				quoted := bytes.TrimSuffix(j.Bytes(), []byte("\n"))
-				s.json = appendForm(s.json, quoted[1:len(quoted)-1])
+		for _, w := range lineEndings(v) { // a multi-line value (a PEM key) as a terminal shows it, CRLF
+			raw = appendForm(raw, scrubForm{b: w})
+			for _, html := range []bool{false, true} { // the node's own lines leave < > & as they are; other encoders escape them
+				var j bytes.Buffer
+				enc := json.NewEncoder(&j)
+				enc.SetEscapeHTML(html)
+				if enc.Encode(string(w)) == nil {
+					quoted := bytes.TrimSuffix(j.Bytes(), []byte("\n"))
+					inJSON = appendForm(inJSON, scrubForm{b: quoted[1 : len(quoted)-1]})
+				}
 			}
 		}
 		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-			s.b64 = appendForm(s.b64, []byte(enc.EncodeToString(v)))
+			b64 = appendForm(b64, scrubForm{b: []byte(enc.EncodeToString(v)), b64: true})
 		}
 	}
-	for _, l := range [][][]byte{s.json, s.raw, s.b64} {
-		slices.SortStableFunc(l, func(a, b []byte) int { return len(b) - len(a) })
-	}
+	s.lineIdx = newScrubIndex(append(slices.Clone(inJSON), b64...))
+	s.rawIdx = newScrubIndex(append(raw, b64...))
 }
 
-func appendForm(list [][]byte, f []byte) [][]byte {
-	if slices.ContainsFunc(list, func(x []byte) bool { return bytes.Equal(x, f) }) {
+// lineEndings is v, and for a value of several lines the same with LF and with CRLF line ends.
+func lineEndings(v []byte) [][]byte {
+	if !bytes.ContainsAny(v, "\r\n") {
+		return [][]byte{v}
+	}
+	lf := bytes.ReplaceAll(v, []byte("\r\n"), []byte("\n"))
+	crlf := bytes.ReplaceAll(lf, []byte("\n"), []byte("\r\n"))
+	return [][]byte{v, lf, crlf}
+}
+
+func appendForm(list []scrubForm, f scrubForm) []scrubForm {
+	if len(f.b) == 0 || slices.ContainsFunc(list, func(x scrubForm) bool { return bytes.Equal(x.b, f.b) }) {
 		return list
 	}
-	return append(list, bytes.Clone(f))
+	f.b = bytes.Clone(f.b)
+	return append(list, f)
 }
 
 // active: there is something to hide.
@@ -355,72 +396,183 @@ func redactedB64(f []byte) []byte {
 	return out
 }
 
-// bytes is b, raw bytes the node sends (a terminal's output), with every value and its base64 hidden.
-func (s *secretScrubber) bytes(b []byte) []byte {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, f := range s.raw {
-		if bytes.Contains(b, f) {
-			b = bytes.ReplaceAll(b, f, []byte(proto.Redacted))
-		}
-	}
-	for _, f := range s.b64 {
-		if bytes.Contains(b, f) {
-			b = bytes.ReplaceAll(b, f, redactedB64(f))
-		}
-	}
-	return b
+// scrubForm is one form of a value; b64 forms are replaced with base64 of the same length, others with proto.Redacted.
+type scrubForm struct {
+	b   []byte
+	b64 bool
 }
 
-// line is one JSON line with the values hidden inside its string values, never in object keys: a match that starts
-// inside an escape sequence or crosses a string's end is left, so the line stays valid JSON. A value's base64 becomes
-// as many base64 characters, so a base64 payload stays one (its bytes there garbled).
-func (s *secretScrubber) line(b []byte) []byte {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	hit := false
-	for _, l := range [][][]byte{s.json, s.b64} {
-		for _, f := range l {
-			if bytes.Contains(b, f) {
-				hit = true
-				break
+// scrubIndex finds every form in one pass: a rolling hash over windows of the shortest form's length (at most 16),
+// a bit filter of the forms' first windows, then the forms whose first window it is.
+type scrubIndex struct {
+	window int
+	pow    uint64 // scrubPrime^(window-1)
+	filter []uint64
+	first  map[uint64][]int // the hash of a form's first window → the forms
+	forms  []scrubForm
+}
+
+const scrubPrime = 1099511628211
+
+func newScrubIndex(forms []scrubForm) *scrubIndex {
+	if len(forms) == 0 {
+		return nil
+	}
+	x := &scrubIndex{window: 16, forms: forms, filter: make([]uint64, 1<<16/64), first: map[uint64][]int{}}
+	for _, f := range forms {
+		x.window = min(x.window, len(f.b))
+	}
+	x.pow = 1
+	for range x.window - 1 {
+		x.pow *= scrubPrime
+	}
+	for i, f := range forms {
+		h := hashWindow(f.b[:x.window])
+		x.filter[(h&0xffff)>>6] |= 1 << (h & 63)
+		x.first[h] = append(x.first[h], i)
+	}
+	return x
+}
+
+func hashWindow(b []byte) uint64 {
+	var h uint64
+	for _, c := range b {
+		h = h*scrubPrime + uint64(c)
+	}
+	return h
+}
+
+// scrubSpan is a place a form was found, [at, end), or several overlapping ones joined.
+type scrubSpan struct {
+	at, end int
+	b64     bool
+}
+
+// find is every place in b a form starts.
+func (x *scrubIndex) find(b []byte) []scrubSpan {
+	if x == nil || len(b) < x.window {
+		return nil
+	}
+	var hits []scrubSpan
+	h := hashWindow(b[:x.window])
+	for i := 0; ; i++ {
+		if x.filter[(h&0xffff)>>6]&(1<<(h&63)) != 0 {
+			for _, fi := range x.first[h] {
+				if f := x.forms[fi]; bytes.HasPrefix(b[i:], f.b) {
+					hits = append(hits, scrubSpan{at: i, end: i + len(f.b), b64: f.b64})
+				}
 			}
 		}
+		if i+x.window >= len(b) {
+			return hits
+		}
+		h = (h-uint64(b[i])*x.pow)*scrubPrime + uint64(b[i+x.window])
 	}
-	if !hit {
+}
+
+// replaceSpans is b with the hits that ok accepts replaced, overlapping ones as one (base64 of the same length only
+// when each of them is a base64 form).
+func replaceSpans(b []byte, hits []scrubSpan, ok func(scrubSpan) bool) []byte {
+	slices.SortFunc(hits, func(x, y scrubSpan) int {
+		if x.at != y.at {
+			return x.at - y.at
+		}
+		return y.end - x.end
+	})
+	var spans []scrubSpan
+	for _, h := range hits {
+		if ok != nil && !ok(h) {
+			continue
+		}
+		if n := len(spans); n > 0 && h.at < spans[n-1].end {
+			spans[n-1].end = max(spans[n-1].end, h.end)
+			spans[n-1].b64 = spans[n-1].b64 && h.b64
+			continue
+		}
+		spans = append(spans, h)
+	}
+	if len(spans) == 0 {
 		return b
 	}
 	var out bytes.Buffer
 	out.Grow(len(b))
-	i := 0
-	for i < len(b) {
+	last := 0
+	for _, sp := range spans {
+		out.Write(b[last:sp.at])
+		if sp.b64 {
+			out.Write(redactedB64(b[sp.at:sp.end]))
+		} else {
+			out.WriteString(proto.Redacted)
+		}
+		last = sp.end
+	}
+	out.Write(b[last:])
+	return out.Bytes()
+}
+
+// bytes is b, raw bytes the node sends (a terminal's output), with every value and its base64 hidden.
+func (s *secretScrubber) bytes(b []byte) []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return replaceSpans(b, s.rawIdx.find(b), nil)
+}
+
+// line is one JSON line with the values hidden inside its string values, never in object keys: a match must start
+// where a character or escape starts and end inside the same string, so the line stays valid JSON. A value's base64
+// becomes as many base64 characters, so a base64 payload stays one (its bytes there garbled).
+func (s *secretScrubber) line(b []byte) []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	hits := s.lineIdx.find(b)
+	if len(hits) == 0 {
+		return b
+	}
+	str, unit := stringValues(b)
+	return replaceSpans(b, hits, func(h scrubSpan) bool {
+		return str[h.at] != 0 && str[h.at] == str[h.end-1] && unit[h.at]
+	})
+}
+
+// stringValues maps line b: str[i] is the number (from 1) of the JSON string value byte i is inside (0 outside one,
+// on its quotes, in an object key or in an unclosed string), and unit[i] says a character or an escape starts there.
+func stringValues(b []byte) (str []int32, unit []bool) {
+	str, unit = make([]int32, len(b)), make([]bool, len(b))
+	var n int32
+	for i := 0; i < len(b); {
 		if b[i] != '"' {
-			out.WriteByte(b[i])
 			i++
 			continue
 		}
-		end := i + 1 // the string's closing quote
+		end := i + 1 // the closing quote
 		for end < len(b) && b[end] != '"' {
 			if b[end] == '\\' {
 				end++
 			}
 			end++
 		}
-		if end >= len(b) { // not closed: copied as it is
-			out.Write(b[i:])
-			break
+		if end >= len(b) {
+			break // not closed: left as it is
 		}
-		str := b[i+1 : end]
-		if isKey(b, end+1) {
-			out.Write(b[i : end+1])
-		} else {
-			out.WriteByte('"')
-			out.Write(s.inString(str))
-			out.WriteByte('"')
+		if !isKey(b, end+1) {
+			n++
+			for j := i + 1; j < end; {
+				str[j], unit[j] = n, true
+				step := 1
+				switch {
+				case b[j] == '\\' && j+1 < end && b[j+1] == 'u': // \uXXXX is one unit
+					step = 6
+				case b[j] == '\\':
+					step = 2
+				}
+				for k := j + 1; k < j+step && k < end; k++ {
+					str[k] = n
+				}
+				j += step
+			}
 		}
 		i = end + 1
 	}
-	return out.Bytes()
+	return str, unit
 }
 
 // isKey: what follows a string's closing quote (at i) makes it an object key.
@@ -429,48 +581,6 @@ func isKey(b []byte, i int) bool {
 		i++
 	}
 	return i < len(b) && b[i] == ':'
-}
-
-// inString replaces the values in str, the inside of a JSON string, where a character or an escape starts only.
-func (s *secretScrubber) inString(str []byte) []byte {
-	var out []byte
-	i, last := 0, 0
-	for i < len(str) {
-		matched, with := 0, []byte(nil)
-		for _, f := range s.json {
-			if bytes.HasPrefix(str[i:], f) {
-				matched, with = len(f), []byte(proto.Redacted)
-				break
-			}
-		}
-		if matched == 0 {
-			for _, f := range s.b64 {
-				if bytes.HasPrefix(str[i:], f) {
-					matched, with = len(f), redactedB64(f)
-					break
-				}
-			}
-		}
-		if matched > 0 {
-			out = append(out, str[last:i]...)
-			out = append(out, with...)
-			i += matched
-			last = i
-			continue
-		}
-		switch {
-		case str[i] == '\\' && i+1 < len(str) && str[i+1] == 'u': // \uXXXX is one unit
-			i += 6
-		case str[i] == '\\':
-			i += 2
-		default:
-			i++
-		}
-	}
-	if out == nil {
-		return str
-	}
-	return append(out, str[min(last, len(str)):]...)
 }
 
 // scrubWriter is the node's connection with the values hidden in every line it writes (Serve). rpc.Peer writes
@@ -555,4 +665,14 @@ func (n *Node) withSecretTicket(line, launcher, ticket string, q func(string) st
 		return "CLAUDE_CONFIG_DIR=" + shellDirQ(*d, q) + " " + wrap + "-- " + word + rest
 	}
 	return wrap + "-- " + word + rest
+}
+
+// capabilities is what this node announces: secret_env only from a resident node (attach, Persona Link), whose
+// process outlives a connection, so the values it hides stay hidden when its manager reconnects. A node that serves
+// one connection (--stdio) would forget them while its Agents still run.
+func (n *Node) capabilities() []string {
+	if n.keeper != nil {
+		return nodeproto.Announced
+	}
+	return slices.DeleteFunc(slices.Clone(nodeproto.Announced), func(c string) bool { return c == nodeproto.SecretEnv })
 }

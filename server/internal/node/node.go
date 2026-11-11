@@ -1630,7 +1630,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		Program:            n.Program,
 		Executable:         n.bin,
 		ProtocolMin:        nodeproto.MinManagerVersion,
-		Capabilities:       nodeproto.Announced,
+		Capabilities:       n.capabilities(), // secret_env only from a resident node (secretenv.go)
 		NodeUpdate:         canUpdate,
 		NodeUpdateReason:   updateReason,
 		ModelConfiguration: true,

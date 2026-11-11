@@ -639,10 +639,8 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
-	if p.Method == proto.MethodSecretStage || p.Method == "session.start" && startHasSecretTicket(params) {
-		// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another
-		// manager's to ask for, so nobody else can stage values or start an Agent with them.
-		return nil, &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+	if refusesHandoff(p.Method, params) {
+		return nil, errHandoffRefused
 	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
@@ -653,6 +651,9 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	params, receipt, prepareErr = d.prepareShareCall(ctx, p, params)
 	if prepareErr != nil {
 		return nil, wireError(prepareErr)
+	}
+	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
+		return nil, errHandoffRefused
 	}
 	var out json.RawMessage
 	err := m.call(ctx, p.Method, params, &out)
@@ -932,3 +933,12 @@ func (w *wrapped) Error() string   { return w.message.Error() }
 func (w *wrapped) Unwrap() []error { return []error{w.message, w.err} }
 
 func explain(message, err error) error { return &wrapped{message: message, err: err} }
+
+// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another manager's
+// to ask for (Devices.Call), so nobody else can stage values or start an Agent with them.
+var errHandoffRefused = &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+
+// refusesHandoff: a hub-relayed call that would stage values or start with a ticket.
+func refusesHandoff(method string, params json.RawMessage) bool {
+	return method == proto.MethodSecretStage || method == "session.start" && startHasSecretTicket(params)
+}
