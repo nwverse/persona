@@ -104,6 +104,9 @@ final class RecordingSync {
         /// `days` came from the hub at least once: until then nothing here is dropped for its age (the hub may keep
         /// recordings longer than the default).
         var daysKnown = false
+        /// All-day recordings: the hub ids of each day's parts past its first (whose id is the day's own), so deleting the
+        /// day deletes every part there (docs/assistant/day-recap.md "Parts"). nil in a file from before.
+        var dayParts: [UUID: [UUID]]? = nil
     }
 
     enum Status: Equatable {
@@ -144,6 +147,8 @@ final class RecordingSync {
     @ObservationIgnored private let api: () -> APIClient?
     @ObservationIgnored private let file: URL
     @ObservationIgnored private let now: () -> Date
+    /// All-day recordings go their own way (`RecordingDaySync`): this hands them over.
+    @ObservationIgnored private let daySync: () -> RecordingDaySync
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var again = false
     /// `worker` is only waiting out a backoff: a new reason to sync cuts it short.
@@ -155,8 +160,8 @@ final class RecordingSync {
     @ObservationIgnored private var started = false
 
     init(library: RecordingLibrary = .shared, api: @escaping () -> APIClient? = { AppModel.shared.api },
-         now: @escaping () -> Date = { .now }) {
-        self.library = library; self.api = api; self.now = now
+         now: @escaping () -> Date = { .now }, daySync: @escaping () -> RecordingDaySync = { RecordingDaySync.shared }) {
+        self.library = library; self.api = api; self.now = now; self.daySync = daySync
         file = library.root.appendingPathComponent("sync.json")
         store = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Store.self, from: $0) } ?? Store()
     }
@@ -166,8 +171,14 @@ final class RecordingSync {
         guard !started else { return }
         started = true
         library.didChange = { [weak self] id in
-            self?.kick()
-            self?.onChange?(id)
+            guard let self else { return }
+            // A day's index row (its language, its end): the day's own upload, never this one's pass (C27).
+            if self.library.entry(id)?.isDay == true {
+                self.daySync().changed(id)
+            } else {
+                self.kick()
+            }
+            self.onChange?(id)
         }
         #if canImport(UIKit) && !os(watchOS)
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable _ in
@@ -179,6 +190,8 @@ final class RecordingSync {
     }
 
     func status(_ entry: RecordingEntry) -> Status {
+        // An all-day recording's text isn't in its entry (`RecordingDaySummaries` has its state): nothing here to send.
+        if entry.isDay { return .waiting }
         if isExpired(entry) { return .expired }
         if uploading == entry.id { return .uploading }
         if let have = store.synced[entry.id], have >= entry.revision { return .synced }
@@ -189,6 +202,7 @@ final class RecordingSync {
     /// Text worth sending: at least one sentence (an empty transcript is noise in the knowledge base). A meeting Persona
     /// attends goes before it has any, so the hub knows the role (the contract's first exception).
     nonisolated static func uploadable(_ entry: RecordingEntry) -> Bool {
+        guard !entry.isDay else { return false }
         if RecordingUpload.attendance(entry) != nil { return true }
         return entry.sentences.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
@@ -213,17 +227,35 @@ final class RecordingSync {
         attendanceChanged(id)
     }
 
+    /// Past the hub's retention. An all-day recording never is here: `RecordingDayKeeper` purges it by its day, whether
+    /// or not it is still open.
     func isExpired(_ entry: RecordingEntry) -> Bool {
-        store.daysKnown && !entry.active && entry.createdAt < now().addingTimeInterval(-Double(store.days) * 86_400)
+        store.daysKnown && !entry.isDay && !entry.active && entry.createdAt < now().addingTimeInterval(-Double(store.days) * 86_400)
     }
 
     /// Deleted by the user: gone here at once (audio and text), and from the knowledge base when the hub is reachable.
     func delete(_ id: UUID) throws {
+        let day = library.entry(id)?.isDay == true
         try library.remove(id)
         store.deletes.insert(id)
+        if day {
+            // Every part of the day goes from the hub, and its transcription and upload let go of it here.
+            store.deletes.formUnion(store.dayParts?[id] ?? [])
+            store.dayParts?[id] = nil
+            daySync().removedHere(id)
+        }
         forget(id)
         save()
         kick()
+    }
+
+    /// A day's hub ids past its first part (`RecordingDaySync` starts one on `413 day_full`), kept for `delete`.
+    func noteDayParts(_ day: UUID, _ hubIDs: [UUID]) {
+        guard store.dayParts?[day] != hubIDs else { return }
+        var parts = store.dayParts ?? [:]
+        parts[day] = hubIDs
+        store.dayParts = parts
+        save()
     }
 
     /// Runs a pass soon (several saves in a row become one upload). `reconcile`: also ask the hub what it has, at most
@@ -302,16 +334,16 @@ final class RecordingSync {
 
     /// `GET /api/v1/recordings`: the hub's retention, what it already has, and what was deleted elsewhere.
     private func reconcile(_ api: APIClient) async -> Bool {
-        struct Have: Decodable { var id: String; var revision: Int64 }
-        struct Answer: Decodable { var days: Int?; var recordings: [Have]?; var deleted: [String]? }
         do {
-            let answer: Answer = try await api.get("/api/v1/recordings")
+            let answer: ReconcileAnswer = try await api.get("/api/v1/recordings")
             if let days = answer.days, (1...365).contains(days) { store.days = days; store.daysKnown = true }
-            let have = Dictionary((answer.recordings ?? []).compactMap { r in UUID(uuidString: r.id).map { ($0, r.revision) } },
+            let rows = answer.recordings ?? []
+            let have = Dictionary(rows.filter { $0.kind != "day" }.compactMap { r in UUID(uuidString: r.id).map { ($0, r.revision) } },
                                   uniquingKeysWith: max)
             // The hub's word replaces ours: one it lost (a new hub) goes again, one it has newer is not resent.
-            store.synced = have.filter { library.entry($0.key) != nil }
-            for id in (answer.deleted ?? []).compactMap(UUID.init(uuidString:)) where library.entry(id) != nil {
+            store.synced = have.filter { library.entry($0.key) != nil && library.entry($0.key)?.isDay != true }
+            handDays(rows, deleted: (answer.deleted ?? []).compactMap(UUID.init(uuidString:)))
+            for id in (answer.deleted ?? []).compactMap(UUID.init(uuidString:)) where library.entry(id).map({ !$0.isDay }) == true {
                 deletedOnHub(id)
             }
             save()
@@ -321,6 +353,53 @@ final class RecordingSync {
             note(error)
             return false
         }
+    }
+
+    private nonisolated struct ReconcileAnswer: Decodable, Sendable {
+        nonisolated struct Row: Decodable, Sendable {
+            var id: String
+            var revision: Int64
+            // All-day recordings (docs/assistant/day-recap.md "Reconciliation").
+            var kind: String?
+            var part: Int?
+            var next: Int?
+            var base: Int64?
+            var recapState: String?
+
+            private nonisolated enum CodingKeys: String, CodingKey {
+                case id, revision, kind, part, next, base
+                case recapState = "recap_state"
+            }
+        }
+
+        var days: Int?
+        var recordings: [Row]?
+        var deleted: [String]?
+    }
+
+    /// Day recordings go to their own upload: each local day with the rows of its parts (none when the hub listed none),
+    /// and the parts the hub deleted. A day goes here only once every part of it is gone (`RecordingDaySync`).
+    private func handDays(_ rows: [ReconcileAnswer.Row], deleted: [UUID]) {
+        let days = library.entries.filter(\.isDay).map(\.id)
+        // Drop the part lists of days that are gone here.
+        if let parts = store.dayParts { store.dayParts = parts.filter { library.entry($0.key) != nil } }
+        guard !days.isEmpty else { return }
+        var owner: [UUID: UUID] = [:]
+        for day in days {
+            owner[day] = day
+            for part in store.dayParts?[day] ?? [] { owner[part] = day }
+        }
+        var byDay: [UUID: [RecordingDayHubRow]] = Dictionary(uniqueKeysWithValues: days.map { ($0, []) })
+        for row in rows {
+            guard let id = UUID(uuidString: row.id), let day = owner[id] else { continue }
+            byDay[day, default: []].append(RecordingDayHubRow(id: id, revision: row.revision, part: row.part, next: row.next,
+                                                              base: row.base, recapState: row.recapState))
+        }
+        let sync = daySync()
+        sync.reconciled(byDay)
+        var gone: [UUID: [UUID]] = [:]
+        for id in deleted { if let day = owner[id] { gone[day, default: []].append(id) } }
+        for (day, ids) in gone { sync.hubDeleted(day: day, hubIDs: ids) }
     }
 
     private func uploadUrgent(_ api: APIClient) async -> Bool {

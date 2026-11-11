@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import os
 
@@ -7,8 +8,13 @@ import os
 /// reaches `RecordingAudioSpec.segmentSeconds` it is closed (finalized) and reported through `onSegment`, and the next buffer
 /// opens the next file. Pausing stops the tap, so the timeline (`elapsed`, segment offsets, marks) never contains
 /// the paused time. Used by both the watch and the iPhone (docs/apple/recording.md).
+///
+/// All-day recordings (docs/assistant/day-recap.md) cut at local midnight without stopping the microphone: the samples
+/// before `setBoundary`'s time close the old day's folder, the ones from it on open the next day's, and both kinds of
+/// event go into one ordered log (`takeEvents`) so whoever registers them never sees a new day's chunk before the
+/// rotation that made its folder.
 nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
-    struct Segment: Sendable {
+    nonisolated struct Segment: Sendable, Equatable {
         let index: Int
         let url: URL
         let start: Double
@@ -16,57 +22,145 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         /// Wall-clock time of the segment's first sample, taken from the audio buffers rather than when the segment
         /// is reported (callbacks can run late, and stop() reports several at once).
         let startedAt: Date
+        /// Mean RMS level of every sample in the file, dBFS (`RecordingDayLevel`): the phone skips quiet all-day chunks.
+        let level: Double
+
+        /// The recording the segment belongs to: its folder's name. Never the recording capture had in mind when it
+        /// asked, since a midnight can move the writer to the next folder before that is known on the main thread.
+        var owner: UUID? { UUID(uuidString: url.deletingLastPathComponent().lastPathComponent) }
+        var endedAt: Date { startedAt.addingTimeInterval(duration) }
     }
 
-    enum RecorderError: LocalizedError {
+    /// A midnight crossed while recording: `last` is the old folder's final segment, ending exactly at `boundary` when
+    /// audio ran through it, or where the audio stopped before it (nil when no file was open), and the next folder's
+    /// audio starts at `firstSampleAt` — the boundary itself, or later when the first buffer past it came after a pause.
+    nonisolated struct Rotation: Sendable, Equatable {
+        let last: Segment?
+        let previous: URL
+        let next: URL
+        let boundary: Date
+        let firstSampleAt: Date
+    }
+
+    /// What the writer did, in the order it did it (`takeEvents`).
+    nonisolated enum Event: Sendable, Equatable {
+        case segment(Segment)
+        case rotated(Rotation)
+
+        /// The segment it finished: a segment's own, or the old day's last at a midnight (nil when none was open).
+        var segment: Segment? {
+            switch self {
+            case .segment(let segment): segment
+            case .rotated(let rotation): rotation.last
+            }
+        }
+
+        /// The recordings it concerns: a segment's, or both days of a midnight.
+        var owners: [UUID] {
+            switch self {
+            case .segment(let segment): [segment.owner].compactMap { $0 }
+            case .rotated(let rotation): [rotation.previous, rotation.next].compactMap { UUID(uuidString: $0.lastPathComponent) }
+            }
+        }
+    }
+
+    /// What `cutForErase` did: the segment it closed (nil when none was open), and where the audio before the cut ends.
+    nonisolated struct Cut: Sendable, Equatable {
+        let segment: Segment?
+        /// Wall-clock end of the last sample written before the cut, or when the microphone last opened if nothing came
+        /// since; nil when this writer never had audio. Every later segment starts at or after it.
+        let through: Date?
+    }
+
+    nonisolated enum RecorderError: LocalizedError {
         case noInput
         var errorDescription: String? { "No microphone input is available." }
     }
 
-    let directory: URL
-    /// Called on the writer queue when a segment file is finalized.
+    /// Called on the writer queue when a segment file is finalized because it reached `segmentLength`. The segment is
+    /// also in the event log: a callback is a wake-up, `takeEvents` is what registers it, exactly once.
     var onSegment: (@Sendable (Segment) -> Void)?
+    /// Called on the writer queue when a buffer crosses the boundary set by `setBoundary` and the writer moved to the
+    /// next folder (also logged, as `Event.rotated`).
+    var onRotate: (@Sendable (_ last: Segment?, _ next: URL) -> Void)?
 
     private let engine = AVAudioEngine()
     private let queue = DispatchQueue(label: "persona.recording-writer", qos: .userInitiated)
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: RecordingAudioSpec.sampleRate, channels: 1, interleaved: false)!
+    /// Whether the engine has our tap; touched only by whoever drives the writer (the main thread, or a test).
+    private var tapInstalled = false
 
     // Writer state: only touched on `queue`.
+    /// The folder segments are written to; moves at a midnight (`setBoundary`) or on `switchDirectory`.
+    private var directory: URL
     private var file: AVAudioFile?
     private var fileFrames: AVAudioFramePosition = 0
+    /// Sum of the squared samples written to the open file, for its level.
+    private var fileSumOfSquares: Double = 0
     private var index: Int
     private var segmentStart: Double
     private var fileStartedAt = Date()
+    /// Frames on the current timeline that reached the queue, so a new day's `elapsed` keeps the buffers still waiting.
+    private var consumedFrames: AVAudioFramePosition
+    /// The next midnight and the folder of the recording after it; nil outside all-day recording.
+    private var boundary: Date?
+    private var nextDirectory: URL?
+    /// Segments and rotations not taken yet (`takeEvents`).
+    private var events: [Event] = []
+    /// Wall-clock end of the newest sample written (counted in samples from its file's start, as the segment's end is),
+    /// or when the microphone last opened if nothing came since: where an erase's cut ends (`cutForErase`).
+    private var audioThrough: Date?
+    /// Left by `cutForErase` for the next file: it starts no earlier, so it lies wholly after the erased range.
+    private var startFloor: Date?
 
     // Shared with readers on other threads.
-    private struct Shared {
+    private nonisolated struct Shared {
         var frames: AVAudioFramePosition = 0
         var level: Float = 0
         var running = false
         var failure: String?
-        var finished: [Segment] = []
         var segmentFrames = AVAudioFramePosition(RecordingAudioSpec.segmentSeconds * RecordingAudioSpec.sampleRate)
     }
     private let shared = OSAllocatedUnfairLock(initialState: Shared())
     private var converter: AVAudioConverter?
 
     /// - Parameters:
-    ///   - firstIndex / startOffset: continue an existing recording (after an interruption the app couldn't resume).
+    ///   - firstIndex / startOffset: continue an existing recording (an all-day recording's day, after the microphone
+    ///     was off): its next index, and where its timeline goes on from.
     init(directory: URL, firstIndex: Int = 0, startOffset: Double = 0) {
         self.directory = directory
         self.index = firstIndex
         self.segmentStart = startOffset
-        shared.withLock { $0.frames = AVAudioFramePosition(startOffset * RecordingAudioSpec.sampleRate) }
+        let frames = AVAudioFramePosition(startOffset * RecordingAudioSpec.sampleRate)
+        self.consumedFrames = frames
+        shared.withLock { $0.frames = frames }
     }
 
-    /// Recorded time on the recording timeline (pauses excluded), seconds.
+    /// Recorded time on the recording timeline (pauses excluded), seconds. An all-day recording's starts again at a
+    /// midnight, with its next day.
     var elapsed: Double { Double(shared.withLock { $0.frames }) / RecordingAudioSpec.sampleRate }
     /// Recent input level, 0…1 (perceptual, for meters).
     var level: Float { shared.withLock { $0.level } }
     var failure: String? { shared.withLock { $0.failure } }
     var isRunning: Bool { shared.withLock { $0.running } }
-    /// After a stop, take every finalized segment synchronously so callbacks the main thread has not handled yet do not leave segments out of the end message's count.
-    var finishedSegments: [Segment] { shared.withLock { $0.finished } }
+
+    /// Takes every segment finalized and not taken yet, in order (a rotation's last segment included): after a stop,
+    /// what the main thread has not registered yet, so the end message's count leaves nothing out. Draining: a second
+    /// read returns only what was finalized since. Capture reads `takeEvents` instead, which also has the rotations.
+    var finishedSegments: [Segment] {
+        takeEvents().compactMap(\.segment)
+    }
+
+    /// Takes the log of segments finalized and midnights crossed since the last call, in order. It waits for the
+    /// buffers already handed to the writer, so nothing that came before the call is left for the next one. Never call
+    /// it from `onSegment` / `onRotate` (they run on the writer queue).
+    func takeEvents() -> [Event] {
+        queue.sync {
+            let taken = events
+            events = []
+            return taken
+        }
+    }
 
     /// Length of the segments being written, seconds. Lowered while someone is watching the text arrive (the iPhone app
     /// is open), so the next segment closes sooner; the current one closes as soon as it is longer than the new length.
@@ -76,10 +170,11 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     }
 
     func start() throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: queue.sync { directory }, withIntermediateDirectories: true)
         try installTap()
         engine.prepare()
-        do { try engine.start() } catch { engine.inputNode.removeTap(onBus: 0); throw error }
+        noteOpening()
+        do { try engine.start() } catch { removeTap(); throw error }
         shared.withLock { $0.running = true }
     }
 
@@ -91,6 +186,7 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     func resume() throws {
         let input = engine.inputNode
         if input.numberOfInputs == 0 { throw RecorderError.noInput }
+        noteOpening()
         if converter?.inputFormat != input.outputFormat(forBus: 0) {
             try restartAfterConfigurationChange()
             return
@@ -103,7 +199,7 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     /// current segment open.
     func restartAfterConfigurationChange() throws {
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
+        removeTap()
         try installTap()
         engine.prepare()
         try engine.start()
@@ -112,9 +208,21 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
 
     /// Closes the segment being written now, while paused (a phone call): an app killed before the recording resumes keeps
     /// it, rather than losing up to a whole segment. The next buffer opens the next one. Nil if nothing was written since.
+    /// The segment is logged too (`takeEvents`).
     @discardableResult
     func cut() -> Segment? {
-        queue.sync { closeFile() }
+        queue.sync { closeAndLog() }
+    }
+
+    /// `cut()` for an erase: also returns where the audio before the cut ends, and the next segment starts no earlier.
+    /// A range erased up to `through` then holds every sample written before the cut and none after it, however late
+    /// either segment is registered, and however short the next one is (a pause or a stop right after).
+    func cutForErase() -> Cut {
+        queue.sync {
+            let segment = closeAndLog()
+            startFloor = audioThrough
+            return Cut(segment: segment, through: audioThrough)
+        }
     }
 
     /// Whether a notification's object is this writer's engine: `.AVAudioEngineConfigurationChange` comes from every engine
@@ -123,16 +231,57 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         object == ObjectIdentifier(engine)
     }
 
-    /// Stops recording and finalizes the last segment; returns it (nil if nothing was written since the last one).
+    /// Stops recording and finalizes the last segment; returns it (nil if nothing was written since the last one). It
+    /// is logged too, so `takeEvents` after a stop has everything still to register.
     @discardableResult
     func stop() -> Segment? {
-        engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
+        if tapInstalled {
+            engine.stop()
+            removeTap()
+        }
         shared.withLock { $0.running = false; $0.level = 0 }
-        return queue.sync { closeFile() }
+        return queue.sync { closeAndLog() }
+    }
+
+    // MARK: - All-day rotation
+
+    /// From the sample at `boundary` (a local midnight) on, audio goes to `nextDirectory`, whose segments start again at
+    /// index 0 on a timeline of their own. Serialized with the buffers: those already handed to the writer are written
+    /// under the boundary they came with. Replaces a boundary not crossed yet.
+    func setBoundary(at boundary: Date, nextDirectory: URL) {
+        queue.sync {
+            self.boundary = boundary
+            self.nextDirectory = nextDirectory
+        }
+    }
+
+    /// Moves to another folder now, for a day that changed while nothing was being written (paused past midnight, the
+    /// clock or the time zone changed): closes the open segment first (returned, and logged under its own folder),
+    /// creates `next`, and goes on at `firstIndex` on a new timeline. A boundary not crossed yet belonged to the old
+    /// folder's day and is dropped; set the new day's one after.
+    @discardableResult
+    func switchDirectory(to next: URL, firstIndex: Int) -> Segment? {
+        queue.sync {
+            let last = closeAndLog()
+            directory = next
+            index = firstIndex
+            segmentStart = 0
+            boundary = nil
+            nextDirectory = nil
+            restartTimeline(dropping: consumedFrames)
+            makeDirectory(next)
+            return last
+        }
     }
 
     // MARK: - Tap
+
+    /// The microphone opens (again): no sample from here on was taken before this moment. Waits for the buffers already
+    /// queued, so the moment is never overwritten by audio from before the pause.
+    private func noteOpening() {
+        let now = Date()
+        queue.sync { audioThrough = now }
+    }
 
     private func installTap() throws {
         let input = engine.inputNode
@@ -146,6 +295,12 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
                 : Double(buffer.frameLength) / buffer.format.sampleRate
             self?.process(buffer, startedAt: Date().addingTimeInterval(-max(0, late)))
         }
+        tapInstalled = true
+    }
+
+    private func removeTap() {
+        engine.inputNode.removeTap(onBus: 0)
+        tapInstalled = false
     }
 
     private func process(_ buffer: AVAudioPCMBuffer, startedAt: Date) {
@@ -194,30 +349,103 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     }
 
     private func write(_ buffer: AVAudioPCMBuffer, startedAt: Date) {
+        let total = buffer.frameLength
+        defer { consumedFrames += AVAudioFramePosition(total) }
         var offset: AVAudioFrameCount = 0
-        while offset < buffer.frameLength {
+        while offset < total {
+            // Samples from the boundary on belong to the next day's folder.
+            var end = total
+            if let boundary {
+                let before = Self.frames(from: startedAt, before: boundary, count: total)
+                if offset >= before {
+                    rotate(atFrame: offset, of: startedAt)
+                    continue
+                }
+                end = before
+            }
             if file == nil {
                 openFile()
-                fileStartedAt = startedAt.addingTimeInterval(Double(offset) / RecordingAudioSpec.sampleRate)
+                fileStartedAt = firstSampleTime(startedAt.addingTimeInterval(Double(offset) / RecordingAudioSpec.sampleRate))
             }
             guard file != nil else { return }
             let segmentFrames = shared.withLock { $0.segmentFrames }
-            if fileFrames >= segmentFrames, let segment = closeFile() {
+            if fileFrames >= segmentFrames, let segment = closeAndLog() {
                 // The segment length was lowered below what this file already holds.
                 onSegment?(segment)
                 continue
             }
             let room = AVAudioFrameCount(segmentFrames - fileFrames)
-            let n = min(room, buffer.frameLength - offset)
+            let n = min(room, end - offset)
             if let slice = Self.slice(buffer, from: offset, count: n) {
                 do { try file?.write(from: slice) } catch { shared.withLock { $0.failure = String(localized: "Couldn't write the recording file") }; return }
+                fileSumOfSquares += Self.sumOfSquares(slice)
             }
             fileFrames += AVAudioFramePosition(n)
             offset += n
-            if fileFrames >= segmentFrames, let segment = closeFile() {
+            audioThrough = fileStartedAt.addingTimeInterval(Double(fileFrames) / RecordingAudioSpec.sampleRate)
+            if fileFrames >= segmentFrames, let segment = closeAndLog() {
                 onSegment?(segment)
             }
         }
+    }
+
+    /// How many of a buffer's `count` frames, the first at `start`, come before `boundary`: the index of the first sample
+    /// at or after it. Dates are doubles a few hundred nanoseconds apart at best, so a boundary that falls on a sample
+    /// within a hundredth of a sample's length counts as on it, rather than moving the cut by one.
+    static func frames(from start: Date, before boundary: Date, count: AVAudioFrameCount) -> AVAudioFrameCount {
+        let exact = boundary.timeIntervalSince(start) * RecordingAudioSpec.sampleRate
+        guard exact > 0 else { return 0 }
+        let first = (exact - 0.01).rounded(.up)
+        return first >= Double(count) ? count : AVAudioFrameCount(max(0, first))
+    }
+
+    /// When a new file's first sample was taken: its buffer's time, or the floor an erase's cut left (`cutForErase`) when
+    /// the buffer says a few milliseconds earlier. Each buffer's time comes from the host clock on its own, so the one
+    /// after a cut can claim to start a hair before the samples ahead of it end. A larger difference is the clock
+    /// itself moving and is kept as it is.
+    private func firstSampleTime(_ time: Date) -> Date {
+        guard let floor = startFloor else { return time }
+        startFloor = nil
+        let early = floor.timeIntervalSince(time)
+        return early > 0 && early < Self.bufferClockJitter ? floor : time
+    }
+
+    /// How far apart two consecutive buffers' host-clock times can be from their sample count, at most.
+    private static let bufferClockJitter: TimeInterval = 0.25
+
+    /// Crossing the boundary at frame `offset` of a buffer that started at `bufferStart`: the old folder's file ends
+    /// there, the next folder starts at index 0, and the timeline (`elapsed`, segment offsets) starts again with the
+    /// first sample past the boundary while still counting buffers queued behind this one.
+    private func rotate(atFrame offset: AVAudioFrameCount, of bufferStart: Date) {
+        guard let crossed = boundary, let next = nextDirectory else {
+            boundary = nil
+            nextDirectory = nil
+            return
+        }
+        boundary = nil
+        nextDirectory = nil
+        let last = closeFile()
+        let previous = directory
+        directory = next
+        index = 0
+        segmentStart = 0
+        restartTimeline(dropping: consumedFrames + AVAudioFramePosition(offset))
+        // Before the first file there: the folder's entry is made later, on the main thread.
+        makeDirectory(next)
+        let firstSampleAt = max(crossed, bufferStart.addingTimeInterval(Double(offset) / RecordingAudioSpec.sampleRate))
+        events.append(.rotated(Rotation(last: last, previous: previous, next: next, boundary: crossed, firstSampleAt: firstSampleAt)))
+        onRotate?(last, next)
+    }
+
+    /// Starts the timeline again after `frames` already on it: what is counted beyond them (buffers queued behind) stays.
+    private func restartTimeline(dropping frames: AVAudioFramePosition) {
+        shared.withLock { $0.frames -= frames }
+        consumedFrames -= frames
+    }
+
+    private func makeDirectory(_ url: URL) {
+        do { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        catch { shared.withLock { $0.failure = String(localized: "Couldn't create the recording file") } }
     }
 
     private func openFile() {
@@ -232,9 +460,17 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         do {
             file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
             fileFrames = 0
+            fileSumOfSquares = 0
         } catch {
             shared.withLock { $0.failure = String(localized: "Couldn't create the recording file") }
         }
+    }
+
+    /// Finalizes the open file and logs it. Returns nil when there was nothing in it.
+    private func closeAndLog() -> Segment? {
+        guard let segment = closeFile() else { return nil }
+        events.append(.segment(segment))
+        return segment
     }
 
     /// Finalizes the open file. Returns nil when there was nothing in it.
@@ -246,16 +482,16 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
             if #available(watchOS 11, *) { file?.close() }
             file = nil
         }
+        defer { fileFrames = 0; fileSumOfSquares = 0 }
         guard fileFrames > 0 else {
             try? FileManager.default.removeItem(at: url)
             return nil
         }
         let duration = Double(fileFrames) / RecordingAudioSpec.sampleRate
-        let segment = Segment(index: index, url: url, start: segmentStart, duration: duration, startedAt: fileStartedAt)
-        shared.withLock { $0.finished.append(segment) }
+        let level = RecordingDayLevel.dBFS(sumOfSquares: fileSumOfSquares, count: Int(fileFrames))
+        let segment = Segment(index: index, url: url, start: segmentStart, duration: duration, startedAt: fileStartedAt, level: level)
         index += 1
         segmentStart += duration
-        fileFrames = 0
         return segment
     }
 
@@ -266,6 +502,11 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         dst.update(from: src.advanced(by: Int(start)), count: Int(count))
         out.frameLength = count
         return out
+    }
+
+    private static func sumOfSquares(_ buffer: AVAudioPCMBuffer) -> Double {
+        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
+        return Double(vDSP.sumOfSquares(UnsafeBufferPointer(start: data, count: Int(buffer.frameLength))))
     }
 }
 

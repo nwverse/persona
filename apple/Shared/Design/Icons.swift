@@ -128,6 +128,13 @@ extension Theme {
         static let dictating = "mic.fill"
         /// A long recording as context, distinct from the composer's dictation.
         static let recording = "waveform.circle"
+        /// All-Day Recording (docs/assistant/day-recap.md): the mode, its switch on the phone, its button and page on the
+        /// watch, and its state while it records. A record mark, not `recording`'s waveform: that is one recording, this
+        /// the mode that keeps recording all day.
+        static let allDay = "record.circle"
+        /// All-day recording paused by the system or a failure, waiting for a tap to continue: a state, beside its words,
+        /// not the Pause control (`pause`).
+        static let allDayPaused = "pause.circle"
         static let pause = "pause.fill"
         /// Back and ahead 15 seconds in something that plays (an audio file).
         static let skipBack = "gobackward.15"
@@ -615,6 +622,12 @@ extension Theme {
         static let openQuestion = "questionmark.circle.dashed"
         /// A meeting's minutes as a whole (the watch's Meeting Minutes).
         static let minutes = "note.text"
+        /// A meeting marked inside an all-day recording (the watch's Mark Meeting, the day's timeline): a meeting, so the
+        /// same symbol.
+        static let meetingMark = meeting
+        /// The hub's recap of a recorded day (docs/assistant/day-recap.md). Its own symbol rather than `minutes`: a day's
+        /// recap and a meeting's minutes sit side by side in Recent Recordings, and one covers a whole day.
+        static let dayRecap = "text.book.closed"
         /// People in the knowledge base.
         static let people = "person.3"
         /// A tap on the screen, in tips and features.

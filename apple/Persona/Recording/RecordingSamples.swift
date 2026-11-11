@@ -144,4 +144,162 @@ enum RecordingSamples {
         #endif
     }
 }
+
+#if os(iOS)
+// MARK: - All-day recording
+
+extension RecordingSamples {
+    /// The made-up past day (`-openDayRecap YES` opens it): yesterday, ended, with a meeting mark, pauses, a call, an
+    /// erase and a silent minute. Its recap is the hub's: the mock writes one when told to (`POST /mock/day_recap`).
+    static let pastDay = UUID(uuidString: "00000000-0000-0000-0000-0000000000da")!
+    /// Today's made-up day, which the watch is recording (`today`) or waits on after a call (`paused`).
+    static let todayDay = UUID(uuidString: "00000000-0000-0000-0000-0000000000db")!
+
+    /// The first install's work; later calls wait for it.
+    private static var dayInstall: Task<Void, Never>?
+
+    /// `-showDaySample today|paused|recap|pending|failed`: yesterday's day in Recent Recordings and today's in the Today
+    /// section, both transcribed (no microphone, no speech recognition), so the phone uploads them to the hub as it would
+    /// a real day; `paused` has the watch waiting for Continue. `recap|pending|failed` name the hub's answer the screenshot
+    /// is for (the UI test sets the mock to it). Without the argument an earlier run's samples go, so other tests see only
+    /// their own recordings. Once per launch.
+    static func installDaySampleIfAsked() async {
+        if dayInstall == nil {
+            let mode = UserDefaults.standard.string(forKey: "showDaySample")
+            dayInstall = Task { await installDays(mode) }
+        }
+        await dayInstall?.value
+    }
+
+    private static func installDays(_ mode: String?) async {
+        let library = RecordingLibrary.shared, store = RecordingDayStore.shared
+        // Built again on every run (another day, another mode): first the earlier run's, with all the store kept of them.
+        for id in [pastDay, todayDay] {
+            let stored = await store.record(id) != nil
+            guard stored || library.entry(id) != nil else { continue }
+            // Removed here only: a delete on the hub would tombstone the id there, and the new sample couldn't go up.
+            try? library.remove(id)
+            RecordingDaySync.shared.removedHere(id)
+            // Read while deleted: the store lets go of the day it holds in memory before the new one is written.
+            _ = await store.record(id)
+        }
+        guard let mode, ["today", "paused", "recap", "pending", "failed"].contains(mode) else { return }
+        let zone = TimeZone.current, now = Date.now
+        let past = pastSample(now: now, zone: zone), today = todaySample(now: now, zone: zone)
+        for day in [past, today] {
+            library.restore(day.id)
+            await write(day, to: store)
+            library.adoptDay(id: day.id, day: day.day, timeZone: zone.identifier, createdAt: day.startedAt, closed: day.ended)
+        }
+        let paused = mode == "paused"
+        RecordingDaySummaries.shared.receive(watch: RecordingDayWatchState(
+            recording: today.id, day: today.day, state: paused ? .interrupted : .recording,
+            since: paused ? today.lastEnd : today.startedAt, next: today.chunks.count, pending: 0))
+    }
+
+    /// A made-up day: its chunks as the watch would send them, and the text the phone would have transcribed.
+    private nonisolated struct SampleDay: Sendable {
+        nonisolated struct Chunk: Sendable {
+            var header: RecordingDayHeader
+            var sentences: [RecordingSentence]
+            var state: RecordingDayChunk.State
+        }
+
+        var id: UUID
+        var day: String
+        var startedAt: Date
+        var ended: Bool
+        var chunks: [Chunk]
+
+        var lastEnd: Date { chunks.map { $0.header.startedAt.addingTimeInterval($0.header.duration) }.max() ?? startedAt }
+    }
+
+    /// Stores the chunks as the receiver does, then gives them their text as the transcriber would. The store's receiver
+    /// calls block on its queue, so they run off the main actor.
+    private static func write(_ day: SampleDay, to store: RecordingDayStore) async {
+        await Task.detached(priority: .userInitiated) {
+            // Never decoded: every chunk is transcribed already. The store needs some audio for a chunk that has it.
+            let audio = Data(repeating: 0, count: 64)
+            for chunk in day.chunks {
+                _ = try? store.store(header: chunk.header, audio: chunk.header.isMarker ? nil : audio)
+            }
+        }.value
+        await store.update(day.id) { record in
+            for chunk in day.chunks where !chunk.header.isMarker {
+                record.chunks[chunk.header.seq]?.state = chunk.state
+                record.chunks[chunk.header.seq]?.attempts = 0
+                record.chunks[chunk.header.seq]?.sentences = chunk.state == .transcribed ? chunk.sentences : nil
+            }
+        }
+    }
+
+    /// Yesterday, 09:12 to 19:07: a design review the watch marked as a meeting, a call, an erase, lunch, the evening, a
+    /// silent minute, then Stop for Today.
+    private static func pastSample(now: Date, zone: TimeZone) -> SampleDay {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now.addingTimeInterval(-86_400)
+        let day = RecordingDayCalendar.day(of: yesterday, in: zone)
+        let midnight = calendar.startOfDay(for: yesterday)
+        func at(_ hour: Int, _ minute: Int) -> Date {
+            calendar.date(bySettingHour: hour, minute: minute, second: 0, of: midnight) ?? midnight
+        }
+        let start = at(9, 12)
+        let paused = RecordingDayContract.Reason.paused
+        var chunks: [SampleDay.Chunk] = []
+        func add(_ startedAt: Date, seconds: Double = 60, after: String? = nil, level: Double = -32, erased: Bool = false,
+                 end: Bool = false, marks: [RecordingDayHeader.Mark]? = nil, lines: [String] = [], skipped: Bool = false) {
+            let header = RecordingDayHeader(recording: pastDay, day: day, seq: chunks.count, startedAt: startedAt, duration: seconds,
+                                            level: erased || end ? nil : level, erased: erased, end: end, after: after, marks: marks,
+                                            recordingStartedAt: start)
+            chunks.append(.init(header: header, sentences: sentences(lines, seconds: seconds), state: skipped ? .skipped : .transcribed))
+        }
+        add(at(9, 12), lines: ["早上先把导出功能的发布清单过一遍。", "超过 4 MB 的条目导出时会被丢掉，这个要先修。"])
+        add(at(9, 41), after: paused, marks: [.init(at: 0, label: RecordingDayMark.meeting)],
+            lines: ["设计评审开始，先看新的导出流程。", "大家同意把进度条放到列表顶部。"])
+        add(at(9, 42), lines: ["Bo 负责明天把上传失败的测试修好。"])
+        add(at(10, 20), after: RecordingDayContract.Reason.interrupted, lines: ["刚才接了个电话，继续说导出的事。"])
+        add(at(11, 5), after: paused, erased: true)
+        add(at(12, 30), after: paused, lines: ["中午和平台组一起吃饭，聊了上传接口的限流。", "他们建议把重试间隔调长一点。"])
+        add(at(15, 20), after: paused, lines: ["下午整理周报，记得周五前发出去。"])
+        add(at(19, 5), after: paused, lines: ["晚上回顾一下：导出修复和设计评审都有进展。"])
+        add(at(19, 6), level: -62, skipped: true)
+        add(at(19, 7), seconds: 0, after: paused, end: true)
+        return SampleDay(id: pastDay, day: day, startedAt: start, ended: true, chunks: chunks)
+    }
+
+    /// Today, from two and a half hours ago (or just after midnight): a pause, then a call, then the last minute.
+    private static func todaySample(now: Date, zone: TimeZone) -> SampleDay {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let day = RecordingDayCalendar.day(of: now, in: zone)
+        let first = calendar.startOfDay(for: now).addingTimeInterval(60)
+        let start = max(first, now.addingTimeInterval(-150 * 60))
+        // Shorter just after midnight, so every chunk ended before now.
+        let scale = min(1, max(0, now.timeIntervalSince(start) - 120) / (62 * 60))
+        let plan: [(minutes: Double, after: String?, lines: [String])] = [
+            (0, nil, ["今天先把全天录音的手机端过一遍。", "Today 一栏要能看到录了多久、转写到哪。"]),
+            (25, RecordingDayContract.Reason.paused, ["下午三点和设计组对一下回顾页的布局。"]),
+            (60, RecordingDayContract.Reason.interrupted, ["接完电话了，继续看同步的状态。"]),
+            (61, nil, ["记得明天把截图发到群里。"]),
+        ]
+        let chunks = plan.enumerated().map { seq, item in
+            let header = RecordingDayHeader(recording: todayDay, day: day, seq: seq,
+                                            startedAt: start.addingTimeInterval(item.minutes * 60 * scale), duration: 60 * max(scale, 0.05),
+                                            level: -30, after: item.after, recordingStartedAt: start)
+            return SampleDay.Chunk(header: header, sentences: sentences(item.lines, seconds: header.duration), state: .transcribed)
+        }
+        return SampleDay(id: todayDay, day: day, startedAt: start, ended: false, chunks: chunks)
+    }
+
+    /// Lines spread evenly over a chunk, each a moment shorter than its share.
+    private nonisolated static func sentences(_ lines: [String], seconds: Double) -> [RecordingSentence] {
+        guard !lines.isEmpty else { return [] }
+        let share = seconds / Double(lines.count)
+        return lines.enumerated().map { i, text in
+            RecordingSentence(start: Double(i) * share, end: Double(i) * share + share * 0.9, text: text)
+        }
+    }
+}
+#endif
 #endif

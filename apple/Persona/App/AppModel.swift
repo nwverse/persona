@@ -1780,6 +1780,7 @@ final class AppModel {
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
             if isHub, Set(hello.features).hasExtensionFeature("operations") { Task { await ExtensionOperations.shared.reload() } }
             if isHub { flushErrorReports(group) } // the feature may have come or gone with this hello (#5621)
+            if isHub, link(group)?.isDemo == false { learnedRecordingDay(hello) }
             #if DEBUG && (os(iOS) || os(visionOS))
             // Registered on connect, before this hello said whether the hub keeps the runtime CLI from the agents.
             if RuntimeCLI.overHub, let link = link(group) { registerPhone(link) }
@@ -3398,6 +3399,23 @@ enum Haptics {
     static func attention() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
 }
 #endif
+
+extension AppModel {
+    /// All-day recording (docs/assistant/day-recap.md): whether the hub-level hub takes day recordings, from each of its
+    /// hellos (an empty feature list included: a manager that lost the flag says so). Cached for launches in the
+    /// background, told to the watch (`recordingDayHub`), and the upload tries a day an older manager refused once more.
+    func learnedRecordingDay(_ hello: HubHello) {
+        let offered = hello.features.contains(RecordingDayContract.feature)
+        let changed = RecordingDayDefaults.offered([]) != offered
+        RecordingDayDefaults.remember(offered: offered)
+        #if os(iOS) || os(visionOS)
+        WatchSync.shared.pushRecordingDay(hub: offered)
+        #endif
+        // Every day's sync state reads the flag.
+        if changed { RecordingDaySummaries.shared.refreshAll() }
+        RecordingDaySync.shared.helloReceived(offered: offered)
+    }
+}
 
 /// One session's latest state, observed on its own (`AppModel.session(_:)`). Its `rev`, `updatedAt` and last line are
 /// as of its last other change: a push of only those (most of a working agent's) draws nothing that reads the cell

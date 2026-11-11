@@ -27,7 +27,8 @@ final class RecordingTranscription {
     }
 
     func enqueue(_ id: UUID) {
-        guard library.entry(id) != nil else { return }
+        // An all-day recording's chunks live in its day store and have their own lane (`RecordingDayTranscriber`).
+        guard let entry = library.entry(id), !entry.isDay else { return }
         errors[id] = nil
         if !queued.contains(id) { queued.append(id) }
         kick()
@@ -44,8 +45,9 @@ final class RecordingTranscription {
     }
 
     func resumePending() {
-        // Rolling recordings only transcribe after an explicit pull.
-        for entry in library.entries where !entry.active && !entry.isRolling && entry.segments.contains(where: { $0.sentences == nil }) {
+        // Rolling recordings only transcribe after an explicit pull; all-day recordings have their own lane.
+        for entry in library.entries where !entry.active && !entry.isRolling && !entry.isDay
+            && entry.segments.contains(where: { $0.sentences == nil }) {
             enqueue(entry.id)
         }
     }
@@ -56,6 +58,10 @@ final class RecordingTranscription {
     }
 
     func setLocale(_ id: UUID, _ locale: String) {
+        if library.entry(id)?.isDay == true {
+            RecordingDayTranscriber.shared.setLocale(id, locale)
+            return
+        }
         guard current != id else { return }
         library.change(id) { entry in
             entry.locale = locale
@@ -81,8 +87,17 @@ final class RecordingTranscription {
 
     private func kickIfNeeded() { if !queued.isEmpty { kick() } }
 
-    /// A rolling recording only transcribes the segments of its pulled range.
+    /// Returns once nothing is being transcribed or queued: all-day recording's lane runs only then, so a recording the
+    /// user is waiting for never waits behind a day's backlog.
+    func whenIdle() async {
+        while let worker {
+            await worker.value
+        }
+    }
+
+    /// A rolling recording only transcribes the segments of its pulled range; an all-day recording none (its own lane).
     private func nextSegment(_ entry: RecordingEntry) -> RecordingSegment? {
+        guard !entry.isDay else { return nil }
         guard entry.isRolling else { return entry.segments.first(where: { $0.sentences == nil }) }
         guard let range = pulls[entry.id] else { return nil }
         return entry.segments(from: range.lowerBound, to: range.upperBound).first(where: { $0.sentences == nil })

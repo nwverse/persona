@@ -15,11 +15,18 @@ struct RecordingsSection: View {
     @State private var transcription = RecordingTranscription.shared
     @State private var sync = RecordingSync.shared
     @State private var capture = RecordingCapture.shared
+    @State private var days = RecordingDaySummaries.shared
 
     var body: some View {
         // The recording being made is the now-recording card, not a row of the list below it.
         let capturing = capture.state == .recording || capture.state == .paused
-        let recents = library.entries.filter { !(capturing && $0.id == capture.recordingID) }
+        // Today's all-day recording is the Today section's row, not one of the list below it (C30).
+        #if os(iOS)
+        let today = RecordingDayStatus.todayID(library.entries, watching: days.watch?.recording, now: .now)
+        #else
+        let today: UUID? = nil
+        #endif
+        let recents = library.entries.filter { !(capturing && $0.id == capture.recordingID) && $0.id != today }
         Section {
             RecordingCaptureControls()
         } footer: {
@@ -28,15 +35,28 @@ struct RecordingsSection: View {
                 Text("Audio stays on this device. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
             }
         }
+        #if os(iOS)
+        // All-day recording: offered with a paired watch and a hub that takes it, and shown once a day exists. Without
+        // either, the page is as it always was.
+        let dayOffered = RecordingDayDefaults.offered(model.hubFeatures)
+        if today != nil || (dayOffered && WatchSync.shared.watchAppInstalled) {
+            RecordingDayTodaySection(dayID: today, offered: dayOffered)
+        }
+        #endif
         Section {
-            if recents.isEmpty, !capturing {
+            if recents.isEmpty, !capturing, today == nil {
                 EmptyStateView(symbol: Theme.Icon.recording, title: String(localized: "No Recordings Yet"),
                                message: String(localized: "Record meetings, dictation and on-site notes with your phone or Apple Watch; the transcribed text goes into Knowledge."))
                     .listRowBackground(Color.clear)
             }
             ForEach(recents) { entry in
-                NavigationLink { RecordingDetailView(id: entry.id) } label: { RecordingRow(entry: entry) }
-                    .accessibilityIdentifier("recording-row")
+                if entry.isDay {
+                    NavigationLink { RecordingDayView(id: entry.id) } label: { RecordingDayRow(entry: entry) }
+                        .accessibilityIdentifier("recording-day-row")
+                } else {
+                    NavigationLink { RecordingDetailView(id: entry.id) } label: { RecordingRow(entry: entry) }
+                        .accessibilityIdentifier("recording-row")
+                }
             }
         } header: {
             if !recents.isEmpty {
@@ -56,6 +76,12 @@ struct RecordingsSection: View {
             transcription.resumePending()
             sync.kick(reconcile: true)
             RecordingRollingKeeper.shared.schedule()
+            #if DEBUG && os(iOS)
+            // `-showDaySample today|paused|recap|pending|failed`: made-up days (screenshots, UI tests); without it an
+            // earlier run's go. Once per launch.
+            // The launch starts it too (PersonaApp, beside the meeting samples), so it is usually done by now.
+            await RecordingSamples.installDaySampleIfAsked()
+            #endif
         }
     }
 }
@@ -464,7 +490,13 @@ struct RecordingCaptureControls: View {
 /// Recordings shows, one step closer.
 struct RecordingsPage: View {
     #if DEBUG
-    @State private var debugRecording: UUID?
+    /// A made-up recording's page, opened once per launch for screenshots and UI tests.
+    private nonisolated enum DebugPage: Hashable {
+        case recording(UUID)
+        case day(UUID)
+    }
+
+    @State private var debugPage: DebugPage?
     private static var sampleOpened = false
     #endif
 
@@ -478,14 +510,31 @@ struct RecordingsPage: View {
             .recordingLiveSheet()
             #endif
             #if DEBUG
-            // `-showMeetingSample minutes|pending`: the made-up finished meeting's page (screenshots, UI tests).
-            .navigationDestination(item: $debugRecording) { RecordingDetailView(id: $0) }
+            .navigationDestination(item: $debugPage) { page in
+                switch page {
+                case .recording(let id): RecordingDetailView(id: id)
+                case .day(let id): RecordingDayView(id: id)
+                }
+            }
             .onAppear {
                 // Once per launch: back from it, the page appears again.
-                if ["minutes", "pending"].contains(UserDefaults.standard.string(forKey: "showMeetingSample")), !Self.sampleOpened {
+                guard !Self.sampleOpened else { return }
+                let defaults = UserDefaults.standard
+                // `-showMeetingSample minutes|pending`: the made-up finished meeting's page.
+                if ["minutes", "pending"].contains(defaults.string(forKey: "showMeetingSample")) {
                     Self.sampleOpened = true
-                    debugRecording = RecordingSamples.pastMeeting
+                    debugPage = .recording(RecordingSamples.pastMeeting)
                 }
+                #if os(iOS)
+                // `-openDayRecap YES` with `-showDaySample …`: the made-up past day's page, once it is in place.
+                if defaults.bool(forKey: "openDayRecap") {
+                    Self.sampleOpened = true
+                    Task {
+                        await RecordingSamples.installDaySampleIfAsked()
+                        debugPage = .day(RecordingSamples.pastDay)
+                    }
+                }
+                #endif
             }
             #endif
     }
