@@ -423,7 +423,10 @@ enum ToolRunSummary {
         }
         return order.map { k in
             var c = chip(k, groups[k]!)
+            // A chip is one line of label and detail: its middle is the detail's only when the detail is the longer of
+            // the two, or a middle cut takes the verb ("Co…o-Do #1").
             c.truncatesTail = ToolPresentation.truncation(groups[k]![0].name, subject: c.detail ?? "") == .tail
+                || (c.detail ?? "").count <= c.label.count
             return c
         }
     }
@@ -643,13 +646,19 @@ struct ToolCallRow: View {
     /// with nothing to name (Enter Plan Mode, List Agents) draws no empty box beside its verb.
     private var chipHeader: some View {
         let subject = ToolPresentation.subject(call)
-        return ToolChipRow(chip(subject), isOpen: isOpen, isRunning: call.isRunning, chipStyle: subject.isEmpty ? .plain : .boxed,
-                           action: tapped) {
-            taskBadge
-            if call.isError { ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(Theme.danger).font(Theme.Font.label) }
+        let stacked = typeSize.isAccessibilitySize
+        return VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            ToolChipRow(chip(subject), isOpen: isOpen, isRunning: call.isRunning, chipStyle: subject.isEmpty ? .plain : .boxed,
+                        action: tapped) {
+                if !stacked { taskBadge }
+                if call.isError { ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(Theme.danger).font(Theme.Font.label) }
+            }
+            .accessibilityIdentifier(headerID)
+            // At the accessibility sizes the badge, which keeps its width, left the verb nothing beside it: it gets a
+            // line of its own under the verb, past the row's 16 pt icon and its 8 pt gap.
+            if stacked { taskBadge.padding(.leading, Theme.Space.xl) }
         }
         .padding(Self.chipInsets(grouped: grouped))
-        .accessibilityIdentifier(headerID)
     }
 
     /// A call that went to the background says how its task went (Background · Done).
@@ -659,7 +668,7 @@ struct ToolCallRow: View {
             let b = TaskNoteText.badge(tasks.notes[id] ?? [])
             let text = Text(b.text).font(Theme.Font.label).foregroundStyle(b.failed ? Theme.danger : Color.secondary)
             if AppStyle.current.usesBeautifulUI {
-                BUIPill(b.text, tone: b.failed ? .red : .neutral)
+                BUIPill(b.text, tone: b.failed ? .red : .neutral, truncates: typeSize.isAccessibilitySize)
             } else if typeSize.isAccessibilitySize {
                 // On a line of its own it can still be wider than the screen: then it wraps, in a box rather than a pill.
                 ViewThatFits(in: .horizontal) {

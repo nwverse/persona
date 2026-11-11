@@ -282,5 +282,8 @@ struct ToolNamingTests {
         #expect(ToolRunSummary.chips([issue]).first?.truncatesTail == true)
         let read = call("Read", ["file_path": .string("/Users/me/code/weather/Sources/App/Forecast.swift")])
         #expect(ToolRunSummary.chips([read]).first?.truncatesTail == false)
+        let done = call("TaskUpdate", ["taskId": .string("1"), "status": .string("completed")])
+        #expect(ToolRunSummary.chips([done]).first?.detail == "#1")
+        #expect(ToolRunSummary.chips([done]).first?.truncatesTail == true)
     }
 }

@@ -9277,12 +9277,12 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
 # MOCK_TOOL_NAMES=1 (#2986): one finished turn that calls Claude Code's newer tools (ToolSearch, TaskCreate, TaskUpdate,
 # NotebookEdit, Monitor, SendMessage, ScheduleWakeup), another server's MCP tool (mcp__github__create_issue) and a tool
 # no table knows, with nested arguments (RenderChart), so each reads in words, the MCP one as "GitHub · Create issue",
-# and the last two list their arguments instead of JSON. The MCP call, the unknown one and a review's ReportFindings also
-# have a chat of their own (…2987, …2988, …2989), so its opened detail ends its chat and a screenshot shows it without
-# scrolling. Made-up content.
+# and the last two list their arguments instead of JSON. The MCP call, the unknown one, a review's ReportFindings and the
+# Monitor also have a chat of their own (…2987, …2988, …2989, …298a), so its opened detail (or the Monitor's Background
+# badge, at the largest text size) ends its chat and a screenshot shows it without scrolling. Made-up content.
 TOOLNAMES = "a1f3c2d4-0000-4000-8000-0000000c2986"
 TOOLNAMES_ONE = {"mcp": "a1f3c2d4-0000-4000-8000-0000000c2987", "unknown": "a1f3c2d4-0000-4000-8000-0000000c2988",
-                 "findings": "a1f3c2d4-0000-4000-8000-0000000c2989"}
+                 "findings": "a1f3c2d4-0000-4000-8000-0000000c2989", "monitor": "a1f3c2d4-0000-4000-8000-0000000c298a"}
 
 
 def mock_tool_names():
@@ -9305,10 +9305,13 @@ def mock_tool_names():
             {"file": "/Users/me/code/weather/export/csv.py", "line": 41, "short_summary": "Header written twice",
              "summary": "A retried export writes the CSV header again in the middle of the file."}]},
             "Findings reported", t),
+        "monitor": lambda t: tool("Monitor", {"command": "tail -f logs/export.log | grep --line-buffered 'rows/s'",
+                                              "description": "Watch the export's throughput"}, "Monitor started (task m7q2)", t),
     }
     asks = {"mcp": ("File the export timeout as an issue", "Filed example-org/weather#128."),
             "unknown": ("Chart the export times before and after", "The chart is in charts/export-time.png."),
-            "findings": ("Review the batched export", "Two problems: the last batch can go missing and a retry repeats the header.")}
+            "findings": ("Review the batched export", "Two problems: the last batch can go missing and a retry repeats the header."),
+            "monitor": ("Watch the export while it runs", "Watching the export log.")}
 
     _t = [it("user", "text", 40, text="The CSV export times out on a year of data: find out why, track it, and tell the reviewer")]
     _t += tool("ToolSearch", {"query": "select:NotebookEdit,Monitor", "max_results": 2}, "Loaded 2 tools: NotebookEdit, Monitor", 39.9)
@@ -9318,8 +9321,7 @@ def mock_tool_names():
     _t += tool("NotebookEdit", {"notebook_path": notebook, "cell_id": "cell-3", "cell_type": "code", "edit_mode": "replace",
                                 "new_source": "rows = load_hourly(year=2026)\n%time export_csv(rows, batch=500)\n%time export_csv(rows, batch=None)"},
                "Updated cell cell-3", 39.6)
-    _t += tool("Monitor", {"command": "tail -f logs/export.log | grep --line-buffered 'rows/s'",
-                           "description": "Watch the export's throughput"}, "Monitor started (task m7q2)", 39.5)
+    _t += calls["monitor"](39.5)
     _t += calls["mcp"](39.4)
     _t += tool("SendMessage", {"to": "reviewer", "summary": "Export timeout: cause found, fix in review",
                                "message": "The export wrote one row per query. Batching 500 rows takes a year of data from 41 s to 5.6 s."},
