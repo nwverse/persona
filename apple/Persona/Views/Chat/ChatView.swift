@@ -805,6 +805,12 @@ struct ChatView: View {
             guard entered, takeMessageJump() else { return }
             landEntry(currentLines())
         }
+        // A refused send's Open Terminal: a dialog holds this session's terminal (#3752).
+        .onChange(of: model.terminalAsk) { _, ask in
+            guard let ask, ask == key else { return }
+            model.terminalAsk = nil
+            if session?.canTerminal == true { openTerminal() }
+        }
         // Going to the background is the last chance before iOS may end the app: a cold relaunch (the dev chat is
         // restored, AppModel.rememberChat) then opens at the same line, not only after leaving the chat.
         .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }

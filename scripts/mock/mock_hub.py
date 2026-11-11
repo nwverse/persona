@@ -18149,8 +18149,9 @@ class H(BaseHTTPRequestHandler):
             if body.get("clear_draft"):
                 return self.send_json({"ok": True})
             if os.environ["MOCK_SEND_REFUSE"] == "dialog_open":
-                return self.send_json({"error": "电脑上的终端正开着一个对话框（确认、选择列表等），这条消息没有发出去：先回答或关掉它再发。",
-                                       "code": "dialog_open", "delivered": "none"}, 409)
+                # As the hub words a node's refusal: its own sentence, the dialog's first line flat beside it (#3752).
+                return self.send_json({"error": "终端正在等待选择，请先到终端处理。", "code": "dialog_open", "delivered": "none",
+                                       "retryable": False, "notice": False, "dialog": "Bash command"}, 409)
             return self.send_json({"error": "电脑上的输入框里有没发出去的内容：「顺便把 README 也更新一下」。这条消息没有发出去，免得拼在一起。",
                                    "code": "input_draft", "delivered": "none", "draft": "顺便把 README 也更新一下",
                                    "clearable": "顺便把 README 也更新一下"}, 409)

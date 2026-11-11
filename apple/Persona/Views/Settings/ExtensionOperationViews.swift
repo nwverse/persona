@@ -10,6 +10,7 @@ struct ExtensionOperationSection: View {
     var retry: () -> Void
     var review: () -> Void
     var dismiss: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var failed: Bool { operation.state == .failed }
     private var waiting: Bool { operation.state == .needsConsent }
@@ -61,26 +62,35 @@ struct ExtensionOperationSection: View {
                 }
             }
             .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
+            // At the accessibility sizes the words wrap and the time goes under them: on one line the title was
+            // cut to its first word (#4058).
+            let large = typeSize.isAccessibilitySize
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(ExtensionOperationText.title(operation) + " " + name).font(Theme.Font.bodyStrong).lineLimit(1)
+                Text(ExtensionOperationText.title(operation) + " " + name).font(Theme.Font.bodyStrong).lineLimit(large ? nil : 1)
                 let line = [ExtensionOperationText.versions(operation), ExtensionOperationText.progress(operation),
                             ExtensionOperationText.actor(operation)].compactMap { $0 }
                 if !line.isEmpty {
-                    Text(line.joined(separator: " · ")).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                    Text(line.joined(separator: " · ")).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(large ? nil : 1)
                 }
+                if large { elapsed }
             }
             Spacer(minLength: Theme.Space.s)
-            if operation.isRunning, let start = operation.startedAt {
-                TimelineView(.periodic(from: start, by: 1)) { context in
-                    Text(ExtensionOperationText.elapsed(since: start, now: context.date))
-                        .font(Theme.Font.label).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-                }
-            }
+            if !large { elapsed }
         }
         .padding(.vertical, Theme.Space.xxs)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("extension-operation")
         .accessibilityValue(operation.state.rawValue)
+    }
+
+    /// How long it has been going, while it goes.
+    @ViewBuilder private var elapsed: some View {
+        if operation.isRunning, let start = operation.startedAt {
+            TimelineView(.periodic(from: start, by: 1)) { context in
+                Text(ExtensionOperationText.elapsed(since: start, now: context.date))
+                    .font(Theme.Font.label).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+            }
+        }
     }
 
     @ViewBuilder private var failure: some View {
@@ -130,6 +140,7 @@ private struct ExtensionOperationStepRow: View {
     var step: ExtensionOperationStep
     var kind: ExtensionOperation.Kind
     var current: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
@@ -138,7 +149,7 @@ private struct ExtensionOperationStepRow: View {
                 Text(ExtensionOperationText.step(step.id, kind: kind))
                     .font(current ? Theme.Font.secondaryMedium : Theme.Font.secondary)
                     .foregroundStyle(step.state == .pending ? Color.secondary : Color.primary)
-                    .lineLimit(1)
+                    .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                 if step.state == .running, step.id == "download" || (step.id == "tools" && step.bytes != nil) {
                     // A size the hub does not know: a bar that cannot say how far.
                     Group {

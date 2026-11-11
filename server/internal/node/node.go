@@ -142,6 +142,7 @@ type Node struct {
 	suggests  map[string]*suggestState   // session id -> Claude's suggested next message (suggestion.go)
 	driving   map[string]bool            // session id -> Persona is working its TUI (a picker it opened is not "blocked")
 	dialogs   paneDialogs                // pane -> the dialog its last screen read showed (dialogstatus.go)
+	allowed   allowWatches               // session -> its pane, followed after an allow (allowwatch.go)
 	firstWait sync.WaitGroup             // first messages being checked (firstprompt.go)
 	engLists  sync.WaitGroup             // new engines' session lists being built in the background (useEngine)
 	lostFirst lostPrompts                // session id -> why its first message did not go in (firstprompt.go)
@@ -380,7 +381,19 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
-	go n.reapAssistants(ctx)
+	reaped := make(chan struct{})
+	go func() { defer close(reaped); n.reapAssistants(ctx) }()
+	if n.keeper == nil {
+		// The end of this connection is the end of its conversations (stopAtConnectionEnd): returned only once they
+		// have exited, since the process exits right after (`node --stdio`) and they would go on without it (#4259).
+		defer func() {
+			cancel()
+			select {
+			case <-reaped:
+			case <-time.After(reaperStopWait()):
+			}
+		}()
+	}
 	go n.meterUsage(ctx, n.stateReady)
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
@@ -1507,6 +1520,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		return map[string]any{"sent": true}, nil
 	case "session.close":
+		var closeParams struct {
+			Force bool `json:"force"`
+		}
+		_ = json.Unmarshal(params, &closeParams)
+		if closeParams.Force {
+			a, ok := n.agent(p.SessionID)
+			if !ok || a.AgentStatus != proto.StatusBlocked || n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) {
+				return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil)
+			}
+		}
 		if n.runtimeAssistant(p.SessionID) { // the runtime keeps the conversation; a running turn stops, as a process would
 			if s, _, listed := n.runtimes.rowOf(p.SessionID); listed && s.Status == proto.StatusWorking {
 				_ = n.assistantInterruptRuntime(ctx, p.SessionID)

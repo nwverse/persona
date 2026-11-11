@@ -4693,7 +4693,10 @@ export interface KBDetail {
   id: string;
   /** Where it is on the manager's machine, for its own file tools. */
   path: string;
-  /** The entity's own fields (meta.json). */
+  /**
+   * The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+   * Status uses the same locked_fields and provenance as other corrected fields.
+   */
   meta: unknown;
   summary?: string;
   log?: string[];
@@ -4832,6 +4835,10 @@ export interface KBUpdateParams {
   name?: string;
   /** A project's: short or long. */
   project_kind?: string;
+  /**
+   * People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+   * ignored. Omitted or empty keeps the current status; active restores a person.
+   */
   status?: string;
   goal?: string;
   my_role?: string;
