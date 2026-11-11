@@ -4,6 +4,7 @@
 #   ./scripts/app/android.sh test       # unit tests only
 #   ./scripts/app/android.sh lint       # Android lint
 #   ./scripts/app/android.sh shots -s <emulator> --out <directory>
+#   ./scripts/app/android.sh shots-live -s <emulator> --scenario <scene.json> --theme light|dark|both --out <directory>
 #   ./scripts/app/android.sh apk        # debug APK only (android/app/build/outputs/apk/debug/app-debug.apk)
 #   ./scripts/app/android.sh release    # R8 release APK, checked, aligned and signed for your own phone
 #                                       # (android/app/build/outputs/apk/release/app-release.apk); add -s <phone> to install it
@@ -29,15 +30,27 @@ cd "$(dirname "$0")/../.."
 COMMAND=install
 SERIAL=""
 OUTPUT=""
+SCENARIO=""
+THEME=both
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -s|--serial) SERIAL="${2:?需要模拟器序列号}"; shift 2 ;;
     --out) OUTPUT="${2:?需要输出目录}"; shift 2 ;;
-    install|apk|release|test|lint|shots) COMMAND="$1"; shift ;;
-    *) echo "用法：$0 [install|apk|release|test|lint|shots] [-s 模拟器] [--out 目录]" >&2; exit 2 ;;
+    --scenario) SCENARIO="${2:?需要场景文件}"; shift 2 ;;
+    --theme) THEME="${2:?需要 light、dark 或 both}"; shift 2 ;;
+    install|apk|release|test|lint|shots|shots-live) COMMAND="$1"; shift ;;
+    *) echo "用法：$0 [install|apk|release|test|lint|shots|shots-live] [-s 模拟器] [--out 目录]" >&2; exit 2 ;;
   esac
 done
-if [ "$COMMAND" = shots ]; then
+if [ "$COMMAND" = shots-live ]; then
+  SCENARIO=${SCENARIO:-scripts/app/android_adaptive_scenes/window-selftest.json}
+  [ -f "$SCENARIO" ] || { echo "场景文件不存在：$SCENARIO" >&2; exit 2; }
+  SCENARIO="$(cd "$(dirname "$SCENARIO")" && pwd)/$(basename "$SCENARIO")"
+  case "$THEME" in light|dark|both) ;; *) echo "--theme 只能是 light、dark 或 both。" >&2; exit 2 ;; esac
+elif [ -n "$SCENARIO" ] || [ "$THEME" != both ]; then
+  echo "--scenario 和 --theme 只用于 shots-live。" >&2; exit 2
+fi
+if [ "$COMMAND" = shots ] || [ "$COMMAND" = shots-live ]; then
   APP_ID=com.example.persona.shots
 else
 APP_ID=$(python3 scripts/persona_config.py get android.application_id 2>/dev/null || true)
@@ -61,8 +74,8 @@ if ! [[ "$JAVA_MAJOR" =~ ^[0-9]+$ ]] || [ "$JAVA_MAJOR" -lt 21 ]; then
     exit 1
   fi
 fi
-if [ "$COMMAND" = shots ]; then
-  case "$SERIAL" in emulator-*) ;; *) echo "shots 必须用 -s 指定专用模拟器。" >&2; exit 2 ;; esac
+if [ "$COMMAND" = shots ] || [ "$COMMAND" = shots-live ]; then
+  case "$SERIAL" in emulator-*) ;; *) echo "shots / shots-live 必须用 -s 指定专用模拟器。" >&2; exit 2 ;; esac
   [ "$("$ADB" -s "$SERIAL" shell getprop ro.kernel.qemu | tr -d '\r')" = 1 ] || { echo "指定设备不是已启动的模拟器。" >&2; exit 2; }
   case "${SHOTS_STYLE:-}" in ""|glass|brief|board) ;; *) echo "SHOTS_STYLE 只能是 glass、brief 或 board。" >&2; exit 2 ;; esac
   case "${SHOTS_PLUGINS:-}" in ""|0|1) ;; *) echo "SHOTS_PLUGINS 只能是 1 或 0。" >&2; exit 2 ;; esac
@@ -143,7 +156,7 @@ case "$COMMAND" in
     ./gradlew -q -PpersonaApplicationId="$APP_ID" :app:assembleDebug
     "$ADB" ${ADB_ARGS[@]+"${ADB_ARGS[@]}"} install -r app/build/outputs/apk/debug/app-debug.apk
     "$ADB" ${ADB_ARGS[@]+"${ADB_ARGS[@]}"} shell am start -n "$APP_ID/persona.android.MainActivity" >/dev/null ;;
-  shots)
+  shots|shots-live)
     ./gradlew -q -PpersonaApplicationId="$APP_ID" -Pkotlin.compiler.execution.strategy=in-process :app:assembleDebug
     "$ADB" -s "$SERIAL" install -r app/build/outputs/apk/debug/app-debug.apk >/dev/null
     "$ADB" -s "$SERIAL" shell pm clear "$APP_ID" >/dev/null
@@ -162,6 +175,10 @@ case "$COMMAND" in
     }
     cleanup_shots() {
       "$ADB" -s "$SERIAL" shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
+      if [ "$COMMAND" = shots-live ]; then
+        "$ADB" -s "$SERIAL" shell run-as "$APP_ID" rm -f no_backup/hub-data/adaptive-probe.json >/dev/null 2>&1 || true
+        "$ADB" -s "$SERIAL" shell rm -f /data/local/tmp/persona-adaptive-ui.xml >/dev/null 2>&1 || true
+      fi
       if [ -n "$MOCK_PORT" ]; then "$ADB" -s "$SERIAL" reverse --remove "tcp:$MOCK_PORT" >/dev/null 2>&1 || true; fi
       if [ -n "$MOCK_PID" ]; then kill "$MOCK_PID" 2>/dev/null || true; wait "$MOCK_PID" 2>/dev/null || true; fi
       if [ -n "$CLOCK_PID" ]; then
@@ -223,6 +240,23 @@ case "$COMMAND" in
     cd ..
     PLUGINS_MODE=""
     [ "${SHOTS_PLUGINS:-}" != 1 ] || PLUGINS_MODE=1
+    if [ "$COMMAND" = shots-live ]; then
+      SCENE_MOCK_ENV=$(python3 - "$SCENARIO" <<'SCENE_ENV_PY'
+import json, re, sys
+with open(sys.argv[1], encoding='utf-8') as source:
+    values = json.load(source).get('requires', {}).get('mockEnv', {})
+if not isinstance(values, dict): sys.exit('requires.mockEnv must be an object')
+for key, value in values.items():
+    if not re.fullmatch(r'MOCK_[A-Z0-9_]+', key) or not isinstance(value, str) or any(c in value for c in '\r\n\t'):
+        sys.exit('mockEnv keys must be MOCK_* and values must be single-line strings')
+    print(key + '\t' + value)
+SCENE_ENV_PY
+) || { echo "场景 mockEnv 无效。" >&2; exit 2; }
+      while IFS=$'\t' read -r key value; do
+        [ -n "$key" ] || continue
+        export "$key=$value"
+      done <<< "$SCENE_MOCK_ENV"
+    fi
     PORT=${SHOTS_MOCK_PORT:-0} MOCK_FROZEN=${SHOTS_FROZEN:-} MOCK_EXTENSIONS=$PLUGINS_MODE python3 -u - >"$OUTPUT/mock-hub.log" 2>&1 <<'MOCK_PY' &
 import ast, os, re, sys, types
 from pathlib import Path
@@ -327,6 +361,20 @@ SHOTS_PY
       # With the mobile network hidden no connection is in service, so Android 15 shows a satellite icon about 5 s
       # later (no demo command or icon_blacklist removes it). Wait it out so every capture has the same status bar.
       while [ $((SECONDS - DEMO_SINCE)) -lt 8 ]; do sleep 0.5; done
+    fi
+    if [ "$COMMAND" = shots-live ]; then
+      THEMES=("$THEME")
+      [ "$THEME" != both ] || THEMES=(light dark)
+      RESET_ARGS=()
+      for theme in ${THEMES[@]+"${THEMES[@]}"}; do
+        ADB="$ADB" APP_ID="$APP_ID" SERIAL="$SERIAL" MOCK_ADDRESS="$MOCK_ADDRESS" OUTPUT="$OUTPUT" \
+          SHOTS_STYLE="${SHOTS_STYLE:-}" SHOTS_SETTLE="$SETTLE" SHOTS_FROZEN="${SHOTS_FROZEN:-}" \
+          python3 scripts/app/android_adaptive_shots.py --scenario "$SCENARIO" --theme "$theme" --out "$OUTPUT" \
+            ${RESET_ARGS[@]+"${RESET_ARGS[@]}"}
+        RESET_ARGS=(--reset)
+      done
+      echo "同进程截图已输出到：$OUTPUT"
+      exit 0
     fi
     capture() {
       local theme="$1" name="$2"

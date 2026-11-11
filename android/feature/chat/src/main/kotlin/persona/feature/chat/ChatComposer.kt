@@ -20,7 +20,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,6 +45,7 @@ import kotlinx.coroutines.withContext
 /** How long an upload waits for the hub connection to be ready again before it fails (a setting, not measured). */
 internal const val UPLOAD_READY_WAIT_MILLIS = 15_000L
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun ChatComposer(
     session: SessionKey,
@@ -82,6 +86,7 @@ fun ChatComposer(
     onBlocked: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val adaptiveProbePage = "chat:${session.path}"
     val resources = LocalResources.current
     val photosOnly = stringResource(R.string.chat_composer_photos_only)
     SideEffect { state.photosOnlyText = photosOnly }
@@ -246,6 +251,9 @@ fun ChatComposer(
     // Voice input: what the phone's recognizer heard goes at the end of the draft, to edit before sending.
     val dictation = rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice)
     if (!visible) return
+    if (AdaptiveProbe.enabled) {
+        AdaptiveComposerProbe(adaptiveProbePage, state.value, state.attachments.map { it.id to it.uploadState.name })
+    }
     LaunchedEffect(state.focusRequest) { if (state.focusRequest > 0) focusRequester.requestFocus() }
     // A read-only session (enabled = false) offers nothing to type with: no +, no mic, no "/" list, no send.
     val dictate = dictation?.takeIf { enabled }
@@ -360,8 +368,13 @@ fun ChatComposer(
         },
     ) {
         BasicTextField(state.value, { state.beginEdit(); state.value = it },
-            modifier = Modifier.fillMaxWidth().then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
-                .focusRequester(focusRequester).onFocusChanged { state.focused = it.isFocused },
+            modifier = Modifier.fillMaxWidth().then(if (AdaptiveProbe.enabled) Modifier.semantics { testTagsAsResourceId = true }
+                .testTag("chat-composer-field") else Modifier)
+                .then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
+                .focusRequester(focusRequester).onFocusChanged {
+                    state.focused = it.isFocused
+                    if (AdaptiveProbe.enabled) AdaptiveProbe.publishComposerFocus(adaptiveProbePage, it.isFocused)
+                },
             maxLines = growLines, onTextLayout = { lineCount = it.lineCount },
             enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
             cursorBrush = SolidColor(PersonaTheme.palette.ink),
