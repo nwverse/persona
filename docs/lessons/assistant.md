@@ -259,8 +259,9 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   Android draws them in order — so none of them changes.
 
 - A read-only worker must be able to report while staying in plan mode (#4201). Denying `ExitPlanMode` does not remove
-  the provider's separate permission request for `mcp__persona__report_to_supervisor`. Allow that exact call once only
-  for a supervised task with a current read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
+  the provider's separate permission request for `report_to_supervisor`. Recognize both built-in namespaces with
+  `compat.MCPToolNames`: Paseo preserves the requested name, including the compatibility alias (#4318). Allow only
+  that tool for a supervised task with a current started read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
   the terminal hook and Paseo then send no permission or mode update. Reuse `PlanTask.TodoID`, whose old bindings are
   retired on takeover, rather than treating a historical read-only plan as authority for a new writable worker.
 
@@ -272,3 +273,5 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   posts the card of a quiet end unless it was recalled (`end != channel.EndRecalled`), not only when it ended as done:
   gating the post on `EndDone` would have made every bad quiet ending silent instead. A branch that answers a run owes
   it the same ending fields as the normal path.
+
+- **A model asked for an option's label copies whatever the input put next to it** (#3929). `delegate_input.md` lists an option as `label：description`, and with Chinese descriptions the delegation model often answered the whole line (`表驱动：和这个包现有的测试一致`): #3923's live runs saw it in 4 of 4, 2 of 5 and 1 of 4 runs of three cases. `interactionAnswers` found no such option, so a choice the assistant had decided to answer went to the user. `optionLabel` (`assistant/tools_apps.go`) now maps an answer to a label only when it writes out exactly one option, its label then a separator (`：`, `:`, a dash, or brackets) and that option's own description, with quotes or spaces; anything else is still refused. Don't widen it to prefixes or the model's own words after a label: those are free text, and a refused answer only costs the user one question. When a prompt shows options with extra text, expect it back and test the hub's check with the exact line the prompt renders.
