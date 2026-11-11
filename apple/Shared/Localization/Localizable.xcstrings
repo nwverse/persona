@@ -346,6 +346,29 @@
         }
       }
     },
+    "Choose who attends. Until then Persona stays out of the meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose who attends. Until then Persona stays out of the meeting."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请选择参会者。选好之前，Persona 不参与这场会议。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参加者を選んでください。選ぶまで Persona は会議に参加しません。"
+          }
+        }
+      }
+    },
     "Couldn't change Private Meeting. Try again.": {
       "extractionState": "manual",
       "localizations": {

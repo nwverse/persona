@@ -78,8 +78,13 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
                 room = RoomUpload(attendance: a.role.rawValue)
                 privateMark = a.privateMark ?? false
             } else {
-                attendance = a.role.rawValue
-                if a.role.attends, let key = a.key { attendingSession = SessionRef(machineID: key.machineID, sessionID: key.sessionID) }
+                // Never an attending role without an explicit target (#3862, the owner's rule after a real meeting): the hub
+                // reads `attending_session` left out as the main chat, so with no session named and the main chat not
+                // picked for this meeting the role goes as off (`sentRole`), and the meeting's words never fill the main
+                // chat by default.
+                let role = a.sentRole
+                attendance = role.rawValue
+                if role.attends, let key = a.key { attendingSession = SessionRef(machineID: key.machineID, sessionID: key.sessionID) }
             }
         }
     }
@@ -91,9 +96,11 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
     }
 
     /// What the hub must have stored before live lines and questions go (`role|session`; `room|role` for a room meeting).
+    /// The role as sent (`sentRole`): a meeting sent as off settles as off, so nothing waits on a role the hub never got.
     static func attendanceMark(_ entry: RecordingEntry) -> String? {
         attendance(entry).map { a in
-            a.room ? "room|\(a.role.rawValue)" : "\(a.role.rawValue)|\(a.role.attends ? a.session ?? "" : "")"
+            let role = a.sentRole
+            return a.room ? "room|\(role.rawValue)" : "\(role.rawValue)|\(role.attends ? a.session ?? "" : "")"
         }
     }
 }

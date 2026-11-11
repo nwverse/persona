@@ -205,8 +205,19 @@ struct RecordingCaptureControls: View {
                 // The meeting's own room conversation attends (#3862): no session to pick, and the private mark instead.
                 privateRow.disabled(busy)
             } else if role.attends {
+                // Never the main chat by default (#3862): Choose until one is picked here or picked before (not the main
+                // chat), and the meeting starts with Persona off without one.
+                let attendee = self.attendee
                 NavigationLink { MeetingAttendeePicker(selected: attendee?.key) { pickedAttendee = $0 } } label: {
-                    MeetingAttendeeLabel(title: attendee?.title, detail: attendee?.detail)
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        MeetingAttendeeLabel(title: attendee?.title, detail: attendee?.detail)
+                        if attendee == nil {
+                            Text("Choose who attends. Until then Persona stays out of the meeting.")
+                                .font(Theme.Font.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("meeting-attendee-needed")
+                        }
+                    }
                 }
                 .disabled(busy)
                 .accessibilityIdentifier("meeting-attendee")
@@ -315,7 +326,13 @@ struct RecordingCaptureControls: View {
         }
     }
 
-    private var role: MeetingAttendance { pickedRole ?? MeetingAttendees.defaultRole(model) }
+    /// The role shown and started with: the one picked here, else the hub's default; on a hub without the meeting
+    /// conversation, Off while nobody is chosen to attend (the main chat never attends by default, #3862).
+    private var role: MeetingAttendance {
+        if let pickedRole { return pickedRole }
+        guard MeetingAttendees.conversation(model) || attendee != nil else { return .off }
+        return MeetingAttendees.defaultRole(model)
+    }
 
     // MARK: Recording
 
@@ -403,23 +420,25 @@ struct RecordingCaptureControls: View {
         }
     }
 
-    /// Who attends the next meeting: the one picked here, else the one picked last (or the main chat).
+    /// Who attends the next meeting: the one picked here, else the one picked last unless that was the main chat; nil
+    /// until one is chosen (#3862).
     private var attendee: MeetingAttendees.Candidate? { pickedAttendee ?? MeetingAttendees.preferred(model) }
 
     /// What Meeting Recording starts with: the role and session shown above it. A session picked here that can no longer
-    /// attend (its computer went offline meanwhile) gives way to the preferred one. With the meeting conversation (#3862)
-    /// it is a room meeting whatever the role, off included: every upload carries `room` and the private mark.
+    /// attend (its computer went offline meanwhile) gives way to the preferred one; with nobody chosen Persona starts off,
+    /// and the main chat attends only when picked here. With the meeting conversation (#3862) it is a room meeting
+    /// whatever the role, off included: every upload carries `room` and the private mark.
     private var startAttendance: RecordingAttendance? {
         guard MeetingAttendees.offered(model) else { return nil }
-        let role = pickedRole ?? MeetingAttendees.defaultRole(model)
+        let role = self.role
         if MeetingAttendees.conversation(model) {
             return RecordingAttendance.room(role, private: pickedPrivate, photos: MeetingAttendees.photos(model))
         }
-        guard role.attends else { return RecordingAttendance(role: .off) }
         let all = MeetingAttendees.candidates(model)
-        let chosen = pickedAttendee.flatMap { p in all.first { $0.key == p.key } } ?? MeetingAttendees.preferred(model)
-        return RecordingAttendance(role: role, session: chosen.flatMap { $0.main ? nil : $0.key.path },
-                                   sessionTitle: chosen?.title ?? model.persona.name)
+        guard role.attends,
+              let chosen = pickedAttendee.flatMap({ p in all.first { $0.key == p.key } }) ?? MeetingAttendees.preferred(model)
+        else { return RecordingAttendance(role: .off) }
+        return MeetingAttendees.choose(chosen, in: RecordingAttendance(role: role))
     }
 
     /// 14:00–15:00.

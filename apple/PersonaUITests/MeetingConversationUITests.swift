@@ -48,18 +48,29 @@ final class MeetingConversationUITests: XCTestCase {
         try shot(app, "start")
     }
 
-    /// A hub without the conversation (`{"on": false}`): the #3746 start, Who Attends and no Private Meeting.
+    /// A hub without the conversation (`{"on": false}`): the #3746 start, Who Attends and no Private Meeting. Nobody is
+    /// chosen to attend by default (the owner's rule: a meeting's lines never fill the main chat unless it is picked for
+    /// the meeting), so the role shows Off whatever the hub's default, and with Take Part Who Attends says Choose.
     @MainActor func testOldHubKeepsTheAttendeePicker() throws {
         let hub = try mockHub()
         try post(hub, "/mock/meeting_conversation", ["on": false])
         let app = launch(hub)
         XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(element(app, "meeting-attendance-role").waitForExistence(timeout: 15), "no role: \(app.debugDescription)")
-        let attendee = app.buttons["meeting-attendee"]
-        if !attendee.waitForExistence(timeout: 15) { reveal(attendee, in: app) }
-        XCTAssertTrue(attendee.waitForExistence(timeout: 5), "no Who Attends from a hub without the conversation: \(app.debugDescription)")
+        let role = element(app, "meeting-attendance-role")
+        XCTAssertTrue(role.waitForExistence(timeout: 15), "no role: \(app.debugDescription)")
         let privately = element(app, "meeting-private-start")
         XCTAssertTrue(waitFor(15) { !privately.exists }, "Private Meeting from a hub without the conversation")
+        XCTAssertTrue(waitFor(10) { "\(role.label) \(role.value ?? "")".contains("关") },
+                      "the hub's default with nobody chosen to attend: \(role.label) \(role.value ?? "")")
+        let attendee = app.buttons["meeting-attendee"]
+        XCTAssertFalse(attendee.exists, "no one attends while Persona is off")
+
+        role.tap(); app.buttons["参会"].firstMatch.tap()
+        if !attendee.waitForExistence(timeout: 15) { reveal(attendee, in: app) }
+        XCTAssertTrue(attendee.waitForExistence(timeout: 5), "no Who Attends from a hub without the conversation: \(app.debugDescription)")
+        // 「选择」: MeetingAttendeeLabel's Choose ("Choose [Meeting Attendee]"); 「主对话」 would be the main chat chosen.
+        XCTAssertTrue(waitFor(5) { attendee.label.contains("选择") }, "Who Attends doesn't say Choose: \(attendee.label)")
+        XCTAssertFalse(attendee.label.contains("主对话"), "the main chat chosen by default: \(attendee.label)")
         sleep(2)
         XCTAssertFalse(privately.exists, "and it stays away")
         try shot(app, "older-hub")
@@ -68,9 +79,12 @@ final class MeetingConversationUITests: XCTestCase {
     // MARK: The meeting page
 
     /// Taking part: the upload names the room's role and the private mark (never the attending session's fields), a typed
-    /// question goes to the room (`via: room`) and its answer shows in the room's thread.
+    /// question goes to the room (`via: room`) and its answer shows in the room's thread. The meeting's lines and the
+    /// question reach the room and add nothing to the main chat (the owner's rule after a real meeting whose every line
+    /// was fed to the main chat).
     @MainActor func testRoomMeetingAnswersATypedQuestionInTheThread() throws {
         let hub = try mockHub()
+        let mainBefore = try mainChat(hub).compactMap { $0["id"] as? String }
         let app = try meetingPage(hub)
         let body = try XCTUnwrap(try upload(hub, live), "the meeting never reached the hub")
         XCTAssertEqual((body["room"] as? [String: Any])?["attendance"] as? String, "participant")
@@ -90,6 +104,21 @@ final class MeetingConversationUITests: XCTestCase {
         XCTAssertEqual(asked["via"] as? String, "room", "answered in the room's conversation, not from material")
         if answers.count > before { reveal(answers.element(boundBy: answers.count - 1), in: app) }
         try shot(app, "answered")
+
+        // The meeting's lines went to the room (its thread holds them), and neither they nor the question touched the
+        // main chat.
+        let theRoom = try XCTUnwrap(try room(hub, live), "no room")
+        let machine = try XCTUnwrap(theRoom["machine_id"] as? String), session = try XCTUnwrap(theRoom["session_id"] as? String)
+        let line = "上周定的长录音测试谁负责"
+        XCTAssertTrue(waitFor(20) {
+            (try? self.items(hub, machine: machine, session: session))?.contains { ($0["text"] as? String)?.contains(line) == true } == true
+        }, "the meeting's lines never reached the room")
+        let mainAfter = try mainChat(hub)
+        XCTAssertEqual(mainAfter.compactMap { $0["id"] as? String }, mainBefore, "the room meeting added to the main chat")
+        XCTAssertFalse(mainAfter.contains { item in
+            let text = item["text"] as? String ?? ""
+            return text.contains(question) || text.contains(line)
+        }, "the meeting's question or lines are in the main chat")
     }
 
     /// Just me: the section says so, and the question goes to the main chat only: never an ask, never the room.

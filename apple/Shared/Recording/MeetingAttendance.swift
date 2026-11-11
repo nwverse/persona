@@ -38,7 +38,7 @@ nonisolated enum MeetingAttendance: String, Codable, CaseIterable, Sendable {
 /// the phone's live log of what it sent the hub, and the stretches Persona spoke in.
 nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     var role: MeetingAttendance
-    /// The attending session's `SessionKey.path`; nil is the main chat (the upload then leaves `attending_session` out).
+    /// The attending session's `SessionKey.path`; nil is the main chat only when `mainPicked`, else nobody chosen yet.
     var session: String?
     /// Its name when it was chosen.
     var sessionTitle: String?
@@ -64,14 +64,18 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     var photos: Bool = false
     /// The start sheet's Private meeting choice, sent as the upload's `private` (the hub takes it only while it has no mark).
     var privateMark: Bool? = nil
+    /// The owner picked the main chat to attend this meeting (#3862): the only way it ever attends one. A meeting's words
+    /// fill the chat they are fed to, so the main chat never gets them by default; no session named without this pick
+    /// means nobody was chosen, and the meeting goes as off (`sentRole`).
+    var mainPicked: Bool = false
 
     nonisolated enum StopReason: String, Codable, Sendable {
         case unsupported
         case liveFull = "live_full"
     }
 
-    init(role: MeetingAttendance, session: String? = nil, sessionTitle: String? = nil, at: Double = 0) {
-        self.role = .off; self.session = session; self.sessionTitle = sessionTitle
+    init(role: MeetingAttendance, session: String? = nil, sessionTitle: String? = nil, mainPicked: Bool = false, at: Double = 0) {
+        self.role = .off; self.session = session; self.sessionTitle = sessionTitle; self.mainPicked = mainPicked
         set(role, at: at)
     }
 
@@ -84,7 +88,9 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         return a
     }
 
-    enum CodingKeys: String, CodingKey { case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, privateMark }
+    enum CodingKeys: String, CodingKey {
+        case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, privateMark, mainPicked
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -101,10 +107,22 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         room = (try? c.decodeIfPresent(Bool.self, forKey: .room)) ?? false
         photos = (try? c.decodeIfPresent(Bool.self, forKey: .photos)) ?? false
         privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
+        // Written since #3862; a file from before has none: its main chat was never picked, so it goes as off.
+        mainPicked = (try? c.decodeIfPresent(Bool.self, forKey: .mainPicked)) ?? false
     }
 
-    /// The attending session, nil for the main chat.
+    /// The attending session, nil for the main chat (when `mainPicked`) or nobody.
     var key: SessionKey? { session.flatMap(SessionKey.init(path:)) }
+
+    /// Who attends is known: the meeting's own room, a session named (one the API can name: a malformed path such as ""
+    /// would go as no `attending_session`, which the hub reads as the main chat), or the main chat picked for this meeting.
+    var hasAttendee: Bool { room || key != nil || mainPicked }
+
+    /// The role the hub is told and the phone acts on (the upload, its stored mark, live lines, asks): `role`, except an
+    /// attending one with nobody chosen to attend, which goes as off. The structural half of "never the main chat by
+    /// default" (#3862): `attending_session` left out means the main chat to the hub, so an attending role without a
+    /// target is never sent, whatever built the attendance.
+    var sentRole: MeetingAttendance { role.attends && !hasAttendee ? .off : role }
 
     /// Sets the role at `at` (seconds on the recording's clock), opening or closing the attending period.
     mutating func set(_ next: MeetingAttendance, at: Double) {

@@ -72,9 +72,26 @@ import Testing
         #expect(try json(meeting(unmarked))["private"] as? Bool == false, "no choice kept on the phone goes as not private")
     }
 
-    /// A meeting started before the hub listed the conversation keeps uploading as #3746 did.
+    /// Meeting content never reaches the main chat through a room meeting (the owner's rule after a real meeting): its
+    /// upload names no attending session and no top-level role for any role, even with a session or the main chat's pick
+    /// set on it (nothing makes either for a room meeting; this pins the shape), so neither this hub nor an older manager
+    /// after a rollback feeds its lines to a chat. Only the room hears them; only Just me reaches the main chat.
+    @Test func aRoomMeetingNeverNamesAnAttendingSession() throws {
+        for role in MeetingAttendance.allCases {
+            var a = room(role)
+            a.session = "server/other"
+            a.mainPicked = true
+            let e = meeting(a)
+            let body = try json(e)
+            #expect(body["attendance"] == nil && body["attending_session"] == nil, "\(role)")
+            #expect((body["room"] as? [String: String]) == ["attendance": role.rawValue], "\(role)")
+            #expect(RecordingUpload.attendanceMark(e) == "room|\(role.rawValue)", "\(role)")
+        }
+    }
+
+    /// A meeting started before the hub listed the conversation keeps uploading as #3746 did (the main chat picked for it).
     @Test func aMeetingStartedWithoutTheConversationUploadsAsBefore() throws {
-        let e = meeting(RecordingAttendance(role: .listener))
+        let e = meeting(RecordingAttendance(role: .listener, mainPicked: true))
         let body = try json(e)
         #expect(body["attendance"] as? String == "listener")
         #expect(body["room"] == nil && body["private"] == nil)
@@ -139,7 +156,7 @@ import Testing
     /// One tap (the drawer, Siri, the Control) on a hub with the conversation starts a room meeting with the default role,
     /// not private; on a hub without it, a #3746 meeting. Reads the last hello's flags as a start without the app does
     /// (no hub in this model), so the user defaults it reads are set for the case and put back after.
-    @Test func aOneTapStartIsARoomMeetingThatIsNotPrivate() {
+    @Test func aOneTapStartIsARoomMeetingThatIsNotPrivate() throws {
         let store = UserDefaults.standard
         let keys = [MeetingAttendanceDefaults.offeredKey, MeetingAttendanceDefaults.roleKey,
                     MeetingAttendanceDefaults.conversationKey, MeetingAttendanceDefaults.photosKey]
@@ -155,6 +172,9 @@ import Testing
         #expect(start.role == MeetingAttendees.defaultRole(model))
         #expect(start.privateMark == false)
         #expect(!start.photos)
+        #expect(start.session == nil && !start.mainPicked, "the room attends, no chat")
+        let body = try json(meeting(start))
+        #expect(body["attendance"] == nil && body["attending_session"] == nil, "nothing an older manager would feed a chat")
         MeetingAttendanceDefaults.remember(conversation: false, photos: false, store)
         #expect(!MeetingAttendees.startAttendance(model).room, "without the conversation: as #3746 starts it")
     }

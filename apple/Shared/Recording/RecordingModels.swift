@@ -133,9 +133,10 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
 
     var duration: Double { segments.map { $0.start + $0.duration }.max() ?? 0 }
     var isMeeting: Bool { meeting != nil }
-    /// A meeting being recorded on this phone that Persona attends: asking is open, live lines go to the hub.
+    /// A meeting being recorded on this phone that Persona attends: asking is open, live lines go to the hub. Only with
+    /// someone chosen to attend (`RecordingAttendance.sentRole`, #3862).
     var attended: Bool {
-        active && isMeeting && source == .phone && attendance?.role.attends == true && attendance?.stopped != .unsupported
+        active && isMeeting && source == .phone && attendance?.sentRole.attends == true && attendance?.stopped != .unsupported
     }
     var displayTitle: String {
         guard title.isEmpty else { return title }

@@ -958,6 +958,10 @@ page the user watches during the meeting is the page they keep writing in after 
   once it said anything (absent: private); the start's choice stands in only until then. The start shows the same switch
   under the role, off by default, and no Who Attends. VoiceOver names the three menus apart: the page menu "Meeting
   options", [+] "Add to the conversation", the control row's "More".
+- **On a hub without the room** (the #3746 start and live sheet): Who Attends never pre-selects the main chat. With
+  nobody chosen the role shows Off; Listen or Take Part shows "Who Attends: Choose" with a caption under it in the same
+  row ("Choose who attends. Until then Persona stays out of the meeting."), and the strip's Turn on Persona or role menu
+  pushes the attendee picker first, turning on once someone is picked. The main chat stays an ordinary row of the picker.
 - Haptics: only `tap`, on send, Pause and Bookmark, while the microphone is open (section 4.3); new room answers are
   announced to VoiceOver as the live view's are.
 - Identifiers for tests: `meeting-page-menu`, `meeting-role`, `meeting-private`, `meeting-page-subtitle`,

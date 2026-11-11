@@ -125,8 +125,9 @@ final class MeetingLive {
 
     private func sendAll(_ id: UUID) async {
         while let entry = library.entry(id), let attendance = entry.attendance, attendance.stopped == nil {
-            // Off for now: the hub refuses lines (`not_attending`); they wait in the log until it is on again.
-            guard attendance.role.attends else { return }
+            // Off for now (or sent as off: nobody chosen to attend, #3862): the hub refuses lines (`not_attending`); they
+            // wait in the log until it is on again.
+            guard attendance.sentRole.attends else { return }
             guard deps.settled(entry) else { return } // the upload that names the attendance goes first; it calls back
             let log = attendance.live
             let from = min(states[id]?.next ?? 0, log.count)
