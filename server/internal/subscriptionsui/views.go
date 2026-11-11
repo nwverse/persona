@@ -80,11 +80,18 @@ func (p *pages) list() wire.View {
 	add("attention", p.t("list.attention"), attention)
 	add("on", p.t("list.on"), on)
 	add("off", p.t("list.off"), off)
+	available := 0
+	// This device's Shortcuts source (#3848) before the connectors' sources: it is the one source of its own.
+	if p.st.C == "" && p.st.Ext == "" {
+		if sec, ok := p.pushSection(subs); ok {
+			v.Sections = append(v.Sections, sec)
+			available++
+		}
+	}
 	cats, _ := p.svc.Catalogs(p.ctx)
 	slices.SortFunc(cats, func(a, b subscriptions.Catalog) int {
 		return cmp.Compare(p.env.Name(a.Connector), p.env.Name(b.Connector))
 	})
-	available := 0
 	for _, c := range cats {
 		if p.st.C != "" && c.Connector != p.st.C || p.st.Ext != "" && c.Extension != p.st.Ext {
 			continue
@@ -106,12 +113,6 @@ func (p *pages) list() wire.View {
 		}
 		available += len(items)
 		add("avail."+c.Connector, p.t("list.available", i18n.Args{"name": p.env.Name(c.Connector)}), items)
-	}
-	if p.st.C == "" && p.st.Ext == "" {
-		if sec, ok := p.pushSection(subs); ok {
-			v.Sections = append(v.Sections, sec)
-			available++
-		}
 	}
 	if len(subs) == 0 && available == 0 {
 		v.Sections = append(v.Sections, wire.Section{Key: "none", Items: []wire.Component{
