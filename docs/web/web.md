@@ -891,6 +891,16 @@ a reply, user input or different source resets it. Long content folds to three l
 control. No group-chat header, member list or per-source avatar is added. Quiet supervision rounds retain their existing
 folded trace, now labeled with their source mention.
 
+**Background rounds** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation, while
+`main_background_folded` is on (Settings › Assistant › **Fold background rounds**, `settings/AssistantSettings.tsx`), a round
+whose first input's source is `conversation`, `followup` or `patrol` folds into the same line as a quiet supervision round,
+`@<source> · Background round` (`chatLines`' `background` option, `lib/turns.ts`; `SupervisionLine` in `views/chat/Lines.tsx`).
+Opened, its inputs are source blocks, not raw model input; a scheduled task's or follow-up's input shows only its line,
+never the prompt (`promptHidden`), folded or not. The supervision visibility rule (`supervisionVisible`) keeps rounds that
+asked or told the user shown. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
+`lib/assistant-entries.ts`) when more than one has rows. `e2e/background-rounds.mjs` checks it in a real browser with
+synthetic data and takes the screenshots; with the switch off the chat is pixel-identical to a build without the feature.
+
 The cache retains the source metadata. Unknown nonempty source kinds still use the source presentation. Old hubs fall back
 to injected metadata and complete canonical relay contexts; genuine app inputs and protected quoted templates are never
 reclassified. Source messages cannot settle an identical pending user message or become user-navigation ticks.

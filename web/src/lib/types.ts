@@ -711,6 +711,8 @@ export interface AssistantInfo {
   /** The side conversations the user made leaders (docs/assistant/unified-entry.md "Leader conversations"): absent
    *  when there are none or from an older hub. The sidebar shows them first among the Persona chats, as pinned. */
   leaders?: string[];
+  /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
+  main_background_folded?: boolean;
   conversations: Session[];
 }
 
