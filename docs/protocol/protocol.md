@@ -800,8 +800,10 @@ allows once, as before, and is no longer recorded as an Always. The value is the
 the field (or in `tool_title`) is dropped.
 
 `tool_title` is the tool's name for people in the user's language (`assistant-tool_titles` in the hub's catalog,
-"iPhone control" for `iphone_do`), set by the manager on its own tools' cards only. Clients title the card with it,
-and otherwise with `tool_name` as before; Agents sessions' cards never carry it.
+"iPhone control" for `iphone_do`), set by the manager on its own tools' cards and on a node's card for one of
+Persona's own MCP tools (`mcp__persona__…` under either namespace, #4966: "Report to supervisor · Done", the phone's
+tools as "iPhone · contacts search", any other "Persona · agent read"). Clients title the card with it, and otherwise
+with `tool_name` as before; Agents sessions' cards for any other tool never carry it.
 
 ### Subagent deliveries as tool results
 
