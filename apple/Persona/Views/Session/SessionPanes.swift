@@ -392,6 +392,7 @@ struct TerminalPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(.rect)
             .modifier(TerminalGrabDrag(grab: grab))
+            .accessibilityElement(children: .contain) // one element to find, its text and Resume Session inside
             .accessibilityIdentifier("terminal-not-running")
     }
 

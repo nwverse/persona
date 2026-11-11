@@ -18040,7 +18040,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "claude did not become ready within 1m0s\nzsh: command not found: claude"}, 502)
             # Resume Session (#4328): a session that isn't running comes back in a new tab under the same id, answered
             # once it is up (a resume is never async). MOCK_RESUME_ERROR=<why>: the node refuses it.
-            resume = next((x for x in all_sessions() if body.get("resume_session_id") and x["session_id"] == body["resume_session_id"]), None)
+            resume = next((x for x in SESSIONS if body.get("resume_session_id") and x["session_id"] == body["resume_session_id"]), None)  # the row itself (all_sessions() decorates copies)
             if resume is not None:
                 if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
                 resume.update(status="idle", state="idle")

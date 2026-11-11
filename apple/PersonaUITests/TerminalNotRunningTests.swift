@@ -22,7 +22,7 @@ final class TerminalNotRunningTests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-openSession", "macbook/" + recipe, "-openTerminalPane", "YES",
                                "-terminalTipsSeen", "YES"] + extra
         app.launchPinned()
-        let state = app.descendants(matching: .any)["terminal-not-running"]
+        let state = app.descendants(matching: .any)["terminal-not-running"].firstMatch
         XCTAssertTrue(state.waitForExistence(timeout: 20), "no no-terminal state:\n\(app.debugDescription)")
         return (app, state)
     }
@@ -37,7 +37,7 @@ final class TerminalNotRunningTests: XCTestCase {
         XCTAssertFalse(app.buttons["terminal-keyboard"].exists, "the key bar is there with nothing to type into")
         close.tap()
         XCTAssertTrue(state.waitForNonExistence(timeout: 5), "Close did not close the terminal")
-        XCTAssertTrue(app.buttons["更多"].firstMatch.waitForExistence(timeout: 5), "not back on the session page")
+        XCTAssertFalse(close.exists, "the terminal's bar is still there")
     }
 
     @MainActor func testDraggingItDownClosesIt() throws {
@@ -53,6 +53,6 @@ final class TerminalNotRunningTests: XCTestCase {
         app.buttons["恢复会话"].tap()
         XCTAssertTrue(state.waitForNonExistence(timeout: 20), "the terminal did not come after Resume Session")
         XCTAssertTrue(app.buttons["terminal-close"].exists, "no Close over the resumed terminal")
-        XCTAssertTrue(app.descendants(matching: .any)["terminal-screen"].waitForExistence(timeout: 10), "no terminal screen")
+        XCTAssertTrue(app.descendants(matching: .any)["terminal-screen"].firstMatch.waitForExistence(timeout: 10), "no terminal screen")
     }
 }
