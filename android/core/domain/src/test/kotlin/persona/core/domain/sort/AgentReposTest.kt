@@ -59,7 +59,7 @@ class AgentReposTest {
         val repo = repos.single()
         assertEquals("repo/machine-a//code/app", repo.id)
         assertEquals(listOf("app*", "fix-a", "fix-b", "fix-c"), (repo.worktrees.map { it.name + if (it.main) "*" else "" }).zhAny())
-        assertEquals("tree/machine-a//home/me/.paseo/worktrees/1a2b/fix-a", repo.worktrees[1].id)
+        assertEquals("tree/machine-a//home/me/.paseo/worktrees/1a2b/fix-a\u0000/code/app", repo.worktrees[1].id)
     }
 
     @Test fun theMainCheckoutComesFirstThenTreesByName() {

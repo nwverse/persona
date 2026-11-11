@@ -480,12 +480,13 @@ internal class AgentsViewModel(
         if (trimmed.isEmpty() || trimmed == session.spaceName) return
         change(session.machineId, R.string.agents_notice_renamed) { it.renameSpace(session, trimmed) }
     }
-    fun close(session: Session) = change(session.machineId) {
+    /** [onDone]: after it went through (the worktree cleanup, #4532). */
+    fun close(session: Session, onDone: () -> Unit = {}) = change(session.machineId, onDone = onDone) {
         it.session(session, AgentSessionEdit(closed = true))
         bindings?.onSessionClosed?.invoke(session.key)
     }
     /** "Delete chat": out of every app's list (the transcript stays); a chat open on it goes. */
-    fun delete(session: Session) = change(session.machineId, R.string.agents_notice_deleted) {
+    fun delete(session: Session, onDone: () -> Unit = {}) = change(session.machineId, R.string.agents_notice_deleted, onDone) {
         it.session(session, AgentSessionEdit(deleted = true))
         bindings?.onSessionClosed?.invoke(session.key)
     }
@@ -536,7 +537,8 @@ internal class AgentsViewModel(
         }
     }
     /** [machineId] is the target's: it goes through its own hub group's connection, as answers do (stateFor). */
-    private fun change(machineId: String, @androidx.annotation.StringRes success: Int = R.string.agents_notice_saved, action: suspend (AgentOperationsState) -> Unit) {
+    private fun change(machineId: String, @androidx.annotation.StringRes success: Int = R.string.agents_notice_saved, onDone: () -> Unit = {},
+                       action: suspend (AgentOperationsState) -> Unit) {
         val operations = operations ?: run { _notice.value = AgentText(R.string.agents_notice_operations_missing); return }
         if (hubGroups.groups.value.stateFor(machineId, connection.state.value) != ConnectionState.Online) { _notice.value = AgentText(R.string.agents_notice_offline); return }
         if (changing) { _notice.value = AgentText(R.string.agents_notice_saving); return }
@@ -547,6 +549,7 @@ internal class AgentsViewModel(
                 action(operations)
                 succeeded = true
                 _notice.value = AgentText(success)
+                onDone()
             } catch (e: CancellationException) { throw e }
             catch (_: OperationsMissing) { _notice.value = AgentText(R.string.agents_notice_operations_missing) }
             catch (_: RenameUnconfirmed) { _notice.value = AgentText(R.string.agents_notice_rename_unconfirmed) }

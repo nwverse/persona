@@ -11,7 +11,10 @@ import (
 // gitPlace is where a working directory sits in git: the repository's main checkout (root), the working tree it is in
 // (worktree: root itself, or a linked worktree's folder) and the branch checked out there ("" when detached). The apps
 // list machine → project (root) → worktree (labelled branch) → sessions with it (#1805).
-type gitPlace struct{ root, worktree, branch string }
+type gitPlace struct {
+	root, worktree, branch string
+	project                *proto.SessionInventory
+}
 
 // fillGitPlace sets s's RepoRoot (unless its host already named it: Paseo, a Codex project), Worktree and Branch from
 // its working directory. The assistant's own conversations are not in a project.
@@ -20,6 +23,20 @@ func fillGitPlace(s *proto.Session) {
 		return
 	}
 	p := gitPlaces.lookup(s.Cwd)
+	project := p.project
+	if s.RepoRoot != "" && (project == nil || project.ProjectKind == "non_git") && filepath.Clean(s.RepoRoot) != filepath.Clean(s.Cwd) {
+		// Hosts can supply the real checkout even when an offline cwd has gone away.
+		project = gitPlaces.lookup(s.RepoRoot).project
+	}
+	if project != nil {
+		if s.Inventory == nil || s.Inventory.CreatedAt == nil {
+			s.Inventory = project
+		} else {
+			s.Inventory = &proto.SessionInventory{
+				ProjectKind: project.ProjectKind, ProjectRepo: project.ProjectRepo, CreatedAt: s.Inventory.CreatedAt,
+			}
+		}
+	}
 	if p.worktree == "" {
 		return
 	}
@@ -42,26 +59,56 @@ func readGitPlace(cwd string) gitPlace {
 	if cwd == "" || !filepath.IsAbs(cwd) {
 		return gitPlace{}
 	}
-	for dir := filepath.Clean(cwd); ; {
+	// Use the existing lexical paths for the legacy worktree fields. A second
+	// walk for identity is only needed if a symlink hides the real ancestors.
+	p := walkGitPlace(filepath.Clean(cwd))
+	real, err := filepath.EvalSymlinks(cwd)
+	if err == nil && real != filepath.Clean(cwd) {
+		p.project = walkGitPlace(real).project
+	}
+	return p
+}
+
+func walkGitPlace(cwd string) gitPlace {
+	st, err := os.Stat(cwd)
+	// Keep the legacy ancestor labels for a missing cwd, but do not use that
+	// as proof of the session's project (it may have been a nested checkout).
+	verified := err == nil && st.IsDir()
+	project := func(metadata string) *proto.SessionInventory {
+		if !verified {
+			return nil
+		}
+		return gitProject(metadata)
+	}
+	for dir := cwd; ; {
 		dotGit := filepath.Join(dir, ".git")
 		if st, err := os.Stat(dotGit); err == nil {
 			switch {
 			case st.IsDir():
-				return gitPlace{root: dir, worktree: dir, branch: headBranch(dotGit)}
+				return gitPlace{root: dir, worktree: dir, branch: headBranch(dotGit), project: project(dotGit)}
 			case st.Mode().IsRegular():
 				gitDir := pointedGitDir(dotGit, dir)
 				if gitDir == "" {
 					return gitPlace{}
 				}
-				root := dir
+				root, metadata := dir, gitDir
 				if common := commonDir(gitDir); common != "" {
-					root = mainCheckout(common)
+					root, metadata = mainCheckout(common), common
 				}
-				return gitPlace{root: root, worktree: dir, branch: headBranch(gitDir)}
+				return gitPlace{root: root, worktree: dir, branch: headBranch(gitDir), project: project(metadata)}
+			default:
+				return gitPlace{}
 			}
+		} else if !os.IsNotExist(err) {
+			return gitPlace{}
+		} else if _, err := os.Lstat(dotGit); !os.IsNotExist(err) {
+			return gitPlace{} // a broken .git symlink is not evidence of a non-Git directory
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
+			if verified {
+				return gitPlace{project: nonGitProject}
+			}
 			return gitPlace{}
 		}
 		dir = parent

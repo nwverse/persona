@@ -90,6 +90,18 @@ describe("port chips under an agent's answer", () => {
     expect(request.mock.calls.map((c) => c[0]).sort()).toEqual(["/machines/m1/ports/443", "/machines/m1/ports/80"]);
   });
 
+  it.each([
+    "Open http://[::1]:4173/app?x=1#top",
+    "Open [preview](http://[::1]:4173/app?x=1#top)",
+  ])("opens an IPv6 reply link through its existing chip: %s", async (text) => {
+    request.mockResolvedValue({ listening: true, http: true });
+    await render(text);
+    expect(chips().map((b) => b.dataset.port)).toEqual(["4173"]);
+    await act(async () => chip(4173)!.click());
+    expect(getPanel()).toMatchObject({ kind: "preview", mid: "m1", sid: "s1", cwd: "/w/site", port: 4173, path: "/app?x=1#top" });
+    expect(request.mock.calls.map((c) => c[0])).toEqual(["/machines/m1/ports/4173"]);
+  });
+
   it("draws nothing for an assistant conversation, a session without a folder, or a hub without previews", async () => {
     await render(ANSWER, "a1");
     expect(chips()).toHaveLength(0);

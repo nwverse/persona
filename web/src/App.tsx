@@ -33,7 +33,6 @@ import { ChatView } from "./views/chat/ChatView";
 import { RequestPage } from "./views/RequestPage";
 import { Home } from "./views/Home";
 import { PersonaAssistant } from "./views/PersonaAssistant";
-import { Login } from "./views/Login";
 import { NewWorktreeHost } from "./views/NewWorktreeHost";
 import { WorktreeActionsHost } from "./views/WorktreeActions";
 import { openWorktreeActions } from "./lib/worktree-actions";
@@ -56,6 +55,9 @@ import { AttentionSignals } from "./lib/attention-signals";
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
 // (lib/lazy-page.ts); "Chat", Persona and "Overview" stay in the main bundle (the extensions' page too: the sidebar already has
 // ExtensionSlots for its icons).
+// The sign-in page is only for a browser that isn't signed in yet (#4603): every load after that would carry it on the
+// first screen for nothing. Its chunk (and its words, the login namespace) loads when it is drawn.
+const Login = lazyPage(() => import("./views/Login").then((m) => m.Login));
 const AgentsView = lazyPage(() => import("./views/agents/AgentsView").then((m) => m.AgentsView), { routes: ["agents"] });
 const WorkspaceBoard = lazyPage(() => import("./views/WorkspaceBoard").then((m) => m.WorkspaceBoard), { routes: ["workspace-board"] });
 const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines"] });
@@ -72,11 +74,9 @@ const Inbox = lazyPage(() => import("./views/inbox/Inbox").then((m) => m.Inbox),
 const Messages = lazyPage(() => import("./views/messages/Messages").then((m) => m.Messages), { routes: ["messages"] });
 const Knowledge = lazyPage(() => import("./views/knowledge/Knowledge").then((m) => m.Knowledge), { routes: ["kb"] });
 const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView), { routes: ["todos"] });
-// The command palette and the new-agent dialog are not on a first screen either, and a shortcut opens them with no link
-// to reach first: their chunks come once the browser is idle after start, and each mounts on its first open (useOpened),
-// so ⌘K right after start waits on the network at most once.
+// Keep the shortcut palette warm. The new-agent dialog loads only when opened.
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
-const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent), { idle: true });
+const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
 
 // A link with the hub's token (`?token=…` or `#token=…`) signs in without the form. The token leaves the address bar
 // before anything else runs (history, bookmarks, a copied link), and is traded for this browser's own one.
@@ -144,7 +144,17 @@ export function App() {
 
   return (
     <>
-      {joining ? <Joining /> : authed ? <Shell /> : <Login error={linkError} onDone={() => setAuthed(true)} />}
+      {joining ? (
+        <Joining />
+      ) : authed ? (
+        <Shell />
+      ) : (
+        <PageBoundary page="login">
+          <Suspense fallback={<PageLoading />}>
+            <Login error={linkError} onDone={() => setAuthed(true)} />
+          </Suspense>
+        </PageBoundary>
+      )}
       <Toasts />
     </>
   );

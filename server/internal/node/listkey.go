@@ -42,6 +42,16 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.Branch, '/')
 		w.quote(s.SpaceID, '/')
 		w.quote(s.SpaceKind, '\n')
+		if inv := s.Inventory; inv != nil {
+			w.b.WriteString("inventory:")
+			w.quote(inv.ProjectKind, '/')
+			w.quote(inv.ProjectRepo, '/')
+			if inv.CreatedAt != nil {
+				w.str(inv.CreatedAt.Format(time.RFC3339Nano), '\n')
+			} else {
+				w.b.WriteByte('\n')
+			}
+		}
 		writeUltracodeKey(&w, s)
 		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
 			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)

@@ -179,6 +179,7 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
+		s.Inventory = m.inventory
 		s.ModelFallback = m.modelFallback
 		n.setModelRestore(&s, c.path, m)
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
@@ -238,6 +239,7 @@ func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
+		s.Inventory = m.inventory
 		s.ModelFallback = m.modelFallback
 		s.PermissionMode, s.Effort = n.currentModes(c.id, m)
 		untitled(&s, m)
@@ -294,8 +296,23 @@ func isAssistantProject(base, own string) bool {
 	if base == own || base == strings.TrimSuffix(own, "-assistant")+"-health" {
 		return true
 	}
+	if isMeetingRoomProject(base) { // a meeting's room (assistant_guest.go): an assistant conversation, whatever runs it now
+		return true
+	}
 	for _, suffix := range assistantProjectSuffixes() {
 		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMeetingRoomProject: base is the projects folder of a meeting room's directory (guest-meeting/<recording id> in the
+// node's state directory, either spelling).
+func isMeetingRoomProject(base string) bool {
+	former := "-" + nonAlnum.ReplaceAllString(compat.StateDir, "-")
+	for _, mark := range []string{"--persona-guest-meeting-", former + "-guest-meeting-"} {
+		if i := strings.LastIndex(base, mark); i >= 0 && uuidRe.MatchString(base[i+len(mark):]) {
 			return true
 		}
 	}

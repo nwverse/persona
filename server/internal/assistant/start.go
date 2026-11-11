@@ -237,6 +237,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
+		if p.PermissionMode == "" {
+			p.PermissionMode = proto.ModeBypass
+		}
 	}
 	var cwd string
 	var err error
@@ -256,6 +259,12 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.GuestTools != nil {
 		// The node starts it with no built-in tools and only these of Persona's (node/assistant_guest.go).
 		params["guest"] = map[string]any{"tools": p.GuestTools}
+	}
+	if p.NewSessionID != "" {
+		params["new_session_id"] = p.NewSessionID // node/assistant_guest.go: under this id, once
+	}
+	if p.ClientMsgID != "" {
+		params["client_msg_id"] = p.ClientMsgID // its first message's (node/node.go assistant.send)
 	}
 	purpose := p.Purpose
 	if purpose == "" {
@@ -390,8 +399,9 @@ type mainHandoff struct {
 
 // mainBook holds the main conversation still while it changes, and the handoff with no database.
 type mainBook struct {
-	mu      sync.Mutex
-	handoff mainHandoff
+	mu        sync.Mutex
+	handoff   mainHandoff
+	execution mainExecutionBook
 }
 
 func (s *Service) loadHandoff(ctx context.Context) mainHandoff {
@@ -431,7 +441,7 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
-		v.Main = sess.SessionID
+		v.Main, v.MainMachineID = sess.SessionID, sess.MachineID
 		return nil
 	}); err != nil {
 		s.logf("assistant: save main: %v", err)
@@ -463,12 +473,12 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	if old == "" {
 		return "", false, nil
 	}
-	machine, c, found := s.findSession(ctx, old, cfg.MachineID)
+	machine, c, found := s.findSession(ctx, old, cfg.mainRouteMachine())
 	if found && (c.Status == proto.StatusWorking || (c.Compaction != nil && c.Compaction.State == proto.CompactionRunning)) {
 		return "", false, &rpc.Error{Code: "busy", Message: i18n.T(s.lang(ctx), "assistant-start.main_busy")}
 	}
 	if !found {
-		machine = cfg.MachineID
+		machine = cfg.mainRouteMachine()
 	}
 	now := time.Now().UTC()
 	handoff := mainHandoff{From: old, MachineID: machine, Until: now}
@@ -488,7 +498,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
-		v.Main = ""
+		v.Main, v.MainMachineID = "", ""
 		v.Former = slices.DeleteFunc(v.Former, func(f FormerMain) bool { return f.SessionID == old })
 		v.Former = append([]FormerMain{{MachineID: machine, SessionID: old, Until: now}}, v.Former...)
 		if len(v.Former) > maxFormerMains {
@@ -748,6 +758,9 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		params = map[string]any{}
 	}
 	params["is_main"] = false
+	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
+		return nil, err // an ended room: 409 meeting_ended (meeting_room.go)
+	}
 	if s.isGuest(ctx, p.MachineID, p.SessionID) {
 		// A guest conversation keeps what it started on: no launcher, model, runtime or mode picked for a message
 		// (the node refuses a change too, node/assistant_guest.go).
@@ -757,7 +770,7 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		return params, nil
 	}
 	cfg := s.settings(ctx)
-	main := cfg.Main != "" && cfg.Main == p.SessionID && cfg.MachineID == p.MachineID
+	main := cfg.Main != "" && cfg.Main == p.SessionID && cfg.mainRouteMachine() == p.MachineID
 	if !main {
 		if _, known := s.session(ctx, p.MachineID, p.SessionID); !known {
 			return params, nil
@@ -789,11 +802,11 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 // ids typed for that launcher before), so a model the gateway dropped does not fail every later turn.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any) error {
 	cfg := s.settings(ctx)
-	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine
+	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
-	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine || s.isTaskConversation(ctx, machine, sid)
+	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
 		m = strings.TrimSpace(m)

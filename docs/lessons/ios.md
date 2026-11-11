@@ -2,6 +2,16 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## An environment font design replaces every run's font (#2984)
+
+`.fontDesign(_:)` in the environment, even `.default`, replaces the font of every run in a `Text`'s attributed string
+with the system font of that design: `.monospaced()`, `Font.system(design:)` and `Font.custom("Menlo", …)` alike
+(measured with `ImageRenderer`). RootView sets the style's design, so MarkdownUI's monospaced variant and a named face
+both came out in the body font. Only `.fontDesign(nil)` leaves runs their own fonts: clear it where a view draws
+runs that need their own face, and give the other runs the design as their family (`RunFonts` in
+`Views/Chat/MessageViews.swift`). SwiftUI has no public environment value for the design (`@Environment(\.fontDesign)`
+does not compile): read it where it is set from (`StyleSpec.current.fontDesign`).
+
 ## A meeting-recording sheet: three traps from #4240 (2026-11-11)
 
 - A type nested in a `nonisolated` type or extension is not `nonisolated` itself; used from a test or a background queue it crashes with `dispatch_assert_queue`. Write `nonisolated` on each nested enum and struct.
@@ -527,6 +537,12 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 ## `Layout` and components
 
+- `.clipped()` limits only what is drawn, not where taps land (#3702, #3689): a `resizable().scaledToFill()` thumbnail in a
+  square frame still takes taps over its whole picture, and in a grid the cell to the right or below is drawn over its neighbour, so a wide or
+  tall picture next door took taps meant for the cell under the finger (the + panel picked the photo beside the one tapped). Give the cell
+  `.contentShape(.rect)` on its square (`AttachPhotoCell`). Squares alone never show it: test with wide screenshots, panoramas and tall
+  phone screenshots, all over each cell, not only its middle (`AttachGridTests`, `AttachGridTapTests`). The simulator has no camera, so
+  its grid starts without the camera cell; on a phone the two-by-two beside it is built from the same stacks and overlaps the same way.
 - Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
 - A `GeometryReader` that ignores the safe area on an edge reports no inset of its own there (`safeAreaInsets.trailing` was 0 on iPhone Duo's outer display, where the system's bars take the right-hand column): a rail meant for that column came out 59 pt wide against the screen edge, half off it. Measure the column as a reader inside the safe area less one that ignores it (`ShellSideRail`, 2026-11-07).
 - Every page on the shell's strip draws its own bar, so each one has to switch to `ShellSideRail` on `\.shellRailEdge`; the moving bar only stands in while the strip slides. The optional Messages page was missed and put its bar back across the top whenever it was in front (#2318); `ShellSideRailTests` checks the pages' rails on an iPhone Duo.
@@ -1744,3 +1760,18 @@ When the segment writer opens a new file, record the tap callback's host time an
 ### Watch holds unconfirmed rolling segments; bookmarked ones longer
 
 The watch only prunes by age. Segments the phone has not confirmed stay up to `undeliveredHours`; bookmarked ones stay `keptDays` so the phone can still mark them kept.
+
+## Simulator arguments and screenshot settling (#1872)
+
+- On Xcode 27.2, a direct `simctl launch` can drop leading DEBUG arguments before they reach `UserDefaults`; put `--` before them. Verify the App actually adopted the mock pairings—an old real-hub cache on screen is a launch-environment failure, not the target RED. UI launch helpers can carry the same separator without changing the assertions.
+- SpringBoard's icon-change alert can remain visible in a screenshot while it fades after a tap. Dismiss it and wait for nonexistence before capturing, then read the image; an accessibility assertion passing does not prove the screenshot was unobstructed. Offscreen SwiftUI rows likewise need bounded scrolling before their presence or absence is meaningful.
+
+## Presenting from a popover's row, and identifiers that cover (2026-11-10, assistant switcher)
+
+- A popover row that opens an alert, a sheet or another page has to wait for the popover to be gone: UIKit refuses a
+  presentation while the popover is still leaving. Keep what was asked for in state, close the popover, and present it from
+  the popover content's `onDisappear` (`AssistantSwitcherHeader.listGone`), not after a guessed delay. A tap outside leaves
+  the state empty and presents nothing.
+- An `accessibilityIdentifier` on a container covers the identifiers of the buttons laid out directly in it (the drawer's
+  `assistant-sidebar` over its header, a popover's list over its actions); a scroll view or list in between keeps its rows'.
+  Put a container's identifier on the part that holds rows, and let UI tests also accept the covering one.

@@ -305,6 +305,10 @@ node's shell check. Shell and managed launchers keep their own execution context
 
 Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
 
+Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
+empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
+Each prompt clears its live text on completion, including when another prompt is queued.
+
 ### Shared runtime behavior
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
