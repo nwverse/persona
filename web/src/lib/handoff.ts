@@ -59,10 +59,11 @@ export function chatPlaceOf(sc: HTMLElement): ChatPlace {
   return { end: false, line: at?.id, offset: at?.r ? at.r.top - top : 0 };
 }
 
-/** Where a task opens: its most pressing Agent's page, or the to-do's own page while no Agent is on it. */
+/** Where a task opens: its most pressing Agent's page, or the to-do's own page while no Agent is on it (one that did
+ *  not start has no page to show). */
 export function taskRoute(id: string, s: State = getState()): Route {
   const todo = s.todos.find((x) => x.id === id);
-  const lead = todo ? mostUrgentAgent(todo, taskSessionLookup(s))?.agent : undefined;
+  const lead = todo ? mostUrgentAgent({ ...todo, agents: todo.agents?.filter((a) => !a.start_error) }, taskSessionLookup(s))?.agent : undefined;
   return lead ? { name: "session", mid: lead.machine_id, sid: lead.session_id } : { name: "todos", id };
 }
 

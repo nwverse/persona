@@ -82,6 +82,7 @@ describe("where a task opens", () => {
     expect(taskRoute("t1", with_(todo([{ machine_id: "m1", session_id: "s1", linked_at: at }])))).toEqual({ name: "session", mid: "m1", sid: "s1" });
     expect(taskRoute("t1", with_(todo([{ machine_id: "m1", session_id: "s1", linked_at: at, released_at: at }])))).toEqual({ name: "todos", id: "t1" });
     expect(taskRoute("t1", with_(todo([])))).toEqual({ name: "todos", id: "t1" });
+    expect(taskRoute("t1", with_(todo([{ machine_id: "m1", session_id: "s1", linked_at: at, start_error: "launcher missing" }])))).toEqual({ name: "todos", id: "t1" });
     expect(taskRoute("unknown")).toEqual({ name: "todos", id: "unknown" });
   });
 
