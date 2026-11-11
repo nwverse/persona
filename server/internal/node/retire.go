@@ -206,18 +206,8 @@ func (n *Node) resumeTabName(id string) string {
 	return n.meta(p, fi).title
 }
 
-// resumeOther resumes a Codex or a compatible CLI that is not running, with text as its next message: in a new tab of the
-// engine, in the directory and with the launcher (and model) it was started with, the message going in as the
-// resume's prompt (nothing is typed). One Persona did not start (its launcher unknown) is refused as before.
-func (n *Node) resumeOther(ctx context.Context, id, text string, images []proto.Image) error {
-	st, mine := n.state.get(id)
-	if _, runtime := engineRuntimes[n.defaultKind()]; runtime || !mine || st.Launcher == "" || st.Cwd == "" {
-		return fmt.Errorf("这个 Agent 已经退出：Codex / TRAEX 的会话要在电脑上重新打开")
-	}
-	return n.resumeOtherWith(ctx, id, st, text, images)
-}
-
-// resumeOtherWith is resumeOther with the launcher, directory and model to resume with (st): the session's own, or
+// resumeOtherWith resumes a Codex or a compatible CLI that is not running, with text as its first message, the user's
+// Resume (#4754): with the launcher, directory and model to resume with (st): the session's own, or
 // what a Codex thread started outside Persona is resumed with (codex_resume.go).
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
 	if r := n.notRunningRefusal(ctx, id); r != nil {
