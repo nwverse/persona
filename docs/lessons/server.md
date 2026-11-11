@@ -1,5 +1,16 @@
 # Lessons: hub / node and networking
 
+## Sharing peer budgets need an authenticated local ingress (#4391)
+
+Keeping X-Forwarded-For untrusted is necessary, but a loopback reverse proxy then
+collapses every anonymous reader into one upstream IP budget. One reader can crowd
+out unrelated readers even with different capability tokens. Bind the actual TCP
+peer and exact anonymous GET to a short-lived sharing-only MAC; accept it only on
+literal loopback and keep the original capability/ownership checks. Verify the
+upstream's acknowledgement before opening, strip the proof/acknowledgement from
+public responses, and fail closed when authentication is lost. Never use this key
+or header as general proxy trust, a login credential or a management authorization.
+
 ## Public sharing ingress needs a fixed authority (#4358)
 
 An independent browser port does not constrain an HTTP client's Host header. A

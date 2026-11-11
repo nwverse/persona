@@ -400,6 +400,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	go n.watchPorts(ctx)
 	go n.watchShellTabs(ctx)
 	n.startTodoTokensReconciler(ctx)
+	defer n.starts.close()
 	return n.peer.Serve(ctx, r)
 }
 
@@ -567,6 +568,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Model            string        `json:"model"`
 		ModelFingerprint string        `json:"model_fingerprint"`
 		Runtime          string        `json:"runtime"`
+		ConfigDir        string        `json:"config_dir"`
 		Prompt           string        `json:"prompt"`
 		ResumeSessionID  string        `json:"resume_session_id"`
 		Host             string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
@@ -992,7 +994,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			sctx = withGuest(ctx, p.Guest.Tools)
 		}
-		id, err := n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, Interject: p.Interject})
+		id, err := n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
 		return map[string]any{"session_id": id}, err
 	case "assistant.guest_prepare": // a guest conversation's directory (assistant_guest.go)
 		return n.assistantGuestPrepare(params)
@@ -1003,7 +1005,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.handoff": // what a new main conversation is told about the old one
 		return n.assistantHandoff(p.SessionID)
 	case "assistant.warm":
-		return ok(n.assistantWarm(p.Cwd, p.Launcher, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime)}))
+		return ok(n.assistantWarm(p.Cwd, p.Launcher, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), ConfigDir: p.ConfigDir}))
 	case "assistant.memory":
 		var a memoryOp
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -1020,7 +1022,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(ctx, p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, Interject: p.Interject})
+					_, err := n.assistantSend(ctx, p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
 					return err
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
@@ -1157,8 +1159,29 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		return n.gitOp(ctx, dir, p.Op)
 	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
+		var in struct {
+			Composer bool `json:"composer"`
+		}
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, err
+		}
+		if in.Composer {
+			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID)
+		}
 		return n.worktreePrepare(ctx, p.Kind, p.WorkspaceID, p.Cwd)
 	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
+		var in struct {
+			Composer bool `json:"composer"`
+		}
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, err
+		}
+		if in.Composer {
+			return n.worktreeCompose(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+		}
+		if err := rejectComposerFields(ctx, params); err != nil {
+			return nil, err
+		}
 		if p.AutoName {
 			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
 				return nil, errors.New("Choose automatic naming or an explicit branch and path")
@@ -1166,6 +1189,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return n.worktreeCreateAutomatic(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
 		}
 		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
+	case "worktree.source":
+		return n.worktreeSources(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+	case "worktree.preset":
+		return n.worktreeSavePreset(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+	case "worktree.delete":
+		return n.worktreeDelete(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
 	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
 		var a struct {
 			NameHint     string `json:"name_hint"`

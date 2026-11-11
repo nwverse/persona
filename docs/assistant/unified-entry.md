@@ -41,6 +41,67 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - Read-only tasks always retain `permission: plan`, including after card edits and on retries. Health-space plans still wait for Start. Runtime support and the current card labels are described in [To-dos](todos.md#read-only-planned-tasks).
 - `task_plan` **does not block**: once the plan is handed to you, the turn ends immediately and you can continue talking about something else. When you tap Start, hub starts the Agents directly; Persona sees the result in the next message's live snapshot.
 
+### Task workspace policy (#3659)
+
+`task_plan.tasks[].workspace` is a task-level choice, separate from `cwd` (the source directory before dispatch):
+
+| Request | Meaning |
+| --- | --- |
+| `"new"` | Create a checkout through the machine's existing herdr/Orca workspace engine |
+| `{"new":{"branch":"task/fix-login"}}` | Create through that engine, with an explicit branch |
+| `{"existing":"/code/app"}` | Reuse an existing directory (`~/…` is expanded on the selected machine) |
+| `{"existing":"ws_…"}` | Select a workspace from that machine's catalog; node-local and board-qualified IDs are accepted |
+| `"none"` | Create no workspace; run at `cwd` (the default for read-only/non-Git tasks) |
+
+Settings › Assistant › Dispatch tasks offers **When dispatching tasks, prefer**:
+`task_workspace_preference: "prefer-existing"` (default) reuses an available source directory;
+`"prefer-new"` gives each writable Git task a new checkout. A read-only task defaults to `none`.
+A writable Git task whose directory is occupied defaults to `new`, regardless of preference.
+An explicit `workspace` overrides inference. When a caller means a particular branch/PR/checkout, it should name that checkout with `existing`.
+Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
+The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
+
+The open web plan card has New / Use existing / Not needed, a machine-local workspace picker, manual existing path/ID,
+an optional new branch, and the resolved absolute path. “Edit” also supports changing machine/cwd and recomputes the preview.
+`POST /api/v1/task-plans/{id}/workspace-preview` applies editable fields to the saved plan without saving or creating anything.
+Start sends those choices through the existing `/start` request; clients cannot supply trusted resolution metadata.
+Task details and the started plan show the chosen policy and actual path, read-only.
+
+For a new checkout, the default branch is `task/<todo id>`: the plan reserves that ID for a stable preview but does not create
+the todo or workspace until Start. The path comes only from the machine engine:
+`WorktreePrepare.Path` plus `herdr.WorktreeDirName(branch)`, exactly as `agent_start` does.
+There is no new workspace-root/template setting or arbitrary new-path override. Dispatch rechecks on the final machine,
+calls `newWorktree`, uses the engine's returned path/host workspace ID, and stores the actual `cwd` in the plan and the unchanged
+`todo_agents.cwd` column. A retry uses the created checkout rather than creating another one; a created checkout stays on its machine.
+Creation/lookup failures prevent Agent launch and appear on the task as failed dispatch with the underlying reason.
+
+An existing workspace on the same machine and canonical path cannot be reused while another unfinished task holds it.
+The refusal names that task's ID/title and suggests waiting or choosing New (v1 has no queue).
+Admission also covers concurrent starts before the agent link exists. Ended/released tasks do not retain a claim.
+Read-only tasks using `none` do not claim a workspace.
+
+The saved `PlanTask.workspace_resolved` is a hub-owned object, separate from the policy, so future repository entries can be
+added without overloading `cwd`. Examples below omit the other task fields and unrelated response fields; the paths are illustrative
+engine answers, not a required directory layout.
+
+`task_plan` itself still returns a textual plan/dispatch acknowledgement. The response fragments are saved tasks read from
+`GET /api/v1/task-plans/{id}` or the conversation feed **after dispatch completes**, not confirmation from the initial queued reply:
+
+```json
+{"workspace":"new","cwd":"/code/app"}
+{"workspace":"new","cwd":"/wt/app/task-todo_example","workspace_resolved":{"machine":"box","path":"/wt/app/task-todo_example","branch":"task/todo_example","workspace_id":"host-space","created":true}}
+
+{"workspace":{"existing":"/code/app"},"cwd":"/code/app"}
+{"workspace":{"existing":"/code/app"},"cwd":"/code/app","workspace_resolved":{"machine":"box","path":"/code/app"}}
+
+{"workspace":"none","cwd":"/code/app","readonly":true}
+{"workspace":"none","cwd":"/code/app","workspace_resolved":{"machine":"box","path":"/code/app"}}
+```
+
+The engine registers new workspaces in the existing App/catalog/board view, with its existing project/branch/kind metadata.
+This v1 does not add multi-repository entries, change `agent_start`, or change acceptance semantics.
+After acceptance, workspaces are **silently retained**: no cleanup, recycling, or migration.
+
 ### Needs you and In progress: each thing once (#3387)
 
 Above the Assistant's composer there are two entries. **Needs you** lists everything the user has to act on; **In
@@ -323,7 +384,7 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
 - **No automatic closure**: when hub judges a supervised to-do complete (the "Automatic completion" check in `docs/assistant/todos.md`), it does not write `done_at`; it marks it pending review. If judged incomplete (`not_done` / `waiting` / `needs_user` / `unsure`), tell the supervisor "Stopped but not finished." Manual completion is unchanged.
 - **A stop that waits on the owner is not accepted** (#1277): when the judge says a stretch of work stopped on a decision only the owner can make (`needs_user`, such as drafts waiting for the owner to pick one), the ledger keeps it as `waits` (`{work, at, reason}`, persisted with the ledger, `todo_supervision.waits`). While it holds, `task_review accepted` is refused (`user_check` included), because closing the task would lose the decision. The refusal tells the supervisor to review it `needs_user` as a decision the owner can answer, to send the owner's answer to the Agent if they already gave it, or to cancel it. The Agent working again, or any review written, clears it. The live snapshot labels such a task "停下等用户拍板，别直接验收" ("stopped on the owner's decision, don't accept it"). Before this, a supervisor once accepted four tasks whose outcomes were each a decision still waiting on the owner, and the decisions were lost with them.
   Completion is about the assigned task and its `done_when`, not whichever side question the Agent answered last. A known peer, cross-conversation or inspection turn cannot enter pending review on its answer alone. Only a fresh, successful `report_to_supervisor` done call with evidence tied to this task can establish the completion candidate from such a turn; the supervisor must still verify it. Unknown-source fallbacks never imply that a new question replaced a finished task. Ordinary delivery turns continue through the existing judge without requiring that tool.
-  Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior.
+  Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior. A text of only `/exit` / `/quit` (no attachments) from such a conversation, as `agent_send` or as `agent_interrupt`'s `then`, is refused before anything is stopped, sent or confirmed on the phone, and again after the phone answers should the agent have become such a task meanwhile (#3537): the node closes an agent only for the bare command, and the agent a task runs on is not another conversation's to close (the user can close it in the app, or with `agent_archive` and `close` once it is idle).
 - **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
   `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below).
   The same signal for the same task is reported only once within the same state segment. A second guard suppresses an unchanged summary for the same task, Agent and signal kind for 30 minutes, regardless of new turn timestamps or elapsed-minute counters. Its hashed fingerprints and timestamps live in Postgres settings (`assistant.supervision_dedup`), survive manager restarts, and are reserved before dispatch; failed dispatch and queue admission release the reservation. An unreadable or unwritable reservation is retried rather than treated as empty history. Changed evidence, questions, summary, task, Agent or status can wake again. Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, links, and handling instructions).

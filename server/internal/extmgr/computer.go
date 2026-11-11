@@ -369,7 +369,7 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	}
 	apps, whole := callApps(name, a.App, a.Script, a.Steps)
 	if name == "computer_state" {
-		if _, ok := h.approveApps(ctx, m, h.assistantAsker(sessionID, m.cfg.ID), name, apps, whole, args); !ok {
+		if _, ok := h.approveApps(ctx, m, h.assistantAsker(sessionID, m.cfg.ID), name, apps, whole, args, nil); !ok {
 			return declined("look")
 		}
 		shot := a.Screenshot == nil || *a.Screenshot
@@ -411,17 +411,70 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	default:
 		return proto.TextResult("give script (run_script) or steps (run_steps)", true)
 	}
+	// Never System Settings or a permission prompt (#4336, computer_protected.go), before any card.
+	if a.Script != "" && !whole {
+		h.logf("[%s] computer_run refused: a script whose apps cannot all be read", m.cfg.ID)
+		return proto.TextResult("Refused: this script names the apps it operates by expression, or names none, so they "+
+			"cannot be checked. Name each one with a literal cua.getApp(\"…\") or cua.launch(\"…\"), or use steps.", true)
+	}
+	var known []knownApp
+	if !lcu {
+		known = h.knownApps(ctx, m)
+	}
+	for _, x := range h.appsOn(ctx, m, apps, known) {
+		if protectedApp(x) {
+			h.logf("[%s] computer_run refused: protected app %s", m.cfg.ID, strings.TrimPrefix(x.BundleID, "name:"))
+			return proto.TextResult(refusedText(m.cfg.Name, "it would operate "+x.Name), true)
+		}
+	}
+	// LCU asks before touching any app, and those questions are refused for these (computer_lcu.go).
+	onScreen := func() *proto.ToolResult {
+		found, ok := h.protectedOnScreen(ctx, m, &known)
+		switch {
+		case !ok:
+			h.logf("[%s] computer_run refused: the windows could not be read", m.cfg.ID)
+			res := proto.TextResult("Nothing was done: the Mac's windows could not be read to check for System Settings or a "+
+				"permission prompt. Try again shortly.", true)
+			return &res
+		case len(found) > 0:
+			h.logf("[%s] computer_run refused: protected app on screen", m.cfg.ID)
+			res := proto.TextResult(refusedText(m.cfg.Name, strings.Join(found, ", ")+" is open on its screen"), true)
+			return &res
+		}
+		return nil
+	}
+	if !lcu {
+		if res := onScreen(); res != nil {
+			return *res
+		}
+	}
 	what := computerSummary(h.userLang(), m.cfg.Name, tool, a.Script, a.Steps)
-	asked, ok := h.approveApps(ctx, m, h.assistantAsker(sessionID, m.cfg.ID), name, apps, whole, args)
-	if !ok || (h.cua().Confirm && !asked && !h.approve(ctx, h.assistantAsker(sessionID, m.cfg.ID), name, what, args)) {
+	asked, ok := h.approveApps(ctx, m, h.assistantAsker(sessionID, m.cfg.ID), name, apps, whole, args, known)
+	refused := !ok || (h.cua().Confirm && !asked && !h.approve(ctx, h.assistantAsker(sessionID, m.cfg.ID), name, what, args))
+	if refused {
 		return declined(computerLogWhat(tool, a.Script, a.Steps))
 	}
+	if !lcu && (asked || h.cua().Confirm) { // a card may have waited minutes: look again
+		if res := onScreen(); res != nil {
+			return *res
+		}
+	}
 	start := time.Now()
-	res, err := h.computerCall(ctx, m, session, sessionID, tool, in)
+	var res *proto.ComputerResult
+	var stopped string
+	if !lcu && tool == "run_steps" && unnamedSteps(a.App, a.Steps) {
+		res, stopped, err = h.runStepsOneByOne(ctx, m, session, sessionID, a.Steps, a.Observe, &known)
+	} else {
+		res, err = h.computerCall(ctx, m, session, sessionID, tool, in)
+	}
 	h.logf("[%s] computer_run for %s: %s, %v, %s", m.cfg.ID, convID(sessionID), computerLogWhat(tool, a.Script, a.Steps),
-		time.Since(start).Round(time.Millisecond), map[bool]string{true: "failed", false: "ok"}[err != nil])
+		time.Since(start).Round(time.Millisecond), map[bool]string{true: "failed", false: "ok"}[err != nil || stopped != ""])
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
+	}
+	if stopped != "" {
+		h.logf("[%s] computer_run refused partway: protected app on screen", m.cfg.ID)
+		return proto.TextResult(refusedText(m.cfg.Name, stopped), true)
 	}
 	return computerResult(res)
 }

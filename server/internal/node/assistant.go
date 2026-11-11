@@ -285,6 +285,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if execution.ConfigDir != "" {
+			return "", errors.New("config_dir is only supported for Claude assistant conversations")
+		}
 		if id != "" && (onRuntime == nil || !runs) && !(runs && launcher == "") { // another kind of agent than its own
 			return "", errors.New("换到另一种 Agent 需要新建对话")
 		}
@@ -333,6 +336,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if guest != nil && (agent != "claude" || execution.Runtime != "") {
 		return "", errGuestAgent
+	}
+	if agent == "claude" {
+		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, execution.Runtime, executionOption(options).ConfigDir, resume)
+		if err != nil {
+			return "", err
+		}
+	} else if executionOption(options).ConfigDir != "" {
+		return "", errors.New("config_dir is only supported for Claude assistant conversations")
 	}
 	var p *assistantProc
 	if id == "" && guest != nil {
@@ -407,7 +418,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain || st.ConfigDir != execution.ConfigDir {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -415,6 +426,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Launcher, st.Cwd, st.StartedAt = launcher, cwd, started
 		st.Model, st.ModelFingerprint, st.ModelEffort, st.Runtime = execution.Model, execution.Fingerprint, execution.Effort, execution.Runtime
 		st.IsMain = execution.IsMain
+		st.ConfigDir = execution.ConfigDir
 		n.state.put(id, st)
 	}
 
