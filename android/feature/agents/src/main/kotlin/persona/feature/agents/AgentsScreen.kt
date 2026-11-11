@@ -783,8 +783,8 @@ internal fun SlotRow(
         launcher = launcher, branch = branch, source = origin,
         // Which agent runs there and in which client (#6390): its mark before the state mark.
         agentMark = session.agentMark,
-        // Its running Workflows (#2935): "Background workflow "parity-audit" · Verify 2/2 · 169/185+ · 14 min", counting as it changes (#3435).
-        note = WorkflowSummary.line(session, now)?.let { RowNote(it.text(), WorkflowIcon) },
+        // Its running Workflows (#2935) stay structured until the row lays them out beside critical facts (#3435).
+        note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
     if (menu) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)

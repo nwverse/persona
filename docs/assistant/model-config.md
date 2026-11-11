@@ -28,6 +28,46 @@ The home page has five category rows and a separate **Lark /agent** row, showing
 
 The original `/launchers` API remains. New connections have `kind` of `launcher` or `api`; omitted on legacy entries, it still means launcher. Messages-protocol API connections (`api` empty or `messages`) can also be selected for the main chat and Agents: node starts claude with their address and key (#2455; see `docs/integrations/claude-integration.md` for environment variables). Responses and Chat Completions connections support only direct calls; `finishModel` refuses to treat them as launchers. Chat Completions can be configured manually, while extension provider declarations accept only Messages and Responses. Legacy API connections (`ai`, `inbox.*_ai`, `kb.ai`, in the manager's `manager.json` since 2026-11-06, in `hub.json` before) appear as compatibility sources; authentication-file paths and values are not returned to clients.
 
+## Execution form
+
+`ModelPurpose.launch` is a read-only value derived from the purpose's `kind` and ID or parent, not from its provider.
+It is returned by the model-configuration list and detail endpoints, never stored in a binding, and rejected in PUT/PATCH.
+
+| Purpose | `kind` | `launch` | Execution |
+| --- | --- | --- | --- |
+| `assistant`, `schedule`, `task.*`, `inbox.agent`, `lark.agent` | `launcher` | `headless` | Background process, without a terminal panel |
+| `agent.new` | `launcher` | `engine` | Interactive Agent in the target computer's terminal host |
+| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant |
+| `plugin.*` | `plugin` | omitted | The plugin's own model service |
+
+Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
+`applyModel` overwrites any caller-supplied `launch` in node-call params. `startOn` requires `headless` before
+`assistant.send`; a new `AgentStartParams` requires `engine` before `session.start`. Existing launcher, model, effort,
+runtime, permission and resume choices are unchanged.
+
+The web page groups purposes by `(kind, launch)`: **Persona chats · Background process**, **Agents · Interactive**,
+**Background processing · Direct API**, then **Extensions** (only when installed; extensions' own API purposes stay here).
+These groups describe execution, not inheritance levels. Lark /agent sits alongside the main chat in the background-process
+group, with **Inherits the Agents model · Runs as a background process** when following Agents, or **Separately configured**
+when overridden. Its reset action still says **Follow Agents**. Only **New agent** sits in the interactive group.
+Scheduled tasks follow the main chat's category; this presentation does not add independent task settings.
+
+Each row's neutral execution chip has a fixed form and a backend that follows the effective provider and runtime:
+`Background process · claude -p`, `Background process · codex app-server`, `Background process · Agent SDK`,
+`Interactive · herdr · claude`, or `Direct API · Messages` / `Responses` / `Chat`.
+The terminal host is a computer setting, not a provider property: only a purpose bound to a known computer shows its
+configured default host; `agent.new` says **By machine**. The editor previews backend changes before saving.
+
+The trailing **?** expands an inline explanation on desktop hover, keyboard focus or click (including touch).
+Click pins or closes it; Escape or a click outside dismisses it. This stays inside the settings card so long explanations
+remain readable on narrow screens and at larger text sizes, without nesting a help button inside the edit button.
+The explanation covers environment, configuration directories, compatible providers, typical uses and the current backend:
+headless processes use the assistant's working directory and the launcher's environment/configuration;
+interactive Agents use the target computer's terminal host environment and launcher configuration;
+direct API purposes use provider connections/credentials and no terminal or Claude/Codex profile;
+plugins use their own environment, configuration and credentials.
+**Unverified** means launcher execution on the target computer has not been confirmed, not that a paid model request succeeded or failed.
+
 ## Editing and inheritance
 
 Each category shows both “In Effect” and “Model Settings”:
@@ -41,7 +81,7 @@ Each category shows both “In Effect” and “Model Settings”:
 
 For launcher purposes without a bound machine (such as Agents), saving a specific model uses the model picker's online-machine selection among the provider's reported machines. This also applies to effort-only edits with an existing model and to model-profile switches. If every candidate is offline, the binding can still be saved without a live model check; it remains unverified. A purpose bound to a known machine still validates there, and an online node's model-validation error still rejects the save. These checks do not make a paid model request.
 
-For API purposes (triage, assessment, drafting, translation, knowledge processing, titles), when there is no override or legacy `ai` configuration in the manager's `manager.json`, automatically choose a connection directly callable from the hub: first the first `kind: api` entry, then the first Persona-managed launcher with a key and Messages protocol (excluding hidden entries or those missing an address / default model / key). Use its default model. “Inherited From” shows “Automatic selection”; no override is written, and later selections here still take priority. If none exists, status and errors explain where to configure one (#388, 2026-11-02: with only “Claude Code default” configured, reply drafting immediately returned no model configured).
+For API purposes (triage, assessment, drafting, translation, knowledge processing, titles), when there is no override or legacy `ai` configuration in the manager's `manager.json`, automatically choose a connection directly callable from the hub: first the first `kind: api` entry, then the first Persona-managed launcher with a key and Messages protocol (excluding hidden entries or those missing an address / default model / key). Use its default model. “Inherited From” shows “Automatic selection”; no override is written, and later selections here still take priority. Automatic selection by these built-in categories alone does not block provider deletion when another eligible connection can take over: the next eligible connection takes over, while an explicit provider choice (or deleting the last provider that leaves no eligible connection) still returns 409. If none exists, status and errors explain where to configure one (#388, 2026-11-02: with only “Claude Code default” configured, reply drafting immediately returned no model configured).
 
 Launchers such as “Claude Code default” are only CLIs on computers, without an API address or key, so they cannot be called directly and are not offered for API purposes.
 
@@ -195,7 +235,8 @@ Direct-API purposes (knowledge processing, Inbox triage / assessment / drafting,
 | HTTP 429, body mentions quota / usage limit / exhausted, etc. (relay `account_quota_exhausted`) | Quota exhausted | Pause for 30 minutes; honor `Retry-After` if present |
 | HTTP 429 / 503 mentioning concurrency (`account_concurrency_full`), or other 429, 503, 529 | Concurrency full | Exponential backoff (starting at 5 seconds, doubling on each consecutive occurrence, up to 5 minutes); use `Retry-After` if longer, and add a concurrency cap for this connection |
 
-- **Limits reported inside a Responses stream**: A `response.failed` or `error` event after the 200 whose code is `rate_limit_exceeded`, `slow_down` or `server_is_overloaded` counts as concurrency full, and one whose code is `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded` or `project_spend_limit_exceeded` as quota exhausted, with the wait in a "try again in ..." of its message (`1.5s`, `250ms`, `20 seconds`, `6m0s`, `1m30s`) used like `Retry-After`; any other in-stream failure is an ordinary error.
+- **Every call streams**: Messages, Responses and Chat Completions requests all ask for a stream (`"stream": true`), so a gateway's cap on a non-streamed request's total time (often 120 seconds) does not fail an answer a slow model needs longer for (#4245). A Messages server that ignores the flag and answers one JSON message is read as before. A stream that ends before its end event (Messages: `message_stop`, or at least a stop reason; Responses: its terminal event; Chat Completions: the finish reason) was cut: it is a failed connection, retried like one, not a short reply.
+- **Limits reported inside a stream**: A Messages `error` event whose type is `overloaded_error` or `rate_limit_error` counts as concurrency full (the HTTP 529 / 429 it stands for; a `rate_limit_error` whose message speaks of quota or credit as quota exhausted). A Responses `response.failed` or `error` event after the 200 whose code is `rate_limit_exceeded`, `slow_down` or `server_is_overloaded` counts as concurrency full, and one whose code is `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded` or `project_spend_limit_exceeded` as quota exhausted, with the wait in a "try again in ..." of its message (`1.5s`, `250ms`, `20 seconds`, `6m0s`, `1m30s`) used like `Retry-After`; any other in-stream failure is an ordinary error.
 - **No requests during a pause**: Calls immediately receive `ai.PausedError` (`ai.IsPaused`), with the same text displayed in the app: “Quota exhausted; retry in 23 minutes.” Callers treat it as deferred: knowledge-processing loops stop immediately (sessions remain pending compaction, projects pending rewrite, entries untagged); Inbox triage does not mark entries as triaged (new entries go into rule-based groups first and are triaged again after recovery); assessment and translation wait for the next round. None logs it.
 - **Only the gate logs**: One line on entry (address, upstream code and message, pause end time), one on exit (pause duration, number of deferred requests).
 - **Release one request after the pause**: The first request probes recovery; others remain deferred. Only a successful probe opens the gate; another rejection starts a new pause (without another log). Matching responses from requests already in flight before the pause do not count and do not compound the backoff.
