@@ -100,8 +100,17 @@ final class MeetingConversationUITests: XCTestCase {
         let field = element(app, "meeting-ask-field")
         let persona = header.label, roomPlaceholder = field.placeholderValue
         let justMe = element(app, "meeting-just-me")
-        XCTAssertTrue(justMe.waitForExistence(timeout: 10), app.debugDescription)
-        flip(justMe)
+        let more = app.buttons["recording-more"].firstMatch
+        if justMe.waitForExistence(timeout: 10) {
+            flip(justMe)
+        } else {
+            // At accessibility sizes the switch is an item of the bar's More menu (DESIGN_SYSTEM "Meeting page (#3862)").
+            XCTAssertTrue(more.waitForExistence(timeout: 5), app.debugDescription)
+            more.tap()
+            let item = element(app, "meeting-just-me")
+            XCTAssertTrue(item.waitForExistence(timeout: 5), app.debugDescription)
+            item.tap()
+        }
         XCTAssertTrue(waitFor(5) { header.label != persona || field.placeholderValue != roomPlaceholder },
                       "the page still asks the room: \(header.label) / \(field.placeholderValue ?? "")")
         let asksBefore = try asks(hub, live).count
