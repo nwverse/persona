@@ -1,10 +1,12 @@
+import ImageIO
 import SwiftUI
 
 // UI version 6's pictures (docs/extensions/extensions.md "UI version 6", "Pictures through the hub", #827): an `image`
 // component, and a picture in a tile or a row's thumbnail. An https `url` loads without any of the app's credentials; a
 // `path` the hub signed for this page's extension loads through the page with the device's (`picture(_:pixels:)`), and
 // when it does not load (its token may have run out) the page is drawn again, signed anew, at most once a minute.
-// While it loads the plain fill shows; when it cannot, its alt text over a broken-picture mark.
+// While it loads the plain fill shows; when it cannot, its alt text over a broken-picture mark. Decoded off the main
+// thread at about the size drawn and kept (docs/apple/performance.md, P8).
 
 /// A picture from an extension's `ImageSource`.
 struct ExtensionPicture: View {
@@ -43,6 +45,14 @@ struct ExtensionPicture: View {
     }
 
     private func load() async {
+        let pixels = max(1, Int((points * scale).rounded(.up)))
+        let key = "\(src.url ?? "")|\(src.path ?? "")|\(pixels)" as NSString
+        if let kept = Self.kept.object(forKey: key) {
+            image = Image(uiImage: kept.image)
+            failed = false
+            loaded?(kept.data)
+            return
+        }
         image = nil
         failed = false
         do {
@@ -50,19 +60,53 @@ struct ExtensionPicture: View {
             if let s = src.url, let url = ExtensionComponentRowLabel<EmptyView>.image(s) {
                 data = try await ExtensionRemoteImage.session.data(from: url).0
             } else if let path = src.path, let model {
-                data = try await model.picture(path, pixels: Int((points * scale).rounded(.up)))
+                data = try await model.picture(path, pixels: pixels)
             } else {
                 failed = true
                 return
             }
-            guard let img = UIImage(data: data) else { failed = true; return }
-            image = Image(uiImage: img)
+            // Twice the width drawn: a cropped or tall shape can need more than its width.
+            let decoded = await Task.detached(priority: .userInitiated) { Self.decode(data, maxPixel: CGFloat(pixels * 2)) }.value
+            guard !Task.isCancelled else { return }
+            guard let decoded else { failed = true; return }
+            Self.kept.setObject(decoded, forKey: key, cost: decoded.cost)
+            image = Image(uiImage: decoded.image)
             loaded?(data)
         } catch {
             guard !Task.isCancelled else { return }
             failed = true
             if src.path != nil { model?.pictureFailed() }
         }
+    }
+
+    /// A decoded picture with the bytes it came from (the full-screen viewer shows those).
+    nonisolated final class Decoded: Sendable {
+        let image: UIImage
+        let data: Data
+        /// Its pixels' bytes and the file's.
+        let cost: Int
+        init(image: UIImage, data: Data, cost: Int) { self.image = image; self.data = data; self.cost = cost }
+    }
+
+    nonisolated(unsafe) private static let kept: NSCache<NSString, Decoded> = { // NSCache is thread-safe
+        let c = NSCache<NSString, Decoded>()
+        c.totalCostLimit = 48 << 20
+        return c
+    }()
+
+    /// The picture downsampled to `maxPixel` on its longer side (ImageIO, never on the main thread); nil when the bytes
+    /// are not a picture.
+    nonisolated static func decode(_ data: Data, maxPixel: CGFloat) -> Decoded? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                     kCGImageSourceThumbnailMaxPixelSize: maxPixel, kCGImageSourceShouldCacheImmediately: true]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        #if os(iOS) || os(visionOS)
+        let image = UIImage(cgImage: cg)
+        #else
+        let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)) // AppKit's own init: callable off the main actor
+        #endif
+        return Decoded(image: image, data: data, cost: cg.width * cg.height * 4 + data.count)
     }
 }
 
