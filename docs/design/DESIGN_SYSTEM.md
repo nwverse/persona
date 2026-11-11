@@ -660,10 +660,20 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
 Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
-parent-chat message bubbles (#3378). Reuse the existing work summary and manually opened tool/report disclosures;
-keep each delivery separately inspectable, including its full text. Nonterminal `running` / `waiting` reports retain
-the existing progress presentation. Empty completion pointers update status without creating another report. The
+parent-chat message bubbles (#3378). Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
+
+**Task cards** (web, #5030; the owner asked that the subagent part of the chat follow cindy's `AgentTaskCard` exactly,
+which replaces the earlier grid, recent-steps list and side panel). A subagent call and a workflow call are each one
+full-width card where they were launched (`TaskCard`: a bordered `rounded-xl` surface, 12 px side padding): a 20 px
+round avatar, a small kind word ("Subagent"), the title on one line, the status word with its mark (Running, Completed,
+Failed, Stopped; only Failed is red), and a second line in the tertiary color: what ran it, a model chip (the model it
+actually ran on, short; never the requested one), tokens, tool uses, the time or "Running for …" each second. The head
+opens a subagent card in place (prompt, the latest result folded past four lines, last tool, output file), remembered
+per card; a workflow card's head opens the chat's Background dialog at its run. A subagent is never a conversation of
+its own (no panel, no page, no sidebar row); a running subagent card and a workflow card are never folded into the
+work summary, a finished subagent card is. Nested subagents are flat cards by start time. A card offers Stop only
+where the node can stop that task. iOS and Android still draw the earlier design (follow-up issue).
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool

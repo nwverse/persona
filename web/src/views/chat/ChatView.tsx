@@ -202,8 +202,8 @@ export interface PanelChrome {
   agents?: MenuItem[];
 }
 
-/** `readOnly`: a subagent's conversation (`<parent>@<agent>`) in the side panel (SubagentPanel): the transcript only,
- *  no header, no composer. */
+/** `readOnly`: the transcript only, no header, no composer. (Its one caller, a subagent's conversation in the side
+ *  panel, is gone since #5030: a subagent is a card in its parent's chat.) */
 export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, readOnly, topCenter, inPage, terminalAvailable, panel, banner, offline, mainCache, refreshError, onRefresh, headerActions }: {
   mid: string;
   sid: string;
