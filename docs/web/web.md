@@ -888,6 +888,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 ### Standing authorizations
 
 **Settings › Persona › Standing authorizations** lists the current assistant's registered grants next to its default task permissions.
+The component uses the existing lazy-page loader when Persona settings opens. The search index loads with Settings; its page-only namespaces, including this group's labels and help, load through the non-startup client catalog.
 Each grant shows its computer, repository/directory, actions, conditions, original user quote, grant time, source and whether the authorized actions can be undone.
 This last field describes the work, not whether the grant can be revoked: every grant has **Revoke…**.
 Known action and condition identifiers have localized labels; other values and user-authored conditions remain visible verbatim.
