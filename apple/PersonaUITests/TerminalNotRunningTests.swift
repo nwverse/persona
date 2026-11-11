@@ -2,12 +2,12 @@ import XCTest
 
 /// The terminal of a session that isn't running (a finished task's Agent whose tab the hub closed, #4328), over the page:
 /// it says so, offers Resume Session, and closes as in every other state — its Close, or a drag down on it. Before, the
-/// no-terminal state took the bar with it and nothing closed the cover. Needs scripts/mock/mock_hub.py, where 菜谱网站加搜索
+/// no-terminal state took the bar with it and nothing closed the cover. Needs scripts/mock/mock_hub.py, where 「菜谱网站加搜索」
 /// is offline (with MOCK_TERMINAL_STREAM=1 its stream ends "not running", as the hub's does; without, its screen reads
 /// offline):
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/TerminalNotRunningTests
 final class TerminalNotRunningTests: XCTestCase {
-    /// 菜谱网站加搜索 on the MacBook, offline in the mock.
+    /// 「菜谱网站加搜索」 on the MacBook, offline in the mock.
     private let recipe = "a1f3c2d4-0000-4000-8000-000000000007"
 
     override func setUp() { continueAfterFailure = false }
