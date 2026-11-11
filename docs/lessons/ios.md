@@ -1057,6 +1057,30 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
 - **Tests**: UI tests that drive the navigator hold first (`press(forDuration: 0.5, thenDragTo:…)`). `testEdgeSwipeScrollsTheList` swipes quickly in the band and checks that nothing jumps and the list follows the finger.
   - `thenHoldForDuration` after a fast synthesized drag does not stop the list from coasting once the finger lifts: the list was where the finger left it, then moved on by more than the drag itself. Measure a lower bound in the finger's direction, and tap to stop the coasting before reading frames.
 
+## Jump to Latest during a glide: take the touch in UIKit, on touch-down (2026-11-10, #3027)
+
+- **What happened**: on a phone (TestFlight 221), flick up through a chat, Agent or Persona, and tap ↓ while the list
+  still glides: nothing. The arrow stayed and the list glided on; a second tap once it had stopped worked. So neither ↓'s
+  SwiftUI `Button` (it would have jumped) nor the list's scroll view (a touch on a gliding `UIScrollView` stops it) had
+  the touch. ↓ is an overlay on the scroll view, not part of its content.
+- **The simulator never showed it**: on an iOS 27.0 simulator, about 15 taps on the old `Button` at every stage of
+  a glide (from a ↓-placed newest end or from further up, 0.3 to 2 s into it, a slow or a 3000 pt/s flick, Agent and
+  Persona chats) all jumped: the glide stopped and SwiftUI's animated `scrollTo(edge:)` got there in about 0.23 s. A
+  theory that `ScrollPosition` still held `.edge(.top)` from the last jump and setting it again changed nothing was
+  ruled out the same way. What on the device keeps the touch from SwiftUI's button stayed unknown.
+- **Fix**: the touch is not SwiftUI's to arbitrate. `JumpArrowTouch` is a plain `UIView` (a `UIViewRepresentable`)
+  laid over the button: UIKit hands it the touch directly, and it acts in `touchesBegan`, the moment the finger lands,
+  as a keyboard key does, so nothing that recognizes later can cancel it. It swallows the rest of the touch. The
+  `Button` under it stays for its look and for VoiceOver, Full Keyboard Access and Switch Control (the pad is not an
+  accessibility element); `point(inside:with:)` lets the pointer's hover through so iPad keeps the button's highlight.
+- **The jump itself no longer asks SwiftUI either**: `ChatJumpRun` stops the glide with
+  `setContentOffset(contentOffset, animated: false)`, puts a far list one screen short of the newest end and animates the
+  rest on a display link (`ChatJump`, docs/apple/ios-state.md「How ↓ gets there」). It starts on the tap's frame whatever
+  SwiftUI thinks of the position, and says when it is there.
+- **Verify on a device**: a UI test proves the touch reaches ↓ during a glide and the list gets there
+  (`ScrollToBottomTests` 11 and 12), but the old code passed it too. The device check is the report's own steps on a
+  TestFlight build: flick hard, tap ↓ at once, in an Agent chat and in Persona's.
+
 ## Context compaction as a divider (2026-11-04, #1064)
 
 Claude Code writes three things: `system/compact_boundary` (`compactMetadata.trigger` `manual` / `auto`; idle compaction also `auto`), a following `isCompactSummary` user line,
