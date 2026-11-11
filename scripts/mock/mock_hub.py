@@ -11150,10 +11150,12 @@ if os.environ.get("MOCK_CHAT_LINES") == "1":
                                      "description": "核对没有价格的商品", "running": False, "started_at": ago(minutes=26)}]))
 
 
-# MOCK_SUBAGENT_CARDS=1: subagent cards in the chat (#1963, web): a finished exchange whose subagents completed, failed
-# and nested (one launched another, which launched a third) fold into its "Work done"; then the live exchange, with one
-# still running in the background (its card stays in the open) and a command running after it. Every subagent has a
-# transcript ("<session>@<agent>") for the card's latest steps and the side panel's "View full process".
+# MOCK_SUBAGENT_CARDS=1: subagent cards in the chat (#1963, #5030 web): a finished exchange whose subagents completed,
+# failed and nested (one launched another, which launched a third, each its own card by when it started) fold into its
+# "Worked"; then the live exchange, with one still running in the background and a command running after it (both in
+# its live summary, super rule 2). The subagents carry the model they ran on and their tokens (#5030). A second session, "后台子 Agent",
+# has finished its turn while a background subagent runs on (`background_working`): the bar above the composer says
+# background subtasks still use the model. Old links to a subagent ("<session>@<agent>") open its parent at its card.
 SUBCARDS = "a1f3c2d4-0000-4000-8000-0000000c1e02"
 
 
@@ -11197,18 +11199,34 @@ def mock_subagent_cards():
         + tool("Bash", {"command": "npm run test:e2e -- search --all", "description": "跑搜索全量用例"}, "120 passed", 8)
         + tool("Read", {"file_path": "/Users/me/code/shop-web/e2e/filters.spec.ts"}, "test('filters', …)", 6)
         + [it("assistant", "tool_use", 2, tool_use_id="toolu_scrunb", tool_name="Bash", tool_input={"command": "npm run test:e2e -- filters", "description": "跑筛选用例"})])
-    sub = lambda i, desc, use, **kw: {"id": i, "session_id": SUBCARDS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
-                                      "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 20)), **kw}
+    sub = lambda i, desc, use, **kw: {k: v for k, v in {
+        "id": i, "session_id": SUBCARDS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
+        "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 20)),
+        "model": kw.pop("model", "claude-haiku-4-5-20251001"), "tokens": kw.pop("tokens", 18432), **kw}.items() if v is not None}
     SESSIONS.append(sess("macbook", SUBCARDS, "回归拆给子 Agent", "/Users/me/code/shop-web", "working", "working", "shop-web", 15, "agents", 2, 0,
                          "搜索全量在后台跑，首页在打包。", subagents=[
                              sub("scrun", "回归：搜索全量", _run, at=9.8, running=True, background=True, last_text="筛选的用例在跑。", steps=3,
                                  last_tool={"id": "toolu_scrunb", "name": "Bash", "summary": "跑筛选用例"}),
                              sub("scdone", "回归：结算流程", _done, at=29.5, last_text="结算流程 42 个用例全部通过。", steps=2,
                                  last_tool={"id": "toolu_scdone2", "name": "Read", "summary": "读 checkout.spec.ts"}, updated_at=ago(minutes=27)),
-                             sub("scfail", "回归：支付回调", _fail, at=27, steps=1),
-                             sub("scnest", "回归：价格筛选", _nest, at=26, type="Explore", steps=2),
-                             sub("scdata", "查价格的测试数据", _data, at=25, parent_id="scnest"),
-                             sub("scold", "核对下架商品", None, at=24.5, parent_id="scdata", type="fork", fork=True)]))
+                             sub("scfail", "回归：支付回调", _fail, at=27, steps=1, model="claude-sonnet-4-6", tokens=9120),
+                             sub("scnest", "回归：价格筛选", _nest, at=26, type="Explore", steps=2, tokens=31250),
+                             sub("scdata", "查价格的测试数据", _data, at=25, parent_id="scnest", steps=1, tokens=7340),
+                             sub("scold", "核对下架商品", None, at=24.5, parent_id="scdata", type="fork", fork=True, model=None, tokens=None)]))
+    # the turn is over, a background subagent runs on
+    bg = "a1f3c2d4-0000-4000-8000-0000000c1e12"
+    _b = [it("user", "text", 6, text="后台把 iOS 的崩溃日志归类一下，我先去开会")]
+    _b += tool("Agent", {"description": "归类崩溃日志", "subagent_type": "general-purpose", "prompt": "把最近一周的崩溃日志按调用栈归类，列出前五类", "run_in_background": True},
+               "Async agent launched successfully.\nagentId: bgcrash (This is an internal ID for your use)", 5.8)
+    _bg = _b[-2]["tool_use_id"]
+    _b.append(it("assistant", "text", 5.5, text="已经在后台归类了，归类完会把前五类发给你。"))
+    ITEMS[bg] = _b
+    ITEMS[bg + "@bgcrash"] = [it("user", "text", 5.8, text="把最近一周的崩溃日志按调用栈归类，列出前五类")]
+    SESSIONS.append(sess("macbook", bg, "后台子 Agent", "/Users/me/code/shop-web", "working", "working", "shop-web", 15, "agents", 3, 0,
+                         "崩溃日志在后台归类。", background_working=True, subagents=[
+                             {"id": "bgcrash", "session_id": bg + "@bgcrash", "type": "general-purpose", "description": "归类崩溃日志", "tool_use_id": _bg,
+                              "running": True, "background": True, "started_at": ago(minutes=5.8), "model": "claude-sonnet-4-6", "tokens": 41230, "steps": 9,
+                              "last_tool": {"id": "toolu_bgc9", "name": "Grep", "summary": "找 EXC_BAD_ACCESS"}}]))
 
 
 if os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
