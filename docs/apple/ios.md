@@ -133,6 +133,27 @@ Chat page:
   - **Sending**: after the `<persona-context>` tags and before what was typed, numbered from 1; comments alone send without words.
   - **Sent bubble**: the blocks, from any client, are quote cards at the top of the bubble (kind, number, place; the note); a tap opens the whole note and the code. A plain `> ` quote before them is a quote card too; a message with no comment block is drawn as before.
   - **Edit**: the comments go back over the box as cards, the words into it.
+- Forwarding a message (#3807; `Views/Chat/Forward.swift`, `ForwardSheet.swift`; iPhone and iPad, not the frozen Mac app): the
+  `<persona-context kind="forward">` block and its metadata are in docs/protocol/protocol.md, "Forwarded messages".
+  - **Entry**: the lifted message's bar has Forward where Share was (`MessageActionBar.forwards`: a sent message, in a chat that
+    forwards), so the bar keeps its width; Share as Image is the first row of the picker. Messages not sent yet, the Mac and
+    Apple Vision Pro keep Share.
+  - **Forward To** (`ForwardSheet`): Share as Image, the message being forwarded, Persona (Main Chat, unless that is this
+    chat) and New Agent…, then Recent (`ForwardMemory`: the last 8 targets per hub group, ids only, never synced, gone with
+    the group) and each computer's live Agents in the Machines order, latest first (`ForwardTargets`: same hub, takes
+    messages, computer online, never this chat or Health). Search matches titles, Agents, projects and computers, and also
+    finds ended Agents (the send resumes them) and Persona's other conversations. The lists are the sessions the app holds,
+    read once as the sheet opens.
+  - **Picking a target** reads the whole message when the chat holds it cut (`/items/{iid}/full`) and the photos of your own
+    message, then opens the target's chat (`AppModel.forward`) with the forward over its box (`composerContexts`, like a
+    quote, × takes it off) and a line saying where it comes from and goes ("From MacBook Pro · to Codex on Mac Studio"), the
+    photos in the box's tray (`composerInbox`). The note is typed and sent there, through the usual send. New Agent opens
+    New Chat with the card over First Message, the block as its `contextBlock`. Persona with no main conversation yet: the
+    new conversation's box.
+  - **Sent**: the block is a card at the top of the bubble, as a quote's, with the arrow, "Forwarded from Claude · chat",
+    the computer and time, and four lines; a tap opens the original chat at the message (`AppModel.openLinked`), or the
+    whole text when this app does not have that chat. Nothing is written to the original chat.
+  - Tests: `ForwardTests` (`spec/fixtures/forward`), `ForwardMessageTests` (the whole way on the mock hub, screenshots).
   - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web; end-to-end `CommentBubbleTests`.
 - Files: message paths and Read / Edit / Write tool paths become tappable file tags, read from the session's computer
   (`GET /api/v1/machines/{mid}/file`, at most 2 MB, iCloud directories denied), rendered Markdown / numbered code / images / PDF / directories.
