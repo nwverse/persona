@@ -80,6 +80,95 @@ final class AttachGridTests: XCTestCase {
         XCTAssertEqual(caption.value as? String, "看看这张图", "what was typed is not in the field")
     }
 
+    /// The panel is a half-height system sheet with an even grid (#4312): it opens at the medium detent with the chat
+    /// above it, the camera is one cell the size of every photo, every cell is square, and the grid scrolls to its last
+    /// row clear of the tab bar. Needs 30 or so pictures in the library. `TEST_RUNNER_PERSONA_SHOTS_ONLY=1` takes the
+    /// screenshots without the checks (a build from before the change).
+    @MainActor func testHalfSheetEvenGrid() throws {
+        let check = ProcessInfo.processInfo.environment["PERSONA_SHOTS_ONLY"] != "1"
+        let (app, cells) = try openPanel()
+        shot(app, "1-open")
+        let window = app.windows.firstMatch.frame
+        if check {
+            let sheet = app.descendants(matching: .any)["attach-sheet"].firstMatch
+            XCTAssertGreaterThan(sheet.frame.minY, window.height * 0.3, "the sheet does not open at half height: \(sheet.frame)")
+            let camera = app.buttons["attach-camera"].firstMatch
+            XCTAssertTrue(camera.exists, "no camera cell")
+            let first = cells.element(boundBy: 0).frame
+            XCTAssertEqual(camera.frame.width, first.width, accuracy: 0.5, "the camera cell is wider than a photo")
+            XCTAssertEqual(camera.frame.height, first.height, accuracy: 0.5, "the camera cell is taller than a photo: \(camera.frame) vs \(first)")
+            for i in 0..<cells.count {
+                let f = cells.element(boundBy: i).frame
+                XCTAssertEqual(f.width, f.height, accuracy: 0.5, "cell \(i) is not square: \(f)")
+                XCTAssertEqual(f.width, first.width, accuracy: 0.5, "cell \(i) is not the size of the others: \(f)")
+            }
+        }
+        // To the end: swipe until the last cell on screen stays where it is.
+        let grid = app.scrollViews["attach-grid"].firstMatch
+        var last = CGRect.null
+        for _ in 0..<12 {
+            grid.swipeUp(velocity: .fast)
+            let now = cells.allElementsBoundByIndex.last?.frame ?? .null
+            if now == last { break }
+            last = now
+        }
+        sleep(1)
+        shot(app, "2-bottom")
+        if check {
+            let bar = app.buttons["attach-tab-photos"].firstMatch.frame
+            XCTAssertLessThanOrEqual(last.maxY, bar.minY + 1, "the last row stays under the tab bar: \(last), the bar \(bar)")
+            XCTAssertLessThanOrEqual(last.maxY, window.maxY, "the last row is cut off: \(last)")
+        }
+    }
+
+    /// A photo picked in the half-height sheet, the caption is typed right away above the keyboard (#4312).
+    @MainActor func testCaptionTypedAboveTheKeyboard() throws {
+        let check = ProcessInfo.processInfo.environment["PERSONA_SHOTS_ONLY"] != "1"
+        let (app, cells) = try openPanel()
+        cells.element(boundBy: 0).tap()
+        let caption = app.descendants(matching: .any)["attach-caption"].firstMatch
+        XCTAssertTrue(caption.waitForExistence(timeout: 5), "no caption field after a photo was picked:\n\(app.debugDescription)")
+        caption.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "no keyboard")
+        sleep(1)
+        caption.typeText("看看这张图")
+        sleep(1)
+        shot(app, "3-keyboard")
+        if check {
+            XCTAssertLessThanOrEqual(caption.frame.maxY, keyboard.frame.minY + 1, "the caption field is under the keyboard: \(caption.frame), the keyboard \(keyboard.frame)")
+            XCTAssertTrue(caption.isHittable, "the caption field can't be reached")
+            XCTAssertEqual(caption.value as? String, "看看这张图", "what was typed is not in the field")
+        }
+    }
+
+    /// Launches against the mock hub with the camera cell shown, opens the panel and gives it the photo library.
+    @MainActor private func openPanel() throws -> (XCUIApplication, XCUIElementQuery) {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)") }
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-app.tab", "assistant", "-showAttachCamera", "YES"]
+        app.launchPinned()
+        let plus = app.buttons.matching(NSPredicate(format: "(identifier == %@ OR label IN %@) AND enabled == true", "shell-composer-add", ["添加", "Add"])).firstMatch
+        XCTAssertTrue(plus.waitForExistence(timeout: 30), "no + in the composer:\n\(app.debugDescription)")
+        // A fresh install asks for the library on the first +: give it all (the runner's grant does not always hold, and
+        // the default handler would deny it).
+        addUIInterruptionMonitor(withDescription: "photos access") { alert in
+            let allow = alert.buttons.matching(NSPredicate(format: "label IN %@", ["允许完全访问", "Allow Full Access"])).firstMatch
+            guard allow.exists else { return false }
+            allow.tap()
+            return true
+        }
+        plus.tap()
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons
+            .matching(NSPredicate(format: "label IN %@", ["允许完全访问", "Allow Full Access"])).firstMatch
+        if allow.waitForExistence(timeout: 5) { allow.tap() }
+        let cells = app.buttons.matching(identifier: "attach-photo")
+        XCTAssertTrue(cells.firstMatch.waitForExistence(timeout: 15), "no photos in the panel:\n\(app.debugDescription)")
+        sleep(2) // the sheet's spring, and the thumbnails
+        return (app, cells)
+    }
+
     /// The cells that read as picked, by their place in the grid.
     @MainActor private func picked(_ cells: XCUIElementQuery) -> [Int] {
         (0..<cells.count).filter { !((cells.element(boundBy: $0).value as? String) ?? "").isEmpty }

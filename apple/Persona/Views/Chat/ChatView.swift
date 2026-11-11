@@ -4799,10 +4799,19 @@ struct Composer: View, Equatable {
     private var attachHost: AttachSheetHost<AttachMoreRows> {
         AttachSheetHost(panel: attachPanel, caption: textBinding, photoRoom: max(0, 4 - images.count),
                         videoRoom: max(0, VideoAttachments.most - videos.items.count),
-                        camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+                        camera: attachHasCamera ? { if CameraPicker.isAvailable { showCamera = true } } : nil,
                         files: { showFiles = true }, allPhotos: { showPhotos = true }, showsMore: true,
                         more: { AttachMoreRows(panel: attachPanel, sections: attachMoreSections) },
                         finish: attachFinished)
+    }
+
+    /// The panel's camera cell: where there is a camera. Simulator automation: `-showAttachCamera YES` shows the cell
+    /// on a simulator, which has none, so screenshots and UI tests see the grid as a phone draws it (a tap does nothing).
+    private var attachHasCamera: Bool {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "showAttachCamera") { return true }
+        #endif
+        return CameraPicker.isAvailable
     }
 
     /// The panel's More tab: what the menu offered besides photos and files.
