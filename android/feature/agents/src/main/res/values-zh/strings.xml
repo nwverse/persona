@@ -82,6 +82,7 @@
     <string name="agents_filter_needs_you">需要你</string>
     <string name="agents_filter_unread">未读</string>
     <string name="agents_filter_working">工作中</string>
+    <string name="agents_filter_background_waiting">后台等待中</string>
     <string name="agents_history_check_resume">核对继续结果</string>
     <string name="agents_history_resume">继续这个会话</string>
     <string name="agents_todo_move_title">改挂到其他待办</string>

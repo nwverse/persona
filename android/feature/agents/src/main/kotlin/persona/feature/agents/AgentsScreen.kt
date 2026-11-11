@@ -329,7 +329,8 @@ internal fun AgentsScreen(
                 // "Lark groups" / "Terminal" (#2526) only while they have agents (or are chosen), as iOS and the web.
                 val shown = AgentQuickFilter.shown(page.settings.quick, quickCounts)
                 HomeAgentFilters(shown.map { filter ->
-                    Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else quickCounts[filter] ?: 0, filter.state?.designStatus)
+                    Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else quickCounts[filter] ?: 0, filter.state?.designStatus,
+                        icon = PersonaIcons.backgroundWaiting.takeIf { filter == AgentQuickFilter.BackgroundWaiting })
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
             }
             // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
@@ -953,6 +954,7 @@ private val AgentQuickFilter.label: String @Composable get() = stringResource(wh
     AgentQuickFilter.NeedsYou -> R.string.agents_filter_needs_you
     AgentQuickFilter.Unread -> R.string.agents_filter_unread
     AgentQuickFilter.Working -> R.string.agents_filter_working
+    AgentQuickFilter.BackgroundWaiting -> R.string.agents_filter_background_waiting
     AgentQuickFilter.Feishu -> R.string.agents_filter_feishu
     AgentQuickFilter.Terminal -> R.string.agents_filter_terminal
 })

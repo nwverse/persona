@@ -266,8 +266,13 @@ internal class AgentsViewModel(
             val counts = status.counts
             val machineCounts = status.machineCounts
             val quickCounts = AgentQuickFilter.entries.associateWith { filter ->
-                filter.state?.let { counts.state[it.wire] ?: 0 }
-                    ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
+                when (filter) {
+                    // The hub counts them among working and apart too (#6045): Working leaves them out, as iOS.
+                    AgentQuickFilter.BackgroundWaiting -> counts.backgroundWaiting
+                    AgentQuickFilter.Working -> ((counts.state[AgentState.Working.wire] ?: 0) - counts.backgroundWaiting).coerceAtLeast(0)
+                    else -> filter.state?.let { counts.state[it.wire] ?: 0 }
+                        ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
+                }
             }
             fun count(id: String): SessionListCounts? = metadata[id]?.takeIf {
                 it.revision == status.counts.revision && it.filter.query == projected.settings.query.take(256) &&
