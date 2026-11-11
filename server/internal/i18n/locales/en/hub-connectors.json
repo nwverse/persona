@@ -13,5 +13,11 @@
   "rate_limited": "lark-cli is rate limited; try again later",
   "error": "lark-cli could not read Lark",
   "expiry_reminder": "Login expires in {count} day(s); run {command} on the hub machine",
+  "larkcli_message": "Lark message",
+  "larkcli_direct_message": "Direct Lark message",
+  "larkcli_mention": "Lark mention",
+  "watched_doc_unreadable": "Watched document \u201c{title}\u201d can\u2019t be read right now; it is tried again every 10 minutes, or remove it in Settings \u203a Connectors",
+  "doc_comment_label": "Document comment",
+  "doc_comment_rule": "Rule: a document comment mentions you or replies to your comment.",
   "larkcli_name": "Lark · my messages"
 }
