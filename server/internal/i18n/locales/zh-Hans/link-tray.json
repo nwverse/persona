@@ -135,7 +135,7 @@
   "ssh_server_label": "SSH 服务器",
   "ssh_server_placeholder": "user@example.com 或 ~/.ssh/config 别名",
   "ssh_target_label": "那台服务器看到的 hub 地址",
-  "ssh_target_placeholder": "127.0.0.1:18660",
+  "ssh_target_placeholder": "127.0.0.1:18662",
   "ssh_always_label": "总是走 SSH",
   "ssh_always_hint": "关闭时先试直连地址，都连不上再走 SSH。",
   "ssh_test": "测试连接",

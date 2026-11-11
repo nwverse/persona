@@ -32,8 +32,9 @@ const KindSSH = "ssh"
 // back when one answers again (docs/operations/network.md "Connecting to hub through SSH").
 const DirectRetryEvery = 2 * time.Minute
 
-// DefaultTargetPort is the fallback hub TLS port when neither a pairing link nor saved endpoints carry one.
-const DefaultTargetPort = "18660"
+// DefaultTargetPort is the fallback hub TLS port when neither a pairing link nor saved endpoints carry one: the port
+// `personad hub setup` gives public.tls_listen. The hub's HTTP port (18660) would never answer a TLS handshake.
+const DefaultTargetPort = "18662"
 
 // SSH is the optional SSH tunnel in link.json: persona-link starts the system ssh client once with -N -L so the link
 // and every stream share one SSH session, while TLS still runs end to end to the hub's TLS port (or HTTPS proxy).
@@ -187,10 +188,7 @@ func parseSSHServer(raw string) (dest, port, canonical string, err error) {
 	}
 	var host string
 	if ip, iperr := netip.ParseAddr(strings.Trim(hp, "[]")); iperr == nil {
-		if strings.Contains(hp, ":") && (!strings.HasPrefix(hp, "[") || !strings.HasSuffix(hp, "]")) && user != "" {
-			// Allow bare IPv6 with user@2001:db8::1 as well as bracketed.
-		}
-		host = ip.String()
+		host = ip.String() // a bare IPv6 address (user@2001:db8::1) as well as a bracketed one
 	} else if h, p, serr := net.SplitHostPort(hp); serr == nil {
 		if h == "" || !validPort(p) {
 			return "", "", "", &SSHError{Code: SSHInvalid, Server: raw}
@@ -456,6 +454,8 @@ func pickLoopbackPort() (int, error) {
 	return port, nil
 }
 
+// startSSHTunnel starts ssh -N -L on a free loopback port. Another process can take that port before ssh binds it;
+// callers see that as isDone() && localBindBusy() on their first request and start once more.
 func startSSHTunnel(sshBin string, cfg SSH) (*sshTunnel, error) {
 	bin := strings.TrimSpace(sshBin)
 	if bin == "" {
@@ -692,9 +692,9 @@ func tunnelBaseURL(c *Config, cfg SSH) string {
 }
 
 // tunnelClient builds an HTTP/1.1 client that dials through t while running the exact same TLS verification as direct
-// connections (pinned to c.FP, or system-trusted with the endpoint's hostname). When c is nil or has neither FP nor
-// SystemTrust (an unpaired "Test connection" without a pairing link), TLS still handshakes so a non-TLS or dead target
-// is caught.
+// connections (hubClient): pinned to c.FP when the pairing gave one, else the system's CAs and the endpoint's host
+// name. Only a nil c (an unpaired "Test connection" with no pairing link, which sends no credential) skips the check;
+// TLS still handshakes there so a non-TLS or dead target is caught.
 func tunnelClient(c *Config, t *sshTunnel) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
@@ -709,7 +709,7 @@ func tunnelClient(c *Config, t *sshTunnel) *http.Client {
 				switch {
 				case c != nil && c.FP != "":
 					tlsCfg = pinnedTLSConfig(c.FP, host)
-				case c != nil && c.SystemTrust():
+				case c != nil:
 					tlsCfg = &tls.Config{
 						MinVersion: tls.VersionTLS12,
 						NextProtos: []string{"http/1.1"},
@@ -720,7 +720,7 @@ func tunnelClient(c *Config, t *sshTunnel) *http.Client {
 					tlsCfg = &tls.Config{
 						MinVersion:         tls.VersionTLS12,
 						NextProtos:         []string{"http/1.1"},
-						InsecureSkipVerify: true, // unpaired connection test with no pairing link yet
+						InsecureSkipVerify: true, // nothing to check against yet, and no token is sent
 					}
 					if net.ParseIP(host) == nil {
 						tlsCfg.ServerName = host
@@ -741,15 +741,6 @@ func tunnelClient(c *Config, t *sshTunnel) *http.Client {
 	}
 }
 
-// openSSHTunnel starts ssh -N -L, retrying once with a fresh loopback port if the chosen ephemeral port was taken.
-func openSSHTunnel(sshBin string, cfg SSH) (*sshTunnel, error) {
-	t, err := startSSHTunnel(sshBin, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return t, nil
-}
-
 // dialSSH opens the SSH tunnel and dials the hub's WebSocket link over it; the returned link owns the tunnel and uses
 // the same tunnel for every stream opened on it.
 func dialSSH(ctx context.Context, c *Config, sshBin string) (*link, error) {
@@ -761,7 +752,7 @@ func dialSSH(ctx context.Context, c *Config, sshBin string) (*link, error) {
 		return nil, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		t, err := openSSHTunnel(sshBin, *cfg)
+		t, err := startSSHTunnel(sshBin, *cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -827,7 +818,7 @@ func TestSSH(ctx context.Context, sshCfg SSH, rawLink string, c *Config, sshBin 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	for attempt := 0; attempt < 2; attempt++ {
-		t, err := openSSHTunnel(sshBin, *norm)
+		t, err := startSSHTunnel(sshBin, *norm)
 		if err != nil {
 			return nil, err
 		}

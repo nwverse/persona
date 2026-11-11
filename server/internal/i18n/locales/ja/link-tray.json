@@ -135,7 +135,7 @@
   "ssh_server_label": "SSH サーバー",
   "ssh_server_placeholder": "user@example.com または ~/.ssh/config の別名",
   "ssh_target_label": "そのサーバーから見たハブのアドレス",
-  "ssh_target_placeholder": "127.0.0.1:18660",
+  "ssh_target_placeholder": "127.0.0.1:18662",
   "ssh_always_label": "常に SSH を使う",
   "ssh_always_hint": "オフのときは先に直接接続を試し、届かないときだけ SSH を使います。",
   "ssh_test": "接続をテスト",

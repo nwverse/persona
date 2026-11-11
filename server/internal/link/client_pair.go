@@ -159,7 +159,7 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 	}
 	redeemSSH := func() (redeemed, error) {
 		for attempt := 0; attempt < 2; attempt++ {
-			t, err := openSSHTunnel(bin, *c.SSH)
+			t, err := startSSHTunnel(bin, *c.SSH)
 			if err != nil {
 				return redeemed{}, err
 			}

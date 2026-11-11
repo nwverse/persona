@@ -135,7 +135,7 @@
   "ssh_server_label": "SSH server",
   "ssh_server_placeholder": "user@example.com or ~/.ssh/config alias",
   "ssh_target_label": "Hub address as that server sees it",
-  "ssh_target_placeholder": "127.0.0.1:18660",
+  "ssh_target_placeholder": "127.0.0.1:18662",
   "ssh_always_label": "Always use SSH",
   "ssh_always_hint": "When off, direct hub addresses are tried first and SSH is used only if they fail.",
   "ssh_test": "Test connection",

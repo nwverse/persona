@@ -348,7 +348,7 @@ When a hub machine exposes only SSH (port 22) — its HTTP and TLS ports listen 
 
 - **Pairing window (Mac menu bar App and Windows tray)**: under **Connect to hub** (active mode), an **SSH tunnel** disclosure section sits below the pairing link. It stays closed by default until opened or until a tunnel is saved, and can be filled in **before** pairing so the pairing request itself travels through the tunnel:
   - **SSH server**: `[user@]host[:port]`, or a host alias from `~/.ssh/config`.
-  - **Hub address as that server sees it**: defaults to `127.0.0.1:<TLS port in the pairing link>`.
+  - **Hub address as that server sees it**: defaults to `127.0.0.1:<TLS port in the pairing link>`; with no link and no saved address yet, to `127.0.0.1:18662`, the TLS port `personad hub setup` uses.
   - **Always use SSH**: uses only the tunnel. Enabled automatically when the pairing link names only loopback addresses; otherwise off so direct addresses are tried first.
   - **Test connection**: opens a one-off tunnel, verifies TLS against the hub, and shows the result in plain words.
   - After pairing, the same section edits, switches **Always use SSH**, or removes the tunnel (**Remove tunnel**) without pairing again; the running link reconnects within about 2 seconds.

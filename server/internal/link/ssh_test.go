@@ -824,6 +824,19 @@ func TestSSHPreservesEndToEndTLSPinAndSystemTrust(t *testing.T) {
 	if _, err := TestSSH(context.Background(), *wrongHostCfg.SSH, "", &wrongHostCfg, ssh.bin); err == nil || !strings.Contains(err.Error(), "证书上的域名对不上") {
 		t.Fatalf("mismatched hostname over SSH = %v", err)
 	}
+
+	// A config with neither a pin nor Trust (Load refuses it, but nothing here should depend on that) is checked with
+	// the system's CAs like a direct connection, never left unverified: the token must not reach an unknown server.
+	restoreEmpty = UseRootsForTesting(x509.NewCertPool())
+	defer restoreEmpty()
+	bare := *proxyCfg
+	bare.Trust = ""
+	if l, err := dialSSH(context.Background(), &bare, ssh.bin); err == nil {
+		l.closeNow()
+		t.Fatal("dialSSH without pin or trust connected to a hub with an untrusted certificate")
+	} else if !isCertError(err) {
+		t.Fatalf("dialSSH without pin or trust = %v, want a certificate error", err)
+	}
 }
 
 func TestSSHErrorSentences(t *testing.T) {

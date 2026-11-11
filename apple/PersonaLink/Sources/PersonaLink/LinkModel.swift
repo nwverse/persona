@@ -387,14 +387,14 @@ enum LinkText {
     /// Passive mode: what the helper says, else what link.json says.
     var passive: Bool { status?.mode.map { $0 == "passive" } ?? (configMode == "passive") }
 
-    /// Default SSH tunnel target (`127.0.0.1:<TLS port>`) from saved endpoints, or `127.0.0.1:18660`.
+    /// Default SSH tunnel target (`127.0.0.1:<TLS port>`) from saved endpoints, or the hub's usual TLS port.
     var defaultSSHTarget: String {
         for e in endpoints {
             guard let c = URLComponents(string: e.url), c.scheme?.lowercased() == "https", !(c.host ?? "").isEmpty else { continue }
             let port = c.port ?? 443
             if (1...65535).contains(port) { return "127.0.0.1:\(port)" }
         }
-        return "127.0.0.1:18660"
+        return "127.0.0.1:18662"
     }
 
     func start() {
