@@ -25,5 +25,6 @@
   "line_width": "線の太さ",
   "width_thin": "細い",
   "width_medium": "中",
-  "width_thick": "太い"
+  "width_thick": "太い",
+  "named_value": "{label}：{value}"
 }
