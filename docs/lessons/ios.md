@@ -527,6 +527,12 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 ## `Layout` and components
 
+- `.clipped()` limits only what is drawn, not where taps land (#3702, #3689): a `resizable().scaledToFill()` thumbnail in a
+  square frame still takes taps over its whole picture, and in a grid the cell to the right or below is drawn over its neighbour, so a wide or
+  tall picture next door took taps meant for the cell under the finger (the + panel picked the photo beside the one tapped). Give the cell
+  `.contentShape(.rect)` on its square (`AttachPhotoCell`). Squares alone never show it: test with wide screenshots, panoramas and tall
+  phone screenshots, all over each cell, not only its middle (`AttachGridTests`, `AttachGridTapTests`). The simulator has no camera, so
+  its grid starts without the camera cell; on a phone the two-by-two beside it is built from the same stacks and overlaps the same way.
 - Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
 - A `GeometryReader` that ignores the safe area on an edge reports no inset of its own there (`safeAreaInsets.trailing` was 0 on iPhone Duo's outer display, where the system's bars take the right-hand column): a rail meant for that column came out 59 pt wide against the screen edge, half off it. Measure the column as a reader inside the safe area less one that ignores it (`ShellSideRail`, 2026-11-07).
 - Every page on the shell's strip draws its own bar, so each one has to switch to `ShellSideRail` on `\.shellRailEdge`; the moving bar only stands in while the strip slides. The optional Messages page was missed and put its bar back across the top whenever it was in front (#2318); `ShellSideRailTests` checks the pages' rails on an iPhone Duo.
@@ -1744,3 +1750,8 @@ When the segment writer opens a new file, record the tap callback's host time an
 ### Watch holds unconfirmed rolling segments; bookmarked ones longer
 
 The watch only prunes by age. Segments the phone has not confirmed stay up to `undeliveredHours`; bookmarked ones stay `keptDays` so the phone can still mark them kept.
+
+## Simulator arguments and screenshot settling (#1872)
+
+- On Xcode 27.2, a direct `simctl launch` can drop leading DEBUG arguments before they reach `UserDefaults`; put `--` before them. Verify the App actually adopted the mock pairings—an old real-hub cache on screen is a launch-environment failure, not the target RED. UI launch helpers can carry the same separator without changing the assertions.
+- SpringBoard's icon-change alert can remain visible in a screenshot while it fades after a tap. Dismiss it and wait for nonexistence before capturing, then read the image; an accessibility assertion passing does not prove the screenshot was unobstructed. Offscreen SwiftUI rows likewise need bounded scrolling before their presence or absence is meaningful.

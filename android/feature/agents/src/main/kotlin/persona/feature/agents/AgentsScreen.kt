@@ -573,7 +573,8 @@ internal fun AgentsScreen(
                 })
         }
     }
-    operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId]) { operationDialog = null } }
+    operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId], creationModel?.service,
+        page.machines.firstOrNull { m -> m.id == it.session.machineId }) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
         TodoPickerSheet(
             todos = assistant.todosFor(todos, targetSession.machineId,

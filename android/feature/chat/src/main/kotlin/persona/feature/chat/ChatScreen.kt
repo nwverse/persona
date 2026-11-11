@@ -862,7 +862,7 @@ private fun ChatPage(
                                 chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
                                 onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
                                 statusState = status, onDetails = { statusSheet = true },
-                                onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares,
+                                onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
                                 onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } }) {
                                 // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain.
                                 if (!readOnly && canTerminal && renderStyle != ChatRenderStyle.Assistant) JIconButton(PhIcons.TerminalWindow, stringResource(if (terminal != null) R.string.chat_screen_open_terminal else R.string.chat_screen_terminal_help),

@@ -989,3 +989,16 @@ Non-guest assistant conversations start in `bypassPermissions` when the manager 
 The command gate honors bypass for classified reads and ordinary writes without creating a tool permission card or persisting an Always grant. It still confirms outbound sends as the user (messages, replies, comments and mail), deletion and writes it cannot classify. It extracts individual calls from compound commands when possible; all must be classified as reads or ordinary writes to bypass confirmation. Proxy-authenticated writes must be standalone, parseable calls so credentials remain isolated. The sent-as-user ledger records `let_through.kind: "permission_mode"` for a proxied call allowed by bypass. Credential guards, explicit deny rules and the health space's separate confirmation rules still apply. Ordinary Agent sessions retain their existing permission behavior.
 
 Bypass controls tool execution, not authorization for an action. The assistant must use `ask_user` before production writes, external sends, deletion or spending unless the user has already authorized that exact action. These questions remain pending until the user answers; bypass does not answer them or make an irreversible recommendation take effect at a deadline.
+
+
+### Main conversation execution on the web
+
+The welcome and main conversation headers read `GET /api/v1/assistant?view=main-runtime`, with the same manager
+selection and access as the ordinary assistant view. Its `machine_id` and the optional `main_machine_id` in the
+ordinary view are routing identities. The main route is kept separately from the default for new conversations.
+Execution location is reported separately: a native process uses its execution environment's hostname; a deployment
+can explicitly name its container via `PERSONA_EXECUTION_CONTAINER` on that node. The hostname alone does not prove
+the presence of a container. An external runtime can opt in with `caps.execution` and answer
+`session.execution {session_id}` with `{state, location?: {host?, container?}}` for that exact session. The connecting
+node is never substituted for the runtime's execution location. Older nodes and runtimes can leave the location
+unknown. A stopped or offline main can show its last observed location; a missing observation remains unknown.
