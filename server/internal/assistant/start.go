@@ -264,8 +264,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.NewSessionID != "" {
 		params["new_session_id"] = p.NewSessionID // node/assistant_guest.go: under this id, once
 	}
-	if p.ClientMsgID != "" {
-		params["client_msg_id"] = p.ClientMsgID // its first message's (node/node.go assistant.send)
+	// Its first message's (node/node.go assistant.send). One the manager gave a person's own start is not given to the
+	// node when the message carries someone else's words after all (what the old main conversation left, startMain):
+	// then no line counts as theirs (secret_handoff.go ownWords).
+	if p.ClientMsgID != "" && (!strings.HasPrefix(p.ClientMsgID, assistantwire.FirstMessageIDPrefix) || ownWords(p.Text)) {
+		params["client_msg_id"] = p.ClientMsgID
 	}
 	purpose := p.Purpose
 	if purpose == "" {
@@ -795,9 +798,11 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	sent, _ := p.Params["text"].(string)
 	id, _ := p.Params["client_msg_id"].(string)
 	params, err := s.sendParams(ctx, p)
+	going, _ := params["text"].(string) // as it goes: the first to a new main conversation with what the old one left
 	switch {
-	case !p.Human || !ownWords(sent): // anyone else's id, or a person's carrying another's words (a mail handed on), never
-		// counts, nor does a person's id once another sent it (secret_handoff.go)
+	case !p.Human || !ownWords(sent) || !ownWords(going): // anyone else's id, or a person's carrying another's words (a
+		// mail handed on, the old main conversation's), never counts, nor does a person's id once another sent it
+		// (secret_handoff.go)
 		s.humanSent.voidSend(p.SessionID, id)
 	case err == nil: // the hub's word: a person's own app sent it (handoffUserTurn)
 		s.humanSent.note(p.SessionID, id, sent)

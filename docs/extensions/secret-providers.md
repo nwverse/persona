@@ -163,9 +163,12 @@ recorded with `approved_by: "rule"`.
 
 "A person's own app" means any full credential with a device: the iPhone, web and other apps, and also a full token the user
 made for a script or an integration, and a Shortcuts automation that runs Ask Persona with text from elsewhere; whoever holds
-the hub's own token (the hub machine's `hub.json`) can make one. What the rule still trusts in such a turn is everything that is
-not a message: the tools' results (a mail or a page the model read at the user's request), the context and earlier turns can
-still steer what the Agent is told. A main chat an inbox item started (when there was none) is the user's own: its first turn,
+the hub's own token (the hub machine's `hub.json`) can make one. Words someone else wrote that ride in the turn's messages never
+count: a context block an app put in a message (above), and what the old main conversation left before the first message of a
+new main one (it may hold a mail handed on there), whether that message started the conversation or was the first sent to one
+started empty; such a turn gets the card. What the rule still trusts is what is not in a message: the tools' results (a mail or
+a page the model read at the user's request), the live snapshot the node adds to every message, and earlier turns can still
+steer what the Agent is told. A main chat an inbox item started (when there was none) is the user's own: its first turn,
 the inbox's message, gets the card, the user's later turns do not.
 
 ## Who may approve a hand-off
