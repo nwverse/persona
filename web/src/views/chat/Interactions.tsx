@@ -101,10 +101,14 @@ const AskedByVoice = createContext(false);
  *  moment online. InteractionCard says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables
  *  every answer meanwhile. */
 const SendingAnswer = createContext("");
+/** Which child session asks (#5120): "From subagent · <title>" at the top of a card on its parent's page. InteractionCard
+ *  says so for every kind but a tool approval, whose body already has that line (PermissionBody). */
+const AskedFrom = createContext("");
 
 function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
   const asked = useContext(AskedByVoice);
   const sending = useContext(SendingAnswer);
+  const from = useContext(AskedFrom);
   return (
     <div {...(cardKeys?.root ?? {})} aria-label={title} className="shrink-0 overflow-clip rounded-card bg-surface shadow-card outline-none focus-visible:ring-2 focus-visible:ring-accent" style={{ animation: `fade-up 350ms ${EASE} both` }}>
       <div className="px-3.5 pt-3 pb-2.5">
@@ -124,7 +128,10 @@ function Card({ title, kicker, onDismiss, busy, children, footer, looking = fals
             <div className="text-[13.5px] font-medium text-ink">{title}</div>
           </div>
         </div>
-        <div className="mt-2">{children}</div>
+        <div className="mt-2">
+          {from && <p data-permission-from title={from} className="mb-2 truncate text-[12px] leading-snug text-ink-3">{from}</p>}
+          {children}
+        </div>
         {/* Hand back (dismiss) leaves the request to the computer's terminal, and the hub takes no other answer for this card
             after it: so it says so in words on a row of its own (Android's action row), never a bare × that reads as "close" */}
         {onDismiss && (
@@ -492,8 +499,13 @@ const CODE_BOX = "max-h-48 overflow-auto rounded-[8px] bg-inset px-2.5 py-2 font
  *  input stays one click away, open from the start only when nothing else says what the tool does. */
 const FROM_MAX = 48;
 
-/** "From subagent · <type>" for a subagent's card, its type on one line and cut to FROM_MAX; empty otherwise. */
-export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type">): string {
+/** "From subagent · <type>" for a subagent's card, its type on one line and cut to FROM_MAX; for a child session's card
+ *  on its parent's page (#5120, `folded_under`), the child's title the same way; empty otherwise. */
+export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" | "folded_under" | "session_title">): string {
+  if (ix.folded_under) {
+    const title = (ix.session_title ?? "").replace(/\s+/g, " ").trim() || t("chat-subagentcard.untitled_task");
+    return t("lib-elicitation.from_subagent", { agent: title.length > FROM_MAX ? `${title.slice(0, FROM_MAX - 1)}…` : title });
+  }
   if (!ix.agent_id?.trim()) return "";
   const type = (ix.agent_type ?? "").replace(/\s+/g, " ").trim();
   if (!type || type.toLowerCase() === "main") return "";
@@ -1168,6 +1180,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);
+  const from = ix.folded_under && ix.kind !== "permission" ? permissionFrom(ix) : "";
   // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was.
   // The fieldset is always there (switching it in would remount the card): disabled, it stops every answer and the
   // card's keys (lib/card-keys.ts) while the session can't be approved here or an answer is on its way
@@ -1175,7 +1188,9 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     <div data-card={ix.id} className="contents">
       <AskedByVoice.Provider value={asked}>
         <SendingAnswer.Provider value={line}>
-          <fieldset disabled={!canApprove || pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+          <AskedFrom.Provider value={from}>
+            <fieldset disabled={!canApprove || pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+          </AskedFrom.Provider>
         </SendingAnswer.Provider>
       </AskedByVoice.Provider>
     </div>

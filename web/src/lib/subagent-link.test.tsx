@@ -5,7 +5,8 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import { directionAgentNodes } from "./direction-agent-tree";
 import { closePanel, getPanel, openPanel } from "./panel";
-import { doneSubagentLink, followSubagentLink, splitSubagentLink, useSubagentLink } from "./subagent-link";
+import { reset, upsertSession } from "./store";
+import { childLinkOf, doneSubagentLink, followChildSession, followSubagentLink, splitSubagentLink, useSubagentLink } from "./subagent-link";
 import type { Session } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -41,6 +42,36 @@ describe("subagent links", () => {
     expect(getPanel()).toEqual({ kind: "agent", mid: "m", sid: "p9" });
     closePanel();
     doneSubagentLink("m", "p9");
+  });
+
+  it("a child session's link opens its parent and asks for the child's card (#5120)", () => {
+    let seen: string | undefined;
+    function Probe() {
+      seen = useSubagentLink("m", "lead");
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    act(() => root.render(<Probe />));
+    act(() => void expect(followChildSession("m", "kid", "lead")).toBe("lead"));
+    expect(seen).toBe("child:kid");
+    expect(childLinkOf(seen!)).toBe("kid");
+    expect(childLinkOf("a1")).toBeUndefined();
+    act(() => doneSubagentLink("m", "lead"));
+    expect(seen).toBeUndefined();
+    act(() => root.unmount());
+  });
+
+  it("an agent panel for a child session opens its parent's chat", () => {
+    upsertSession({ machine_id: "m", session_id: "kid", title: "Kid", cwd: "", status: "idle", folded_under: "lead" });
+    openPanel({ kind: "agent", mid: "m", sid: "kid" });
+    expect(getPanel()).toEqual({ kind: "agent", mid: "m", sid: "lead" });
+    closePanel();
+    doneSubagentLink("m", "lead");
+    // a session that folds under nothing opens as itself
+    openPanel({ kind: "agent", mid: "m", sid: "solo" });
+    expect(getPanel()).toEqual({ kind: "agent", mid: "m", sid: "solo" });
+    closePanel();
+    reset();
   });
 
   it("the sidebar's direction tree draws no in-session subagent rows", () => {
