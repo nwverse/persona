@@ -255,6 +255,7 @@ type Contributes struct {
 	Voice           []NamedItem          `json:"voice,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
+	Iphone          []NamedItem          `json:"iphone,omitempty"`
 	Quota           []QuotaItem          `json:"quota,omitempty"`
 	Providers       []ProviderItem       `json:"providers,omitempty"`
 	API             []APIItem            `json:"api,omitempty"`
@@ -274,6 +275,7 @@ type Contributes struct {
 	Tunnels         []TunnelItem         `json:"tunnels,omitempty"`
 	ErrorReports    []ErrorReportsItem   `json:"error_reports,omitempty"`
 	AuthRelay       []AuthRelayItem      `json:"auth_relay,omitempty"`
+	SecretProviders []SecretProviderItem `json:"secret_providers,omitempty"`
 	Messaging       []MessagingItem      `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -285,7 +287,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -317,7 +319,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging":
+		case "connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -519,6 +521,18 @@ type AuthRelayItem struct {
 	Paths []string `json:"paths"`
 }
 
+// SecretProviderItem: secret values it supplies for references of its schemes (op://vault/item/field): the manager
+// calls secrets.describe and secrets.resolve when a setting holds such a reference or the user approves handing one
+// to an Agent run. Needs the program to speak the protocol. A scheme another installed extension claims fails the
+// install.
+type SecretProviderItem struct {
+	ID string `json:"id"`
+	// Whose secrets these are, in a few words (1Password): the settings say From <name>.
+	Name string `json:"name"`
+	// The reference schemes it resolves, without :// (op).
+	Schemes []string `json:"schemes"`
+}
+
 // ErrorReportsItem: it is given the error and crash reports of the hub and the user's devices
 // (error_reports.deliver): needs the program to speak the protocol, on_startup and permissions.error_reports.
 type ErrorReportsItem struct {
@@ -528,7 +542,8 @@ type ErrorReportsItem struct {
 }
 
 // TunnelItem: A tunnel the apps can reach this hub through when its own addresses do not answer (docs "In-app
-// tunnels"): an in-app tunnel core built into the app, going to the configuration's target_host and target_port.
+// tunnels"): an in-app tunnel core built into the app, going to the configuration's target_host and target_port; an
+// optional integer ssh_port is the hub machine's SSH port, for an SSH tunnel the app dials through this tunnel.
 type TunnelItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -1274,6 +1289,53 @@ type AuthRelayResult struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// SecretPurpose: what a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a
+// launcher's or model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent
+// run after the user approved it on the phone, id the variable's name, machine and session the Agent's).
+type SecretPurpose struct {
+	Kind    string `json:"kind"`
+	ID      string `json:"id"`
+	Machine string `json:"machine,omitempty"`
+	Session string `json:"session,omitempty"`
+}
+
+// SecretsDescribeParams: secrets.describe's parameters: a reference of one of the contribution's schemes.
+type SecretsDescribeParams struct {
+	Contribution string `json:"contribution"`
+	Reference    string `json:"reference"`
+}
+
+// SecretsDescribeResult: what secrets.describe answers: words for people (the item and field), never a value.
+type SecretsDescribeResult struct {
+	Title  string `json:"title"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// SecretsResolveParams: secrets.resolve's parameters: the reference and what it is resolved for. Only the manager
+// calls it.
+type SecretsResolveParams struct {
+	Contribution string        `json:"contribution"`
+	Reference    string        `json:"reference"`
+	Purpose      SecretPurpose `json:"purpose"`
+}
+
+// SecretsResolveResult: what secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in,
+// rate_limited (data.retry_after), refused.
+type SecretsResolveResult struct {
+	Value string `json:"value"`
+}
+
+// SecretsUsedEvent: secrets.used (an event to the provider, no answer): a reference it resolved was used, for the
+// usage record its own page shows. Never the value.
+type SecretsUsedEvent struct {
+	Contribution string        `json:"contribution"`
+	Reference    string        `json:"reference"`
+	Purpose      SecretPurpose `json:"purpose"`
+	At           time.Time     `json:"at"`
+	// settings (a reference saved in Settings), rule (an Always rule) or the approving device's id.
+	ApprovedBy string `json:"approved_by,omitempty"`
+}
+
 // ExtensionNotification: extension_notification in an extension's alert push: whose it is, the page a tap opens (ui
 // with state) and its buttons (category ext.<extension>.<hash of the action ids>, registered by the app as it meets
 // it).
@@ -1488,6 +1550,7 @@ const (
 	NavIconPause       = "pause"
 	NavIconStop        = "stop"
 	NavIconSpeaker     = "speaker"
+	NavIconMusic       = "music"
 	NavIconTv          = "tv"
 	NavIconPlug        = "plug"
 	NavIconBattery     = "battery"
@@ -1519,7 +1582,7 @@ const (
 )
 
 // NavIcons are the values of NavIcon, in order.
-var NavIcons = []string{"plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"}
+var NavIcons = []string{"plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"}
 
 type View struct {
 	Title    string    `json:"title,omitempty"`
@@ -3205,9 +3268,13 @@ type ConnectorStatus struct {
 	// One sentence for people when state is not ok; never a secret.
 	Error string `json:"error,omitempty"`
 	// How to fix it, a step a sentence.
-	Guide     []string  `json:"guide,omitempty"`
-	LastSync  time.Time `json:"last_sync,omitzero"`
-	LastEvent time.Time `json:"last_event,omitzero"`
+	Guide []string `json:"guide,omitempty"`
+	// Optional HTTPS page the App may open for the fix; never a secret.
+	GuideURL string `json:"guide_url,omitempty"`
+	// Permissions the connector can identify as absent.
+	MissingScopes []string  `json:"missing_scopes,omitempty"`
+	LastSync      time.Time `json:"last_sync,omitzero"`
+	LastEvent     time.Time `json:"last_event,omitzero"`
 }
 
 // ConnectorTool: A read tool (tools.list) or a write (actions.list): its name starts with <connector id>_.
@@ -3910,9 +3977,13 @@ type ConnectorPrompt struct {
 	// Seconds between asks of a device_code or qr step.
 	Interval int              `json:"interval,omitempty"`
 	Qr       *ConnectorQRCode `json:"qr,omitempty"`
-	Hint     string           `json:"hint,omitempty"`
-	Error    string           `json:"error,omitempty"`
-	Done     bool             `json:"done,omitempty"`
+	// An absolute URL where this step's action is completed; empty means no link.
+	Link string `json:"link,omitempty"`
+	// The label for the optional link.
+	LinkText string `json:"link_text,omitempty"`
+	Hint     string `json:"hint,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Done     bool   `json:"done,omitempty"`
 	// Who is signed in, once done.
 	Account string `json:"account,omitempty"`
 }
@@ -4244,10 +4315,11 @@ const (
 	KBKindMeetings   = "meetings"
 	KBKindEvents     = "events"
 	KBKindRecordings = "recordings"
+	KBKindTopics     = "topics"
 )
 
 // KBKinds are the values of KBKind, in order.
-var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "events", "recordings"}
+var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"}
 
 // KBErrorCode: error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing):
 // invalid_params, not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict
@@ -4369,7 +4441,8 @@ type KBDetail struct {
 	ID   string `json:"id"`
 	// Where it is on the manager's machine, for its own file tools.
 	Path string `json:"path"`
-	// The entity's own fields (meta.json).
+	// The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+	// Status uses the same locked_fields and provenance as other corrected fields.
 	Meta     json.RawMessage      `json:"meta"`
 	Summary  string               `json:"summary,omitempty"`
 	Log      []string             `json:"log,omitempty"`
@@ -4379,6 +4452,30 @@ type KBDetail struct {
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
 	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
 	Minutes json.RawMessage `json:"minutes,omitempty"`
+	// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
+	Points []KBTopicPoint `json:"points,omitempty"`
+}
+
+// KBTopicPoint: one knowledge point of a topic, under up to two levels of subtopics (path).
+type KBTopicPoint struct {
+	ID   string   `json:"id"`
+	Path []string `json:"path,omitempty"`
+	Kind string   `json:"kind"`
+	Text string   `json:"text"`
+	// A decision's reason, a pitfall's cause.
+	Why     string          `json:"why,omitempty"`
+	Sources []KBTopicSource `json:"sources,omitempty"`
+	// YYYY-MM-DD: when it was last confirmed.
+	When string `json:"when,omitempty"`
+}
+
+// KBTopicSource: an entry a knowledge point came from.
+type KBTopicSource struct {
+	// projects or chats
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	// YYYY-MM-DD
+	Day string `json:"day,omitempty"`
 }
 
 // KBMomentRef: A feed post linked to a project.
@@ -4466,12 +4563,14 @@ type KBUpdateParams struct {
 	Name           string   `json:"name,omitempty"`
 	// A project's: short or long.
 	ProjectKind string `json:"project_kind,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Goal        string `json:"goal,omitempty"`
-	MyRole      string `json:"my_role,omitempty"`
-	Note        string `json:"note,omitempty"`
-	Importance  string `json:"importance,omitempty"`
-	Relevance   *int   `json:"relevance,omitempty"`
+	// People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+	// ignored. Omitted or empty keeps the current status; active restores a person.
+	Status     string `json:"status,omitempty"`
+	Goal       string `json:"goal,omitempty"`
+	MyRole     string `json:"my_role,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Importance string `json:"importance,omitempty"`
+	Relevance  *int   `json:"relevance,omitempty"`
 	// Replaces the tags; an empty list clears them, none keeps them.
 	Tags    []string `json:"tags,omitzero"`
 	Summary string   `json:"summary,omitempty"`
@@ -4537,21 +4636,25 @@ type TodoEventThread struct {
 // deleted to-do); thread is left out when the to-do has none, done unless the to-do is done (closed, or its task
 // failed to start). supervisor is the conversation that supervises it (the main conversation or a leader, see
 // leaders.schema.json), left out when none does; a change of supervisor (the task moved to another leader) sends it
-// too. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the to-do again
-// if it matters.
+// too. kind is concern for something the owner raised in the main conversation and wants an answer to; such a to-do
+// is done only once its outcome was reported to the owner (an event.todo.decision of source reported comes with it),
+// never on its own; kind is left out for a to-do or a task and never changes. Notes, agents and decisions changing do
+// not send it (decisions have event.todo.decision). Read the to-do again if it matters.
 type TodoChangedEvent struct {
 	ID         string           `json:"id"`
 	Title      string           `json:"title"`
 	Thread     *TodoEventThread `json:"thread,omitempty"`
 	Done       bool             `json:"done,omitempty"`
 	Supervisor string           `json:"supervisor,omitempty"`
+	Kind       string           `json:"kind,omitempty"`
 	What       string           `json:"what"`
 }
 
 // TodoEventDecision: A decision on a to-do: what was asked and chosen (reason and supersedes_id left out when empty),
 // and where it came from: manual (written in the to-do), card (the user answered an Agent's question card), outcome
 // (pulled out of an Agent's finished work, not made by the user), agent (an Agent noted it), thread (the user's reply
-// in the to-do's chat thread).
+// in the to-do's chat thread), reported (what the main conversation told the owner of a concern's outcome, as choice;
+// it closes the concern).
 type TodoEventDecision struct {
 	ID           string `json:"id"`
 	Question     string `json:"question"`
@@ -4575,30 +4678,41 @@ type TodoDecisionEvent struct {
 // LeaderChangedEvent: event.leader.changed: a leader conversation was made (a side conversation added to
 // assistant.leaders), its title changed, it was filed under another knowledge-base project, it ended (it left
 // assistant.leaders; nothing is deleted) or it was made a leader again. id is the leader conversation's session id,
-// the key a work-log record keeps; title its title as the apps show it; project the knowledge-base project's slug,
-// left out while it has none; ended true once it is no longer a leader, left out while it is.
+// the key a work-log record keeps; title its title as the apps show it; name what the direction is called, to show it
+// by (the name the owner or the secretary gave it, else its knowledge-base project's name, else the title without its
+// "MMDD | kind | " prefix; always sent by a hub that has it, #3679); project the knowledge-base project's slug, left
+// out while it has none; ended true once it is no longer a leader, left out while it is.
 type LeaderChangedEvent struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
+	Name    string `json:"name,omitempty"`
 	Project string `json:"project,omitempty"`
 	Ended   bool   `json:"ended,omitempty"`
 }
 
 // LeaderReportEvent: event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it),
-// needs the owner's decision (decision: its review says needs_user), or is stuck (stuck: in Waiting on you or stopped
-// unfinished for 24 hours, told at most once per 24 hours). Written by the hub from the task's ledger, never by a
-// model; progress is never reported. id names the report (never sent twice; key on it to be safe), leader the leader
-// conversation's id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it), text at most 300
-// characters in the owner's language, link the task's PR or delivery link when it has one, at when what it reports
-// happened.
+// needs the owner's decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's
+// Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours);
+// those are written by the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary
+// of its direction at the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck),
+// needs_you (what the owner has to do) and links (evidence; link is the first), text the three put together, todo "".
+// id names the report (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's
+// to-do id (GET /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the
+// waiting plan's id (only on a decision about a plan), text at most 300 characters in the owner's language, link the
+// task's PR or delivery link when it has one, at when what it reports happened.
 type LeaderReportEvent struct {
-	ID     string    `json:"id"`
-	Leader string    `json:"leader"`
-	Kind   string    `json:"kind"`
-	Todo   string    `json:"todo"`
-	Text   string    `json:"text"`
-	Link   string    `json:"link,omitempty"`
-	At     time.Time `json:"at"`
+	ID       string    `json:"id"`
+	Leader   string    `json:"leader"`
+	Kind     string    `json:"kind"`
+	Todo     string    `json:"todo"`
+	Plan     string    `json:"plan,omitempty"`
+	Text     string    `json:"text"`
+	Link     string    `json:"link,omitempty"`
+	At       time.Time `json:"at"`
+	Reached  string    `json:"reached,omitempty"`
+	Doing    string    `json:"doing,omitempty"`
+	NeedsYou string    `json:"needs_you,omitempty"`
+	Links    []string  `json:"links,omitempty"`
 }
 
 // ModelErrorCode: error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params;
@@ -5658,6 +5772,7 @@ var newDef = map[string]func() any{
 	"LookItem":                      func() any { return new(LookItem) },
 	"TriageTemplateItem":            func() any { return new(TriageTemplateItem) },
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
+	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
@@ -5721,6 +5836,12 @@ var newDef = map[string]func() any{
 	"ErrorReportsDeliver":           func() any { return new(ErrorReportsDeliver) },
 	"AuthRelayCompleteParams":       func() any { return new(AuthRelayCompleteParams) },
 	"AuthRelayResult":               func() any { return new(AuthRelayResult) },
+	"SecretPurpose":                 func() any { return new(SecretPurpose) },
+	"SecretsDescribeParams":         func() any { return new(SecretsDescribeParams) },
+	"SecretsDescribeResult":         func() any { return new(SecretsDescribeResult) },
+	"SecretsResolveParams":          func() any { return new(SecretsResolveParams) },
+	"SecretsResolveResult":          func() any { return new(SecretsResolveResult) },
+	"SecretsUsedEvent":              func() any { return new(SecretsUsedEvent) },
 	"ExtensionNotification":         func() any { return new(ExtensionNotification) },
 	"View":                          func() any { return new(View) },
 	"Section":                       func() any { return new(Section) },
@@ -5956,6 +6077,8 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBTopicPoint":                  func() any { return new(KBTopicPoint) },
+	"KBTopicSource":                 func() any { return new(KBTopicSource) },
 	"KBMomentRef":                   func() any { return new(KBMomentRef) },
 	"KBRecordingSegment":            func() any { return new(KBRecordingSegment) },
 	"KBDayParams":                   func() any { return new(KBDayParams) },

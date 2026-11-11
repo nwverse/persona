@@ -102,23 +102,30 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
 
 // The "Pinned" heading above the pinned conversations (iOS's pinned heading, Android's pinned section): its ⋯ and a right
 // click on it give "Unpin all", which a touch screen reaches through the ⋯.
-export function PinnedHeading({ onMenu }: { onMenu: (at: MenuAt) => void }) {
+/** `onMenu` absent: nothing here is this browser's to unpin (only leader conversations), so no ⋯. */
+export function PinnedHeading({ onMenu }: { onMenu?: (at: MenuAt) => void }) {
+  return <SubHeading icon="pin" label={t("sidebar.pinned_section")} onMenu={onMenu} menuLabel={t("conversation-menu.unpin_all")} />;
+}
+
+/** A group's small title inside a sidebar section (Persona chats' "Directions", "Pinned", "Other chats"): the same type
+ *  as the section's own title, optionally with an icon before it and a ⋯ for the group's actions. */
+export function SubHeading({ label, icon, onMenu, menuLabel }: { label: string; icon?: IconName; onMenu?: (at: MenuAt) => void; menuLabel?: string }) {
   return (
-    <div className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...contextMenuProps((at) => onMenu(at))}>
+    <div role="heading" aria-level={3} className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...(onMenu ? contextMenuProps((at) => onMenu(at)) : {})}>
       <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[11px] font-semibold text-ink-3">
-        <Icon name="pin" size={10} stroke={2.2} className="shrink-0" />
-        {t("sidebar.pinned_section")}
+        {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
+        {label}
       </span>
-      <button
+      {onMenu && <button
         type="button"
-        aria-label={t("conversation-menu.unpin_all")}
+        aria-label={menuLabel}
         aria-haspopup="menu"
         title={t("sidebar.more")}
         onClick={(e) => onMenu({ anchor: e.currentTarget })}
         className="touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 hover:bg-hover hover:text-ink-2"
       >
         <Icon name="more" size={12} />
-      </button>
+      </button>}
     </div>
   );
 }
@@ -233,7 +240,7 @@ function sameProps<P extends { to: Route }>(a: P, b: P): boolean {
 export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat" }: SessionRowProps) {
   // what it asks you, or what it did, under its title (#3195): no hover or click needed to see why it is red or green
   const ix = useStore((st) => st.interactions.find((i) => i.machine_id === given.machine_id && i.session_id === given.session_id));
-  // a card answered here takes its red dot and "Asking you" line away at once, not at the hub's next push (#4286)
+  // a card answered here takes its red dot and "Has a question" line away at once, not at the hub's next push (#4286)
   const justAnswered = useStore((st) => lastAnsweredAt(st.answered, given.machine_id, given.session_id));
   const pending = useStore((st) => answerPending(st.answered, given.machine_id, given.session_id));
   // seen on this page and not yet recorded by the hub (lib/seen-outbox.ts): the paged list's rows come from the list

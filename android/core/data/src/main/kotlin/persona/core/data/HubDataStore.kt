@@ -115,12 +115,16 @@ class HubDataStore(
             requireNotNull(result)
         } }
 
-    /** Writes [credentials] into a new pairing scope and returns it; the registry is the caller's to update. */
-    suspend fun storeHub(credentials: HubCredentials): HubScope = withContext(Dispatchers.IO) { lock.withLock {
+    /**
+     * Writes [credentials] into a new pairing scope and returns it; the registry is the caller's to update. [access] is
+     * the Cloudflare Access service token entered while pairing, kept with the pairing's tunnels.
+     */
+    suspend fun storeHub(credentials: HubCredentials, access: persona.core.contracts.api.HubAccess? = null): HubScope = withContext(Dispatchers.IO) { lock.withLock {
         check(job.isActive) { "Hub data store is closed" }
         require(credentials.hubAddress.isNotBlank() && credentials.deviceToken.isNotBlank())
         val scope = HubScope(credentials.hubId, UUID.randomUUID().toString())
         writeCredentialsLocked(scope, credentials)
+        if (access != null) temporary({ encrypted.tunnels(scope.path, it) }) { store -> store.updateData { it.copy(access = access) } }
         scope
     } }
 
@@ -473,8 +477,9 @@ class ScopedHubData internal constructor(
     suspend fun cachedImage(session: persona.core.contracts.SessionKey, itemId: String,
         width: Int, height: Int, fetch: suspend () -> ByteArray): File = withContext(Dispatchers.IO) {
         writeFiles { images.read(session, itemId, width, height) }?.let { return@withContext it }
-        val bytes = fetch()
-        writeFiles { images.put(session, itemId, width, height, bytes) }
+        // Decoded and encoded outside the lock: the other images and file writes of this pairing don't wait for it (#4047).
+        val encoded = images.encode(fetch(), width, height)
+        writeFiles { images.store(session, itemId, width, height, encoded) }
     }
     val imageCacheDirectory: File get() = directory(cacheDirectory, "images")
     val inboxMediaDirectory: File get() = directory(cacheDirectory, "inbox-media")

@@ -31,11 +31,14 @@ func newUUID() string {
 // after the directory is reused or created.
 // tabName names the herdr tab (hub picks one from the first message when the user gave none); empty: agent-<n>.
 // newID is the id a new session gets (startAsync picked it already); empty: a fresh one.
-// agentType is the agent the user picked for the launcher (claude, codex, traex); empty: what the launcher runs.
-func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (*proto.Session, error) {
+// agentType is the agent the user picked for the launcher (claude, codex, traex, omp); empty: what the launcher runs.
+func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (_ *proto.Session, startErr error) {
 	execution := executionOption(options)
 	if err := execution.check(); err != nil {
 		return nil, err
+	}
+	if execution.SecretTicket != "" && resume != "" { // a hand-off goes only to a new start (secretenv.go)
+		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
 	}
 	if resume != "" && validID(resume) && n.codexPath(resume) != "" && !n.isAssistantSession(resume) {
 		if _, live := n.agent(resume); !live { // a Codex thread nothing runs (codex_resume.go)
@@ -55,10 +58,40 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if kind == "" {
 		kind = launcherAgentType(launcher)
 	}
-	if kind != "claude" && kind != "codex" && kind != traexAgent {
+	if kind != "claude" && kind != "codex" && kind != traexAgent && kind != ompAgent {
 		return nil, fmt.Errorf("unsupported agent type %q", kind)
 	}
+	if execution.SecretTicket != "" {
+		if err := n.secretStartProblem(kind, launcher, resume, execution.SecretTicket); err != nil {
+			return nil, err
+		}
+		defer func() { // this start took the ticket: failed, nothing else may fetch its values (secretenv.go)
+			if startErr != nil {
+				n.handoffs().take(execution.SecretTicket, false)
+			}
+		}()
+	}
+	if kind == ompAgent { // start_agent.go: omp's own command, and none of a Claude start's options
+		if launcher != ompAgent {
+			// Only the launcher named omp is known to run omp: another one (a Codex launcher, a provider of no omp
+			// command) would type something else into the pane and get the first message.
+			return nil, fmt.Errorf("omp starts only with the launcher named omp, not %q", launcher)
+		}
+		if execution.Model != "" || mode != "" || effort != "" || wantsUltracode(execution.Ultracode) {
+			return nil, refusal("omp_options", ompOptionsRefusal, nil)
+		}
+		if resume != "" {
+			if a, ok := n.agent(resume); ok {
+				return n.sessionFor(resume, a), nil // already running
+			}
+			// A stopped omp has no session file here yet: refuse rather than guess which conversation to resume.
+			return nil, refusal("omp_resume_unknown", "这个 omp 会话找不到会话文件，请在电脑上恢复，这次没有发送。", nil)
+		}
+	}
 	argv, codex := n.codexLauncher(ctx, launcher)
+	if codex && execution.SecretTicket != "" { // Codex would start without the values (secretenv.go)
+		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
+	}
 	if mode == "plan" {
 		if codex && kind != traexAgent {
 			if argv, err = n.codexReadonlyArgs(launcher, argv, mode); err != nil {
@@ -156,6 +189,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if resume != "" && n.transcriptPath(id) != "" {
 		args = "--resume " + id
 	}
+	planThen := planThenOf(mode, execution.PlanThen)
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
 	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: execution.Model,
@@ -163,10 +197,15 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
 	shells := paneShells(ctx, created)
-	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), n.claudeCommandLine(spec, args+modeFlags(mode, effort), shellQuote))
+	line := n.claudeCommandLine(spec, args+modeFlags(mode, effort)+planThenFlags(mode, planThen), shellQuote)
+	if execution.SecretTicket != "" { // through personad launch --ticket; the spec herdr resumes with keeps none (secretenv.go)
+		line = n.withSecretTicket(line, launcher, execution.SecretTicket, shellQuote)
+	}
+	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), line)
 	cmd = n.agentCommand(cmd, shellQuote, shells...)
 	n.notePaneStart(launcher) // not in the agent sandbox unless a managed launcher (agentsandbox.go)
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint}
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint,
+		PlanThen: planThen}
 	if prev, ok := n.state.get(id); ok && resume != "" {
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
 			st.StartedAt = prev.StartedAt

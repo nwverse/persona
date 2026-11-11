@@ -49,7 +49,7 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		case kbRPCKind(a.Kind):
 			hits = e.SearchKind(a.Query, a.Kind, messages, limit)
 		default:
-			return "", fmt.Errorf("kind %q: one of projects, chats, people, docs, meetings, events, recordings", a.Kind)
+			return "", fmt.Errorf("kind %q: one of projects, chats, people, docs, meetings, events, recordings, topics", a.Kind)
 		}
 		if len(hits) == 0 {
 			// A neutral, localized line: it can be relayed to the owner, so it never names the store's disk path.
@@ -141,6 +141,13 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if a.Kind == kb.KindMeeting || a.Kind == kb.KindEvent {
 			b.WriteString(s.recordingsAt(ctx, e, a.Kind, d.ID))
 		}
+		var trimmed struct {
+			At *time.Time `json:"trimmed_at"`
+		}
+		if a.Kind == kb.KindRecording && json.Unmarshal(d.Meta, &trimmed) == nil && trimmed.At != nil {
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
+				"assistant.minutes_days after the meeting (0 means forever, the default), and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
+		}
 		switch {
 		case d.Recent != "" && a.Kind == kb.KindRecording:
 			fmt.Fprintf(&b, "\ntranscript.md:\n%s\n", d.Recent)
@@ -197,6 +204,7 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		SessionID     string          `json:"session_id"`
 		InteractionID string          `json:"interaction_id"`
 		Answers       json.RawMessage `json:"answers"`
+		Reason        string          `json:"reason"`
 	}
 	_ = json.Unmarshal(args, &a)
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
@@ -232,16 +240,21 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 	if err != nil {
 		return "", err
 	}
+	// A card handed to this conversation before the user (ask_route.go): its answer is the task's decision.
+	todo, routed := s.routedTo(ix.ID, self)
 	var res struct {
 		OK     bool   `json:"ok"`
 		Status string `json:"status"`
 	}
 	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsAnswer, map[string]any{"machine_id": ix.MachineID,
-		"session_id": ix.SessionID, "interaction_id": ix.ID, "answers": answers}, &res); err != nil {
+		"session_id": ix.SessionID, "interaction_id": ix.ID, "answers": answers, "reason": clip(oneLine(a.Reason), 120)}, &res); err != nil {
 		return "", err
 	}
 	if !res.OK {
 		return "", interactionEnded(ix.ID, res.Status)
+	}
+	if routed {
+		s.askAnswered(ctx, todo, self, ix, answers, a.Reason)
 	}
 	var b strings.Builder
 	b.WriteString("Answered for the user:\n")
@@ -268,8 +281,9 @@ func interactionEnded(id, status string) error {
 }
 
 // interactionAnswers checks a question's answers against the questions themselves: every question answered, by the
-// wording it was asked, with options it offers. A multi-select takes several labels and becomes the app's own form,
-// "A, B". Free text is refused: the user answers that in the app, or through agent_send.
+// wording it was asked, with options it offers (an option written out with its description counts as its label,
+// optionLabel). A multi-select takes several labels and becomes the app's own form, "A, B". Free text is refused: the
+// user answers that in the app, or through agent_send.
 func interactionAnswers(ix proto.Interaction, args json.RawMessage) (map[string]string, error) {
 	var raw map[string]json.RawMessage
 	if len(args) == 0 || json.Unmarshal(args, &raw) != nil {
@@ -297,7 +311,7 @@ func interactionAnswers(ix proto.Interaction, args json.RawMessage) (map[string]
 				return nil, fmt.Errorf("%q takes an option label or an array of them (options: %s)", q.Question, optionLabels(q))
 			}
 			if !q.MultiSelect {
-				answers[q.Question] = one
+				answers[q.Question] = optionLabel(q, one)
 			} else {
 				many = []string{one}
 			}
@@ -305,6 +319,9 @@ func interactionAnswers(ix proto.Interaction, args json.RawMessage) (map[string]
 		if many != nil {
 			if !q.MultiSelect && len(many) > 1 {
 				return nil, fmt.Errorf("%q takes one option; pick one of: %s", q.Question, optionLabels(q))
+			}
+			for i, a := range many {
+				many[i] = optionLabel(q, a)
 			}
 			answers[q.Question] = strings.Join(many, ", ")
 		}
@@ -335,6 +352,109 @@ func checkOptions(q proto.Question, answer string) error {
 		return fmt.Errorf("%q takes one option; pick one of: %s", q.Question, optionLabels(q))
 	}
 	return nil
+}
+
+// optionLabel is the label of the option answer names: answer itself when it is a label. The delegation input lists
+// an option as "label：description" (prompts/agents/delegate_input.md), and a model sometimes copies the whole line
+// (#3929), so an answer that writes out exactly one option, its label and then its own description, is that option's
+// label too: with "：", ":" or a dash between them, or the description in brackets, and spaces or quotes around the
+// label or the whole answer. Anything else, the model's own words after a label or text that reads as two options,
+// comes back as it is, for checkOptions to refuse.
+func optionLabel(q proto.Question, answer string) string {
+	for _, o := range q.Options {
+		if o.Label == answer {
+			return answer
+		}
+	}
+	label := ""
+	for _, o := range q.Options {
+		if !writesOut(answer, o) {
+			continue
+		}
+		if label != "" && label != o.Label {
+			return answer
+		}
+		label = o.Label
+	}
+	if label == "" {
+		return answer
+	}
+	return label
+}
+
+// labelSeparators may come between an option's label and its description; a longer one before its prefix.
+var labelSeparators = []string{"——", "--", "：", ":", "—", "–", "－", "-"} // i18n-ignore: punctuation matched in a model's answer
+
+// descBrackets may hold the description after an option's label.
+var descBrackets = [][2]string{{"（", "）"}, {"(", ")"}} // i18n-ignore: punctuation matched in a model's answer
+
+// labelQuotes may wrap an option's label, or a whole answer.
+var labelQuotes = [][2]string{{`"`, `"`}, {"'", "'"}, {"`", "`"}, {"“", "”"}, {"‘", "’"}, {"「", "」"}, {"『", "』"}} // i18n-ignore: punctuation matched in a model's answer
+
+// writesOut: answer is option o written out, its label alone or followed by its own description.
+func writesOut(answer string, o proto.QuestionOption) bool {
+	label := strings.TrimSpace(o.Label)
+	if label == "" {
+		return false
+	}
+	s := unquoted(answer)
+	if s == label {
+		return true
+	}
+	desc := plainDescription(o.Description)
+	if desc == "" {
+		return false
+	}
+	rest, ok := cutLabel(s, label)
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSpace(rest)
+	for _, sep := range labelSeparators {
+		if d, ok := strings.CutPrefix(rest, sep); ok {
+			return plainDescription(d) == desc
+		}
+	}
+	for _, b := range descBrackets {
+		if d, ok := strings.CutPrefix(rest, b[0]); ok {
+			d, ok = strings.CutSuffix(d, b[1])
+			return ok && plainDescription(d) == desc
+		}
+	}
+	return false
+}
+
+// unquoted is s without the spaces and quotes around it.
+func unquoted(s string) string {
+	s = strings.TrimSpace(s)
+	for again := true; again; {
+		again = false
+		for _, p := range labelQuotes {
+			if len(s) > len(p[0])+len(p[1]) && strings.HasPrefix(s, p[0]) && strings.HasSuffix(s, p[1]) {
+				s, again = strings.TrimSpace(s[len(p[0]):len(s)-len(p[1])]), true
+				break
+			}
+		}
+	}
+	return s
+}
+
+// cutLabel is what follows label at the start of s, the label bare or in quotes.
+func cutLabel(s, label string) (string, bool) {
+	if rest, ok := strings.CutPrefix(s, label); ok {
+		return rest, true
+	}
+	for _, p := range labelQuotes {
+		if rest, ok := strings.CutPrefix(s, p[0]+label+p[1]); ok {
+			return rest, true
+		}
+	}
+	return "", false
+}
+
+// plainDescription is an option's description as compared: its words one space apart, no full stop at the end.
+func plainDescription(s string) string {
+	return strings.TrimRight(strings.Join(strings.Fields(s), " "), "。.") // i18n-ignore: punctuation matched in a model's answer
 }
 
 func optionLabels(q proto.Question) string {
@@ -430,6 +550,9 @@ func (s *Service) recordingLines(ctx context.Context, e *kb.Engine, items []kb.E
 			extra += " minutes-pending"
 		case kb.MinutesFailed:
 			extra += " minutes-failed"
+		}
+		if r.Trimmed() {
+			extra += " transcript-expired"
 		}
 		items[i].Extra = extra
 	}

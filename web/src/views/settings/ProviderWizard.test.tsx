@@ -554,7 +554,7 @@ describe("ProviderWizard device scope", () => {
   };
 
   beforeEach(() => {
-    Object.assign(getState(), { features: ["builtin_presets", "launcher_scope"], machines: [{ id: "mbp", name: "MacBook", online: true }, { id: "box", name: "Devbox", online: true }] });
+    Object.assign(getState(), { features: ["builtin_presets", "launcher_scope"], machines: [{ id: "mbp", name: "MacBook", online: true }, { id: "box", name: "Test computer", online: true }] });
   });
   afterEach(() => {
     Object.assign(getState(), { machines: [] });
@@ -598,7 +598,7 @@ describe("ProviderWizard device scope", () => {
     expect(button("保存")!.disabled).toBe(true);
     await act(async () => button("保存")!.click());
     expect(put()).toBeUndefined();
-    act(() => button("Devbox")!.click());
+    act(() => button("Test computer")!.click());
     act(() => (document.body.querySelector('button[role="switch"][aria-label="每台电脑存一份"]') as HTMLButtonElement).click());
     expect(button("保存")!.disabled).toBe(false);
     await act(async () => button("保存")!.click());

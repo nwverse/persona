@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -51,6 +52,11 @@ const assistantIdleCompact = standardWindow / 4 * 3
 // schedule_followup waited for a tap on the phone, so a follow-up firing at night just stalled.
 const assistantAllowedTools = "mcp__persona"
 
+// assistantBuiltinTools keeps the headless assistant's file, shell, web, skill and sub-agent capabilities without
+// the software-development, notebook, worktree, LSP, workflow and Claude-specific scheduling surfaces. Persona MCP
+// tools are not affected by this built-in allow-list; scheduling and user questions use their Persona tools instead.
+const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch"
+
 type assistantProc struct {
 	id       string
 	agent    string // "claude" (stream-json) or "codex" (app-server, assistant_codex.go)
@@ -61,7 +67,7 @@ type assistantProc struct {
 	stdin    io.WriteCloser
 	exited   chan struct{}
 	born     time.Time
-	// personaMCPOnly is fixed at Claude process start. A warm spare must still match
+	// personaMCPOnly is fixed at a Claude or Codex process start. A warm spare must still match
 	// the hub's current capability before it becomes a new conversation.
 	personaMCPOnly bool
 	// stderrDone closes when its stderr ends (watchAssistantStderr has read all of it): what a failed start printed
@@ -307,6 +313,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
 		return "", err
+	}
+	if recovery == nil && id != "" {
+		execution = n.heldFallback(id, launcher, execution) // the fallback that answered, for a while (#3788)
 	}
 	if execution.Model != "" {
 		if _, err := n.launcherModelCheck(ctx, launcher, execution.Model); err != nil {
@@ -682,7 +691,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			}
 			recovering := n.recoverAssistantResult(p, ev.IsError, ev.Result, kinds...)
 			if !recovering {
-				n.clearAssistantRecovery(p)
+				n.clearAssistantRecovery(p, !ev.IsError)
 			}
 			p.mu.Lock()
 			manual := p.manual
@@ -759,9 +768,9 @@ func (n *Node) rememberTasks(id string, tasks []string) {
 }
 
 // recoverAssistantTasks runs once the session state is loaded: conversations whose background tasks or monitors
-// were running when the node went down (a deploy restarts it, and systemd kills claude and its children with it)
-// get a message saying so, which wakes them up to re-arm what still matters. Without it they would wait forever
-// for a notification that cannot come. send delivers the message (assistantSend).
+// were running when the node went down (its connection ended and it stopped its conversations, stopAtConnectionEnd,
+// or a service restart killed them with it) get a message saying so, which wakes them up to re-arm what still matters.
+// Without it they would wait forever for a notification that cannot come. send delivers the message (assistantSend).
 func (n *Node) recoverAssistantTasks(send func(id, text string) error) {
 	n.state.mu.Lock()
 	lost := map[string][]string{}
@@ -825,7 +834,7 @@ func (n *Node) assistantSessions() []proto.Session {
 		if path := n.transcriptPath(p.id); path != "" {
 			if st, err := os.Stat(path); err == nil {
 				m := n.meta(path, st)
-				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(m.lastText), st.Size()
+				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(assistantAnswer(m)), st.Size()
 				s.PermissionMode, s.Effort = n.currentModes(p.id, m)
 				setContext(&s, m)
 				// Background shells outlive the turn, as in a pane's session: a channel run (Lark) waits for the turn
@@ -844,6 +853,9 @@ func (n *Node) assistantSessions() []proto.Session {
 				record = reported(turnError, turnErrorKind, record)
 			}
 			record.set(&s)
+		}
+		if p.agent == "codex" && p.cx != nil {
+			p.cx.speedRow(&s)
 		}
 		n.decorate(&s)
 		out = append(out, s)
@@ -867,4 +879,15 @@ func (n *Node) notifyList(list []proto.Session) {
 	n.revsChanged(list)
 	n.mu.Unlock()
 	n.sendSessions(list)
+}
+
+// assistantAnswer is what a conversation's row says it last said: its latest turn's answer from the first words on
+// (transcript.Meta.TurnAnswer), the push body when the turn ends, so a report written before a tool call is not left
+// out for the line after it. Its last words when those are an error notice (the push marks the turn cut off by
+// their start, assistantwire.CutOff) or the tail read held none of the turn's words.
+func assistantAnswer(m quickMeta) string {
+	if m.answer == "" || assistantwire.CutOff(m.lastText) {
+		return m.lastText
+	}
+	return m.answer
 }

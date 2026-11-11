@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -23,6 +23,30 @@ type assistantTurnRecovery struct {
 	running  bool
 	finished bool // a result completed while handover still owned the process; adopt must not migrate it
 	pending  *assistantPendingFailure
+	// launcher and from: what the conversation was asked to run when this chain began; switched: it moved to another
+	// model. A switched chain that answers holds the conversation there (assistant_fallback_hold.go). Under Node.mu.
+	launcher string
+	from     modelExecution
+	switched bool
+}
+
+// newAssistantRecovery is a conversation's chain begun by a failure of launcher running execution (key and current as
+// recoverAssistantResultFor has them), stored on n. Refused again soon after a fallback answered, the same-model retry
+// is spent already: a resend carries the refused turns again (#3788). n.mu is held.
+func (n *Node) newAssistantRecovery(id, launcher string, execution modelExecution, key, current string) *assistantTurnRecovery {
+	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}, launcher: launcher, from: execution}
+	if current != "" {
+		r.used[current] = true
+	}
+	if from, l, ok := n.recentFallback(id); ok && l == launcher {
+		r.from = from // what the user's setting asks for, not the fallback a failure there came from
+		r.retried[key] = true
+	}
+	if n.recoveries == nil {
+		n.recoveries = map[string]*assistantTurnRecovery{}
+	}
+	n.recoveries[id] = r
+	return r
 }
 
 // assistantPendingFailure is a new turn result that arrived while its recovery send was still returning. It is not a
@@ -37,6 +61,10 @@ type assistantRecoveryContextKey struct{}
 // assistantModelServiceFailure is an internal second error-kind entry: Codex's structured error proved a 429/5xx even
 // when its human-readable message contains no status. It is not published as the session's TurnErrorKind.
 const assistantModelServiceFailure = "model-service"
+
+// assistantRecordKind is an internal second error-kind entry: the agent's record classified the failed turn, so its
+// kind (kinds[0], "" for none) is the whole answer on a usage limit and the words are not read for one (#3788).
+const assistantRecordKind = "record"
 
 type assistantRecoveryCall struct {
 	recovery *assistantTurnRecovery
@@ -72,24 +100,26 @@ func (n *Node) noteAssistantRecoveryProcess(ctx context.Context, p *assistantPro
 }
 
 var (
-	assistantServerError = regexp.MustCompile(`\b5[0-9][0-9]\b`)
-	assistantRateLimit   = regexp.MustCompile(`\b429\b`)
-	assistantClientError = regexp.MustCompile(`\b4(?:0[0-9]|1[0-9]|2[0-8]|[3-9][0-9])\b`) // every 4xx but 429
+	assistantServerError = lazyre.New(`\b5[0-9][0-9]\b`)
+	assistantRateLimit   = lazyre.New(`\b429\b`)
+	assistantClientError = lazyre.New(`\b4(?:0[0-9]|1[0-9]|2[0-8]|[3-9][0-9])\b`) // every 4xx but 429
 )
 
 // assistantRecoverableError is deliberately narrower than the Agents' transient-continuation rule. Only the failure
 // classes in #3204 replay a request: an upstream safeguards refusal, throttling, or a 5xx. In particular, the hub's
-// own 400s, authentication, model routing, usage limits and over-context requests remain the user's to fix.
-func assistantRecoverableError(failed bool, result string) bool {
+// own 400s, authentication, model routing, usage limits and over-context requests remain the user's to fix. limitWords:
+// the words may tell a usage limit, as they must when no record classified the failure. With a record, a gateway's
+// "upstream account quota usage limit has been reached" 429 is an ordinary throttle another model gets past (#3788).
+func assistantRecoverableError(failed bool, result string, limitWords bool) bool {
 	if !failed {
 		return false
 	}
 	t := strings.ToLower(strings.TrimSpace(result))
-	if strings.Contains(t, "safeguards flagged") {
+	if assistantSafeguardsRefusal(t) {
 		return true // the provider's transient refusal may itself be an HTTP 400 (#3204)
 	}
-	if strings.Contains(t, "usage limit") || strings.Contains(t, "usage_limit") || strings.Contains(t, "account_quota_exhausted") {
-		return false // Claude's result has no structured kind: a subscription reset is not an ordinary 429 retry
+	if limitWords && (strings.Contains(t, "usage limit") || strings.Contains(t, "usage_limit") || strings.Contains(t, "account_quota_exhausted")) {
+		return false // no record to say otherwise: a subscription reset is not an ordinary 429 retry
 	}
 	if assistantClientError.MatchString(t) {
 		return false // a 400, 401, 403…: ours or the user's to fix, even when the detail mentions an upstream 5xx (#3495)
@@ -98,10 +128,32 @@ func assistantRecoverableError(failed bool, result string) bool {
 		strings.Contains(t, "too many requests") || assistantServerError.MatchString(t)
 }
 
+// assistantSafeguardsRefusal: the provider's safeguards refused the turn.
+func assistantSafeguardsRefusal(result string) bool {
+	return strings.Contains(strings.ToLower(result), "safeguards flagged")
+}
+
+// assistantModelUnavailable: the model asked for does not exist there, or this account cannot use it (Claude Code's
+// "There's an issue with the selected model (…). It may not exist or you may not have access to it.", model_not_found).
+func assistantModelUnavailable(result string) bool {
+	t := strings.ToLower(result)
+	return strings.Contains(t, "issue with the selected model") || strings.Contains(t, "model_not_found") ||
+		strings.Contains(t, "model not found") || strings.Contains(t, "model does not exist")
+}
+
+// recoverySwitched: conversation id's chain has moved it to another model.
+func (n *Node) recoverySwitched(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	r := n.recoveries[id]
+	return r != nil && r.switched
+}
+
 // claudeResultKinds is what the transcript says of the failed turn that just ended (transcript.claudeErrorKind): a
-// result carries only its text, and a usage limit's text need not say "usage limit" (#3495). A turn Claude Code says
-// it goes on with by itself after the reset counts as a usage limit: typing into it would cancel that. Read fresh, not
-// from the list's cache, which keeps a growing transcript's meta for a few seconds.
+// result carries only its text, and a usage limit's text need not say "usage limit" (#3495), nor is every text that
+// says it one (#3788). A turn Claude Code says it goes on with by itself after the reset counts as a usage limit:
+// typing into it would cancel that. A turn error read there comes with assistantRecordKind. Read fresh, not from the
+// list's cache, which keeps a growing transcript's meta for a few seconds.
 func (n *Node) claudeResultKinds(id string) []string {
 	path := n.transcriptPath(id)
 	if path == "" {
@@ -113,12 +165,12 @@ func (n *Node) claudeResultKinds(id string) []string {
 	}
 	f := readQuickMeta(path, st).turnErr
 	if f.resumes {
-		return []string{proto.TurnErrorUsageLimit}
+		return []string{proto.TurnErrorUsageLimit, assistantRecordKind}
 	}
-	if f.kind == "" {
-		return nil
+	if f.text == "" {
+		return nil // no failed turn written (yet): the words decide
 	}
-	return []string{f.kind}
+	return []string{f.kind, assistantRecordKind}
 }
 
 // assistantRecoverable: whether a failed turn is replayed, from its words and the kinds the agent's record gives
@@ -139,13 +191,19 @@ func assistantRecoverable(failed bool, result string, kinds []string) bool {
 			}
 		}
 	}
-	return assistantRecoverableError(failed, result) || slices.Contains(kinds, assistantModelServiceFailure)
+	return assistantRecoverableError(failed, result, !slices.Contains(kinds, assistantRecordKind)) ||
+		slices.Contains(kinds, assistantModelServiceFailure)
 }
 
-func (n *Node) clearAssistantRecovery(p *assistantProc) {
+// clearAssistantRecovery ends p's chain on a result that needs no recovery. answered: the turn succeeded, so a chain
+// that had moved to another model holds the conversation on it (assistant_fallback_hold.go).
+func (n *Node) clearAssistantRecovery(p *assistantProc, answered bool) {
 	if p == nil || p.id == "" {
 		return
 	}
+	p.mu.Lock()
+	launcher, model := p.launcher, p.model
+	p.mu.Unlock()
 	n.mu.Lock()
 	if n.recoveryClosed && n.procs[p.id] != p {
 		if r := n.recoveries[p.id]; r != nil && (r.proc == nil || r.proc == p) {
@@ -154,12 +212,15 @@ func (n *Node) clearAssistantRecovery(p *assistantProc) {
 		owner := p.ownerOr(n)
 		n.mu.Unlock()
 		if owner != n { // the result handler read the old owner before adoption; finish on the current one
-			owner.clearAssistantRecovery(p)
+			owner.clearAssistantRecovery(p, answered)
 		}
 		return
 	}
 	defer n.mu.Unlock()
 	if n.procs[p.id] == p { // a replaced process's late result cannot clear its replacement's recovery
+		if r := n.recoveries[p.id]; answered && r != nil && r.switched && r.launcher == launcher {
+			n.holdFallback(p.id, launcher, r.from, model)
+		}
 		delete(n.recoveries, p.id)
 	}
 }
@@ -196,7 +257,10 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 // recoverAssistantResultFor optionally requires the recovery that captured a pending result to still own the session.
 // That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
 func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
-	if !assistantRecoverable(failed, result, kinds) {
+	// A model this chain switched to that the gateway does not have was the recovery's pick, not the user's: it is
+	// spent, and the chain goes on to the next one (#4283). One the user asked for stays theirs to fix.
+	unavailable := failed && assistantModelUnavailable(result) && n.recoverySwitched(p.id)
+	if !unavailable && !assistantRecoverable(failed, result, kinds) {
 		return false
 	}
 	p.mu.Lock()
@@ -228,14 +292,7 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 				n.mu.Unlock()
 				return false
 			}
-			r = &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
-			if current != "" {
-				r.used[current] = true
-			}
-			if n.recoveries == nil {
-				n.recoveries = map[string]*assistantTurnRecovery{}
-			}
-			n.recoveries[p.id] = r
+			r = n.newAssistantRecovery(p.id, launcher, execution, key, current)
 		}
 		if (expected != nil && r != expected) || (r.proc != nil && r.proc != p) {
 			n.mu.Unlock()
@@ -257,14 +314,7 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		return false
 	}
 	if r == nil {
-		r = &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
-		if current != "" {
-			r.used[current] = true
-		}
-		if n.recoveries == nil {
-			n.recoveries = map[string]*assistantTurnRecovery{}
-		}
-		n.recoveries[p.id] = r
+		r = n.newAssistantRecovery(p.id, launcher, execution, key, current)
 	}
 	r.proc = p
 	if r.running {
@@ -274,6 +324,11 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		p.busy = true
 		p.mu.Unlock()
 		return true
+	}
+	if unavailable || p.agent == "claude" && assistantSafeguardsRefusal(result) {
+		// Claude Code continues a safeguards refusal once by itself ("continuing once with that noted"): a resend on the
+		// same model would be the third try at it (#4283).
+		r.retried[key] = true
 	}
 	same := !r.retried[key]
 	if same {
@@ -415,6 +470,9 @@ func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, 
 		}
 		execution = assistantExecutionForModel(execution, list, next)
 		r.used[next] = true
+		n.mu.Lock()
+		r.switched = true
+		n.mu.Unlock()
 	}
 	err := assistantRecoverySend(withAssistantRecovery(ctx, r, !same), n, p, launcher, cwd, execution)
 	var pending *assistantPendingFailure

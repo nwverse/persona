@@ -38,10 +38,12 @@ import kotlin.coroutines.resumeWithException
  * client accepts: the other hubs of a group, which were learned from a paired hub's authenticated hello. Which of them
  * an endpoint must present is checked per request ([HubHttpClient.health], [spkiFingerprint]).
  *
- * [system] is set only for a pairing without a fingerprint (`fp`): a hub without its own TLS behind a reverse proxy
- * whose certificate comes from a public CA. A certificate that matches no pin is then checked like any HTTPS site:
- * the system's trust store here, the host name in [HubHttpClient]'s verifier. That trusts every CA the system trusts
- * (the same as the iOS app and the web client) instead of one key; a pairing with `fp` never falls back to it.
+ * [system] is set for a pairing without a fingerprint (`fp`): a hub without its own TLS behind a reverse proxy whose
+ * certificate comes from a public CA. A certificate that matches no pin is then checked like any HTTPS site: the
+ * system's trust store here, the host name in [HubHttpClient]'s verifier. That trusts every CA the system trusts (the
+ * same as the iOS app and the web client) instead of one key. A pairing with `fp` sets it only for the link's own
+ * proxied `url` ([HubHttpClient.systemOrigins], #2622), and the verifier refuses a chain this let through for any
+ * other host before a request is sent.
  */
 class SpkiTrustManager(
     fingerprint: String?, pins: Set<String> = emptySet(), private val system: X509TrustManager? = null,
@@ -162,8 +164,35 @@ internal fun managerHeaderFor(url: HttpUrl, hubId: String?, method: String = "GE
     return apiSegments(url)?.let { choice.itemHeader(it, hubId) }
 }
 
+/**
+ * Cloudflare Access answered instead of the hub: a redirect to its login (`*.cloudflareaccess.com` or `/cdn-cgi/access/`),
+ * or a 401 / 403 of Cloudflare's own that is not the hub's JSON and names Access. The hub never redirects and always
+ * answers errors in JSON, so neither can be the hub's.
+ */
+fun isCloudflareAccessBlock(response: Response): Boolean {
+    if (response.isRedirect) {
+        val location = response.header("Location")?.let { response.request.url.resolve(it) } ?: return false
+        return location.host.endsWith(".cloudflareaccess.com") || location.encodedPath.startsWith("/cdn-cgi/access/")
+    }
+    if (response.code != 401 && response.code != 403) return false
+    if (response.header("WWW-Authenticate")?.contains("Cloudflare-Access", ignoreCase = true) == true) return true
+    if (response.header("Server")?.equals("cloudflare", ignoreCase = true) != true) return false
+    if (response.header("Content-Type")?.contains("json", ignoreCase = true) == true) return false
+    val body = runCatching { response.peekBody(16 * 1024).string() }.getOrNull() ?: return false
+    return body.contains("cloudflareaccess.com", ignoreCase = true) || body.contains("Cloudflare Access", ignoreCase = true)
+}
+
+/** Same scheme, host and port: the origin a Cloudflare Access token belongs to. */
+internal fun HttpUrl.sameOrigin(other: HttpUrl) = scheme == other.scheme && host == other.host && port == other.port
+
 /** How TLS pins are keyed: the host as OkHttp hands it to the hostname verifier, and the port. */
 internal fun tlsKey(host: String, port: Int) = "${host.lowercase()}:$port"
+
+/**
+ * [HubFailure.code] of a refused certificate at a pinned pairing's proxied address ([HubHttpClient.systemOrigins]): its
+ * [HubFailure.detail] is that address.
+ */
+const val PROXY_CERTIFICATE = "proxy_certificate"
 
 /** Additional VPN ranges must be supplied by the caller; endpoint labels are not trusted. */
 class LocalAddressPolicy(private val isVpnAddress: (InetAddress) -> Boolean = { false }) {
@@ -188,11 +217,21 @@ class HubHttpClient(
     socketFactory: SocketFactory = SocketFactory.getDefault(),
     /** Where HTTPS without a pinned fingerprint is checked ([SpkiTrustManager]); tests pass their own CA. */
     systemTrust: () -> X509TrustManager = ::systemTrustManager,
+    /**
+     * The HTTPS origins ("host:port", [tlsKey]) of a pairing with a fingerprint that are reached through a reverse
+     * proxy or tunnel with a public CA's certificate (#2622, [HubPairingClient.systemTrustedOrigin]): the link's `url`
+     * on a host name, not on the hub's own TLS port. Those alone are checked like [systemTrusted]'s; every other
+     * endpoint stays pinned.
+     */
+    val systemOrigins: Set<String> = emptySet(),
 ) : AutoCloseable {
     val client: OkHttpClient
     /** No fingerprint from pairing: HTTPS endpoints are checked against the system CAs and the host name. */
     val systemTrusted: Boolean = fingerprint == null
-    private val trust = SpkiTrustManager(fingerprint, pins, if (systemTrusted) systemTrust() else null)
+    private val trust = SpkiTrustManager(fingerprint, pins, if (systemTrusted || systemOrigins.isNotEmpty()) systemTrust() else null)
+
+    /** This endpoint is checked against the system CAs and its host name, not a pin. */
+    fun systemTrusts(url: HttpUrl): Boolean = url.isHttps && (systemTrusted || tlsKey(url.host, url.port) in systemOrigins)
     @Volatile private var extraPins = pins
     /** For a group: which hub's pin each TLS endpoint must present, set by the connection. */
     private val expectedPins = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -212,6 +251,13 @@ class HubHttpClient(
         expectedPins.putAll(keys)
     }
 
+    /**
+     * The Cloudflare Access service token a request to [HttpUrl] carries (docs/operations/network.md "Behind Cloudflare
+     * Access"): the owner's answer for one of its paired hub's own HTTPS origins, null for anything else. Asked per
+     * request, so a token saved in settings, or an origin the hub lists later, takes effect at once.
+     */
+    @Volatile var access: (HttpUrl) -> persona.core.contracts.api.HubAccess? = { null }
+
     /** The pin the endpoint at [url] presented in its last TLS handshake. */
     internal fun seenPin(url: HttpUrl): String? = seenPins[tlsKey(url.host, url.port)]
 
@@ -221,8 +267,9 @@ class HubHttpClient(
             .sslSocketFactory(tls.socketFactory, trust)
             .hostnameVerifier { host, session ->
                 val leaf = session.peerCertificates.firstOrNull() as? X509Certificate
-                if (leaf != null && !trust.matches(leaf) && systemTrusted) {
-                    // Passed the system CAs in the trust manager: the name must be this endpoint's, as for any site.
+                if (leaf != null && !trust.matches(leaf) && (systemTrusted || tlsKey(host, session.peerPort) in systemOrigins)) {
+                    // Passed the system CAs in the trust manager: the name must be this endpoint's, as for any site. A
+                    // pinned pairing's other endpoints fall to the next branch and are refused.
                     OkHostnameVerifier.verify(host, session)
                 } else if (leaf == null || !trust.matches(leaf)) false else {
                     val key = tlsKey(host, session.peerPort)
@@ -268,7 +315,20 @@ class HubHttpClient(
                     val authority = url.toString().substringAfter("://").substringBefore('/')
                     builder.url(url.newBuilder().host(peer.hostAddress!!).build()).header("Host", authority)
                 }
-                chain.proceed(builder.build())
+                // Only on HTTPS and only to the hub the owner names for this origin: redirects are not followed, so the
+                // headers never reach the Access login page or any other host.
+                val token = if (url.isHttps) access(url) else null
+                token?.let {
+                    builder.header(persona.core.contracts.api.HubAccess.ClientIdHeader, it.clientId)
+                        .header(persona.core.contracts.api.HubAccess.ClientSecretHeader, it.clientSecret)
+                }
+                val response = chain.proceed(builder.build())
+                if (isCloudflareAccessBlock(response)) {
+                    val status = response.code
+                    response.close()
+                    throw HubFailure(if (token != null) HubError.AccessRejected else HubError.AccessRequired, status = status)
+                }
+                response
             }
             .addNetworkInterceptor { chain ->
                 // Inspect the actual peer before sending headers, including after DNS resolution.
@@ -300,8 +360,18 @@ class HubHttpClient(
         // closes it as soon as the body's Content-Length bytes are read, and over HTTP/2 the stream's end can still be on
         // its way in a frame of its own; the read that waits for it then fails ("Connection failed", #1519).
         val caller = if (!fresh) client else client.newBuilder().connectionPool(ConnectionPool(1, 1, TimeUnit.SECONDS)).build()
-        caller.newCall(Request.Builder().url(url).build()).awaitResponse().use { response ->
-            if (url.isHttps) {
+        val proxied = systemOrigins.isNotEmpty() && systemTrusts(url)
+        val call = try { caller.newCall(Request.Builder().url(url).build()).awaitResponse() }
+        catch (error: Exception) {
+            // The link's proxied address (#2622): its certificate is checked like any site's, so a refusal there is the
+            // proxy's certificate, named as such, not a hub that changed its key.
+            val failure = HubFailure.from(error)
+            if (proxied && failure.kind == HubError.CertificateMismatch) throw HubFailure(HubError.CertificateMismatch,
+                code = PROXY_CERTIFICATE, detail = endpoint.url, retryable = false, cause = error)
+            throw error
+        }
+        call.use { response ->
+            if (url.isHttps && !proxied) {
                 // The trust manager accepts every pin of the group; the leaf must be this endpoint's own hub's.
                 val pin = expectedPin ?: fingerprint.takeIf { extraPins.isNotEmpty() }
                 if (pin != null && seenPin(url) != pin) throw HubFailure(HubError.CertificateMismatch, retryable = false)

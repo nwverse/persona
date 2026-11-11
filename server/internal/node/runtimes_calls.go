@@ -95,6 +95,7 @@ func errRuntimeUnsupported(label, what string) error {
 
 // runtimeCallParams are the parameters of a hub call about a runtime's session that the node looks at.
 type runtimeCallParams struct {
+	Force          bool          `json:"force"`
 	SessionID      string        `json:"session_id"`
 	Text           string        `json:"text"`
 	Images         []proto.Image `json:"images"`
@@ -108,6 +109,7 @@ type runtimeCallParams struct {
 	ItemID         string        `json:"item_id"`
 	PermissionMode string        `json:"permission_mode"`
 	Effort         string        `json:"effort"`
+	Model          string        `json:"model"`
 }
 
 // runtimeHandle serves a hub call for a session a runtime lists; handled is false for methods that are not about one
@@ -227,7 +229,14 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		if !caps.Close {
 			return nil, errRuntimeUnsupported(label, "从手机关闭"), true
 		}
-		_, err := call("session.close", map[string]any{"session_id": p.SessionID})
+		if p.Force && (n.runtimeAssistant(p.SessionID) || n.runtimeStatus(h, p.SessionID) != proto.StatusBlocked) {
+			return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil), true
+		}
+		closeParams := map[string]any{"session_id": p.SessionID}
+		if p.Force {
+			closeParams["force"] = true
+		}
+		_, err := call("session.close", closeParams)
 		return okResult(err), err, true
 	case "session.archive", "session.unarchive":
 		// Its own archive (archive.go): one that has none keeps the archive Persona's alone.
@@ -267,13 +276,13 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 	case "terminal.unwatch":
 		return okResult(nil), nil, true
 	case "session.modes":
-		if !caps.Modes || strings.Contains(p.SessionID, subagentSep) {
+		if !caps.Modes || p.Model != "" && !caps.Model || strings.Contains(p.SessionID, subagentSep) {
 			return nil, errRuntimeUnsupported(label, "这个操作"), true
 		}
 		if err := validModes(p.PermissionMode, p.Effort); err != nil {
 			return nil, err, true
 		}
-		_, err := call("session.modes", map[string]any{"session_id": p.SessionID, "permission_mode": p.PermissionMode, "effort": p.Effort})
+		_, err := call("session.modes", map[string]any{"session_id": p.SessionID, "permission_mode": p.PermissionMode, "effort": p.Effort, "model": p.Model})
 		return okResult(err), err, true
 	case "session.queue.edit", "session.queue.send_now":
 		return nil, errRuntimeUnsupported(label, "这个操作"), true

@@ -17,9 +17,11 @@ import { machineWithHub } from "../lib/mesh";
 import { baseName, tabLabel } from "../lib/format";
 import { agentKey, isSpacePinned, pinnedSessions } from "../lib/pins";
 import { firstAndCurrent } from "../lib/persona-nav";
-import { sidebarConversations, usePinnedConversations } from "../lib/conversation-pins";
+import { pinOrder, sidebarConversations, splitDirections, usePinnedConversations } from "../lib/conversation-pins";
+import { directionLabel, useDirectionNames } from "../lib/direction-names";
 import { autoConversations, autoOrigin, isAutoConversation, originLabel, type AutoOrigin, type OriginTally } from "../lib/conversation-origins";
 import { ConversationRowMenu, pinnedSectionItems } from "./ConversationMenu";
+import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, type Route } from "../lib/router";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { refresh, useStore } from "../lib/store";
@@ -27,7 +29,7 @@ import { conversationTitle } from "./assistant/conversations";
 import { buildTodoTree, shareTree, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
-import { Collapse, cx, EASE, Kbd, Menu, useMenu, type MenuItem } from "../ui/atoms";
+import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon, type IconName } from "../ui/icons";
 import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
@@ -56,7 +58,7 @@ import { runtimeIdentity, runtimeOrder, runtimeRemoval, runtimeSessions } from "
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, useActiveKey, useGo, useNavPages } from "./SidebarParts";
-import { NavRow, PersonalAgents, PersonaRow, PinnedHeading, SessionRow } from "./SidebarRows";
+import { NavRow, PersonalAgents, PersonaRow, PinnedHeading, SessionRow, SubHeading } from "./SidebarRows";
 import { LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
 import { scoped, useScope, useScoped, useScopedTodos } from "../lib/current-assistant";
@@ -250,8 +252,17 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
-  const pinnedIds = usePinnedConversations();
+  const localPins = usePinnedConversations();
+  // the leader conversations are pinned by the hub, first (#3623): not this browser's to unpin
+  const leaders = assistant?.leaders;
+  const isLeader = (id: string) => !!leaders?.includes(id) && id !== assistant?.main;
+  const pinnedIds = pinOrder(leaders, localPins);
   const { pinned: pinnedConvs, recent } = sidebarConversations(assistant?.conversations ?? [], assistant?.main, pinnedIds, 5, activeKey.startsWith("j:") ? activeKey.slice(2) : undefined);
+  // the leaders are the "Directions" group, under their direction's name (#3519, #3695); this browser's own pins stay
+  // "Pinned", and the rest are "Other chats" once there are directions to tell them from
+  const { directions, pinned: ownPinned } = splitDirections(pinnedConvs, leaders, assistant?.main);
+  const localPinned = ownPinned.length;
+  const directionNames = useDirectionNames(directions.map((c) => `${c.session_id}\u0000${c.title ?? ""}`).join("\u0001"));
   const convs = [...pinnedConvs, ...recent];
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
@@ -267,6 +278,10 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
   const { nav, reg, hover, highlight } = useGlide(activeKey);
   const go = useGo(onNavigate);
   const scrolled = useScrolled(nav);
+
+  const conversationRow = (c: Session, label: string, pinned: boolean) => (
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={label} showState={false} icon={pinned ? "pin" : undefined} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+  );
 
   return (
     <aside className="flex h-full w-full flex-col bg-canvas">
@@ -307,15 +322,16 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
             title={t("sidebar.persona_chats")}
             folded={personaFolded}
             onToggle={togglePersona}
-            // New chat lives with the chats it makes (#3231, after #2303 moved it above the main chat): a labeled
-            // first row, and while the group is folded the same compose icon on its title, one click either way
-            right={personaFolded ? <SectionAdd icon="compose" label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} /> : undefined}
+            // New chat lives with the chats it makes (#3231, after #2303 moved it above the main chat): the compose icon at
+            // the end of the section's title, as on the phone's sidebar, folded or not
+            right={<SectionAdd icon="compose" label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} active={activeKey === "j:new"} />}
           >
-            <NavRow k="j:new" reg={reg} hover={hover} active={activeKey === "j:new"} to={{ name: "persona-new" }} go={go} icon="compose" label={t("sidebar.new_chat")} />
-            {pinnedConvs.length > 0 && <PinnedHeading onMenu={(at) => setChatsMenu(at)} />}
-            {convs.map((c) => (
-              <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={{ name: "persona", sid: c.session_id }} go={go} label={conversationTitle(c)} showState={false} icon={pinnedIds.includes(c.session_id) ? "pin" : undefined} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
-            ))}
+            {directions.length > 0 && <SubHeading label={t("sidebar.directions")} />}
+            {directions.map((c) => conversationRow(c, directionLabel(directionNames, c.session_id, conversationTitle(c)), false))}
+            {ownPinned.length > 0 && <PinnedHeading onMenu={(at) => setChatsMenu(at)} />}
+            {ownPinned.map((c) => conversationRow(c, conversationTitle(c), true))}
+            {directions.length > 0 && recent.length > 0 && <SubHeading label={t("sidebar.other_chats")} />}
+            {recent.map((c) => conversationRow(c, conversationTitle(c), false))}
             {assistant && <AutoConversations conversations={assistant.conversations} main={assistant.main} shown={convs} activeKey={activeKey} holds={autoHolds} reg={reg} hover={hover} go={go} />}
             {assistant && <NavRow k="history" reg={reg} hover={hover} active={activeKey === "history"} to={{ name: "history" }} go={go} icon="list" label={t("sidebar.all_chats")} hint={assistant.conversations.length > convs.length ? String(assistant.conversations.length) : undefined} />}
           </Section>
@@ -326,8 +342,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
         {/* the phone's Agents page shows them already: the drawer over it doesn't build them twice */}
         {!(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} foldable />}
       </div>
-      {convMenu && <ConversationRowMenu s={convMenu.s} main={convMenu.s.session_id === assistant?.main} pinned={pinnedIds.includes(convMenu.s.session_id)} anchor={convMenu.anchor} at={convMenu.at} onClose={() => setConvMenu(null)} />}
-      {chatsMenu && <Menu anchor={chatsMenu.anchor ?? null} point={chatsMenu.point} onClose={() => setChatsMenu(null)} align="right" width={200} header={t("sidebar.pinned_section")} items={pinnedSectionItems(pinnedConvs.length)} />}
+      {convMenu && <ConversationRowMenu s={convMenu.s} main={convMenu.s.session_id === assistant?.main} pinned={pinnedIds.includes(convMenu.s.session_id)} leader={isLeader(convMenu.s.session_id)} anchor={convMenu.anchor} at={convMenu.at} onClose={() => setConvMenu(null)} />}
+      {chatsMenu && <Menu anchor={chatsMenu.anchor ?? null} point={chatsMenu.point} onClose={() => setChatsMenu(null)} align="right" width={200} header={t("sidebar.pinned_section")} items={pinnedSectionItems(localPinned)} />}
       {/* subscription rate-limit windows (#2432): nothing is drawn without data */}
       <SidebarUsage />
       <NodePrompt />
@@ -431,9 +447,9 @@ function MorePages({ more, reg, hover, activeKey, go }: { more: NavPage[]; reg: 
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{t("sidebar.more_pages")}</span>
         {folded && counted.length > 0 && <span aria-hidden className={cx("size-1.5 rounded-full", DOT_CLASS[counted[0].badgeTone ?? "accent"])} />}
         <span className="text-[11px] text-ink-3 tabular-nums">{more.length}</span>
-        <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+        <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
       </button>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
           {more.map((p) => <NavRow key={p.k} {...p} reg={reg} hover={hover} active={activeKey === p.k} go={go} />)}
         </div>
@@ -700,7 +716,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         {foldable ? (
           <button type="button" aria-expanded={!folded} onClick={toggleBlock} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
             <span className="min-w-0 truncate">Agents</span>
-            <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] duration-200 group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+            <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           </button>
         ) : (
           <span className="min-w-0 flex-1 text-[11px] font-semibold text-ink-3">Agents</span>
@@ -727,7 +743,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         ]} />
       )}
       <FoldScope.Provider value={AGENTS_FOLD}>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
       <div inert={folded || undefined}>
       <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={chooseGroupingOutOfChatList} />
       <FilterBar selection={filter} counts={filterTotals} onChoose={choose} botmux={botmux} />
@@ -988,9 +1004,9 @@ function AutoConversations({ conversations, main, shown, activeKey, holds, reg, 
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{t("sidebar.auto_chats")}</span>
         {folded && <TallyMark tally={total} />}
         <span className="text-[11px] text-ink-3 tabular-nums">{total.count}</span>
-        <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+        <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
       </button>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
           {groups.map((g) => {
             const k = `auto:${g.origin}`;
@@ -1052,9 +1068,10 @@ function AgentSection({ group, machines, byTodo, showHost, reg, hover, activeKey
 
 // A section's "+" (a new conversation, a new agent): quiet, next to the section's title.
 /** A small button at the end of a section's heading: "+" (add), or another page of the section (`icon`). */
-function SectionAdd({ label, to, go, onClick, icon: name = "plus" }: { label: string; to?: Route; go?: GoFn; onClick?: () => void; icon?: IconName }) {
-  const cls = "touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 hover:bg-hover hover:text-ink-2";
+/** A section title's own action as an icon (New chat on Persona chats, New group…); `active`: the page it opens is open. */
+function SectionAdd({ label, to, go, onClick, icon: name = "plus", active }: { label: string; to?: Route; go?: GoFn; onClick?: () => void; icon?: IconName; active?: boolean }) {
+  const cls = cx("touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] hover:bg-hover hover:text-ink-2", active ? "bg-hover text-ink" : "text-ink-3");
   const icon = <Icon name={name} size={12} stroke={2} />;
-  if (to && go) return <a href={href(to)} onClick={go(to)} title={label} aria-label={label} className={cls}>{icon}</a>;
+  if (to && go) return <a href={href(to)} onClick={go(to)} title={label} aria-label={label} aria-current={active ? "page" : undefined} className={cls}>{icon}</a>;
   return <button type="button" onClick={onClick} title={label} aria-label={label} className={cls}>{icon}</button>;
 }

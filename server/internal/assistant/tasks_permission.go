@@ -64,3 +64,19 @@ func (s *Service) claudeDefaultMode(ctx context.Context, machine string) string 
 	}
 	return ""
 }
+
+// setPlanThen records, on the parameters of a start in plan mode, the mode the session goes on in once its plan is
+// approved (#3784): what a writable start with no mode of its own would run in (taskPermission). The node applies it
+// whichever surface approves the plan (node/planthen.go). Nothing for a start in another mode, one that names it
+// already, or when that mode is plan itself.
+func (s *Service) setPlanThen(ctx context.Context, machine string, params map[string]any) {
+	if mode, _ := params["permission_mode"].(string); mode != "plan" {
+		return
+	}
+	if then, _ := params["plan_then"].(string); then != "" {
+		return
+	}
+	if then := s.taskPermission(ctx, machine, nil); then != "plan" {
+		params["plan_then"] = then
+	}
+}

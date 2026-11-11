@@ -14,11 +14,11 @@
         <item quantity="other">%1$d done</item>
     </plurals>
     <string name="designsystem_core_fleet_all_done">All caught up</string>
-    <string name="designsystem_core_fleet_permission_waiting">Waiting for your approval</string>
+    <string name="designsystem_core_fleet_permission_waiting">Needs your permission</string>
     <string name="designsystem_core_fleet_permission_detail">Approve: %1$s</string>
-    <string name="designsystem_core_fleet_plan_waiting">Plan waiting for approval</string>
+    <string name="designsystem_core_fleet_plan_waiting">Plan awaiting approval</string>
     <string name="designsystem_core_fleet_plan_detail">Plan: %1$s</string>
-    <string name="designsystem_core_fleet_question_waiting">Asking you</string>
+    <string name="designsystem_core_fleet_question_waiting">Has a question</string>
     <string name="designsystem_core_fleet_item_working">Working</string>
     <string name="designsystem_core_fleet_item_done">Done</string>
     <string name="designsystem_core_fleet_screen_waiting">Terminal needs you</string>
@@ -139,6 +139,8 @@
     <string name="designsystem_core_compact_before">%1$s tokens before</string>
     <string name="designsystem_core_compact_unit">1000</string>
     <string name="designsystem_core_compact_count">%1$sK</string>
+    <!-- Only a language whose compact unit is 1000 steps up to millions (persona.core.contracts.compactCount); Chinese and Japanese count in ten-thousands. -->
+    <string name="designsystem_core_compact_millions" translatable="false">%1$sM</string>
     <plurals name="designsystem_core_work_tools">
         <item quantity="one">%1$d tool</item>
         <item quantity="other">%1$d tools</item>
@@ -203,6 +205,24 @@
         <item quantity="other">Waking it in %1$d hours</item>
     </plurals>
     <string name="designsystem_core_wake_in_hours_minutes">Waking it in %1$d h %2$d min</string>
+    <string name="designsystem_core_dot_joined">%1$s · %2$s</string>
+    <string name="designsystem_core_closeout_merged_yes">merged</string>
+    <string name="designsystem_core_closeout_merged_no">not merged</string>
+    <string name="designsystem_core_closeout_merged_confirmed">merged ✓</string>
+    <string name="designsystem_core_closeout_merged_contradicted">✗ says merged, isn\'t</string>
+    <string name="designsystem_core_closeout_deployed_yes">deployed</string>
+    <string name="designsystem_core_closeout_deployed_no">not deployed</string>
+    <string name="designsystem_core_closeout_deployed_confirmed">deployed ✓</string>
+    <string name="designsystem_core_closeout_deployed_contradicted">✗ says deployed, isn\'t</string>
+    <string name="designsystem_core_closeout_blocked_on">Blocked on: %1$s</string>
+    <string name="designsystem_core_closeout_blocked">Blocked</string>
+    <string name="designsystem_core_closeout_not_done_missing">Not done: %1$s</string>
+    <string name="designsystem_core_closeout_not_done">Not done</string>
+    <string name="designsystem_core_closeout_done">Reported done</string>
+    <string name="designsystem_core_todo_orphaned">Nobody is working on this</string>
+    <string name="designsystem_core_todo_orphaned_error">closed after an error</string>
+    <string name="designsystem_core_todo_orphaned_closed">closed</string>
+    <string name="designsystem_core_todo_orphaned_offline">computer offline</string>
     <string name="designsystem_core_source_codex_live">Codex live</string>
     <string name="designsystem_core_source_codex_history">Codex history</string>
     <string name="designsystem_core_source_identity_conflict">Identity conflict</string>
@@ -215,6 +235,7 @@
     <string name="designsystem_core_engine_herdr">herdr in a terminal</string>
     <string name="designsystem_core_engine_herdr_app">Terminals opened in the desktop app</string>
     <string name="designsystem_core_engine_orca">Terminals in Orca</string>
+    <string name="designsystem_core_engine_tern">Terminals in Tern</string>
     <string name="designsystem_core_engine_paseo">Agents in Paseo</string>
     <string name="designsystem_core_engine_cindy">Agents in Cindy</string>
     <string name="designsystem_core_engine_offline">Offline, no detection info yet</string>
@@ -314,19 +335,19 @@
     <string name="designsystem_core_mail_outlook">Outlook · Microsoft account</string>
     <string name="designsystem_core_mail_gmail">Gmail · Google account</string>
     <string name="designsystem_core_mail_lark">Lark Mail</string>
-    <string name="designsystem_core_headline_question">%1$s has a question for you</string>
+    <string name="designsystem_core_headline_question">%1$s has a question</string>
     <string name="designsystem_core_headline_elicitation">An MCP form is waiting for you</string>
     <string name="designsystem_core_headline_permission">Wants to use %1$s</string>
     <string name="designsystem_core_headline_permission_detail">Wants to use %1$s: %2$s</string>
     <string name="designsystem_core_headline_agent_permission">%1$s wants to use %2$s</string>
     <string name="designsystem_core_headline_agent_permission_detail">%1$s wants to use %2$s: %3$s</string>
     <string name="designsystem_core_headline_secret_run">Run on %1$s with your password</string>
-    <string name="designsystem_core_headline_screen">A dialog in the terminal needs you</string>
+    <string name="designsystem_core_headline_screen">Terminal needs you</string>
     <string name="designsystem_core_headline_needs_you">Needs you</string>
-    <string name="designsystem_core_ask_question">Asking you</string>
-    <string name="designsystem_core_ask_permission">Needs permission</string>
-    <string name="designsystem_core_ask_plan">Plan to approve</string>
-    <string name="designsystem_core_ask_screen">Terminal dialog</string>
+    <string name="designsystem_core_ask_question">Has a question</string>
+    <string name="designsystem_core_ask_permission">Needs your permission</string>
+    <string name="designsystem_core_ask_plan">Plan awaiting approval</string>
+    <string name="designsystem_core_ask_screen">Terminal needs you</string>
     <string name="designsystem_core_ask_elicitation">MCP request</string>
     <string name="designsystem_core_ask_line">%1$s: %2$s</string>
     <string name="designsystem_core_todo_done">Completed</string>
@@ -362,6 +383,8 @@
     <string name="designsystem_core_endpoint_protocol">Unexpected response format</string>
     <string name="designsystem_core_endpoint_rejected">The hub refused the request</string>
     <string name="designsystem_core_endpoint_rate_limited">Too many requests. Try again later</string>
+    <string name="designsystem_core_endpoint_access_required">This hub is behind Cloudflare Access and needs a service token</string>
+    <string name="designsystem_core_endpoint_access_rejected">Cloudflare Access rejected the service token</string>
     <string name="designsystem_core_endpoint_failed">Connection failed</string>
     <string name="designsystem_core_address_empty">Enter an address</string>
     <string name="designsystem_core_address_spaces">The address can’t contain spaces</string>
@@ -452,7 +475,10 @@
     <string name="designsystem_core_workflow_failed">Failed</string>
     <string name="designsystem_core_workflow_killed">Stopped</string>
     <string name="designsystem_core_workflow_stalled">Gone quiet</string>
-    <string name="designsystem_core_workflow_agents_done">%1$d/%2$d agents done</string>
+    <plurals name="designsystem_core_workflow_agents_done">
+        <item quantity="one">%2$d/%1$d agent done</item>
+        <item quantity="other">%2$d/%1$d agents done</item>
+    </plurals>
     <string name="designsystem_core_always_scope_commands">All commands in this conversation</string>
     <string name="designsystem_core_always_scope_read_directory">All reads in this directory in this conversation</string>
     <string name="designsystem_core_always_scope_edit_directory">All file edits in this directory in this conversation</string>

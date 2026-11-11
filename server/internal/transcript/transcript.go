@@ -216,12 +216,15 @@ type Meta struct {
 	TurnErrorAfterWork bool
 	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next
 	// turn's start sets it back. turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
-	turnWorked    bool
+	turnWorked bool
+	// turnParts: the latest turn's words so far, for TurnAnswer (answer.go).
+	turnParts     []AnswerPart
 	turnErrorLine string
 	// codexLimitFull: when the full windows of a rollout's latest rate limits (Codex's own limit, at 100%) reset, the
 	// latest of them; zero when none is full. A usage-limit failure resets then (TurnErrorResetsAt).
 	codexLimitFull time.Time
-	// codexSeen: newer rollouts record an item both as event_msg/item_completed and in history_mutation.
+	// codexSeen: newer rollouts record an item both as event_msg/item_completed and in history_mutation, within
+	// one turn: the ids of the turn under way (task_started drops them, as a window starting there has none).
 	codexSeen   map[string]bool
 	codexTurnID string
 	codexUserID string
@@ -308,6 +311,11 @@ var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also
 // <persona-context> (#3182).
 var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
 
+// ViewErrorsRe matches the <persona-view-errors> feedback the node puts after the snapshot when the assistant's last
+// replies drew rich views that failed their check (node/assistant_context.go turnContext): for the model, like the
+// snapshot. Left in, it became a user item of its own before the message, its raw tags in the user's bubble.
+var ViewErrorsRe = lazyre.New(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*`)
+
 var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
 
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
@@ -351,6 +359,11 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		meta.trackActivity(it)
 		meta.trackPlan(it)
+		if it.Wake || it.Role == "user" && !it.Queued && (it.Kind == proto.KindText || it.Kind == proto.KindImage) {
+			// A new turn's words start afresh (TurnAnswer): a photo with no caption and a command that runs the model
+			// start one too, though they do not reach ClaudeTurnStarted.
+			meta.turnParts = nil
+		}
 		switch {
 		case it.Wake:
 			meta.LastTurnWake = true
@@ -759,6 +772,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 					}
 					continue
 				}
+				meta.turnTool()
 				it := mk(i, "assistant", proto.KindToolUse)
 				it.ToolUseID = b.ID
 				it.ToolName = b.Name
@@ -778,6 +792,7 @@ func (m *Meta) said(t string, ts time.Time) {
 	if t != "" {
 		m.LastText = t
 		m.tree.said = t
+		m.turnSaid(t)
 	}
 	m.LastTextAt = ts
 	m.tree.saidAt, m.tree.spoke = ts, true

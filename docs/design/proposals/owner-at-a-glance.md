@@ -1,6 +1,6 @@
 # Proposal: the owner sees every direction at a glance
 
-Status: proposal (#3465), nothing built yet. Covers hub, prompts, web, iOS / Mac and Android, plus a contract with
+Status: proposal (#3465); H1 built (#3494, #3519, #3530), H2 built (#3561, `docs/assistant/todos.md` "Concerns"); H3 built (#3607, #3608, #3679, `docs/assistant/unified-entry.md` "New chat opens a direction", "New agent goes under a leader", "Names and progress"); P1 built (#3609). Covers hub, prompts, web, iOS / Mac and Android, plus a contract with
 work-log extensions.
 
 ## 1. Goal

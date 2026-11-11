@@ -2,12 +2,13 @@ package assistant
 
 import (
 	"cmp"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -33,6 +34,7 @@ var triageSections = []string{triageWaiting, triageWorking, triageJustDone, tria
 // The SOP's rules, by name.
 const (
 	ruleFailedStart    = "failed_start"
+	ruleSuperseded     = "superseded"
 	ruleAgentAsks      = "agent_asks"
 	ruleOwnerDecides   = "owner_decides"
 	ruleAgentRunning   = "agent_running"
@@ -297,7 +299,7 @@ func triageDueBy(t Todo, loc *time.Location) (time.Time, bool) {
 		return *t.DueAt, true
 	}
 	if loc == nil {
-		loc = time.Local
+		loc = time.UTC
 	}
 	day, err := time.ParseInLocation("2006-01-02", t.DueDate, loc)
 	if err != nil {
@@ -306,8 +308,15 @@ func triageDueBy(t Todo, loc *time.Location) (time.Time, bool) {
 	return day.AddDate(0, 0, 1).Add(-time.Second), true
 }
 
-// triageShelvable: a task (an agent was linked, or a conversation handed it out) with no due date ahead.
+// triageShelvable: a task (an agent was linked, or a conversation handed it out) with no due date ahead. An open concern
+// never is (docs/assistant/todos.md "Concerns", #3582): it waits for the secretary's report, however long, and sits in
+// Working while an agent of it runs, else in Other open (triageTodo keeps it out of Done too). The clients get the same
+// rule with W1 / I1 / A1, and the shared fixtures follow then; so does whether a concern may share a row with a related
+// to-do (triageTodos still merges it like any to-do).
 func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
+	if t.Kind == db.KindConcern {
+		return false
+	}
 	if due, ok := triageDueBy(t, loc); ok && !due.Before(now) {
 		return false
 	}
@@ -316,19 +325,27 @@ func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
 
 // triageTodo places one to-do by the SOP's decision table, first match wins (docs/assistant/todo-status-sop.md).
 // restoredAt is a restore from Shelved (zero on the hub: restores are kept on each device); loc is the user's zone, for
-// a due day.
-func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc *time.Location) todoTriage {
+// a due day; superseded: a failed start whose row's work really finished (triageSupersededFailedStarts, #3713).
+func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc *time.Location, superseded bool) todoTriage {
 	last := triageLastActivity(t, look, restoredAt)
 	status := triageStatus(t.Todo, look, now)
 	recent := func(at time.Time) bool { return now.Sub(at) < triageJustDoneFor }
 	ask := triageOpenAsk(t.Ask)
 	at := func(section, rule string) todoTriage { return todoTriage{Section: section, Rule: rule, Last: last} }
 	review := triageReviewState(t.Todo)
+	// An open concern closes only with the secretary's report: nothing else files it with the finished ones.
+	concern := t.Kind == db.KindConcern && t.DoneAt == nil
 
 	switch {
 	case status == "failed":
+		if superseded { // the same piece of work finished in a related to-do: history, nothing left to retry
+			return at(cond(recent(cmp.Or(derefTime(t.DoneAt), last)), triageJustDone, triageDone), ruleSuperseded)
+		}
 		if now.Sub(last) < triageShelveAfter {
 			return at(triageWaiting, ruleFailedStart)
+		}
+		if concern {
+			return at(triageOther, ruleRest)
 		}
 		return at(triageDone, ruleFailedStart)
 	case status == "needs_you" || status == "interrupted":
@@ -339,9 +356,9 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageWorking, ruleAgentRunning)
 	case t.DoneAt != nil:
 		return at(cond(recent(*t.DoneAt), triageJustDone, triageDone), ruleClosed)
-	case acceptanceStands(t.Todo):
+	case !concern && acceptanceStands(t.Todo):
 		return at(cond(recent(triageLatestReview(t.Supervision).At), triageJustDone, triageDone), ruleAccepted)
-	case t.Delivery != nil && t.Delivery.State == deliveryLive:
+	case !concern && t.Delivery != nil && t.Delivery.State == deliveryLive:
 		return at(cond(recent(cmp.Or(t.Delivery.At, last)), triageJustDone, triageDone), ruleDeployed)
 	case status == "unread" || review == reviewPending || ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone):
 		return at(triageJustDone, ruleFinishedUnseen)
@@ -351,6 +368,14 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageShelved, ruleStale)
 	}
 	return at(triageOther, ruleRest)
+}
+
+// derefTime is *at, or the zero time.
+func derefTime(at *time.Time) time.Time {
+	if at == nil {
+		return time.Time{}
+	}
+	return *at
 }
 
 func cond[T any](c bool, a, b T) T {
@@ -375,9 +400,9 @@ func triageCountsAsOpen(t Todo, tr todoTriage) bool {
 // ---- related to-dos ----
 
 var (
-	triageIssueRef  = regexp.MustCompile(`#(\d{2,7})\b`)
-	triagePRTail    = regexp.MustCompile(`[#?].*$`)
-	triageTitleDrop = regexp.MustCompile(`[\s\p{Z}\p{P}\p{S}]+`)
+	triageIssueRef  = lazyre.New(`#(\d{2,7})\b`)
+	triagePRTail    = lazyre.New(`[#?].*$`)
+	triageTitleDrop = lazyre.New(`[\s\p{Z}\p{P}\p{S}]+`)
 )
 
 // triageRelatedKeys are the keys that make two to-dos the same piece of work (the web's relatedKeys): the same PR, the
@@ -416,17 +441,9 @@ type triageResult struct {
 	Open, Shelved, Finished int
 }
 
-// triageTodos places every to-do and merges related ones into rows (the web's triageTodos): closed and open to-dos never
-// share a row; a row takes its lead's section; rows go most recently active first. includeQuiet false leaves quiet
-// tasks out, as the sidebar's badge does.
-func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.Location, includeQuiet bool) triageResult {
-	if !includeQuiet {
-		list = slices.DeleteFunc(slices.Clone(list), func(t listedTodo) bool { return t.Quiet })
-	}
-	placed := make(map[string]todoTriage, len(list))
-	for _, t := range list {
-		placed[t.ID] = triageTodo(t, look, now, time.Time{}, loc)
-	}
+// triageRelatedRoots is the row each to-do is in (the web's relatedRoots): the root of its related to-dos, open and
+// closed ones kept apart.
+func triageRelatedRoots(list []listedTodo) func(string) string {
 	parent := map[string]string{}
 	for _, t := range list {
 		parent[t.ID] = t.ID
@@ -452,6 +469,42 @@ func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.
 			}
 		}
 	}
+	return find
+}
+
+// triageSupersededFailedStarts are the failed starts (rule 1) whose row has a to-do that really finished: closed
+// without a start error (the web's supersededFailedStarts, #3713). The work got done another way; such a failed start
+// goes to Just finished / Done and is not counted open.
+func triageSupersededFailedStarts(list []listedTodo) map[string]bool {
+	find := triageRelatedRoots(list)
+	finished := map[string]bool{}
+	for _, t := range list {
+		if t.DoneAt != nil && t.StartError == "" {
+			finished[find(t.ID)] = true
+		}
+	}
+	out := map[string]bool{}
+	for _, t := range list {
+		if t.StartError != "" && finished[find(t.ID)] {
+			out[t.ID] = true
+		}
+	}
+	return out
+}
+
+// triageTodos places every to-do and merges related ones into rows (the web's triageTodos): closed and open to-dos never
+// share a row; a row takes its lead's section (a superseded failed start never leads); rows go most recently active
+// first. includeQuiet false leaves quiet tasks out, as the sidebar's badge does.
+func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.Location, includeQuiet bool) triageResult {
+	if !includeQuiet {
+		list = slices.DeleteFunc(slices.Clone(list), func(t listedTodo) bool { return t.Quiet })
+	}
+	superseded := triageSupersededFailedStarts(list)
+	placed := make(map[string]todoTriage, len(list))
+	for _, t := range list {
+		placed[t.ID] = triageTodo(t, look, now, time.Time{}, loc, superseded[t.ID])
+	}
+	find := triageRelatedRoots(list)
 	var roots []string
 	byRoot := map[string][]listedTodo{}
 	for _, t := range list {
@@ -477,7 +530,9 @@ func triageTodos(list []listedTodo, look triageLookup, now time.Time, loc *time.
 		members := byRoot[r]
 		slices.SortStableFunc(members, func(a, b listedTodo) int {
 			ta, tb := placed[a.ID], placed[b.ID]
-			return cmp.Or(cmp.Compare(order(ta.Section), order(tb.Section)), tb.Last.Compare(ta.Last), strings.Compare(a.ID, b.ID))
+			behind := func(t todoTriage) int { return cond(t.Rule == ruleSuperseded, 1, 0) }
+			return cmp.Or(cmp.Compare(order(ta.Section), order(tb.Section)), cmp.Compare(behind(ta), behind(tb)),
+				tb.Last.Compare(ta.Last), strings.Compare(a.ID, b.ID))
 		})
 		g := triageGroup{Lead: members[0], Members: members, Section: placed[members[0].ID].Section, Triage: map[string]todoTriage{}}
 		for _, m := range members {

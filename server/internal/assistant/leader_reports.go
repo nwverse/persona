@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -18,6 +20,8 @@ import (
 //
 //   - reached its goal: its latest review accepted it;
 //   - needs the owner's decision: its latest review says needs_user;
+//   - needs the owner's decision on a plan: a plan the leader handed out, or the main conversation handed to it
+//     (task_plan supervisor), waits for the owner's Start (#3608; told once per plan, with its id and no to-do);
 //   - is stuck: by the To-dos SOP (todo_triage.go) it sits in Waiting on you, or stopped unfinished (PR to merge, Other
 //     open, Shelved), and nothing of it moved for leaderStuckAfter.
 //
@@ -45,6 +49,8 @@ type leaderReportBook struct {
 	loaded bool
 	told   leaderReportsTold
 	run    sync.Mutex // one sync at a time
+	// plansDue: a leader's plan was just made; the next sync reads the waiting plans even when it is not the loop's.
+	plansDue atomic.Bool
 }
 
 type leaderReportsTold struct {
@@ -145,7 +151,11 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		}
 	}
 	s.todos.mu.RUnlock()
-	if len(tasks) == 0 {
+	var plans []leaderPlan
+	if stuckToo || s.lreports.plansDue.Swap(false) { // a plan waits rarely: the loop's, or right after task_plan made one
+		plans = s.leaderPlans(ctx, cfg.Main, leads, now)
+	}
+	if len(tasks) == 0 && len(plans) == 0 {
 		return
 	}
 	slices.SortFunc(tasks, func(a, b Todo) int { return a.CreatedAt.Compare(b.CreatedAt) })
@@ -156,6 +166,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		look, reached = s.leaderSessions(ctx, tasks)
 	}
 	l, loc := s.lang(ctx), s.location(ctx)
+	names := s.leaderNames(ctx, leads) // before the book's lock: it reads the titles and the knowledge base
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -164,6 +175,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	}
 	told := &b.told
 	var out []assistantwire.LeaderReportEvent
+	var stuckSigs []superviseSignal // the main conversation's one line for each (sigLeaderStuck)
 	for _, t := range tasks {
 		lead := t.Supervision.Supervisor
 		if r := triageLatestReview(t.Supervision); r != nil && !r.At.Before(told.Since) && now.Sub(r.At) < leaderReportsKeep {
@@ -187,14 +199,33 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		if a, ok := asks[t.ID]; ok {
 			lt.Ask = &a
 		}
-		tr := triageTodo(lt, look, now, time.Time{}, loc)
+		tr := triageTodo(lt, look, now, time.Time{}, loc, false) // a failed start is closed: never stuck
 		stuck := !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderStuckAfter && t.DoneAt == nil &&
 			slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
 		if last, ok := told.Stuck[t.ID]; stuck && (!ok || now.Sub(last) >= leaderStuckAfter) {
 			told.Stuck[t.ID] = now
 			key := "stuck|" + t.ID + "|" + now.UTC().Format(time.RFC3339Nano)
-			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section), now))
+			text := leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section)
+			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, text, now))
+			stuckSigs = append(stuckSigs, superviseSignal{Todo: t.ID, Kind: sigLeaderStuck, Key: key,
+				Detail: clip(names[lead]+" · "+oneLine(text), 200)})
 		}
+	}
+	for _, lp := range plans {
+		p := lp.plan
+		key := "plan|" + p.ID
+		if _, done := told.Reviews[key]; done || p.CreatedAt.Before(told.Since) {
+			continue
+		}
+		told.Reviews[key] = now
+		titles := make([]string, 0, len(p.Tasks))
+		for _, t := range p.Tasks {
+			titles = append(titles, clip(oneLine(t.Title), 60))
+		}
+		sum := sha256.Sum256([]byte(key))
+		out = append(out, assistantwire.LeaderReportEvent{ID: "lrep_" + hex.EncodeToString(sum[:8]), Leader: lp.lead,
+			Kind: assistantwire.LeaderDecision, Plan: p.ID, At: p.CreatedAt.UTC(), Text: clip(i18n.T(l, "assistant-reports.leader_plan_waiting",
+				i18n.Args{"tasks": strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep"))}), assistantwire.LeaderReportTextMost)})
 	}
 	// Forget what can no longer be told again: reviews past keeping, stuck marks of to-dos gone or no longer stuck long.
 	for k, at := range told.Reviews {
@@ -218,6 +249,74 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	for _, r := range out {
 		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
 	}
+	if len(stuckSigs) > 0 {
+		go func() { // not under the book's lock
+			for _, g := range stuckSigs {
+				s.signal(g)
+			}
+		}()
+	}
+}
+
+// leaderPlan is a plan waiting for the owner's Start and the leader it is of.
+type leaderPlan struct {
+	plan *TaskPlan
+	lead string
+}
+
+// leaderPlans are the plans of the last 7 days still waiting for the owner's Start that are a current leader's: made in
+// a leader's own conversation, or in the main conversation with a leader as their tasks' supervisor (task_plan
+// supervisor). Read from the plans themselves, not the feed (which pages from its oldest item). A conversation whose
+// plans cannot be read is left out this time.
+func (s *Service) leaderPlans(ctx context.Context, main string, leads []string, now time.Time) []leaderPlan {
+	var out []leaderPlan
+	for _, conv := range append(slices.Clone(leads), main) {
+		if conv == "" {
+			continue
+		}
+		for _, p := range s.openPlans(ctx, conv, now.Add(-7*24*time.Hour)) {
+			lead := conv
+			if conv == main {
+				lead = p.Tasks[0].Supervisor
+			}
+			if slices.Contains(leads, lead) {
+				out = append(out, leaderPlan{plan: p, lead: lead})
+			}
+		}
+	}
+	return out
+}
+
+// openPlans are conversation's plans made since then that still wait for Start and have tasks, oldest first.
+func (s *Service) openPlans(ctx context.Context, conversation string, since time.Time) []*TaskPlan {
+	var all []*TaskPlan
+	if st := s.store(); st == nil {
+		s.tasks.mu.Lock()
+		for _, p := range s.tasks.plans {
+			if p.Conversation == conversation {
+				cp := *p
+				cp.Tasks = slices.Clone(p.Tasks)
+				all = append(all, &cp)
+			}
+		}
+		s.tasks.mu.Unlock()
+	} else {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil
+		}
+		for _, r := range rows {
+			all = append(all, planFromRow(r))
+		}
+	}
+	var out []*TaskPlan
+	for _, p := range all {
+		if p.State == planOpen && len(p.Tasks) > 0 && p.CreatedAt.After(since) {
+			out = append(out, p)
+		}
+	}
+	slices.SortFunc(out, func(a, b *TaskPlan) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out
 }
 
 // leaderSessions finds the sessions of the tasks' agents as the apps get them, asking each machine once; reached says,
