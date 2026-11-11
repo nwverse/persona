@@ -97,6 +97,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 - The Assistant home's list (`android/feature/assistant/src/main/kotlin/persona/feature/assistant/NeedsYou.kt`) takes the same rows.
 - "Requests and history" moves under ⋯, where iOS keeps its history.
 - Tests: the needs-you fixtures, plus a page test that the header count equals the badge.
+- Done (11-11): `agentNeedsYouRows` in `AgentsListInfo.kt` builds the section from `needsYouRows`: muted sessions included, the computer filter applied, shown under All and Needs You and never while searching. A session waiting only in its terminal is a "Terminal needs you" row that opens it. The section's title is the state name. The header, the page's summary and the Needs You filter count these rows. Left: "Requests and history" stays a row (not yet under ⋯), and the Assistant home's list goes with decision 10 (#4339 C11) instead of being recounted.
 
 ### A2, A7, A8, A9
 
