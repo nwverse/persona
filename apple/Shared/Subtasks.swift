@@ -124,7 +124,7 @@ nonisolated struct CodexTasks: Sendable {
                 }
                 if found == nil { found = named(s, s.rootSessionID, codex: true) }
             }
-            guard let found, sessions[found].key != s.key else { return nil }
+            guard let found, sessions[found].sessionID != s.sessionID || sessions[found].key != s.key else { return nil }
             return found
         }
         var parent = [Int](repeating: -1, count: sessions.count)
