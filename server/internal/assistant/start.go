@@ -744,10 +744,20 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 	}
 	delete(p.Params, "source") // app input cannot claim an automated author
 	delete(p.Params, "message_source")
-	if text, ok := p.Params["text"].(string); ok {
+	text, said := p.Params["text"].(string)
+	if said {
 		p.Params["text"] = prompts.ProtectUserMessage(text)
+	} else {
+		_, said = p.Params["images"] // the node asking what its own message runs on carries neither (NodeAnswer)
 	}
-	return s.sendParams(ctx, p)
+	// The owner's message to a round they did not start is read at once, whatever interject_background says
+	// (owner_preempt.go).
+	preempt := said && s.ownerPreempts(p.SessionID)
+	params, err := s.sendParams(ctx, p)
+	if err == nil && preempt {
+		params["interject_background"] = true
+	}
+	return params, err
 }
 
 // sendParams also serves manager-generated notices, which must not be marked as

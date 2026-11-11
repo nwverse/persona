@@ -417,7 +417,17 @@ merges such a message into the turn with `turn/steer` ("Codex" below); a Claude 
 
 - **Switch**: `interject_background` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key
   `assistant.interject_background`), **off by default**. The manager adds `interject_background: true` to `assistant.send` and to the
-  `session.send` parameters it fills in (`SendParams`) while it is on.
+  `session.send` parameters it fills in (`SendParams`) while it is on. It decides for rounds the owner started.
+- **A round the owner did not start is always preempted** (#4926, `assistant/owner_preempt.go`): the owner's own message carries
+  `interject_background: true` whatever the switch says when the conversation's last round was started by a supervision message, a
+  scheduled task or follow-up, another conversation's message (`conversation_send` / `conversation_new`) or a task's notice. Persona
+  continuing the owner's own work (a usage-limit reset, a wake for what it waits on) is not such a round, as under "Background rounds".
+  The manager keeps one mark per conversation, in memory: set when it sends such a message into a conversation its last session list
+  did not show working (a message into a working conversation joins the round in flight, whose starter stands), dropped when another
+  of its messages starts a round there, used up by the owner's next message, and forgotten after 24 hours. So the owner's first message
+  into a background round preempts it, and the round is theirs from then on: the supervision push hold is released (`UserSpoke`) and
+  the answer pushes and mirrors as "A user message absorbed mid-turn" says. Whether the round still runs is the node's check below.
+  After a manager restart the switch decides until the next background round. Codex needs none of this: `turn/steer` merges the message.
 - **Node** (`node/assistant_interject.go`): when such a message reaches a chat that is busy, runs Claude on the CLI (not the Agent SDK bridge
   or a runtime) and whose `system/init` named `claude_code_version` 2.1.139 or later, the message gets `prompts/assistant/interject.md`
   after its live snapshot, and once it is written the node sends the control request `{"subtype":"background_tasks"}` (Ctrl+B: every
