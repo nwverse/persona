@@ -1,1 +1,14 @@
-{}
+{
+  "aria": "选择模型。当前：{model}",
+  "aria_effort": "选择模型。当前：{model}，思考强度：{effort}",
+  "aria_pending": "选择模型。下条消息：{agent} · {model}",
+  "aria_pending_effort": "选择模型。下条消息：{agent} · {model}，思考强度：{effort}",
+  "current_and_next": "当前：{current}\n下条消息：{next}",
+  "loading": "正在读取模型…",
+  "failed": "模型读取失败",
+  "default_model": "默认模型",
+  "effort_xhigh_short": "很高",
+  "other_provider": "运行中的 Agent 暂时不能换供应商",
+  "other_engine": "从 {from} 换到 {to} 需要新开对话",
+  "model_fixed": "运行中的 {agent} 会话不能换模型"
+}
