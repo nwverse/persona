@@ -107,6 +107,8 @@ describe("New agent: provider display names (#5029)", () => {
       ["cc_glm", "cc_glm"],
       ["team-relay", "Team relay"],
     ]);
+    // the startup ID is secondary text (#5029): the rail cell's tooltip, small and monospace in the group's header
+    expect(cells.map((c) => c.title)).toEqual(["我的中转 站 (relay-example-com)", "cc_glm", "Team relay (team-relay)"]);
     expect(group("我的中转 站")).toBeDefined();
     expect(group("cc_glm")).toBeDefined();
     expect(group("relay-example-com")).toBeUndefined();

@@ -12,7 +12,7 @@ import { launcherBlock } from "./launcher-health";
 import type { ModelBinding } from "./model-config";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelPreset, type PanelProvider, type PanelState } from "./model-panel";
 import { isCurrentModel } from "./model-switch";
-import { providerTitle } from "./provider-names";
+import { providerIdNote, providerTitle } from "./provider-names";
 import { effortTitle } from "./session-actions";
 import { modelLabel, type ModelList, type PillSetup } from "./session-models";
 import type { Launcher } from "./types";
@@ -80,6 +80,8 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     const agent = launcherAgent(l.name, launchers, list);
     const followed = bindingFor(l.name, configured);
     const p: PanelProvider = { id: l.name, name: providerTitle(l), engine: agentId(agent), models: null };
+    const idNote = providerIdNote(l);
+    if (idNote) p.idNote = idNote;
     const block = launcherBlock(l);
     if (block) {
       p.unavailable = block.reason;

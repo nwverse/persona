@@ -516,7 +516,10 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                   sections.map((s) => (
                     <div key={s.key} role="group" aria-label={label(s)} data-panel-section={s.kind}>
                       {/* the group's name is its aria-label: the heading is for the eye only */}
-                      <div aria-hidden className="truncate px-2.5 pt-2 pb-1 text-[12px] leading-[1.33] font-medium text-ink-2">{label(s)}</div>
+                      <div aria-hidden className="truncate px-2.5 pt-2 pb-1 text-[12px] leading-[1.33] font-medium text-ink-2">
+                        {label(s)}
+                        {s.kind === "provider" && s.provider?.idNote && <span className="ml-1.5 font-mono text-[11px] font-normal text-ink-3">{s.provider.idNote}</span>}
+                      </div>
                       {s.kind === "provider" && s.provider && <GroupNotes provider={s.provider} onReload={onReload} onHelp={onHelp} />}
                       {s.loading && (
                         <div role="status" className="flex items-center gap-2 px-3 py-2 text-[12px] text-ink-3">

@@ -1600,7 +1600,8 @@ and Android follow in #5117.
   (the one picked, else Model settings'). Codex shows no effort: a start doesn't set it. The workflow mark while ultracode
   is on.
 - **Providers** (`lib/new-agent-panel.ts`): the chosen computer's launchers in the hub's order (`GET
-  /machines/{mid}/launchers`), by display name. Each group begins with **Default** ("Default: Opus 5.5"), which sends no
+  /machines/{mid}/launchers`), by display name, the startup ID small and monospace beside the group's name and in the
+  rail cell's tooltip (#5029). Each group begins with **Default** ("Default: Opus 5.5"), which sends no
   model (Model settings' model on their launcher, else the launcher's own), then the models its agent lists (`GET
   …/launchers/{name}/models`, kept for the page's life with the chat's lists in `lib/session-models.ts`: the one that runs
   is read again on each opening of the sheet, every other one when the panel opens, at most three at a time). A launcher

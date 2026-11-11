@@ -62,6 +62,8 @@ describe("the panel's providers", () => {
       ["codex", "codex", "codex"],
       ["p-relay", "Team relay", "claude"],
     ]);
+    // a display name keeps its startup ID as secondary text (#5029); an rc alias has none
+    expect(p.providers.map((x) => x.idNote)).toEqual([undefined, undefined, undefined, undefined, "p-relay"]);
     const claude = provider(p, "claude");
     expect(claude.models?.map((m) => m.id)).toEqual(["default", "opus", "sonnet", "gateway/glm-5.3", "vendor/model-x"]);
     // the model settings run sonnet on claude: its Default row says so, and takes their effort as its default
