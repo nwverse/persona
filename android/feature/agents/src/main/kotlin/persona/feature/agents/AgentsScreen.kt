@@ -744,6 +744,8 @@ internal fun SlotRow(
         agent = session.agentLabel.takeIf { !session.isClaude && source == null },
         statusText = row.rowStatusText(muted),
         facts = buildList {
+            // Where its closeout stands on merged and deployed (#3612), first: the facts' line is cut at its end.
+            session.closeoutFacts.forEach { add(RowFact(it.text.text(), caution = it.contradicted)) }
             // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
             source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
             if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
@@ -771,6 +773,12 @@ internal fun SlotRow(
         flags = buildList {
             if (pinned) add(RowFlag(stringResource(R.string.agents_row_pinned), PhIcons.PushPin))
             if (muted) add(RowFlag(stringResource(R.string.agents_row_muted), PhIcons.Prohibit))
+            // Its closeout (#3612): the hub found a claim untrue (the line says which), or the turn is not finished.
+            when (session.closeoutMark) {
+                CloseoutMark.Contradicted -> add(RowFlag(stringResource(R.string.agents_row_closeout_contradicted), PhIcons.Warning, caution = true))
+                CloseoutMark.NotFinished -> add(RowFlag(stringResource(R.string.agents_row_not_finished), PhIcons.CircleDashed))
+                null -> Unit
+            }
         },
         launcher = launcher, branch = branch, source = origin,
         // Which agent runs there and in which client (#6390): its mark before the state mark.

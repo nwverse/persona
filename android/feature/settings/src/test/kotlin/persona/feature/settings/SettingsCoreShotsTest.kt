@@ -98,7 +98,7 @@ class SettingsCoreShotsTest {
     }
 
     private class Triage : AgentTriage {
-        override suspend fun switches() = TriageSwitches(enabled = true, decide = true)
+        override suspend fun switches() = TriageSwitches(enabled = true, decide = true, closeout = true)
         override suspend fun put(value: TriageSwitches) = value
     }
 
@@ -148,7 +148,7 @@ class SettingsCoreShotsTest {
         }
         val cjk = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff]")
         for (p in pages) {
-            val variants = if (p.first == "list") AppStyle.entries.flatMap { s -> listOf(s to false, s to true) }
+            val variants = if (p.first == "list" || p.first == "triage") AppStyle.entries.flatMap { s -> listOf(s to false, s to true) }
                 else listOf(AppStyle.Glass to false, AppStyle.Glass to true)
             for ((s, d) in variants) {
                 page = p; style = s; dark = d
