@@ -138,7 +138,8 @@ try {
   ok(`取消常驻 ends the lead on the hub and takes it out of 常驻${recentOf(ended).includes(first) ? " (into 最近)" : ""}`);
   // back from 全部对话: its menu has 设为常驻
   await page.goto(`${base}/history`);
-  const histRow = page.locator(`a[href^="/persona/${first}"]`).first();
+  // the page's row, not the sidebar's: the ended lead can be under 最近 there now
+  const histRow = page.locator("main").locator(`a[href^="/persona/${first}"]`).first();
   await histRow.waitFor({ timeout: 10000 });
   await histRow.locator("xpath=..").getByRole("button").last().click();
   const hmenu = page.locator('[role="menu"]').last();
