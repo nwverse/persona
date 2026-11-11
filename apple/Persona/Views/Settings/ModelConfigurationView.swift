@@ -93,7 +93,7 @@ struct ModelConfigurationView: View {
             Text(category.id == "lark.agent" ? String(localized: "Lark /agent") : category.name).font(Theme.Font.body).lineLimit(1)
             Text(page.modelSummary(category))
                 .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-            if category.id == "lark.agent" {
+            if ModelConfigurationModel.followsAgents(category) {
                 Text(page.inheritanceStatus(category)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             if let limit = category.limit {
@@ -142,13 +142,13 @@ struct ModelPurposeEditorView: View {
         SettingsForm {
             if let purpose = page.purpose {
                 Section("In Effect") {
-                    if page.isLarkAgent {
+                    if page.isAgentsOverride {
                         LabeledContent("Configuration", value: page.inheritanceStatus(purpose))
                             .accessibilityIdentifier("model-config-inheritance")
                     }
                     LabeledContent("Model [Assistant View c98e11]", value: page.summary(purpose).isEmpty ? String(localized: "Not set up") : page.summary(purpose))
                     if let source = purpose.inheritedFrom, !source.isEmpty {
-                        LabeledContent("Inherited From", value: page.isLarkAgent ? String(localized: "Agents") : source)
+                        LabeledContent("Inherited From", value: page.isAgentsOverride ? String(localized: "Agents") : source)
                     }
                     if let limit = purpose.limit {
                         ModelLimitLine(limit: limit, font: Theme.Font.label)
@@ -207,6 +207,8 @@ struct ModelPurposeEditorView: View {
                 } footer: {
                     Text(page.isLarkAgent
                          ? String(localized: "Only applies to Lark /agent, not other Agents. Empty fields follow Agents. Changing the provider clears the previous model and thinking effort. Choose Follow Agents and save to clear the independent settings.")
+                         : page.isAgentsOverride
+                         ? String(localized: "Only applies to the Inbox's AI twin, not other Agents. Empty fields follow Agents. Changing the provider clears the previous model and thinking effort. Choose Follow Agents and save to clear the independent settings.")
                          : String(localized: "Every use in this category uses this setting. Leave fields empty to keep the current default. Changing the provider clears the previous model and reasoning effort. Custom model IDs must be supported by the provider."))
                 }
                 .disabled(page.saving || page.loading)
@@ -214,7 +216,7 @@ struct ModelPurposeEditorView: View {
                     Button {
                         page.restoreInheritance()
                     } label: {
-                        Label(page.isLarkAgent ? String(localized: "Follow Agents") : String(localized: "Restore Default"), systemImage: Theme.Icon.undo).lineLimit(1)
+                        Label(page.isAgentsOverride ? String(localized: "Follow Agents") : String(localized: "Restore Default"), systemImage: Theme.Icon.undo).lineLimit(1)
                     }
                     .accessibilityIdentifier("model-config-restore")
                     .disabled(page.saving || page.loading || page.conflict || page.draft.isEmpty)
@@ -353,7 +355,7 @@ struct ModelPurposeEditorView: View {
 
     private var providerPicker: some View {
         Picker("Model Providers", selection: Binding(get: { page.draft.provider ?? "" }, set: { page.chooseProvider($0) })) {
-            Text(page.isLarkAgent ? String(localized: "Follow Agents") : String(localized: "Default [Model Configuration View a44f9f]")).tag("")
+            Text(page.isAgentsOverride ? String(localized: "Follow Agents") : String(localized: "Default [Model Configuration View a44f9f]")).tag("")
             ForEach(page.candidates) { provider in
                 Text(provider.name).tag(provider.id)
             }

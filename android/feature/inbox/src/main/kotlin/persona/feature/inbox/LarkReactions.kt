@@ -22,7 +22,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -122,7 +121,7 @@ fun LarkReactionRow(
         // Button to open reaction picker
         Box(
             Modifier
-                .size(Tokens.Space.xxl)
+                .size(Tokens.Space.xl)
                 .clip(CircleShape)
                 .background(palette.ink.copy(alpha = 0.05f))
                 .clickable(onClick = onOpenPicker)
@@ -148,7 +147,6 @@ fun LarkMessageActionMenu(
     onAddPin: (() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
-    val clipboard = LocalClipboardManager.current
     val res = LocalResources.current
     val moreLabel = stringResource(R.string.inbox_lark_more_emoji)
     // The menu rows' icons, one size.
@@ -168,7 +166,7 @@ fun LarkMessageActionMenu(
             for (key in DEFAULT_QUICK_REACTIONS) {
                 Box(
                     Modifier
-                        .size(Tokens.Space.xxxl)
+                        .size(Tokens.Space.xxl)
                         .clip(CircleShape)
                         .clickable {
                             onDismiss()
@@ -182,7 +180,7 @@ fun LarkMessageActionMenu(
             }
             Box(
                 Modifier
-                    .size(Tokens.Space.xxxl)
+                    .size(Tokens.Space.xxl)
                     .clip(CircleShape)
                     .clickable {
                         onDismiss()

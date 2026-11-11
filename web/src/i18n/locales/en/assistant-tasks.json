@@ -1,6 +1,19 @@
 {
+  "workspace": "Workspace",
+  "workspace_new": "New",
+  "workspace_existing": "Use existing",
+  "workspace_none": "Not needed",
+  "workspace_select": "Choose an existing workspace",
+  "workspace_manual": "Enter a path or workspace ID",
+  "workspace_path": "Existing workspace path or ID",
+  "workspace_branch": "New workspace branch",
+  "workspace_branch_default": "Default: task/<todo id>",
+  "workspace_resolving": "Resolving workspace path…",
+  "workspace_engine_path": "The machine's workspace engine chooses the path. Edit the branch to preview again.",
   "tray_needs_you": "Needs you",
   "tray_running": "In progress",
+  "tray_expand": "Expand",
+  "tray_restore": "Restore size",
   "background_tasks_running": "Background tasks running: {count}",
   "subagents_count_running": "Subagents running: {count}",
   "background_running": "Background work is running",
@@ -214,5 +227,6 @@
   "interrupt_batch_title_on_one": "{cause} on {machine}: {count} task interrupted",
   "interrupt_batch_title_on_other": "{cause} on {machine}: {count} tasks interrupted",
   "interrupt_batch_counts": "→ {resolved} handled / {pending} pending",
-  "interrupt_batch_all": "→ all handled"
+  "interrupt_batch_all": "→ all handled",
+  "needs_group_another": "Another conversation"
 }

@@ -19,8 +19,8 @@ import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
-import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
+import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
@@ -52,7 +52,8 @@ import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
-import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, searchSettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
+import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { searchSettings, type SearchGroup } from "./settings/search";
 import { GroupAction, GroupFooter, GroupTitle, hasFooter } from "./settings/SettingsGroups";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { formatList, t } from "../i18n";
@@ -587,15 +588,16 @@ function AssistantProfile({ onTriageModel }: { onTriageModel: () => void }) {
 
 /** This browser's own switches for Agents (the terminal, the sidebar, the details shown). */
 function AgentPreferences() {
+  const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions"));
   const sidebarTerminals = useSidebarTerminals();
   const agentDetails = useAgentDetails();
   const contextAsUsed = useContextAsUsed();
   return (
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
       <TerminalModeRow />
-      <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
+      {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
         <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
-      </Row>
+      </Row>}
       <Row label={t("context.details")} hint={t("context.details_hint")}>
         <Switch on={agentDetails} onChange={setAgentDetails} label={t("context.details")} />
       </Row>
@@ -715,7 +717,7 @@ function Models() {
   const rc = rcGroups(shown);
   // a wrapper script on PATH or a runtime's launcher (agy, omp): a computer's, but not from an rc file
   const onPath = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.source !== "zshrc" && !l.hidden);
-  const hidden = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.hidden);
+  const hidden = shown.filter((l) => !managedProvider(l.source) && l.hidden);
   // the machines that did not answer this time, named on the entries they gave before
   const staleMark = (ids?: string[]) =>
     ids?.length ? <Pill tone="orange">{t("settings.stale", { machines: formatList(ids.map(name), { type: "conjunction", style: "narrow" }) })}</Pill> : null;
@@ -770,7 +772,8 @@ function Models() {
       {builtin.length > 0 && (
         <Group title={t("settings.builtin_title", { count: builtin.length })} footer={t("settings.builtin_footer")}>
           {builtin.map((b) => (
-            <div key={`${b.name}/${b.machine}`} className="flex items-center gap-3 px-4 py-2.5">
+            // its page tests it and hides it in Persona (#4384), as an rc-file launcher's does
+            <button key={`${b.name}/${b.machine}`} type="button" onClick={() => setOpen(b.name)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[13px] font-medium text-ink">{t("settings.builtin_row", { name: b.name, machine: name(b.machine) })}</span>
@@ -778,7 +781,8 @@ function Models() {
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{b.version ? `Claude Code ${b.version}` : "Claude Code"}</div>
               </div>
-            </div>
+              <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+            </button>
           ))}
         </Group>
       )}

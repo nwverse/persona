@@ -29,6 +29,8 @@ import persona.core.domain.answer.*
 import persona.core.domain.tasks.BackgroundWork
 import persona.core.domain.tasks.TriageStatus
 import persona.core.domain.tasks.NeedsYouEntry
+import persona.core.domain.tasks.NeedsYouGroup
+import persona.core.domain.tasks.needsYouGroups
 import persona.core.domain.tasks.RunningEntry
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.notDoneReason
@@ -182,7 +184,9 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     onApprove: (List<Pair<Interaction, Resolution>>) -> Unit, onReview: (Interaction) -> Unit,
     onSend: (TrayDraft) -> Unit, onSchedule: (ScheduledTask) -> Unit,
     backgroundRecords: Boolean = false, onBackground: (() -> Unit)? = null,
-    onPlan: (TaskPlan) -> Unit = {}) {
+    onPlan: (TaskPlan) -> Unit = {},
+    /** The main conversation folds background rounds (#4314): Needs you groups its rows by supervising conversation. */
+    groupByOrigin: Boolean = false) {
     val todos by host.tasks.todos.collectAsStateWithLifecycle()
     val plans by host.tasks.plans.collectAsStateWithLifecycle()
     val feeds by host.tasks.feeds.collectAsStateWithLifecycle()
@@ -210,6 +214,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     val deciding = entries.needsYou.filter { it is NeedsYouEntry.Task && it !in asking }.map { it as NeedsYouEntry.Task }
     val drafts = trayDrafts(inbox, entries.needsYou.filterIsInstance<NeedsYouEntry.Message>().map { it.item })
     val needsCount = asking.size + own.size + plansWaiting.size + deciding.size + drafts.size
+    val needsGroups = needsYouGroups(entries.needsYou, host.conversation, groupByOrigin)
     val shownRequests = own + asking.flatMap { (it as? NeedsYouEntry.Task)?.asks ?: (it as NeedsYouEntry.Agent).asks }
     val approvals = shownRequests.mapNotNull { r -> trayApproval(r, bySession[GroupKeys.rawKey(r.sessionKey)])?.let { r to it } }
     val standalone = persona.core.domain.tasks.dockAgents(host.conversation, main, host.sessions, todos)
@@ -237,51 +242,62 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                     when (tray) {
                         AssistantTray.NeedsYou -> {
                             if (needsCount == 0) item { JEmptyState(stringResource(R.string.chat_tray_caught_up), "", icon = PhIcons.CheckCircle) }
-                            items(asking, key = { it.key }) { entry ->
-                                val (title, asks, tag) = when (entry) {
-                                    is NeedsYouEntry.Task -> Triple(entry.todo.title, entry.asks, "assistant-needs-task-${entry.todo.id}")
-                                    is NeedsYouEntry.Agent -> Triple(entry.session.displayTitle, entry.asks, "assistant-needs-agent-${entry.session.sessionId}")
-                                    else -> return@items
+                            // #4314: one group, as before; with several supervising conversations, each under its title,
+                            // this conversation's first (its own cards, plans and drafts are in it), the rows unchanged.
+                            for (group in needsGroups) {
+                                if (needsGroups.size > 1 && (group.entries.isNotEmpty() || (group.conversation == host.conversation && (own.isNotEmpty() || drafts.isNotEmpty())))) {
+                                    item(key = "needs-group:${group.conversation}") {
+                                        JSectionHeader(host.sessions.firstOrNull { it.sessionId == group.conversation }?.displayTitle?.takeIf(String::isNotBlank)
+                                            ?: stringResource(R.string.chat_tray_other_conversation))
+                                    }
                                 }
-                                // one row for the task or Agent: its oldest card, the next one once that is answered
-                                val request = asks.first()
-                                val approval = trayApproval(request, bySession[GroupKeys.rawKey(request.sessionKey)])
-                                Box(Modifier.testTag(tag)) {
-                                    TrayDecisionRow(title, request.headline.shown, if (approval != null) R.string.chat_tray_approve else R.string.chat_tray_review,
+                                items(asking.filter(group::has), key = { it.key }) { entry ->
+                                    val (title, asks, tag) = when (entry) {
+                                        is NeedsYouEntry.Task -> Triple(entry.todo.title, entry.asks, "assistant-needs-task-${entry.todo.id}")
+                                        is NeedsYouEntry.Agent -> Triple(entry.session.displayTitle, entry.asks, "assistant-needs-agent-${entry.session.sessionId}")
+                                        else -> return@items
+                                    }
+                                    // one row for the task or Agent: its oldest card, the next one once that is answered
+                                    val request = asks.first()
+                                    val approval = trayApproval(request, bySession[GroupKeys.rawKey(request.sessionKey)])
+                                    Box(Modifier.testTag(tag)) {
+                                        TrayDecisionRow(title, request.headline.shown, if (approval != null) R.string.chat_tray_approve else R.string.chat_tray_review,
+                                            "assistant-decision-${request.id}", enabled && !busy, onOpen = { onReview(request) }) {
+                                            if (approval != null) onApprove(listOf(request to approval)) else onReview(request)
+                                        }
+                                    }
+                                }
+                                items(own.takeIf { group.conversation == host.conversation }.orEmpty(), key = { "request:${it.id}" }) { request ->
+                                    val approval = trayApproval(request, bySession[GroupKeys.rawKey(request.sessionKey)])
+                                    TrayDecisionRow(request.sessionTitle ?: bySession[GroupKeys.rawKey(request.sessionKey)]?.displayTitle ?: request.headline.shown,
+                                        request.headline.shown, if (approval != null) R.string.chat_tray_approve else R.string.chat_tray_review,
                                         "assistant-decision-${request.id}", enabled && !busy, onOpen = { onReview(request) }) {
                                         if (approval != null) onApprove(listOf(request to approval)) else onReview(request)
                                     }
                                 }
-                            }
-                            items(own, key = { "request:${it.id}" }) { request ->
-                                val approval = trayApproval(request, bySession[GroupKeys.rawKey(request.sessionKey)])
-                                TrayDecisionRow(request.sessionTitle ?: bySession[GroupKeys.rawKey(request.sessionKey)]?.displayTitle ?: request.headline.shown,
-                                    request.headline.shown, if (approval != null) R.string.chat_tray_approve else R.string.chat_tray_review,
-                                    "assistant-decision-${request.id}", enabled && !busy, onOpen = { onReview(request) }) {
-                                    if (approval != null) onApprove(listOf(request to approval)) else onReview(request)
+                                items(plansWaiting.filter(group::has), key = { it.key }) { entry ->
+                                    val plan = entry.plan
+                                    TrayDecisionRow(plan.tasks.joinToString(stringResource(R.string.chat_tasks_list_separator)) { it.title },
+                                        stringResource(R.string.chat_tray_plan_review), R.string.chat_tray_review, "assistant-plan-${plan.id}", enabled && plan.id !in taskBusy,
+                                        onOpen = { onPlan(plan) }) { onPlan(plan) }
                                 }
-                            }
-                            items(plansWaiting, key = { it.key }) { entry ->
-                                val plan = entry.plan
-                                TrayDecisionRow(plan.tasks.joinToString(stringResource(R.string.chat_tasks_list_separator)) { it.title },
-                                    stringResource(R.string.chat_tray_plan_review), R.string.chat_tray_review, "assistant-plan-${plan.id}", enabled && plan.id !in taskBusy,
-                                    onOpen = { onPlan(plan) }) { onPlan(plan) }
-                            }
-                            items(deciding, key = { it.key }) { entry ->
-                                val todo = entry.todo
-                                val row = progressByTodo[todo.id]
-                                if (todo.ask?.outcome == "decide") TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
-                                else TrayDecisionRow(todo.title, todo.ask?.verdict ?: row?.text.orEmpty(), R.string.chat_tray_review,
-                                    "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
-                            }
-                            if (drafts.isNotEmpty()) item { JSectionHeader(stringResource(R.string.chat_tray_drafts)) }
-                            items(drafts, key = { "draft:${if (it is TrayDraft.Feed) it.item.id else it.id}" }) { draft ->
-                                if (draft is TrayDraft.Feed) {
-                                    Box(Modifier.testTag("assistant-draft-${draft.id}").padding(horizontal = Tokens.Space.s)) {
-                                        MessageCard(draft.item, host, todos, enabled && !busy)
-                                    }
-                                } else TrayDecisionRow(draft.title, draft.text, R.string.chat_tray_send, "assistant-draft-${draft.id}",
-                                    enabled && !busy && draftPlaceholder(draft.text) == null) { onSend(draft) }
+                                items(deciding.filter(group::has), key = { it.key }) { entry ->
+                                    val todo = entry.todo
+                                    val row = progressByTodo[todo.id]
+                                    if (todo.ask?.outcome == "decide") TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
+                                    else TrayDecisionRow(todo.title, todo.ask?.verdict ?: row?.text.orEmpty(), R.string.chat_tray_review,
+                                        "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
+                                }
+                                val groupDrafts = drafts.takeIf { group.conversation == host.conversation }.orEmpty()
+                                if (groupDrafts.isNotEmpty()) item { JSectionHeader(stringResource(R.string.chat_tray_drafts)) }
+                                items(groupDrafts, key = { "draft:${if (it is TrayDraft.Feed) it.item.id else it.id}" }) { draft ->
+                                    if (draft is TrayDraft.Feed) {
+                                        Box(Modifier.testTag("assistant-draft-${draft.id}").padding(horizontal = Tokens.Space.s)) {
+                                            MessageCard(draft.item, host, todos, enabled && !busy)
+                                        }
+                                    } else TrayDecisionRow(draft.title, draft.text, R.string.chat_tray_send, "assistant-draft-${draft.id}",
+                                        enabled && !busy && draftPlaceholder(draft.text) == null) { onSend(draft) }
+                                }
                             }
                         }
                         AssistantTray.Running -> {
@@ -465,3 +481,6 @@ private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null,
         }
     }
 }
+
+/** Whether [entry] is one of this group's rows. */
+private fun NeedsYouGroup.has(entry: NeedsYouEntry): Boolean = entries.any { it.key == entry.key }
