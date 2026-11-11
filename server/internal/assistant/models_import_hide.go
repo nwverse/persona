@@ -46,8 +46,10 @@ type importHideFacts struct {
 	profiles    []ModelProfile
 	tasks       []taskLauncher
 	uses        map[string][]string // aliasUses by alias: a group's aliases are asked again for its variants
-	// remote: another computer's own aliases (launchers.zshrc), asked once a request and only when needed.
+	// remote: another computer's own aliases (launchers.zshrc), asked once a request and only when needed; ask false
+	// (the import under its lock) reads only what was asked before, a computer not asked counting as elsewhere.
 	remote map[string]remoteAliases
+	ask    bool
 }
 
 // taskLauncher is a scheduled task whose own record names a provider.
@@ -65,7 +67,7 @@ var remoteAliasWait = 5 * time.Second
 // importHideFacts reads what aliasHide needs. rc is s.zshrcLaunchers, stored the provider list it judges against.
 func (s *Service) importHideFacts(ctx context.Context, machine string, rc []zshrcLaunchers, stored []storedLauncher) (importHideFacts, error) {
 	f := importHideFacts{machine: machine, rc: rc, hidden: s.hiddenLaunchers(ctx), stored: stored, devices: s.devices(ctx),
-		uses: map[string][]string{}, remote: map[string]remoteAliases{}}
+		uses: map[string][]string{}, remote: map[string]remoteAliases{}, ask: true}
 	keys, err := s.readMachineKeys(ctx)
 	if err != nil {
 		return f, err
@@ -221,6 +223,9 @@ func (s *Service) sameKeyOn(f importHideFacts, l storedLauncher, machine, key st
 func (s *Service) sameAliasOn(ctx context.Context, f importHideFacts, machine, alias, base, key string) bool {
 	got, ok := f.remote[machine]
 	if !ok {
+		if !f.ask {
+			return false
+		}
 		cctx, cancel := context.WithTimeout(ctx, remoteAliasWait)
 		got.aliases, got.err = zshrcAliases(cctx, s, machine)
 		cancel()

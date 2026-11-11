@@ -53,16 +53,30 @@ func hideTestHubOn(t *testing.T, st Store, aliases []zshrcAlias, rc map[string][
 	var mu sync.Mutex
 	asked := []string{}
 	old := zshrcAliases
+	underLock := 0
 	zshrcAliases = func(_ context.Context, _ *Service, machine string) ([]zshrcAlias, error) {
 		if machine == "m1" {
 			return aliases, nil
 		}
+		// No node is asked while the configuration lock is held (the import asks before it takes the lock).
+		free := s.models.mu.TryLock()
+		if free {
+			s.models.mu.Unlock()
+		}
 		mu.Lock()
 		asked = append(asked, machine)
+		if !free {
+			underLock++
+		}
 		mu.Unlock()
 		return remote[machine].aliases, remote[machine].err
 	}
-	t.Cleanup(func() { zshrcAliases = old })
+	t.Cleanup(func() {
+		zshrcAliases = old
+		if underLock > 0 {
+			t.Errorf("%d computers were asked for their aliases under the configuration lock", underLock)
+		}
+	})
 	return s, s, &asked
 }
 

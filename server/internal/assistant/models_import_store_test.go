@@ -224,3 +224,26 @@ func TestImportAskingAnotherComputerReturnsNoKey(t *testing.T) {
 		t.Fatalf("asked %v", *asked)
 	}
 }
+
+// Under the lock the check reads only what was asked before it: a computer not asked then counts as elsewhere, and
+// no node is asked.
+func TestImportCheckUnderTheLockAsksNoNode(t *testing.T) {
+	rc := map[string][]proto.Launcher{"m1": hideListed["m1"], "m2": {{Name: "acc", BaseURL: "https://a.example.com"}}}
+	s, _, asked := hideTestHubOn(t, newSettingsFaultStore(), []zshrcAlias{hideAlias}, rc, map[string]hideRemote{"m2": {aliases: []zshrcAlias{hideAlias}}})
+	ctx := context.Background()
+	f, err := s.importHideFacts(ctx, "m1", s.zshrcLaunchers(ctx, false), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g importGroup
+	g.BaseURL = "https://a.example.com"
+	target := importedLauncher(g, time.Time{})
+	f.ask = false
+	if src, err := s.aliasHide(ctx, f, "acc", target, importKeyA); err != nil || src.Hide != "elsewhere" || len(*asked) != 0 {
+		t.Fatalf("%+v %v asked %v", src, err, *asked)
+	}
+	f.ask = true
+	if src, err := s.aliasHide(ctx, f, "acc", target, importKeyA); err != nil || src.Hide != "ok" || !slices.Equal(*asked, []string{"m2"}) {
+		t.Fatalf("%+v %v asked %v", src, err, *asked)
+	}
+}
