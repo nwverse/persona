@@ -80,7 +80,8 @@ type fakeHub struct {
 	noModel       bool
 	asked         []modelCall
 	pushes        []Notification
-	events        []string // the type of each event the apps were sent
+	events        []string         // the type of each event the apps were sent
+	liveEvents    []map[string]any // the meeting_live events as sent
 	snaps         []Snapshot
 
 	// Agents a task starts (session.start a1, a2…) and what was sent to them; a machine offline, a node refusing.
@@ -101,7 +102,9 @@ type fakeHub struct {
 	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
 	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
 	outcomeAsked []modelCall
-	retired      []string // session.retire's session ids
+	retired      []string         // the session ids of session.retire and of session.stop with retire (the done and idle passes)
+	retireArgs   []map[string]any // what each of those calls asked
+	stopped      []string         // session.stop's session ids without retire (a cancelled task's agent)
 	retireErr    error
 	tokens       map[string][]map[string]map[string]string // todo.sync_session_tokens, by machine, in order
 
@@ -458,7 +461,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.retireErr
 		}
 		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
+	case deviceSessionStop:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		if retire, _ := a["retire"].(bool); retire {
+			f.retired = append(f.retired, a["session_id"].(string))
+			f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "retire": true})
+		} else {
+			f.stopped = append(f.stopped, a["session_id"].(string))
+		}
+		return json.RawMessage(`{"stopped":true}`), nil
 	case deviceTodoTokens:
 		var t struct {
 			Tokens map[string]map[string]string `json:"tokens"`
@@ -579,6 +594,11 @@ func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {
 	_ = json.Unmarshal(b.Message, &ev)
 	f.mu.Lock()
 	f.events = append(f.events, ev.Type)
+	if ev.Type == "meeting_live" {
+		var live map[string]any
+		_ = json.Unmarshal(b.Message, &live)
+		f.liveEvents = append(f.liveEvents, live)
+	}
 	receipt := f.readHooks.receipt
 	f.mu.Unlock()
 	if receipt != nil && ev.Type == "assistant_feed" && ev.Item.Kind == feedReceipt {
