@@ -73,9 +73,18 @@ func TestForceArchiveConfirmationDatabase(t *testing.T) {
 	}
 	for _, kind := range []string{proto.IxPermission, proto.IxPlan, proto.IxScreen} {
 		status, r, err := database.InteractionOutcome(ctx, "force-"+kind)
-		if err != nil || status == "pending" || r != nil && (r.Allow != nil && *r.Allow || r.Approve != nil && *r.Approve) {
+		wantStatus := "resolved"
+		if kind == proto.IxScreen {
+			wantStatus = "dismissed"
+		}
+		if err != nil || status != wantStatus || r == nil {
 			t.Fatalf("stored confirmation %s: %s %+v %v", kind, status, r, err)
 		}
+		if kind == proto.IxPermission && (r.Allow == nil || *r.Allow) || kind == proto.IxPlan && (r.Approve == nil || *r.Approve) || kind == proto.IxScreen && !r.Dismiss || r.Always || r.Mode != "" {
+			t.Fatalf("stored confirmation granted or lost its cancellation: %+v", r)
+		}
+		raw, _ := json.Marshal(r)
+		t.Logf("%s persisted %s: %s", kind, status, raw)
 	}
 }
 
