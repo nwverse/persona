@@ -4,17 +4,31 @@
 // launcher and its engine come with it, and the engine's mark stays on the pill and on every row. A "Follow Model
 // settings" row on top goes back to the default, the profile's presets are a group of their own, the thinking effort and
 // Claude Code's ultracode switch are in the chosen model's flyout. The panel's data is lib/new-agent-panel.ts.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { PickerTier } from "../lib/launcher-models";
 import type { ModelBinding } from "../lib/model-config";
 import type { PanelConfig } from "../lib/model-panel";
 import { formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "../lib/new-agent-panel";
 import { launcherBlock } from "../lib/launcher-health";
-import { forgetModel, modelList, readModels, useModelList, useModelLists } from "../lib/session-models";
+import { forgetModel, modelList, readModels, subscribeModelLists, useModelLists, type ModelList } from "../lib/session-models";
 import type { Launcher } from "../lib/types";
 import { toast } from "../ui/atoms";
 import { ModelPanel } from "../ui/model-panel/ModelPanel";
 import { ModelPill } from "./chat/ModelPill";
+
+const NO_LIST: ModelList = {};
+
+/** One launcher's list as read, drawn again only when that list changes (the pill and the form need one or two lists,
+ *  not the panel's every one); "" for either: nothing. Here rather than in lib/session-models.ts, which the first
+ *  screen loads: a list's entry is replaced on every change, so it is its own snapshot. */
+export function useModelList(mid: string, launcher: string): ModelList {
+  const read = () => {
+    if (!mid || !launcher) return NO_LIST;
+    const e = modelList(mid, launcher);
+    return e.list !== undefined || e.loading || e.error ? e : NO_LIST;
+  };
+  return useSyncExternalStore(subscribeModelLists, read, () => NO_LIST);
+}
 
 export interface NewAgentModelProps {
   mid: string;

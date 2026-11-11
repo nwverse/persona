@@ -221,11 +221,5 @@ export function resetModelListsForTests(): void {
   changed();
 }
 
-const NO_LIST: ModelList = {};
-
-/** One launcher's list as read, drawn again only when that list changes (a place that needs one or two lists, not the
- *  panel's every one); "" for either: nothing. */
-export function useModelList(mid: string, launcher: string): ModelList {
-  const key = mid && launcher ? listKey(mid, launcher) : "";
-  return useSyncExternalStore(subscribe, () => (key ? (lists.get(key) ?? NO_LIST) : NO_LIST), () => NO_LIST);
-}
+/** Subscribes to every change of what was read (views/NewAgentModel.tsx useModelList follows one list with it). */
+export const subscribeModelLists = subscribe;

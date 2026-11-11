@@ -20,7 +20,7 @@ import {
   effortChoices, fitEffort, followedBinding, launcherAgent, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
 } from "../lib/launcher-models";
 import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
-import { readModels, useModelList } from "../lib/session-models";
+import { readModels } from "../lib/session-models";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
   clearRecentSetups, forgetSetup, formHolds, loadRecentSetups, machineModel, recentCards, rememberSetup, setupKey, setupTime, type RecentCard, type RecentSetup,
@@ -45,7 +45,7 @@ import { settingsHref } from "./settings/nav";
 import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../lib/provider-names";
 import { WorkSessionForm } from "./WorkSessionForm";
-import { NewAgentModel } from "./NewAgentModel";
+import { NewAgentModel, useModelList } from "./NewAgentModel";
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
 function draftImageFile(img: DraftImage): File {
