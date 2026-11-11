@@ -1,6 +1,8 @@
 // A subagent is a card in the chat that launched it, never a conversation of its own (#5030, cindy). A link to its
 // conversation from before ("<parent>@<agent>": a page `/s/<machine>/<parent>@<agent>`, an "agent" side panel, a link in
 // a message) opens the parent's chat instead, and that chat brings the subagent's card into view, opened (ChatView).
+// A child session's (#5120: a Codex subagent, an Agent a Paseo Agent created; its row says which session it folds under)
+// the same way: its parent's chat, at the child's card.
 import { useSyncExternalStore } from "react";
 
 /** The parent session and the subagent of a "<parent>@<agent>" id; null for any other id. */
@@ -26,7 +28,22 @@ export function followSubagentLink(mid: string, sid: string): string {
   return link.parent;
 }
 
-/** The subagent this chat is asked to show, until it did (`doneSubagentLink`). */
+/** What a chat is asked to show for a child session's link: `child:` and its id, beside the subagents' ids. */
+const CHILD = "child:";
+
+/** The child session a chat is asked to show (`useSubagentLink`'s value for a child's link); undefined for a subagent. */
+export function childLinkOf(asked: string): string | undefined {
+  return asked.startsWith(CHILD) ? asked.slice(CHILD.length) : undefined;
+}
+
+/** The id to open for a child session's link: its parent's, which is then asked to show the child's card. */
+export function followChildSession(mid: string, child: string, parent: string): string {
+  pending.set(key(mid, parent), `${CHILD}${child}`);
+  tell();
+  return parent;
+}
+
+/** The subagent (or, `childLinkOf`, the child session) this chat is asked to show, until it did (`doneSubagentLink`). */
 export function useSubagentLink(mid: string, sid: string): string | undefined {
   const read = () => pending.get(key(mid, sid));
   return useSyncExternalStore(subscribe, read, read);

@@ -18,7 +18,7 @@ export function compareListIds(a: string, b: string): number {
 const JOURNAL_LIMIT = 16_384;
 const validCounts = (counts: ListCounts | undefined): counts is ListCounts => !!counts && typeof counts.total === "number" &&
   typeof counts.revision === "string" && !!counts.machine && !!counts.project && !!counts.group && !!counts.state;
-const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q"] as const;
+const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q", "parent_session_id"] as const;
 
 export type ListFilters = Partial<Record<typeof FILTER_KEYS[number], string>>;
 export interface ListCounts {
