@@ -85,7 +85,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // the hub's
   { tab: "avatar", group: t("settings.avatar"), anchor: "avatar" },
   { tab: "hub", group: t("workspace-board.setting_group"), anchor: "agent-group" },
-  { tab: "persona", group: t("settings-standing.title"), anchor: "standing-authorizations" },
+  { tab: "persona", group: t("settings-nav.standing_authorizations"), anchor: "standing-authorizations" },
   // Models' sections and Agents' sections (their element ids)
   { tab: "models", group: t("settings-nav.tab_providers"), anchor: "settings-providers" },
   { tab: "models", group: t("settings-nav.tab_model_config"), anchor: "settings-model-config" },

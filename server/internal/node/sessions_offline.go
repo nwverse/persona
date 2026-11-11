@@ -294,8 +294,23 @@ func isAssistantProject(base, own string) bool {
 	if base == own || base == strings.TrimSuffix(own, "-assistant")+"-health" {
 		return true
 	}
+	if isMeetingRoomProject(base) { // a meeting's room (assistant_guest.go): an assistant conversation, whatever runs it now
+		return true
+	}
 	for _, suffix := range assistantProjectSuffixes() {
 		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMeetingRoomProject: base is the projects folder of a meeting room's directory (guest-meeting/<recording id> in the
+// node's state directory, either spelling).
+func isMeetingRoomProject(base string) bool {
+	former := "-" + nonAlnum.ReplaceAllString(compat.StateDir, "-")
+	for _, mark := range []string{"--persona-guest-meeting-", former + "-guest-meeting-"} {
+		if i := strings.LastIndex(base, mark); i >= 0 && uuidRe.MatchString(base[i+len(mark):]) {
 			return true
 		}
 	}
