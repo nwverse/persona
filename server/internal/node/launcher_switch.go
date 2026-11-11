@@ -686,11 +686,16 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 	row := proto.Session{SessionID: id, Cwd: plan.cwd, Launcher: ps.Launcher, Agent: "claude", Status: proto.StatusIdle,
 		Starting: true, StartedByPersona: had, UpdatedAt: time.Now().UTC(), WorkspaceID: plan.a.WorkspaceID, PendingSwitch: &ps}
 	if !n.switches().begin(id, row) {
-		n.logf("session %s: switch to launcher %s waits (another one is under way); the message goes on %s", id, ps.Launcher, own)
-		return pane, false, nil
+		n.logf("session %s: switch to launcher %s refused: another one is under way", id, ps.Launcher)
+		return "", false, n.switchingRefusal(id) // not typed into a pane that one is quitting and starting again
 	}
+	var serving *Node
 	defer func() {
-		n.switches().end(id) // last: what the switch wrote is written by then, here or by the next connection's Node
+		// last: what the switch wrote is written by then, here or by the Node serving now (the next connection's),
+		// whose list then shows the row on its launcher again
+		if serving = n.switches().end(id); serving != nil && serving != n {
+			serving.notifySessions()
+		}
 		n.notifySessions()
 	}()
 	// From the first Ctrl+C on, on its own clock: a caller that goes away (a hub redeploy ends the connection) must
@@ -703,6 +708,10 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 		return "", false, err
 	}
 	n.switched(id, ps)
+	if to := n.switches().serving(); to != nil && to != n { // what that Node's list shows meanwhile
+		to.noteModes(id, r.mode, cmp.Or(ps.Effort, r.effort))
+		to.noteSwitchedModel(id, ps)
+	}
 	n.logf("session %s: now on launcher %s", id, ps.Launcher)
 	return newPane, true, nil
 }
@@ -764,6 +773,13 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 func (n *Node) switched(id string, ps proto.PendingSwitch) {
 	n.state.setPendingSwitch(id, nil)
 	n.switches().setPending(id, nil)
+	n.noteSwitchedModel(id, ps)
+	n.notifySessions()
+}
+
+// noteSwitchedModel is what the list shows of session id's model once its switch to ps is done: the model picked, until
+// a reply names one; not a model picked on the old launcher.
+func (n *Node) noteSwitchedModel(id string, ps proto.PendingSwitch) {
 	n.mu.Lock()
 	if m, ok := n.modes[id]; ok {
 		m.Model = nil
@@ -773,7 +789,16 @@ func (n *Node) switched(id string, ps proto.PendingSwitch) {
 	if ps.Model != "" {
 		n.noteModel(id, ps.Model, n.transcriptModel(id)) // shown until a reply names the model
 	}
-	n.notifySessions()
+}
+
+// switchingRefusal refuses what would type into session id's pane or press its keys while a launcher switch of it is
+// carried out, on this connection's Node or the last one's (switch_share.go), whose typing lock this Node's does not
+// hold: the agent is being quit and started again there. nil when none is.
+func (n *Node) switchingRefusal(id string) error {
+	if !n.switches().busy(id) {
+		return nil
+	}
+	return refusal(proto.CodeSwitchUnderWay, "the agent is moving to another launcher right now: try again once it runs", nil)
 }
 
 // shellAfterQuit waits, once session id's agent left its pane a, until only shells are in front of the pane and no

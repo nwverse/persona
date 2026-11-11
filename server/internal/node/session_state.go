@@ -242,6 +242,25 @@ func (s *stateFile) restoreLaunch(id string, prev sessionState, had bool, launch
 	}
 }
 
+// adoptSwitch takes v, what a launcher switch carried out on another Node wrote of session id (switch_share.go), and
+// writes it through this Node's hub: the fields the switch owns (launcher, model, directory, start time, plan mode,
+// pane, pending switch) over this Node's record, the rest of it as this Node has it (an ultracode observation the new
+// claude's hooks made on this connection); v whole when there is no record.
+func (s *stateFile) adoptSwitch(id string, v sessionState) {
+	s.mu.Lock()
+	if cur, ok := s.Sessions[id]; ok {
+		cur.Launcher, cur.Model, cur.ModelFingerprint, cur.ModelEffort = v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort
+		cur.Cwd, cur.StartedAt, cur.PlanThen, cur.Pane, cur.PendingSwitch = v.Cwd, v.StartedAt, v.PlanThen, v.Pane, v.PendingSwitch
+		v = cur
+	}
+	s.Sessions[id] = v
+	persist := s.persist
+	s.mu.Unlock()
+	if persist != nil {
+		persist(id, v)
+	}
+}
+
 func (s *stateFile) get(id string) (sessionState, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

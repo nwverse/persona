@@ -875,6 +875,7 @@ func TestASwitchOutlivingItsConnectionIsWrittenByTheNextNode(t *testing.T) {
 
 	next, _ := testNode(t)
 	next.share.Store(n.switches())
+	next.modes = map[string]sessionModes{}
 	var mu sync.Mutex
 	var written []sessionState
 	next.state.persist = func(id string, v sessionState) {
@@ -883,6 +884,9 @@ func TestASwitchOutlivingItsConnectionIsWrittenByTheNextNode(t *testing.T) {
 		mu.Unlock()
 	}
 	next.state.merge(map[string]sessionState{sidA: loaded})
+	// the new claude's hook on the next connection: an ultracode observation of its own, newer than the switch's
+	since := ultracodeRecord{Since: time.Now().UTC()}
+	next.state.setUltracode(sidA, since)
 	next.switches().receive(next) // its state has loaded
 	// The old connection is gone: its Node's writes to the hub fail.
 	closed := rpc.New("n", io.Discard)
@@ -897,6 +901,12 @@ func TestASwitchOutlivingItsConnectionIsWrittenByTheNextNode(t *testing.T) {
 	st, ok := next.state.get(sidA)
 	if !ok || st.Launcher != "work" || st.Model != "opus" || st.PendingSwitch != nil {
 		t.Fatalf("the next Node has %+v", st)
+	}
+	if st.Ultracode == nil || !st.Ultracode.Since.Equal(since.Since) {
+		t.Errorf("the next Node's own observation was written over: %+v", st.Ultracode)
+	}
+	if shown := next.shownModel(sidA, next.transcriptModel(sidA)); shown != "opus" {
+		t.Errorf("the next Node shows model %q", shown)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -962,5 +972,109 @@ func TestAnOldSwitchIsNotShownAsWaiting(t *testing.T) {
 	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", At: time.Now()})
 	if ps := rowOf(t, n, sidA).PendingSwitch; ps == nil {
 		t.Error("a fresh switch is not shown")
+	}
+}
+
+// While a launcher switch of a session is carried out on the last connection's Node of a resident node (whose typing
+// lock this Node does not hold), what would type into its pane or press its keys is refused with nothing done: a
+// model, mode or effort change, a rewind, keys and an interrupt, a close.
+func TestTypingRefusedWhileASwitchRunsElsewhere(t *testing.T) {
+	n, f, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	other := &switchShare{} // the resident node's, shared with the Node the switch runs on
+	n.share.Store(other)
+	other.begin(sidA, proto.Session{SessionID: sidA, Starting: true})
+	f.reset()
+	for _, c := range []struct {
+		method string
+		params map[string]any
+	}{
+		{"session.modes", map[string]any{"model": "opus"}},
+		{"session.modes", map[string]any{"permission_mode": "plan"}},
+		{"session.modes", map[string]any{"effort": "high"}},
+		{"session.rewind", map[string]any{"prompt": "hi", "occurrence": 1, "restore": RestoreConversation}},
+		{"session.keys", map[string]any{"keys": []string{"enter"}}},
+		{"session.interrupt", nil},
+		{"session.close", nil},
+	} {
+		p := map[string]any{"session_id": sidA}
+		for k, v := range c.params {
+			p[k] = v
+		}
+		_, err := request(t, n, c.method, p)
+		if code, _ := refusalOf(t, err); code != proto.CodeSwitchUnderWay {
+			t.Errorf("%s %v: %q (%v)", c.method, c.params, code, err)
+		}
+	}
+	if got := drove(f); len(got) != 0 {
+		t.Errorf("typed or pressed during the switch: %q", got)
+	}
+	other.end(sidA)
+}
+
+// The records a switch on the last connection's Node writes reach the Node that serves now in the order they were
+// written: one written while an earlier one is being given to it goes after it, not before (the earlier one would
+// win). And a Node that cannot write either (its connection gone too) leaves them for the next one, without looping.
+func TestSwitchShareGivesRecordsInOrder(t *testing.T) {
+	old, _ := testNode(t)
+	share := old.switches()
+	share.begin(sidA, proto.Session{SessionID: sidA, Starting: true})
+	older := sessionState{Launcher: "work", Cwd: "/w", PendingSwitch: &proto.PendingSwitch{Launcher: "work"}}
+	newer := sessionState{Launcher: "claude", Cwd: "/w"}
+	share.keep(old, sidA, older) // held: no Node takes them yet
+
+	next, _ := testNode(t)
+	next.share.Store(share)
+	var during string
+	next.state.persist = func(id string, v sessionState) {
+		if v.Launcher == "work" { // while the older one is given, the switch writes again
+			share.keep(old, sidA, newer)
+			cur, _ := next.state.get(sidA)
+			during = cur.Launcher
+		}
+	}
+	share.receive(next)
+	if during != "work" {
+		t.Errorf("the newer record went in while the older one was being given (now %q)", during)
+	}
+	if st, _ := next.state.get(sidA); st.Launcher != "claude" || st.PendingSwitch != nil {
+		t.Fatalf("the serving Node has %+v", st)
+	}
+
+	// A Node whose own writes fail takes no more: the record waits for the next one.
+	gone, _ := testNode(t)
+	gone.share.Store(share)
+	gone.state.persist = func(id string, v sessionState) { share.keep(gone, id, v) }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		share.receive(gone)
+		share.keep(old, sidA, older)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("giving records to a Node that cannot write them never ends")
+	}
+	last, _ := testNode(t)
+	last.share.Store(share)
+	share.receive(last)
+	if st, _ := last.state.get(sidA); st.Launcher != "work" {
+		t.Errorf("the next Node did not get the record: %+v", st)
+	}
+	share.end(sidA)
+}
+
+// Two marks of one session (two messages taking a switch up at once, or a pick and a message) end one at a time: the
+// session is still taken up until the last one ends.
+func TestSwitchMarksCount(t *testing.T) {
+	s := &switchShare{}
+	first, second := s.mark(sidA), s.mark(sidA)
+	first()
+	if !s.busy(sidA) {
+		t.Error("the first mark's end cleared the second")
+	}
+	second()
+	if s.busy(sidA) {
+		t.Error("still marked after both ended")
 	}
 }

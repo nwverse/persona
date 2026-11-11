@@ -23,15 +23,17 @@ type switchShare struct {
 	// pending: the switches waiting for a message, of sessions with no state record (a recorded session keeps its own
 	// in the record).
 	pending map[string]proto.PendingSwitch
-	// marked: the sessions a message has taken a switch up for, from before its checks until it ends.
-	marked map[string]bool
+	// marked: the sessions a message has taken a switch up for, from before its checks until it ends (how many).
+	marked map[string]int
 	// flights: the switches past their checks, from just before the quit until they end: the row listed meanwhile, and
 	// a channel closed at the end.
 	flights map[string]*switchFlight
 	// held: the records a switch wrote that its Node could no longer send its hub (its connection had ended), until a
-	// Node whose state has loaded takes them (to).
-	held map[string]sessionState
-	to   *Node
+	// Node whose state has loaded takes them (to); delivering while drain gives them to it, one batch after another,
+	// so a record written meanwhile goes after the ones before it.
+	held       map[string]sessionState
+	to         *Node
+	delivering bool
 }
 
 type switchFlight struct {
@@ -76,13 +78,15 @@ func (s *switchShare) setPending(id string, ps *proto.PendingSwitch) {
 func (s *switchShare) mark(id string) (done func()) {
 	s.mu.Lock()
 	if s.marked == nil {
-		s.marked = map[string]bool{}
+		s.marked = map[string]int{}
 	}
-	s.marked[id] = true
+	s.marked[id]++
 	s.mu.Unlock()
 	return func() {
 		s.mu.Lock()
-		delete(s.marked, id)
+		if s.marked[id]--; s.marked[id] <= 0 {
+			delete(s.marked, id)
+		}
 		s.mu.Unlock()
 	}
 }
@@ -101,15 +105,25 @@ func (s *switchShare) begin(id string, row proto.Session) bool {
 	return true
 }
 
-// end ends session id's switch under way: those waiting for it go on, and its records are no longer held for it.
-func (s *switchShare) end(id string) {
+// end ends session id's switch under way: those waiting for it go on, and its records are no longer held for it. It
+// returns the Node serving now, the one whose state took the records (nil when none has loaded since).
+func (s *switchShare) end(id string) (serving *Node) {
 	s.mu.Lock()
 	f := s.flights[id]
 	delete(s.flights, id)
+	serving = s.to
 	s.mu.Unlock()
 	if f != nil {
 		close(f.done)
 	}
+	return serving
+}
+
+// serving is the Node whose state takes the records switches write now, nil when none has loaded.
+func (s *switchShare) serving() *Node {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.to
 }
 
 // inFlight: session id's switch is under way (past its checks).
@@ -123,7 +137,7 @@ func (s *switchShare) inFlight(id string) bool {
 func (s *switchShare) busy(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.marked[id] || s.flights[id] != nil
+	return s.marked[id] > 0 || s.flights[id] != nil
 }
 
 // wait blocks while a switch of session id is under way.
@@ -157,25 +171,28 @@ func (s *switchShare) listed(seen map[string]bool) []proto.Session {
 }
 
 // keep takes the record v of session id that Node from could not send its hub, when a switch of it is under way
-// (written by the switch, which outlived from's connection): to the Node whose state has loaded now, or held until one
-// has. false: not a switch's, not taken.
+// (written by the switch, which outlived from's connection): for the Node whose state has loaded now, after what it
+// is being given already, or held until one has. A record its own Node could not send is held for the next one: that
+// Node's connection has gone too, and it takes no more. false: not a switch's, not taken.
 func (s *switchShare) keep(from *Node, id string, v sessionState) bool {
 	s.mu.Lock()
 	if s.flights[id] == nil {
 		s.mu.Unlock()
 		return false
 	}
-	to := s.to
-	if to == nil || to == from {
-		if s.held == nil {
-			s.held = map[string]sessionState{}
-		}
-		s.held[id] = v
-		s.mu.Unlock()
-		return true
+	if s.to == from {
+		s.to = nil
 	}
+	if s.held == nil {
+		s.held = map[string]sessionState{}
+	}
+	s.held[id] = v // the latest word of that session
+	start := s.to != nil && !s.delivering
+	s.delivering = s.delivering || start
 	s.mu.Unlock()
-	to.state.put(id, v) // the latest word of that session: over what that Node loaded, and written through its hub
+	if start {
+		s.drain()
+	}
 	return true
 }
 
@@ -184,11 +201,31 @@ func (s *switchShare) keep(from *Node, id string, v sessionState) bool {
 func (s *switchShare) receive(n *Node) {
 	s.mu.Lock()
 	s.to = n
-	held := s.held
-	s.held = nil
+	start := len(s.held) > 0 && !s.delivering
+	s.delivering = s.delivering || start
 	s.mu.Unlock()
-	for id, v := range held {
-		n.state.put(id, v)
+	if start {
+		s.drain()
+	}
+}
+
+// drain gives the held records to the Node that takes them, a batch at a time, until none is left or no Node takes
+// them; one kept while a batch is given goes in the next. Only the call that set delivering drains; no lock is held
+// while a Node takes a record (adoptSwitch writes it through that Node's hub, and may keep it back here).
+func (s *switchShare) drain() {
+	for {
+		s.mu.Lock()
+		to, held := s.to, s.held
+		if to == nil || len(held) == 0 {
+			s.delivering = false
+			s.mu.Unlock()
+			return
+		}
+		s.held = nil
+		s.mu.Unlock()
+		for id, v := range held {
+			to.state.adoptSwitch(id, v) // over what that Node loaded, the fields the switch owns
+		}
 	}
 }
 

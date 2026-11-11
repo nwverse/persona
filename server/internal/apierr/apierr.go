@@ -254,6 +254,7 @@ var rpcFailureKeys = map[string]string{
 	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)
 	proto.CodeSwitchStale:           "rpc-errors.switch_stale",
 	proto.CodeSwitchPickModel:       "rpc-errors.switch_pick_model",
+	proto.CodeSwitchUnderWay:        "rpc-errors.switch_under_way",
 	proto.CodeSwitchUnsupported:     "rpc-errors.switch_unsupported",
 	proto.CodeSwitchLauncherMissing: "rpc-errors.switch_launcher_missing",
 	proto.CodeSwitchOtherAgent:      "rpc-errors.switch_other_agent",

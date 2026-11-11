@@ -419,6 +419,10 @@ const (
 	// CodeSwitchStale: the pick was made against another launcher than the session runs on by now (POST …/modes'
 	// from): a switch was carried out meanwhile. Nothing was recorded.
 	CodeSwitchStale = "switch_stale"
+	// CodeSwitchUnderWay: a switch of the session is being carried out right now (maybe on the last connection's Node
+	// of a resident node): what would type into its pane or press its keys (a model, mode or effort change, a rewind,
+	// an answer, keys, a close), and a message that would carry out another, is refused with nothing done.
+	CodeSwitchUnderWay = "switch_under_way"
 	// CodeSwitchPickModel: no model was picked, and what the launcher runs by default cannot be seen (a wrapper script,
 	// a provider that names no model): resumed without --model, the conversation would go on with the model of the
 	// launcher it ran on.

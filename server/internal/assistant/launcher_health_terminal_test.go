@@ -161,9 +161,9 @@ func TestLauncherHealthRecordsAppStarts(t *testing.T) {
 	}
 }
 
-// A running Agent moving to another launcher is listed as starting meanwhile (Starting with its pending switch,
-// node/launcher_switch.go): it says nothing of that launcher's starts, and its row listed clean afterwards (back on its
-// own launcher after a failed switch included) is no start that worked.
+// A running Agent moving to another launcher is listed as starting meanwhile on the launcher it moves to (Starting with
+// its pending switch, node/launcher_switch.go): it is not followed, since the row listed clean afterwards may be back on
+// its own launcher (a switch that failed and rolled back): no start of the launcher the starting row named.
 func TestLauncherHealthLeavesSwitchesOut(t *testing.T) {
 	s, f := launcherHealthHubOn(t, newStorelessService)
 	delete(f.checks, "l4/work")

@@ -302,6 +302,9 @@ func keepImagePaths(text string) string {
 }
 
 func (n *Node) keys(ctx context.Context, id string, keys []string, text string) error {
+	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
+		return err
+	}
 	n.dropSuggestion(id) // whatever goes in replaces or sends it
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {

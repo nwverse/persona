@@ -447,6 +447,9 @@ func (n *Node) sessionFor(id string, a host.Agent) *proto.Session {
 // close quits any Claude running in the machine's engine (started by Persona or by hand) and closes its pane: herdr
 // closes its tab, or in a split tab only its own pane, so the other panes survive; herdr-core ends its terminal.
 func (n *Node) close(ctx context.Context, id string) error {
+	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
+		return err
+	}
 	a, ok := n.agent(id)
 	if !ok {
 		if _, mine := n.state.get(id); mine {
