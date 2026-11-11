@@ -67,7 +67,8 @@ final class AssistantSwitcherUITests: XCTestCase {
     @MainActor func testSwitchingClosesAPushedPage() throws {
         let app = launch(["-openAssistantPage", "profile"])
         guard app.windows.firstMatch.frame.width > 700 else { throw XCTSkip("the switcher beside a pushed page: regular width only") }
-        let profile = element(app, "assistant-main-tasks-quiet")
+        // The profile's bar (its title Persona) with the way back: the page is pushed.
+        let profile = app.navigationBars.matching(identifier: "Persona").firstMatch
         XCTAssertTrue(profile.waitForExistence(timeout: 20), "the profile did not open:\n\(app.debugDescription)")
         let header = switcherHeader(app)
         XCTAssertTrue(header.waitForExistence(timeout: 20), "no switcher in the sidebar's header:\n\(app.debugDescription)")
