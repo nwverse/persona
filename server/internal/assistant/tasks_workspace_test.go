@@ -35,7 +35,7 @@ func workspaceTaskService(t *testing.T) (*Service, *fakeHub) {
 
 func workspacePlan(t *testing.T, s *Service, choice string) *TaskPlan {
 	t.Helper()
-	args := `{"tasks":[{"title":"Fix login","prompt":"Fix login and add tests","machine":"box","cwd":"/code/app"`
+	args := `{"tasks":[{"title":"Fix login","prompt":"Fix login and add tests","machine":"box","cwd":"/code/app","permission":"bypassPermissions"`
 	if choice != "" {
 		args += `,"workspace":` + choice
 	}
@@ -324,8 +324,8 @@ func TestTaskWorkspaceConcurrentExistingStartsCannotBothWrite(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, f := workspaceTaskService(t)
 		args := `{"tasks":[
-			{"title":"Writer one","prompt":"Write one","machine":"box","cwd":"/code/app","workspace":{"existing":"/code/app"}},
-			{"title":"Writer two","prompt":"Write two","machine":"box","cwd":"/code/app","workspace":{"existing":"/code/app"}}
+			{"title":"Writer one","prompt":"Write one","machine":"box","cwd":"/code/app","permission":"bypassPermissions","workspace":{"existing":"/code/app"}},
+			{"title":"Writer two","prompt":"Write two","machine":"box","cwd":"/code/app","permission":"bypassPermissions","workspace":{"existing":"/code/app"}}
 		]}`
 		if _, err := s.toolTaskPlan(context.Background(), "workspace-chat", json.RawMessage(args)); err != nil {
 			t.Fatal(err)

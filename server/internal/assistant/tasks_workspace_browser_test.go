@@ -31,8 +31,8 @@ func TestTaskWorkspaceBrowserHarness(t *testing.T) {
 	f.hello.Assistant.Machines = []string{"macbook"}
 	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "macbook", chat })
 	raw := `{"tasks":[
-		{"title":"Isolate the login fix","prompt":"Fix the example login","machine":"macbook","cwd":"/code/app","workspace":"new"},
-		{"title":"Reuse the review checkout","prompt":"Update the example tests","machine":"macbook","cwd":"/code/app","workspace":{"existing":"/code/other"}},
+		{"title":"Isolate the login fix","prompt":"Fix the example login","machine":"macbook","cwd":"/code/app","permission":"bypassPermissions","workspace":"new"},
+		{"title":"Reuse the review checkout","prompt":"Update the example tests","machine":"macbook","cwd":"/code/app","permission":"bypassPermissions","workspace":{"existing":"/code/other"}},
 		{"title":"Read the release notes","prompt":"Summarize the example release","machine":"macbook","cwd":"/code/app","readonly":true,"workspace":"none"}
 	]}`
 	if _, err := s.toolTaskPlan(context.Background(), chat, json.RawMessage(raw)); err != nil {
