@@ -297,13 +297,10 @@ enum ExtensionMarketText {
         var api: () -> APIClient?
         /// The app's own (its installs go through `ExtensionOperations.shared`); a test's has a store of its own.
         var live = false
-        /// Markets here belong to the default manager, so another manager's copy does not inflate the removal count.
-        var ownsExtension: (String?) -> Bool = { $0 == nil || $0 == ManagerRoster.assistant }
+        /// The current roster resolves the default manager; without it, explicit ownership stamps are not guessed.
+        var roster: () -> ManagerRoster? = { nil }
         static var live: Deps {
-            .init(api: { AppModel.shared.api }, live: true, ownsExtension: { manager in
-                guard let roster = AppModel.shared.managerRoster else { return manager == nil || manager == ManagerRoster.assistant }
-                return roster.owner(manager) == roster.defaultID
-            })
+            .init(api: { AppModel.shared.api }, live: true, roster: { AppModel.shared.managerRoster })
         }
     }
 
@@ -398,9 +395,23 @@ enum ExtensionMarketText {
         removalCount = nil
         let count: Int?
         do {
-            let own = try await api().plugins().filter { deps.ownsExtension($0.manager) }
-            // A hub from before `market` can report auto_upgrade without saying which market it came from.
-            count = own.contains(where: { $0.autoUpgrade != nil && $0.market == nil }) ? nil : own.filter { $0.market == id }.count
+            let listed = try await api().plugins()
+            let own: [HubExtension]?
+            if let roster = deps.roster() {
+                own = listed.filter { roster.owner($0.manager) == roster.defaultID }
+            } else {
+                // An explicit manager stamp needs the roster: the built-in assistant is not necessarily the default.
+                let ownershipUnknown = listed.contains {
+                    $0.manager != nil && ($0.market == id || ($0.autoUpgrade != nil && $0.market == nil))
+                }
+                own = ownershipUnknown ? nil : listed.filter { $0.manager == nil }
+            }
+            if let own {
+                // A hub from before `market` can report auto_upgrade without saying which market it came from.
+                count = own.contains(where: { $0.autoUpgrade != nil && $0.market == nil }) ? nil : own.filter { $0.market == id }.count
+            } else {
+                count = nil
+            }
         } catch {
             count = nil
         }

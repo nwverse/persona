@@ -210,7 +210,7 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
 
     private var autoUpgradeReason: String {
         if offline { return offlineReason }
-        if detail.plugin.autoUpgradePaused == "market_removed" {
+        if detail.plugin.marketWasRemoved {
             return String(localized: "Auto-upgrade is paused because its market was removed. Your setting is kept and applies again once the market is added back with the same address.")
         }
         if detail.plugin.enabled == false || detail.plugin.autoUpgradePaused == "disabled" {

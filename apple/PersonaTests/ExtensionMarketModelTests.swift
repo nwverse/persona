@@ -37,7 +37,9 @@ struct ExtensionMarketModelTests {
 
     private static let detail = #"{"id":"example-calendar","name":"Example 日历","kind":"connectors","status":"running"}"#
 
-    private func market(_ hub: FakeHub) -> ExtensionMarketModel { ExtensionMarketModel(deps: .init(api: { hub.client })) }
+    private func market(_ hub: FakeHub, roster: ManagerRoster? = nil) -> ExtensionMarketModel {
+        ExtensionMarketModel(deps: .init(api: { hub.client }, roster: { roster }))
+    }
 
     @Test func theCatalogDecodesAndSaysHowEachStands() async throws {
         let hub = FakeHub()
@@ -127,10 +129,36 @@ struct ExtensionMarketModelTests {
     @Test func removalCountsOnlyTheDefaultManagersAffectedExtensions() async {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"a","name":"A","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m1"},{"id":"b","name":"B","kind":"ui","status":"disabled","source":"installed","auto_upgrade":false,"market":"m1"},{"id":"c","name":"C","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m2"},{"id":"other","name":"Other","kind":"ui","status":"running","source":"installed","manager":"other","auto_upgrade":true,"market":"m1"}]}"#)
-        let page = market(hub)
+        let roster = ManagerRoster(managers: [
+            HubManager(id: "assistant", name: "Assistant", online: true),
+            HubManager(id: "other", name: "Other", online: true),
+        ], defaultID: "assistant")
+        let page = market(hub, roster: roster)
         await page.prepareRemoval(of: "m1")
         #expect(page.removalMarket == "m1" && page.removalCount == 2)
         #expect(page.error == nil, "counting is explanatory and must not block the market page")
+    }
+
+    private static let managerCopies = #"{"plugins":[{"id":"default","name":"Default","kind":"ui","status":"running","manager":"m-2","auto_upgrade":true,"market":"m1"},{"id":"builtin","name":"Built-in assistant","kind":"ui","status":"running","manager":"assistant","auto_upgrade":true,"market":"m1"},{"id":"unstamped","name":"Unstamped","kind":"ui","status":"running","auto_upgrade":true,"market":"m1"}]}"#
+
+    @Test func removalCountUsesTheRostersActualDefaultManager() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: Self.managerCopies)
+        let roster = ManagerRoster(managers: [
+            HubManager(id: "m-2", name: "Second", online: true),
+            HubManager(id: "assistant", name: "Assistant", online: true),
+        ], defaultID: "m-2")
+        let page = market(hub, roster: roster)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalCount == 2, "the m-2 copy and the default's unstamped copy count; the assistant's copy does not")
+    }
+
+    @Test func removalCountStaysUnknownWhenTheDefaultManagerIsUnknown() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: Self.managerCopies)
+        let page = market(hub)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalCount == nil, "without the roster, an explicitly stamped assistant is not necessarily the default")
     }
 
     @Test func removalCountDistinguishesAnOldHubFromNoAffectedExtensions() async {

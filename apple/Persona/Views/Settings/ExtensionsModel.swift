@@ -30,6 +30,7 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var autoUpgrade: Bool?
     /// Why its own switch does not apply now: "market_removed" once its market is gone, or "disabled" while it is off.
     var autoUpgradePaused: String?
+    var marketWasRemoved: Bool { autoUpgradePaused == "market_removed" }
     /// The market it upgrades from, retained after that market is removed (nil: a hub from before this field).
     var market: String?
     var upgrade: ExtensionUpgrade?

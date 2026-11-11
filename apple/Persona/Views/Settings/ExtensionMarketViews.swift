@@ -665,6 +665,7 @@ private struct MarketRow: View {
     var act: (Act) -> Void
     @State private var confirmRemove = false
     @State private var preparingRemoval = false
+    @State private var removalAttempt = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -695,11 +696,14 @@ private struct MarketRow: View {
             action(market.hasToken ? String(localized: "Change Token") : String(localized: "Set Token"), .token, id: "market-token-\(market.id)")
             Spacer(minLength: 0)
             Button(role: .destructive) {
+                removalAttempt += 1
+                let attempt = removalAttempt
                 Task {
                     preparingRemoval = true
                     let prepared = await prepareRemoval()
+                    guard attempt == removalAttempt else { return }
                     preparingRemoval = false
-                    confirmRemove = prepared
+                    if prepared { confirmRemove = true }
                 }
             } label: { Text("Delete").lineLimit(1) }
             .buttonStyle(.borderless)

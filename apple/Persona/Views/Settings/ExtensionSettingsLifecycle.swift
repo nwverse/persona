@@ -34,7 +34,7 @@ nonisolated struct ExtensionSettingsPolicy {
         let parts = origin.hasPrefix("market:") ? String(origin.dropFirst(7)).split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false) : []
         market = installed && parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty ? String(parts[0]) : nil
         canEnable = !configured && plugin.source != "dev" && (plugin.enabled != nil || builtin)
-        let marketRemoved = plugin.autoUpgradePaused == "market_removed"
+        let marketRemoved = plugin.marketWasRemoved
         canCheck = market != nil && !marketRemoved
         canAutoUpgrade = canCheck && plugin.autoUpgrade != nil
         // DELETE is destructive even when dependency checks fail. There is no safe removal preview API.
