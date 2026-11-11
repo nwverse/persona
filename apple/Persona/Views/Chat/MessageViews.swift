@@ -312,7 +312,8 @@ struct PeerMessage: View {
 /// A message just sent from this phone, before the transcript has it: drawn like a sent bubble right away, with a
 /// quiet clock while the request runs, the clock and "Sends when connected" while it waits for the network (Outbox.swift),
 /// and a red "Resend" when it failed. A long press gives an action bar like a sent message's, with Copy, Select Text and
-/// Share (#6427): one that never went out can be copied rather than typed again.
+/// Share (#6427): one that never went out can be copied rather than typed again. One only on this phone (failed or
+/// waiting) ends the bar in Delete / Don't Send, as its mark's menu does (#4626).
 struct PendingBubble: View {
     var msg: PendingMessage
     var retry: () -> Void
@@ -382,7 +383,9 @@ struct PendingBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .messageActionBar(id: msg.id.uuidString, text: shown, isUser: true, date: msg.createdAt, pending: true)
+        // The bar's last item on one only on this phone (#4626): what its mark's menu says, doing the same.
+        .messageActionBar(id: msg.id.uuidString, text: shown, isUser: true, date: msg.createdAt, pending: true,
+                          delete: .of(msg, run: discard))
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
