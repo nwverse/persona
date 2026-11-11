@@ -124,7 +124,6 @@ type Node struct {
 	resumes   resumeLocks                // one resume report at a time per herdr pane (herdrresume.go reportResume)
 	panes     map[string]string          // pane id -> session id (learned from hooks)
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
-	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
 	procs     map[string]*assistantProc  // headless assistant conversations (assistant.go)
 	titles    map[string]string          // session id -> title given before its transcript existed (rename.go retitle)
 	spare     *assistantProc             // warm process waiting for the next new conversation
@@ -407,7 +406,6 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
-	go n.watchShellTabs(ctx)
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
 	return n.peer.Serve(ctx, r)
@@ -672,9 +670,23 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(n.interruptCodex(ctx, p.SessionID))
 		}
 	}
-	if method == "session.retire" { // before the runtimes: a session another tool owns is refused, not handed on
-		closed, err := n.retire(ctx, p.SessionID)
-		return map[string]any{"closed": closed}, err
+	// Before the runtimes: a session another tool owns is refused, not handed on. Neither closes the agent's pane
+	// (retire.go, #4754): session.retire is what a hub before #4754 asks, answered as it expects ("closed").
+	if method == "session.retire" {
+		var a struct {
+			CloseTerminal bool `json:"close_terminal"` // the user's "Archive and close"
+		}
+		_ = json.Unmarshal(params, &a)
+		done, err := n.retire(ctx, p.SessionID, a.CloseTerminal)
+		return map[string]any{"closed": done}, err
+	}
+	if method == "session.stop" {
+		var a struct {
+			Retire bool `json:"retire"`
+		}
+		_ = json.Unmarshal(params, &a)
+		stopped, err := n.stop(ctx, p.SessionID, a.Retire)
+		return map[string]any{"stopped": stopped}, err
 	}
 	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing
 		return n.restoreModel(ctx, p.SessionID)
