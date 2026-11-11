@@ -100,9 +100,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * shared stylesheet's classes for the topic page and the knowledge map, and its switch in Settings' search; the pages,
  * their code and words load on demand), and 2,048 B for tool names in words (#2986 added 1,996 B: lib/turns.ts's
  * subjects of Claude Code's newer tools and other servers' MCP tools named in words, the verbs views/chat/ActionRow.tsx
- * gives them). Raise it on purpose, in the change that needs it.
+ * gives them), and 1,024 B for background rounds in the main conversation (#4314 added about 580 B: lib/turns.ts's
+ * background-round detection and source blocks in an opened round, the folded line's words and Needs you's grouping by
+ * supervisor), and 4,096 B for the authoritative workspace catalog and its direct workspace rows, the first-screen
+ * worktree action words, and shared sticky group controls (PR #3222: 3,605 B over its main baseline). Raise it on purpose,
+ * in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 585_856;
+export const FIRST_SCREEN_BUDGET = 590_976;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

@@ -18,7 +18,7 @@ func fakeRisk(words []string) string {
 		return "read" // lark-cli reads the command off the leading words; the event key is an argument
 	}
 	switch strings.Join(words, " ") {
-	case "im +chat-list", "im +messages-search", "im +chat-messages-list", "docs +fetch", "calendar +agenda", "event consume":
+	case "im +chat-list", "im +messages-search", "im +chat-messages-list", "docs +fetch", "calendar +agenda", "calendar events get", "event consume":
 		return "read"
 	case "im +messages-send", "im +messages-reply", "im reactions create":
 		return "write"
@@ -143,9 +143,12 @@ func TestLarkCLIRules(t *testing.T) {
 // A command the gate cannot follow that runs lark-cli is confirmed whole, unless every lark-cli call in it reads.
 func TestLarkCLIInComplexCommands(t *testing.T) {
 	for cmd, write := range map[string]bool{
-		`for c in a b; do lark-cli im +messages-send --chat-id "$c" --text hi; done`:  true,
-		`lark-cli im +messages-send --chat-id oc_x --text hi | python3 -c 'print(1)'`: true,
-		`lark-cli im +chat-list | python3 -c 'print(1)'`:                              false,
+		`for c in a b; do lark-cli im +messages-send --chat-id "$c" --text hi; done`:                                                                 true,
+		`for c in a b; do lark-cli "$CMD" --chat-id "$c"; done`:                                                                                      true,
+		`for c in a b; do lark-cli im +chat-list; done`:                                                                                              false,
+		`for id in a b c; do lark-cli calendar events get --params "{\"calendar_id\":\"primary\",\"event_id\":\"$id\"}" | jq -r '.' | head -3; done`: false,
+		`lark-cli im +messages-send --chat-id oc_x --text hi | python3 -c 'print(1)'`:                                                                true,
+		`lark-cli im +chat-list | python3 -c 'print(1)'`:                                                                                             false,
 	} {
 		v := classifyLark(cmd, nil, "", fakeRisk)
 		if !v.other {

@@ -63,7 +63,8 @@ func TestGuestProcessFlags(t *testing.T) {
 	}
 
 	mcpJSON, flags = n.claudeAssistantMCPAndTools("ordinary-1", t.TempDir(), true)
-	if servers(mcpJSON)["example"] == nil || slices.Contains(flags, "--tools") || slices.Contains(flags, "--strict-mcp-config") {
+	builtin, hasBuiltin := flagValue(flags, "--tools")
+	if servers(mcpJSON)["example"] == nil || !hasBuiltin || builtin != assistantBuiltinTools || slices.Contains(flags, "--strict-mcp-config") {
 		t.Fatalf("an ordinary conversation changed: %s %q", mcpJSON, flags)
 	}
 	if v, _ := flagValue(flags, "--allowedTools"); !slices.Contains(strings.Split(v, ","), assistantAllowedTools) {

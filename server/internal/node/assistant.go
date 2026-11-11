@@ -52,6 +52,11 @@ const assistantIdleCompact = standardWindow / 4 * 3
 // schedule_followup waited for a tap on the phone, so a follow-up firing at night just stalled.
 const assistantAllowedTools = "mcp__persona"
 
+// assistantBuiltinTools keeps the headless assistant's file, shell, web, skill and sub-agent capabilities without
+// the software-development, notebook, worktree, LSP, workflow and Claude-specific scheduling surfaces. Persona MCP
+// tools are not affected by this built-in allow-list; scheduling and user questions use their Persona tools instead.
+const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch"
+
 type assistantProc struct {
 	id       string
 	agent    string // "claude" (stream-json) or "codex" (app-server, assistant_codex.go)
@@ -62,7 +67,7 @@ type assistantProc struct {
 	stdin    io.WriteCloser
 	exited   chan struct{}
 	born     time.Time
-	// personaMCPOnly is fixed at Claude process start. A warm spare must still match
+	// personaMCPOnly is fixed at a Claude or Codex process start. A warm spare must still match
 	// the hub's current capability before it becomes a new conversation.
 	personaMCPOnly bool
 	// stderrDone closes when its stderr ends (watchAssistantStderr has read all of it): what a failed start printed
@@ -276,6 +281,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if execution.ConfigDir != "" {
+			return "", errors.New("config_dir is only supported for Claude assistant conversations")
+		}
 		if id != "" && (onRuntime == nil || !runs) && !(runs && launcher == "") { // another kind of agent than its own
 			return "", errors.New("换到另一种 Agent 需要新建对话")
 		}
@@ -324,6 +332,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if guest != nil && (agent != "claude" || execution.Runtime != "") {
 		return "", errGuestAgent
+	}
+	if agent == "claude" {
+		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, execution.Runtime, executionOption(options).ConfigDir, resume)
+		if err != nil {
+			return "", err
+		}
+	} else if executionOption(options).ConfigDir != "" {
+		return "", errors.New("config_dir is only supported for Claude assistant conversations")
 	}
 	var p *assistantProc
 	if id == "" && guest != nil {
@@ -398,7 +414,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Runtime != execution.Runtime || st.IsMain != execution.IsMain || st.ConfigDir != execution.ConfigDir {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -406,6 +422,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Launcher, st.Cwd, st.StartedAt = launcher, cwd, started
 		st.Model, st.ModelFingerprint, st.ModelEffort, st.Runtime = execution.Model, execution.Fingerprint, execution.Effort, execution.Runtime
 		st.IsMain = execution.IsMain
+		st.ConfigDir = execution.ConfigDir
 		n.state.put(id, st)
 	}
 
@@ -763,9 +780,9 @@ func (n *Node) rememberTasks(id string, tasks []string) {
 }
 
 // recoverAssistantTasks runs once the session state is loaded: conversations whose background tasks or monitors
-// were running when the node went down (a deploy restarts it, and systemd kills claude and its children with it)
-// get a message saying so, which wakes them up to re-arm what still matters. Without it they would wait forever
-// for a notification that cannot come. send delivers the message (assistantSend).
+// were running when the node went down (its connection ended and it stopped its conversations, stopAtConnectionEnd,
+// or a service restart killed them with it) get a message saying so, which wakes them up to re-arm what still matters.
+// Without it they would wait forever for a notification that cannot come. send delivers the message (assistantSend).
 func (n *Node) recoverAssistantTasks(send func(id, text string) error) {
 	n.state.mu.Lock()
 	lost := map[string][]string{}

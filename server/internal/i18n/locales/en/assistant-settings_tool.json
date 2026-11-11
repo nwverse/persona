@@ -1,4 +1,6 @@
 {
+  "title_task_workspace_preference": "Task workspace preference",
+  "change_task_workspace_preference": "Task workspace preference: {before} → {after}",
   "title_notes": "About me",
   "title_main_tasks_quiet": "Notify tasks from the main chat only in the main chat",
   "title_start_requested_tasks": "Start what I asked for in the chat right away",
@@ -37,5 +39,7 @@
   "minutes_forever": "Forever",
   "minutes_days_value": "{days} days",
   "minutes_unchanged": "Meeting minutes retention is unchanged: {saved} is saved; {after} is in effect.",
-  "minutes_applied": "Meeting minutes retention is saved as {saved}; {after} is in effect. Transcripts still follow the recording retention."
+  "minutes_applied": "Meeting minutes retention is saved as {saved}; {after} is in effect. Transcripts still follow the recording retention.",
+  "title_main_background_folded": "Fold background rounds",
+  "change_main_background_folded": "“Fold background rounds”: {before} → {after}"
 }

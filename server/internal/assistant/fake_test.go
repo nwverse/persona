@@ -72,6 +72,7 @@ type fakeHub struct {
 	slowSnapshots time.Duration // the connectors' live states come this late (nothing: there are none)
 	liveStates    []any         // the connectors' live states (connectors.snapshots), when they come at once
 	snapshotAsks  int           // connectors.snapshots calls
+	hungChannel   string        // the channel whose program never answers a send (hangChannel)
 	replies       []string      // the model's answers, in turn (the last one again when they run out)
 	answers       []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown     bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
@@ -402,6 +403,10 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		f.guestPrepared = append(f.guestPrepared, a)
 		return json.Marshal(map[string]any{"cwd": "/home/me/.persona/guest"})
+	case "worktree.status":
+		return json.Marshal(proto.WorktreeStatus{})
+	case "workspace.resolve":
+		return json.Marshal(proto.Workspace{Cwd: a["path"].(string), Available: true})
 	case DeviceWorktreePrepare, DeviceWorktreeCreate: // the machine's engine: checkouts under /wt/<repo>
 		a["method"] = p.Method
 		f.worktrees = append(f.worktrees, a)
@@ -478,6 +483,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 }
 
 func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, error) {
+	if err := f.hungAppCall(ctx, p); err != nil {
+		return nil, err
+	}
 	if f.inbox != nil { // outside the lock: a round calls back into the assistant
 		if out, ok, err := f.inbox.answer(ctx, p); ok {
 			return out, err
@@ -507,7 +515,9 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	case AppConnectors + " " + ConnectorsSignedIn:
 		return json.Marshal(map[string]any{"connectors": []string{}, "clis": map[string]string{}, "lark_cli": f.larkCLI})
 	case AppPlugins + " " + PluginsAssistant:
-		return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})
@@ -638,6 +648,14 @@ func (f *fakeHub) pushed() []Notification {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]Notification(nil), f.pushes...)
+}
+
+// started is a copy of the session.start parameters so far: a task starts its agent on a goroutine of its own, which
+// appends to f.starts under f.mu.
+func (f *fakeHub) started() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.starts)
 }
 
 // pushedBy is pushed once there is a push, or at deadline: a watcher records a run before it pushes it, so a test

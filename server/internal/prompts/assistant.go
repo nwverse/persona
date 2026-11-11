@@ -237,7 +237,7 @@ type Snapshot struct {
 	Machines      []SnapshotMachine
 	Needs, Unread []SnapshotAgent
 	// Waiting: stopped on something the hub waits out for them (a retry, a deploy, another agent); Done: finished
-	// within a day, with the conclusion (docs/assistant/agent-work.md "What Persona knows").
+	// within a day. Their details stay out of the snapshot; Done renders only a count and agents_list state=done.
 	Waiting, Done []SnapshotAgent
 	// Awaiting: stopped on a question to the user, who looked at it and has not answered (docs/protocol/agent-states.md
 	// "Awaiting your reply", #5096).
@@ -279,7 +279,7 @@ type Snapshot struct {
 // and its count, with the tool that lists it, never as empty: the node sends only the sections that changed, so a
 // section that went missing would read as unchanged, and one rendered without its items as "none".
 type SnapshotOmit struct {
-	Muted, Done, Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+	Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
 }
 
 // SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).

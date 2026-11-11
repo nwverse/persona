@@ -1,4 +1,9 @@
 {
+  "workspace_preference": "派发任务时优先使用",
+  "workspace_prefer_existing": "优先已有工作区",
+  "workspace_prefer_new": "优先新建工作区",
+  "workspace_hint": "只读任务不新建；已有目录被占用时新建隔离工作区。每个计划可单独修改。",
+  "workspace_unconfirmed": "助手没有确认工作区偏好，请重试。",
   "retry": "重试",
   "save_failed": "没改成：{error}",
   "subtitle": "你的私人助手",
@@ -81,5 +86,7 @@
   "agent_tasks_hint": "不是从主对话派出去的 Agent 也会挂上一个不打扰的任务，有人验收结果、做完后关掉它；会多花一些模型调用",
   "archive_closed": "已关闭的会话多久后归档",
   "archive_closed_hint": "已关闭、身上没有未完成任务的会话，闲置这么多天后移出列表，仍能在已归档里找到；0 表示不自动归档",
-  "archive_closed_unit": "天"
+  "archive_closed_unit": "天",
+  "background_folded": "后台轮次默认折叠",
+  "background_folded_footer": "主对话里由别的对话、定时任务或跟进发起的轮次折成一行，点开能看全部；问过你或通知过你的轮次照常显示。"
 }

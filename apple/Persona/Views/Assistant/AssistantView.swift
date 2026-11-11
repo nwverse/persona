@@ -132,7 +132,7 @@ struct AssistantView: View {
                                 openTodos: places ? { show(.todos) } : { drawer.close(); showTodos = true },
                                 onMachines: places ? { show(.machines) } : nil,
                                 onOpenExtension: places ? { show(.extensionPage($0)) } : { r in drawer.close(); openedExtension = r },
-                                openHealth: places ? { show(.health) } : { drawer.close(); showHealth = true },
+                                openHealth: { drawer.close(); enterHealth() },
                                 startMeeting: Self.startMeeting(places ? { show(.recordings) } : { drawer.close(); showRecordings = true }),
                                 collapse: column && pageTabSwitch ? { toggleSidebar() } : nil)
     }
@@ -241,7 +241,9 @@ struct AssistantView: View {
                                 sidebarIsColumn: widthClass == .regular,
                                 sidebarShown: columns != .detailOnly,
                                 openSidebar: toggleSidebar,
-                                newConversation: newConversation,
+                                // In a health conversation New opens Health's new conversation page, whose list has the
+                                // space's past ones (#4329); elsewhere the assistant's.
+                                newConversation: currentIsHealth ? { backToRoot(); showHealth = true } : newConversation,
                                 openKnowledge: { showKnowledge = true },
                                 openProfile: { showProfile = true })
                 #if os(macOS)
@@ -329,7 +331,7 @@ struct AssistantView: View {
                 case "routines": show(.routines)
                 case "knowledge": show(.knowledge)
                 case "profile": show(.profile)
-                case "health": show(.health)
+                case "health": backToRoot(); showHealth = true // the page itself, for its screenshots
                 case "recordings": show(.recordings)
                 default: break
                 }
@@ -364,8 +366,26 @@ struct AssistantView: View {
         case .todos: path.append(ShellRoute.todos)
         case .machines: path.append(ShellRoute.machines)
         case .extensionPage(let r): path.append(ShellRoute.extensionPage(r))
-        case .health: showHealth = true
+        case .health: enterHealth()
         case .recordings: showRecordings = true
+        }
+    }
+
+    /// The open conversation is the health space's.
+    private var currentIsHealth: Bool { HealthModel.newOpensHealth(current.flatMap { model.session($0) }) }
+
+    /// Health from the sidebar or the shell (#4329): back in the latest health conversation, as Codex does; the Health
+    /// page, its new conversation page, when it has none. `-openAssistantPage health` still shows the page.
+    private func enterHealth() {
+        Task {
+            switch await HealthModel.entry(deps: .live, live: model.healthConversations) {
+            case .open(let key):
+                backToRoot()
+                model.openAssistantConversation(key)
+            case .new:
+                backToRoot()
+                showHealth = true
+            }
         }
     }
 

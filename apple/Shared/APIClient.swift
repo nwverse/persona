@@ -177,6 +177,8 @@ nonisolated struct APIClient: Sendable {
     var personaNaming = false
     /// The hub's hello has `sessions_lookup`: one session's complete row can be asked for by machine and id.
     var sessionLookup = false
+    /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
+    var sessionList = false
     /// Execution surface is diagnostic only; authorization still uses the paired hub credential.
     var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
@@ -1100,16 +1102,48 @@ nonisolated struct APIClient: Sendable {
         /// Notify Main-Chat Tasks Only in the Main Chat (#1731): tasks the main conversation starts are quiet (`TodoItem.quiet`). The
         /// value in effect (on by default); nil from a hub without the setting, which hides the switch.
         var mainTasksQuiet: Bool?
+        /// Fold Background Rounds (docs/apple/ios.md "Background rounds"): the main conversation folds rounds another
+        /// conversation, a scheduled task or a follow-up started into one line. The value in effect; nil from a hub
+        /// without the setting, which hides the switch and folds as if on (`backgroundFolded`).
+        var mainBackgroundFolded: Bool?
         /// The role a meeting recording starts with (#2981, docs/assistant/meeting-minutes.md「Attendance fields」): `off`,
         /// `listener` or `participant`; nil from a hub without attending.
         var meetingAttendanceDefault: String?
+        /// The side conversations that lead a direction of the owner's work (docs/assistant/unified-entry.md "Leader
+        /// conversations"), in the hub's order; nil when there are none or from an older hub. The sidebar shows them as
+        /// the Directions group, under the names `assistantLeaders()` gives.
+        var leaders: [String]?
         enum CodingKeys: String, CodingKey {
-            case launcher, cwd, conversations, timezone, main
+            case launcher, cwd, conversations, timezone, main, leaders
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
+            case mainBackgroundFolded = "main_background_folded"
             case meetingAttendanceDefault = "meeting_attendance_default"
         }
+
+        /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
+        var backgroundFolded: Bool { mainBackgroundFolded ?? true }
     }
     func assistant() async throws -> AssistantState { owned(try await get("/api/v1/assistant")) }
+    /// A direction as `GET /api/v1/assistant/leaders` lists it (#3519, #3695): its leader conversation's id and the name
+    /// the hub gives the direction (the name set, else its project's, else the title without its "MMDD | kind | " prefix).
+    struct LeaderInfo: Codable, Sendable, Equatable {
+        var id: String
+        var name: String?
+        var ended: Bool?
+    }
+    /// The directions' names by leader conversation id: the current ones with a name (ended ones left out).
+    func directionNames() async throws -> [String: String] {
+        struct Body: Decodable { var leaders: [LeaderInfo]? }
+        let body = try await get("/api/v1/assistant/leaders", as: Body.self)
+        return Self.directionNames(body.leaders ?? [])
+    }
+    static func directionNames(_ list: [LeaderInfo]) -> [String: String] {
+        var out: [String: String] = [:]
+        for l in list where !(l.ended ?? false) && !l.id.isEmpty {
+            if let name = l.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { out[l.id] = name }
+        }
+        return out
+    }
     /// `st` with its conversations stamped with the manager this client named: the hub relays another manager's answer as
     /// it came, without the `manager` its own lists put on each session. Nothing named: the default's, left as they came.
     private func owned(_ st: AssistantState) -> AssistantState {
@@ -1140,17 +1174,20 @@ nonisolated struct APIClient: Sendable {
         var timezone: String?
         var notes: String?
         var mainTasksQuiet: Bool?
+        var mainBackgroundFolded: Bool?
         var meetingAttendanceDefault: String?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
+            case mainBackgroundFolded = "main_background_folded"
         }
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
-                      mainTasksQuiet: Bool? = nil, meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
+                      mainTasksQuiet: Bool? = nil, mainBackgroundFolded: Bool? = nil,
+                      meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
         owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
             body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet,
-                                      meetingAttendanceDefault: meetingAttendanceDefault))))
+                                      mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).

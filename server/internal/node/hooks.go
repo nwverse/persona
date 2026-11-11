@@ -192,6 +192,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleNotify(ctx, req)
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
+	case "secret.env": // personad launch --ticket (secretenv.go)
+		resp = n.secretEnvFor(req)
 	case "mcp.tools":
 		var res struct {
 			Tools []proto.Tool `json:"tools"`
@@ -565,6 +567,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 				"type": "addRules", "rules": []any{rule},
 				"behavior": "allow", "destination": "session",
 			}}
+		}
+		if !assistant { // Claude may not take it: its safety checks keep their dialog (allowwatch.go, #3752)
+			n.watchAllow(in.SessionID, n.allowPane(req, in.SessionID))
 		}
 		return permissionDecision(d), nil
 	}

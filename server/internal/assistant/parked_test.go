@@ -117,7 +117,7 @@ func TestParkedTaskIsNotInNeedsYouAndRaisesNoSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"is parked until", "It stays open", "parked_due", "parked 1 time(s) in a row"} {
+	for _, want := range []string{"is parked until", "It stays open", "supervision message (parked_due)", "parked 1 time(s) in a row"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the answer lacks %q: %s", want, got)
 		}

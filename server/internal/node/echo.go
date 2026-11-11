@@ -271,6 +271,7 @@ func echoLines(items []proto.Item) []echoLine {
 
 var echoDropped = []*lazyre.Regexp{
 	transcript.ContextRe,
+	transcript.ViewErrorsRe, // the assistant's view feedback before the message
 	lazyre.New(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
 	lazyre.New(`(?s)<attached_images>.*?</attached_images>`),
 	lazyre.New(`<[\\/]*pasted_content[^>]*>`),
