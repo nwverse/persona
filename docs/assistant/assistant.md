@@ -345,8 +345,10 @@ Edit, Monitor, Skill, Agent, ListAgents, SendMessage, TaskStop, WebFetch and Web
 Claude-specific cron, worktree, notebook, LSP, design, workflow, code-review and resource-tool surfaces; Persona's own
 scheduling and question tools remain. The merged start settings disable bundled skills and the development-only
 feature-dev, frontend-design, mattpocock, gopls, context7 and HUD plugins, with overrides for the remaining development
-skills. User/project setting sources, auto-memory, Persona and connector skills are not disabled. Guest conversations keep
-their stricter `--tools ""` and `--strict-mcp-config` behavior. No setting is required.
+skills. User/project setting sources, auto-memory, Persona and connector skills are not disabled. On the CLI, guest
+conversations keep their stricter `--tools ""` and `--strict-mcp-config` behavior. On the Agent SDK they use
+`tools: []` for no built-ins and register the declared Persona MCP tools through an in-process server; no user setting
+sources are loaded. No setting is required.
 
 ## Extension MCP servers (Claude assistant only)
 
@@ -450,6 +452,7 @@ Prompts live in `server/internal/prompts/assistant/` (`docs/assistant/prompts.md
   appearing ineffective). Every main-chat message follows this setting, not the previous turn's launcher: #1355 briefly preserved the running launcher, so a follow-up changing it prevented returning (#1518).
   But a chat can resume only with its original Agent type. If settings select another type (Codex main chat → Claude launcher, vice versa, or into / out of a runtime), node uses the chat's launcher; if its remembered launcher is also the wrong type (overwritten by a failed start), use same-type `claude` / `codex`, ignoring the hub model for this message (`assistantResumeLauncher` in `node/assistant_agent.go`).
   Previously node rejected only while the process lived, then tried `claude --resume <thread>` for exited Codex threads: every message returned `No conversation found`, main chat showed "Session ended", messages stayed "Couldn't confirm delivery" (2026-11-05). To change Agent type, create a new main chat.
+  That swap covers the setting only. A launcher of the other kind *picked* for a message (the web chip, the iOS Launcher menu) is refused before anything is sent: `409 launcher_other_kind` with `conversation_agent`, `launcher`, `launcher_agent` and `delivered: "none"` in the body, and a localized message saying the conversation can't change its agent. Before that, the node ran the message on the conversation's own launcher while the app kept showing the pick, and a model picked with it was remembered under a launcher that never ran it (#4662). The manager checks this in `sendModel` (`assistant/launcher_kind.go`) only when both the conversation's `agent` and the launcher's kind are `claude` or `codex`; a runtime, a conversation the machine doesn't list yet, or a launcher list that can't be read lets the message go as before.
   `schedule_followup` returns to the original chat using the same rules (main chat follows settings, other chats keep their own), not the Agents category (`sendModel` in `assistant/start.go`, hub asks `assistant.send_params`). Scheduled-task chats (morning briefing, etc.) also use the "Main chat" category, following settings per message and follow-up (#1544). The top-bar "Launcher" menu changes only this chat's next message; opening a launcher also allows selecting a model from its model list (the `/model` list),
   sent as message `model`, which hub uses for the execution fingerprint and node process restart; unselected means the launcher default.
   The menu (`?purpose=assistant`) and the check before each message list and accept only launchers that can run the assistant: both use `assistantLaunchers` (`modelProviderCompatible` in `assistant/models_edit.go`; the check is `mainChatFit` in `assistant/launcher_mainchat.go`).
@@ -823,8 +826,14 @@ An ordinary extension conversation is an assistant conversation (the assistant d
 - **Starting one**: `POST /api/v1/assistant/conversations` with `guest: {"tools": ["lark_agent_reply"]}`. `tools` are 1–8 **connector** tools (an extension's; the assistant's own, the phone's, Cua's and ego's are refused with 400). It can't be combined with `main` or `space`, and `report_tasks` is ignored (it hands nothing out).
   Conversations without `guest` are exactly as before. An extension first asks `GET /api/v1/assistant/capabilities` (`{"guest_conversations": true}`): an older hub would ignore `guest` and start an ordinary conversation, so on 404 the extension starts none.
 - **Directory**: the hub has the node's `assistant.guest_prepare` write `.persona/guest` with only a guest CLAUDE.md / AGENTS.md (`prompts/assistant/guest_claude_md.md`), leaving the assistant's connectors, CLIs and skills alone. A node that doesn't know the method (too old) gets a 400 and nothing starts.
-- **Node** (`node/assistant_guest.go`): Claude Code CLI only (Codex, the Agent SDK and agent runtimes such as DSH are refused: their built-in tools can't be taken away), never the warm spare process.
-  Every process it runs in (start, resume, compaction, model switch) has `--tools ""` (no built-in tools), `--strict-mcp-config` (only Persona's own MCP server, none of the user's or the extensions'), and `--allowedTools` naming only its tools.
+- **Node** (`node/assistant_guest.go`): Claude Code on the CLI or the Agent SDK (Codex and agent runtimes such as DSH are refused), never the warm spare process.
+  Every CLI process it runs in (start, resume, compaction, model switch) has `--tools ""`, `--strict-mcp-config` (only Persona's own MCP server, none of the user's or the extensions'), and `--allowedTools` naming only its tools.
+  On the Agent SDK, `tools: []` disables built-ins, `settingSources: []` leaves out user and project settings, and
+  `strictMcpConfig` is true. The bridge lists the guest's tools from the same stdio Persona MCP server and registers
+  only those through an in-process SDK server, so the manager's whitelist and call routing stay unchanged.
+  The manager registers the guest's session id and tools before starting the node: SDK discovery happens before
+  `assistant.send` returns, and an unregistered first discovery would return an empty list. A start that fails drops
+  that registration.
   The guest flag and tools live in its session state (`sessionState.Guest`) and follow a fork; a later message naming another launcher or runtime is ignored and it runs on what it started on. It gets no live snapshot and no gate proxy addresses. The node relays its MCP calls with `guest: true`.
 - **Hub** (`assistant/guest.go`, setting `assistant.guests`, kept 30 days): `mcp.tools` lists and `mcp.call` runs only its tools; `assistant.context` gives it an empty snapshot; `SendParams` drops a launcher, model, runtime or permission mode picked for a message.
   While the record can't be read, every tool call is refused (the user's own conversations keep their snapshot and picks: the node enforces those for a guest itself), and a conversation the node calls a guest but the hub doesn't know gets no tools.
