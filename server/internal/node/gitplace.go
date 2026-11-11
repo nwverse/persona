@@ -11,32 +11,22 @@ import (
 // gitPlace is where a working directory sits in git: the repository's main checkout (root), the working tree it is in
 // (worktree: root itself, or a linked worktree's folder) and the branch checked out there ("" when detached). The apps
 // list machine → project (root) → worktree (labelled branch) → sessions with it (#1805).
-type gitPlace struct {
-	root, worktree, branch string
-	project                *proto.SessionInventory
-}
+type gitPlace struct{ root, worktree, branch string }
 
 // fillGitPlace sets s's RepoRoot (unless its host already named it: Paseo, a Codex project), Worktree and Branch from
-// its working directory. The assistant's own conversations are not in a project.
+// its working directory. Both paths are physical directories (physicalGitPlace), whichever way s names its own, and
+// so is the root a host named: a host that writes it through a link would have its main checkout a linked worktree
+// of itself (physicalDirs). The assistant's own conversations are not in a project.
 func fillGitPlace(s *proto.Session) {
 	if s.Cwd == "" || s.Assistant {
 		return
 	}
-	p := gitPlaces.lookup(s.Cwd)
-	project := p.project
-	if s.RepoRoot != "" && (project == nil || project.ProjectKind == "non_git") && filepath.Clean(s.RepoRoot) != filepath.Clean(s.Cwd) {
-		// Hosts can supply the real checkout even when an offline cwd has gone away.
-		project = gitPlaces.lookup(s.RepoRoot).project
-	}
-	if project != nil {
-		if s.Inventory == nil || s.Inventory.CreatedAt == nil {
-			s.Inventory = project
-		} else {
-			s.Inventory = &proto.SessionInventory{
-				ProjectKind: project.ProjectKind, ProjectRepo: project.ProjectRepo, CreatedAt: s.Inventory.CreatedAt,
-			}
+	if filepath.IsAbs(s.RepoRoot) {
+		if real := physicalDirs.lookup(s.RepoRoot).root; real != "" {
+			s.RepoRoot = real
 		}
 	}
+	p := gitPlaces.lookup(s.Cwd)
 	if p.worktree == "" {
 		return
 	}
@@ -53,66 +43,64 @@ func fillGitPlace(s *proto.Session) {
 
 // readGitPlace finds the .git nearest above cwd and reads it the way git does, without running git (this runs for every
 // listed session): a .git folder is a main checkout; a .git file points at a linked worktree's (or a submodule's) git
-// dir, whose commondir, when it has one, is the main checkout's .git. Paths stay as the session reports them (no
-// symlink resolution), so a cwd always lies under its worktree.
+// dir, whose commondir, when it has one, is the main checkout's .git. Paths are as cwd and git's files write them
+// (no symlink resolution: physicalGitPlace does that).
 func readGitPlace(cwd string) gitPlace {
 	if cwd == "" || !filepath.IsAbs(cwd) {
 		return gitPlace{}
 	}
-	// Use the existing lexical paths for the legacy worktree fields. A second
-	// walk for identity is only needed if a symlink hides the real ancestors.
-	p := walkGitPlace(filepath.Clean(cwd))
-	real, err := filepath.EvalSymlinks(cwd)
-	if err == nil && real != filepath.Clean(cwd) {
-		p.project = walkGitPlace(real).project
-	}
-	return p
-}
-
-func walkGitPlace(cwd string) gitPlace {
-	st, err := os.Stat(cwd)
-	// Keep the legacy ancestor labels for a missing cwd, but do not use that
-	// as proof of the session's project (it may have been a nested checkout).
-	verified := err == nil && st.IsDir()
-	project := func(metadata string) *proto.SessionInventory {
-		if !verified {
-			return nil
-		}
-		return gitProject(metadata)
-	}
-	for dir := cwd; ; {
+	for dir := filepath.Clean(cwd); ; {
 		dotGit := filepath.Join(dir, ".git")
 		if st, err := os.Stat(dotGit); err == nil {
 			switch {
 			case st.IsDir():
-				return gitPlace{root: dir, worktree: dir, branch: headBranch(dotGit), project: project(dotGit)}
+				return gitPlace{root: dir, worktree: dir, branch: headBranch(dotGit)}
 			case st.Mode().IsRegular():
 				gitDir := pointedGitDir(dotGit, dir)
 				if gitDir == "" {
 					return gitPlace{}
 				}
-				root, metadata := dir, gitDir
+				root := dir
 				if common := commonDir(gitDir); common != "" {
-					root, metadata = mainCheckout(common), common
+					root = mainCheckout(common)
 				}
-				return gitPlace{root: root, worktree: dir, branch: headBranch(gitDir), project: project(metadata)}
-			default:
-				return gitPlace{}
+				return gitPlace{root: root, worktree: dir, branch: headBranch(gitDir)}
 			}
-		} else if !os.IsNotExist(err) {
-			return gitPlace{}
-		} else if _, err := os.Lstat(dotGit); !os.IsNotExist(err) {
-			return gitPlace{} // a broken .git symlink is not evidence of a non-Git directory
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			if verified {
-				return gitPlace{project: nonGitProject}
-			}
 			return gitPlace{}
 		}
 		dir = parent
 	}
+}
+
+// physicalGitPlace is the Git place of the physical directory cwd is (symbolic links resolved, realPath), with the
+// project and the working tree named by their physical directories too. The records the sessions of one repository
+// come from do not agree on how to write a directory that is reached through a link (a home on another mount, macOS's
+// /tmp): Claude Code records the physical one, Codex the one it was started in, and a host that names the project
+// (Paseo, a Codex project) what git says, the physical one again. Read as written, one repository became two
+// projects, and a host's main checkout a linked worktree of itself (#4492). The directory is resolved before the
+// walk up, as git resolves the one it runs in: a link into a repository (~/.config/nvim → ~/dotfiles/nvim) is in that
+// repository, and a link that leads out of one is not in it. The project and the working tree are resolved after
+// it, because a linked worktree's .git file still writes its git dir the way `git worktree add` was run. A session's
+// own cwd stays as its record has it; workspace_cwd is its physical directory.
+func physicalGitPlace(cwd string) gitPlace {
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return gitPlace{}
+	}
+	p := readGitPlace(realPath(filepath.Clean(cwd)))
+	if p.worktree == "" {
+		return p
+	}
+	main := p.worktree == p.root
+	p.root = realPath(p.root)
+	if main {
+		p.worktree = p.root
+	} else {
+		p.worktree = realPath(p.worktree)
+	}
+	return p
 }
 
 // pointedGitDir reads a .git file ("gitdir: <path>", relative to the folder it is in).

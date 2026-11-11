@@ -97,6 +97,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 - The Assistant home's list (`android/feature/assistant/src/main/kotlin/persona/feature/assistant/NeedsYou.kt`) takes the same rows.
 - "Requests and history" moves under ⋯, where iOS keeps its history.
 - Tests: the needs-you fixtures, plus a page test that the header count equals the badge.
+- Done (11-11): `agentNeedsYouRows` in `AgentsListInfo.kt` builds the section from `needsYouRows`: muted sessions included, the computer filter applied, shown under All and Needs You and never while searching. A session waiting only in its terminal is a "Terminal needs you" row that opens it. The section's title is the state name. The header, the page's summary and the Needs You filter count these rows. Left: "Requests and history" stays a row (not yet under ⋯), and the Assistant home's list goes with decision 10 (#4339 C11) instead of being recounted.
 
 ### A2, A7, A8, A9
 
@@ -109,18 +110,20 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 
 - The grouping pill: `AgentHomeComponents.kt` takes the grouping's icon; the picker is a `JMenu` with the groupings only.
 - Computers, hub, range and sort move to a menu under the Agents switch, as `AgentsMenus.swift` does; display options into ⋯ › Display.
-- The "Only <computer>" chip clears `machineFilter`.
+- The "Only <computer>" chip clears `machineFilter`. Done (11-11): with the home chrome, a chosen computer shows as a selected "Only <computer>" chip above the grouping pill (`AgentsHomeAffordancesTest`); the computers and range menu (A4) is still to move.
 
 ### A5
 
 - Rename `MachineSpace` to By Project in the strings (en, zh-Hans, ja), keeping the stored value.
 - By To-do: flatten `AgentList.kt`'s to-do branch to iOS's order; hide the choice when the hub has no to-dos.
 - By Status: add the background-waiting section (the state exists in core/domain), counts on every header, Seen folded.
+- Done (11-11): "By computer and space" reads By project (按项目, プロジェクト別), the stored value unchanged; the sheet offers By To-do only while the hub has to-dos (`offeredGroupings`, `AgentsListInfoTest`). The two layouts are still to change.
 
 ### A6
 
 - Store folds per grouping in `AgentsState.kt`, as herdr tab folds already are.
 - `AgentsViewModel.kt` stops clearing `folded` in `query`, `range` and `grouping`; a search expands through a separate set that is dropped when the query clears.
+- Done (11-11): folds per grouping in DataStore (`AgentsPreferences.folds`), read on start and on a grouping change; a search stashes them and opens every fold, and restores them when it clears (`AgentsFoldAllTest`).
 
 ### A10
 
