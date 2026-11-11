@@ -224,6 +224,7 @@
   "grouping_label": "待办分组方式",
   "grouping_status": "状态",
   "grouping_folder": "目录",
+  "grouping_direction": "常驻",
   "section_just_done": "刚做完待看",
   "section_pr": "PR 待合并",
   "section_other": "其余没完成",

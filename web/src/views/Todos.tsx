@@ -60,6 +60,8 @@ import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
+import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
+import { DirectionCountsText } from "./DirectionMarks";
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, supersededFailedStarts, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
@@ -101,7 +103,7 @@ import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
 const VIEW_KEY = "persona.todos.view";
 const MODE_KEY = "persona.todos.calendar.mode";
 const DONE_KEY = "persona.todos.calendar.showDone";
-/** The list by status sections (default, #3156) or by folder (#2526). */
+/** The list by status sections (default, #3156), by folder (#2526) or by pinned direction (#4352). */
 const GROUPING_KEY = "persona.todos.grouping";
 /** The list's filter by due date and its order inside each section (#3740), kept per browser like the view. */
 const FILTER_KEY = "persona.todos.filter";
@@ -110,6 +112,13 @@ const SORT_KEY = "persona.todos.sort";
 /** A filter's and a sort's name, as the menu and the chip say them. */
 const filterLabel = (f: TodoListFilter) => t(`todos.filter_${f}`);
 const sortLabel = (s: TodoListSort) => t(`todos.sort_${s}`);
+
+type TodoGrouping = "status" | "folder" | "direction";
+
+/** The grouping saved in this browser; status for none or an unknown one. */
+function todoGrouping(saved: string | null): TodoGrouping {
+  return saved === "folder" || saved === "direction" ? saved : "status";
+}
 
 function pref(key: string): string | null {
   try {
@@ -280,8 +289,22 @@ export function TodosView({
   );
 
   // The list by status sections (#3156, docs/assistant/todo-status-sop.md), or by folder as before
-  const [grouping, setGrouping] = useState<"status" | "folder">(() => (pref(GROUPING_KEY) === "folder" ? "folder" : "status"));
+  const [chosenGrouping, setGrouping] = useState<TodoGrouping>(() => todoGrouping(pref(GROUPING_KEY)));
+  // "Pinned" (#4352): the hub's direction tree, offered while there is a leader; else the list goes by status and the
+  // choice is kept for when there is one
+  const directionTree = useDirectionTree();
+  const byDirection = groupsByDirection(directionTree);
+  const grouping: TodoGrouping = chosenGrouping === "direction" && !byDirection ? "status" : chosenGrouping;
   const byStatus = grouping === "status";
+  const leaderTitles = useStore((s) => s.assistant?.conversations);
+  const directionSections = useMemo(() => {
+    if (grouping !== "direction" || !byDirection) return [];
+    const open = new Map(filteredUncompleted.map((td) => [td.id, td]));
+    return directionTree.directions
+      .map((d) => ({ d, todos: (d.tasks ?? []).map((task) => open.get(task.id)).filter((td): td is Todo => !!td) }))
+      .filter((g) => g.todos.length > 0)
+      .map(({ d, todos }) => ({ d, todos, title: directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title) }));
+  }, [grouping, byDirection, directionTree, filteredUncompleted, leaderTitles]);
   const [restored, restoreTodo] = useRestoredTodos();
   // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
   // leaves the finished one out must not put it back in Needs you
@@ -574,6 +597,7 @@ export function TodosView({
               options={[
                 { v: "status", label: t("todos.grouping_status") },
                 { v: "folder", label: t("todos.grouping_folder") },
+                ...(byDirection ? [{ v: "direction" as const, label: t("todos.grouping_direction") }] : []),
               ]}
               onChange={(next) => {
                 setPref(GROUPING_KEY, next);
@@ -662,7 +686,18 @@ export function TodosView({
               </div>
               ) : (
               <div className="flex flex-col gap-1">
-                {projectGroups.map((g) => (
+                {grouping === "direction" ? directionSections.map((g) => (
+                  <TodoDirectionSection
+                    key={g.d.id}
+                    direction={g.d}
+                    title={g.title}
+                    todos={g.todos}
+                    views={views}
+                    selectedId={activeTodo?.id}
+                    onSelect={openFromList}
+                    onToggleDone={toggleDone}
+                  />
+                )) : projectGroups.map((g) => (
                   <TodoProjectSection
                     key={g.key}
                     group={g}
@@ -980,6 +1015,46 @@ function HiddenWaitingLine({ count, filter, onShowAll }: { count: number; filter
     </div>
   );
 }
+
+/** One pinned direction's open to-dos (#4352): its name (书记官 for the secretary's group) and the hub's two counts on a
+ *  folding title, the to-dos in the tree's order. */
+const TodoDirectionSection = memo(function TodoDirectionSection({
+  direction,
+  title,
+  todos,
+  views,
+  selectedId,
+  onSelect,
+  onToggleDone,
+}: {
+  direction: Direction;
+  title: string;
+  todos: readonly Todo[];
+  views: ReadonlyMap<string, TodoRowView>;
+  selectedId: string | undefined;
+  onSelect: (id: string) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
+}) {
+  const holds = todos.some((td) => td.id === selectedId);
+  const [folded, toggle] = useFolded(`todos-direction:${direction.id}`, false, { holds });
+  return (
+    <div className="mt-1 first:mt-0" data-testid="todo-group" data-group={`direction:${direction.secretary ? "secretary" : direction.id}`}>
+      <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11">
+        <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+        <Icon name={direction.secretary ? "person" : "target"} size={12} stroke={2} className="shrink-0 text-ink-3" />
+        <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
+        <DirectionCountsText counts={direction.counts} />
+      </button>
+      {!folded && (
+        <div className="flex flex-col gap-1 pl-2 pt-0.5">
+          {todos.map((todo) => (
+            <TodoListItem key={todo.id} todo={todo} view={views.get(todo.id)!} selected={selectedId === todo.id} onSelect={onSelect} onToggleDone={onToggleDone} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
 
 // ── Status sections (#3156) ──────────────────────────────────
 
