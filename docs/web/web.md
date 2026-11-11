@@ -1605,8 +1605,11 @@ and Android follow in #5117.
   …/launchers/{name}/models`, kept for the page's life with the chat's lists in `lib/session-models.ts`: the one that runs
   is read again on each opening of the sheet, every other one when the panel opens, at most three at a time). A launcher
   that fixes its own `--model` has its Default row alone, with why under it; Claude Code and Codex take a typed ID ("Use
-  “…”", #1644), and an ID typed for this start that the list lacks has its own row. An older hub without lists: each
-  launcher's Default row.
+  “…”", #1644), and an ID typed for this start that the list lacks has its own row. A list that couldn't be read says why
+  with **Retry**, and its launcher still offers its Default row (and, for Claude Code and Codex, a typed ID). An older hub
+  without lists: each launcher's Default row. A preset whose model its launcher's group doesn't have (a launcher that fixes
+  its own `--model`, one that takes no typed ID) stands on that launcher's Default row; the line under the box says what of
+  it can't be applied.
 - **Defaults and presets**: **Follow Model settings** is on top of the list, in no group (Cindy's follow row), with what
   Model settings › New agent runs under it, a warning when that can't start here, and a check while it is followed; a
   click goes back to it. The profile's Agent presets (#2225) are a **Presets** group after Favorites, in the place Cindy
@@ -1625,10 +1628,11 @@ and Android follow in #5117.
   records it (shared with the chat's panel, `persona.modelPanel.<base>.agent.*`). Permission mode, folder and worktree stay
   as they were. An effort set in a flyout is also kept as that model's setup, as in the chat, but the row lit always shows
   what the form holds.
-- **Another computer**: a launcher picked by hand goes along to the next computer chosen when that computer has it and
+- **Another computer**: a launcher picked by hand in this opening (a model, a preset, the follow row) goes along to the next computer chosen when that computer has it and
   can start it, with its model and effort; otherwise the form goes back to that computer's default and a line under the
   box says "{launcher} can't run on {computer}, so its default is used" (Cindy: a choice the target can't run falls back
-  to its default). Following Model settings stays following; a recent setup card brings its own.
+  to its default). Following Model settings stays following; a choice the sheet merely restored gives way to the next
+  computer's own (its default and latest setup, #2134); a recent setup card brings its own.
 - **What a start sends** is unchanged: `POST /api/v1/sessions` with `launcher`, `model` and `effort` as `startPicks`
   decides them; with untouched settings none of them.
 - **Deviations from Cindy**: a Persona launcher is a provider and an engine at once, so another engine is another
