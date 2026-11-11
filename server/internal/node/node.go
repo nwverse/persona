@@ -164,6 +164,8 @@ type Node struct {
 	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
 	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
+	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
+	freshForks map[string]bool
 	starts    startLog        // sessions starting in the background (starting.go)
 	ups       uploads         // files arriving from the phone (upload.go)
 	sysOnce   sync.Once       // system: read once (metrics.go)
@@ -1033,8 +1035,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			execution: modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket}}
 		if p.ResumeSessionID != "" {
 			r = n.fillResume(p.ResumeSessionID, r) // what it ran with, for what the start leaves out (retire.go)
+			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
+			// still there (stopped.go).
+			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
 		}
 		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, "", p.AgentType, r.execution)
+		if err == nil && p.ResumeSessionID != "" {
+			n.forkStarted(p.ResumeSessionID)
+		}
 		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
@@ -1241,6 +1249,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		_ = json.Unmarshal(params, &a)
 		return n.newShell(ctx, a.Kind, a.WorkspaceID)
+	case "panes.close_finished": // the user's "Close finished terminals" (stopped.go, #4754)
+		var a struct {
+			Panes   string `json:"panes"`
+			Preview bool   `json:"preview"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.closeFinished(ctx, a.Panes, a.Preview)
 	case "panes.close":
 		return ok(n.closePane(ctx, p.Pane))
 	case "panes.split":

@@ -450,6 +450,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes
 -                    POST /api/v1/machines/{mid}/panes/agent
 -                    POST /api/v1/machines/{mid}/panes/close
+-                    POST /api/v1/machines/{mid}/panes/close_finished
 -                    POST /api/v1/machines/{mid}/panes/git
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
@@ -512,6 +513,8 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
+-                    POST /api/v1/todos/{id}/decision-dismiss
+-                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/retry
