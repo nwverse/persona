@@ -30,6 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
@@ -379,6 +384,7 @@ fun TodosScreen(
                             countTone = section.status ?: Status.Idle,
                             onClick = { toggled = if (section.name in toggled) toggled - section.name else toggled + section.name },
                             sub = false,
+                            open = !folded,
                             action = { JIcon(if (folded) PhIcons.CaretDown else PhIcons.CaretUp, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) },
                         )
                     }
@@ -488,8 +494,17 @@ private fun TodoTriageRow(
         JCard(modifier = Modifier.fillMaxWidth(), onClick = onOpen) {
             Column(Modifier.padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    // TalkBack reads the tick as a "Done" checkbox whose checked state says whether it is done, and the
+                    // double-tap hint says what a tap does: Done or Reopen (#4077)
+                    val tickName = stringResource(R.string.agents_todo_done_action)
+                    val tickLabel = stringResource(if (finished) R.string.agents_todo_reopen else R.string.agents_todo_done_action)
                     Box(
-                        Modifier.size(Tokens.Space.xxl).clip(CircleShape).clickable { onDone(todo, !finished) },
+                        Modifier.size(Tokens.Space.xxl).clip(CircleShape)
+                            .clickable(onClickLabel = tickLabel, role = Role.Checkbox) { onDone(todo, !finished) }
+                            .semantics {
+                                contentDescription = tickName
+                                toggleableState = ToggleableState(finished)
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         if (finished) {

@@ -139,7 +139,7 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
             sections.forEach { section ->
                 item(key = "section/${section.key}", contentType = "section") {
                     JSectionHeader(section.tag?.let { "#$it" } ?: stringResource(section.title), count = section.entries.size,
-                        onClick = if (section.collapsed) toggleIgnored else null,
+                        onClick = if (section.collapsed) toggleIgnored else null, open = showIgnored,
                         trailing = if (section.collapsed) stringResource(if (showIgnored) R.string.knowledge_collapse else R.string.knowledge_expand) else null)
                 }
                 if (!section.collapsed || showIgnored) items(section.entries, key = { "entry/${it.key}" }, contentType = { "entry" }) {
