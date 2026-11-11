@@ -128,7 +128,7 @@ struct AutoConversationsView: View {
                     }
                 }
                 Spacer(minLength: Theme.Space.xs)
-                mark(s)
+                RowStateMark(state: s.state)
             }
             .padding(.vertical, Theme.Space.xs)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -155,16 +155,6 @@ struct AutoConversationsView: View {
             Button { Task { await model.archiveConversation(s.key, true) } } label: {
                 Label("Archive", systemImage: Theme.Icon.archive)
             }
-        }
-    }
-
-    /// Waiting for you, working or unread, as the sidebar's rows mark it.
-    @ViewBuilder private func mark(_ s: Session) -> some View {
-        switch s.state {
-        case .working: ProgressView().controlSize(.mini)
-        case .needsYou: Circle().fill(Theme.needsYou).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
-        case .unread: Circle().fill(Theme.accent).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
-        default: EmptyView()
         }
     }
 }

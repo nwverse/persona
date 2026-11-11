@@ -86,6 +86,7 @@ import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions"
 import { QueueStrip } from "./QueueStrip";
 import { ChatSearch, type LoadOutcome } from "./ChatSearch";
 import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
+import { forwardDraftOf, openForward, peekJump, takeJump } from "../../lib/forward";
 import { lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
 import { sameMessage } from "../../lib/queue";
@@ -450,18 +451,24 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const editProp = useMemo(() => (editing ? { commit: commitEdit, cancel: () => setEditTarget(null) } : undefined), [editing, commitEdit]);
   const editableLast = useMemo(() => lastEditablePrompt(tr.items), [tr.items]);
   const onEditLastMessage = canRewind && !rewindOff && !noRow && !tr.loading && !tr.error && !editingLast && editableLast ? editLastMessage : undefined;
+  // the chat a forward comes from, read when Forward is picked (lib/forward.ts): a push does not draw every message again
+  const forwardChat = useRef<{ session?: Session; title: string }>({ title });
+  forwardChat.current = { session: session ?? archivedHere ?? undefined, title };
   const actions = useMemo<ChatActions>(
     () => ({
       draftKey,
       title,
-      isAgent: !assistant,
       canCompose,
+      forward: readOnly ? undefined : (pick) => {
+        const machine = getState().machines.find((m) => m.id === mid)?.name;
+        openForward(forwardDraftOf({ mid, sid, assistant: Boolean(assistant), title: forwardChat.current.title, items: items.current, session: getSession(mid, sid) ?? forwardChat.current.session, machine }, pick));
+      },
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
       rewind: canRewind ? { block: rewindLive, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
     }),
-    [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
+    [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name, readOnly],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant) }), [session?.cwd, draftKey, assistant]);
@@ -1175,13 +1182,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     setSearch((x) => ({ ...x, open: false }));
     if (!picked) origin.current = null;
   }, [picked]);
-  const goTo = useCallback((hit: ChatSearchHit) => {
-    setSearch((x) => ({ ...x, open: false }));
-    setPicked(true);
+  // brings an item into view, opening what holds it, and lights it: a search hit, or a forward's original (#3899)
+  const seekItem = useCallback((itemId: string, quiet = false) => {
     const sc = scroller.current;
     if (!sc) return;
     follow(false);
-    revealItem(ctx.scope, hit.itemId);
+    revealItem(ctx.scope, itemId);
     const run = ++going.current;
     void untilStill<HTMLElement>({
       frame: nextFrame,
@@ -1190,15 +1196,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       giveUpMs: GIVE_UP_MS,
       // the rows that hold it take a few frames to open: the line it is on only once they had the time
       locate: (waited) => {
-        const exact = sc.querySelector<HTMLElement>(`[data-items~="${CSS.escape(hit.itemId)}"]`);
-        const lineId = exact || waited <= FIND_MS ? undefined : lineOfItem(linesNow.current, trNow.current.items, hit.itemId);
+        const exact = sc.querySelector<HTMLElement>(`[data-items~="${CSS.escape(itemId)}"]`);
+        const lineId = exact || waited <= FIND_MS ? undefined : lineOfItem(linesNow.current, trNow.current.items, itemId);
         const el = exact ?? (lineId ? sc.querySelector<HTMLElement>(`[data-line="${CSS.escape(lineId)}"]`)?.firstElementChild : null);
         return el instanceof HTMLElement ? { y: el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop, value: el } : null;
       },
     }).then((r) => {
       if (r === "cancelled") return;
       clearReveal();
-      if (r === "missing") return void toast(t("chat-chatsearch.not_found"));
+      if (r === "missing") return void (quiet || toast(t("chat-chatsearch.not_found")));
       const el = r.value;
       const tall = el.getBoundingClientRect().height > sc.clientHeight;
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
@@ -1209,6 +1215,19 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       lit.current = { el, timer: window.setTimeout(unlight, HIT_MS) };
     });
   }, [ctx.scope, follow, unlight, land]);
+  const goTo = useCallback((hit: ChatSearchHit) => {
+    setSearch((x) => ({ ...x, open: false }));
+    setPicked(true);
+    seekItem(hit.itemId);
+  }, [seekItem]);
+  // a forward's card opened this chat at its original (#3899, lib/forward.ts jumpWhenOpen): brought into view once the
+  // transcript is in and holds it; one further back stays where the chat opens, as iOS does
+  useEffect(() => {
+    const item = peekJump(mid, sid);
+    if (!item || tr.loading) return;
+    takeJump(mid, sid);
+    if (tr.items.some((i) => i.id === item)) requestAnimationFrame(() => seekItem(item, true));
+  }, [mid, sid, tr.loading, tr.items, seekItem]);
   const backToOrigin = useCallback(() => {
     const o = origin.current;
     origin.current = null;

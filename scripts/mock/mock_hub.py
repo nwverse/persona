@@ -1715,8 +1715,8 @@ WEEKDAYS = [1, 2, 3, 4, 5]
 
 
 # MOCK_ASSISTANT_SIDEBAR=1: the Persona sidebar's "Recent" holds more than the 30 it shows before "View all"
-# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (red dot), unread
-# (blue dot), working (spinner).
+# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (blue dot), unread
+# (green dot), working (spinner).
 if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
     for _n, _state in enumerate(["needs_you", "unread", "working"] + ["idle"] * 33):
         _s = assistant_sess("b2e4d6f8-0000-4000-8000-%012d" % (100 + _n), "整理第 %d 周的周报" % (_n + 1),
@@ -10118,7 +10118,7 @@ def providers_route(h, method, p, q, body):
         h.send_json(PROVIDER_LOG); return True
     if MOCK_PROVIDERS:
         b = json.loads(body or b"{}") if method != "GET" else {}
-    else:  # a body that is not this wizard's goes on to the routes after this one
+    else:  # a body that is not a typed-in gateway's probe goes on to the routes after this one
         try:
             b = json.loads(body or b"{}")
         except ValueError:
@@ -10161,7 +10161,7 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
         if "bad" in (b.get("base_url") or ""):
-            h.send_json({"models": [], "error": "网关没有 /v1/models"}); return True
+            h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)

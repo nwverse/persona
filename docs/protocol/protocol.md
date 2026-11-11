@@ -3644,6 +3644,7 @@ The web shows a prefs change at once and then PUTs it. When the PUT fails (other
 | `<persona-context kind="context\|edit\|doc\|instructions" title="…" url="…">text</persona-context>` | phone (text selected in a link card), hub (Lark /agent instructions and context) | not written by the user: all blocks gather into one "Context · N items" row beside the bubble (with one block, "Context · title"), collapsed by default; expanding shows a title list, each opening the body and link. Attributes may be in any order or omitted (`url` is often absent); only text outside the tags is user-written |
 | Rename (#3182): tags are moving from `<persona-context>` to `<persona-context>`, with attributes unchanged | | readers (hub, node, web, Android, Apple, DSH) accept both names, with mixed opening / closing tags allowed; closing tags of either name are stripped from block bodies. Attribute-free live snapshots and run instructions already write only `<persona-context>` (written and stripped by the same node, never seen by the App); blocks with attributes (hub templates, the three clients) still write `<persona-context>`, to switch once Apps that recognize the new name are widespread: old Apps only recognize `persona-context` and show an entire `<persona-context …>` block as body text |
 | `<persona-context kind="workspace" title="…" url="" machine="<machine id>" cwd="<folder>" branch="…">` | web (a workspace picked in the assistant's @ menu, #5594) | shown like the other blocks. Before the assistant gets it, the manager replaces the block (same tag, `branch` dropped) with where to dispatch by default, knowledge-base projects and recent Agents in that folder (docs/assistant/assistant.md "Workspace mentions"); a block naming an unknown computer is passed on as written |
+| `<persona-context kind="forward" title="…" url="persona://session/…?at=…" msg="…" role="…" author="…" chat="…" project="…" machine="…" time="…">` | iOS (Forward on a message, #3807), web (#3899) | the user forwarded a message from another chat: a card at the top of the user's bubble that opens the original; see "Forwarded messages" below |
 | `<cross-session-message from-name="…">…</cross-session-message>` | Claude Code (cross-session messages) | a left-side "From name" card, body rendered as Markdown |
 
 ### Quote and comment blocks at the start of messages (web and iOS, #2427, #2437, #151)
@@ -3714,6 +3715,45 @@ The manager persists explicit provenance in the native transcript with a leading
 The original content follows the block. JSON is HTML-escaped when written so a title cannot close the block. This is metadata, not a selectable Context card: clients exclude `kind="message-source"` from Context groups. The block survives history reads, full-item reads, paging, subscription backlog and process restarts without depending on the 24-hour echo cache or a database migration. Queued relays retain their sender id/title in the existing persisted relay JSON; dispatch reconstructs the same source after restart. Scheduled runs receive a source whether they address an existing chat, reuse their own chat, or start a new one.
 
 For compatibility, prefer explicit `source`, then persisted source context, then existing `injected`: `followup.daily|interval` maps to `patrol`, other followup states to `followup`, and `system.supervise` to `supervision`. `from` still names a native peer and is not converted into a conversation id. With no metadata, only the complete canonical relay context (`assistant/relay.md`, matching sender and reply ids, recognized relay tool and numeric hop limits) supplies a conversation id/title; an emoji, title, or ordinary user sentence never does. Existing generated task templates remain the narrow fallback for old transcripts. A message with `client_msg_id` is never text-inferred. New user starts and app sends protect pasted source blocks or complete templates with an outer `message-source` block containing `{"author":"user"}`; this internal sentinel produces no source and prevents nested metadata or legacy recognition, even before the echo id arrives. Explicit source fields supplied by app input are removed.
+
+### Forwarded messages (#3807)
+
+A message forwarded from one chat to another goes out as the user's own message in the target chat: a
+`<persona-context kind="forward">` block that carries the original, then the note the user typed (with no note, a fixed
+"Please look at the forwarded message above." in the sender's language). It is sent through
+`POST /api/v1/sessions/{mid}/{sid}/messages` like any message, or as a new Agent's first message; there is no forward
+endpoint, and nothing is written to the original chat. Only chats of the same hub are offered.
+
+```text
+<persona-context kind="forward" title="Forwarded from Claude · Network tests" url="persona://session/<machine id>/<session id>?at=<item id>" msg="<item id>" role="agent" author="Claude" chat="Network tests" project="weather › tests" machine="MacBook Pro" time="2026-11-11T10:24:00+08:00">
+Retries live in `RetryPolicy.swift`: 3 tries.
+</persona-context>
+
+Make the photo upload use the same retries
+```
+
+| Attribute | Meaning |
+| --- | --- |
+| `title` | "Forwarded from {author} · {chat}" in the sender's language: what a reader that does not know `forward` shows, and the title the hub takes for a chat that starts with it |
+| `url` | `persona://session/<machine id>/<session id>?at=<item id>`, the item id percent-encoded: the original, which clients open at that message |
+| `msg` | The original item id |
+| `role` | Whose message it was: `user` (the user's own), `persona`, `agent`, or `other` (a relayed or scheduled message, another session's Claude) |
+| `author` | Who wrote it, by name; for the user's own, "Me" in the sender's language |
+| `chat` | The original chat's title |
+| `project` | The Agent's project (`space › tab`); absent for Persona's chats |
+| `machine` | The computer's name (not its id); absent for Persona's chats |
+| `time` | When the original was written, ISO 8601 with the sender's offset |
+
+The attributes are written in this order after `kind`, `title`, `url` and `msg`; values escape `&`, `"`, `<` and `>`,
+and readers keep attributes they do not know. The text is the original as the chat shows it: without message-source
+metadata, photo notes or file tags; quote and forward blocks it opened with become `> ` lines led by their heading;
+files sent with it are named, not copied; at most 20,000 characters, then a line saying it was cut. It goes through the
+usual closing-tag removal. Photos the user sent with their own message go with the forward as the new message's images.
+
+Clients draw the block as a card at the top of the user's bubble (the heading, the computer and time, the first lines
+of the original) that opens the original chat at that message; a reader that does not know `forward` folds it like the
+other context blocks ("Context · title"). Persona's CLAUDE.md says how to read it, and that `agent_read` and
+`conversation_read` read the original chat from the ids in `url`. Shared cases: `spec/fixtures/forward`.
 
 ## Messages injected by Persona
 

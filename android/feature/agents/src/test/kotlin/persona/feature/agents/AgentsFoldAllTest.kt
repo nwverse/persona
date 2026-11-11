@@ -154,6 +154,8 @@ class AgentsFoldAllTest {
         assertTrue(model.page.value.list.machines.isNotEmpty())
         assertTrue(model.page.value.list.machines.none { it.folded })
         assertTrue(model.page.value.list.groups.all { it.folded })
+        // The list settings say Collapse all is done, the computers open as they are.
+        assertTrue(model.page.value.list.allCollapsed)
         model.foldAll(false)
         runCurrent()
         val hidden = model.page.value.list.machines.single { it.machine.id == "hidden" }

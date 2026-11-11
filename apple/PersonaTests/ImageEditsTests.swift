@@ -205,13 +205,17 @@ struct ImageEditsTests {
                                     provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
     }
 
-    /// One pixel of `image` (RGBA, from the top left).
+    /// One pixel of `image` (RGBA, from the top left), each channel rounded to the nearest of 0 and 255 when within 24 of
+    /// it (an edge drawn through a turn may blend a little).
     private static func color(_ image: CGImage, x: Int, y: Int) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
-        let ctx = CGContext(data: &bytes, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
-                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        bytes.withUnsafeMutableBytes { buffer in
+            let ctx = CGContext(data: buffer.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8,
+                                bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
         let i = (y * image.width + x) * 4
-        return Array(bytes[i..<i + 4])
+        return bytes[i..<i + 4].map { $0 < 24 ? 0 : $0 > 231 ? 255 : $0 }
     }
 }
