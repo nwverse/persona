@@ -4,7 +4,7 @@ import XCTest
 /// width and a tap on it opens the strip; Send Now sits on the line under it and still asks before sending. At the
 /// default size the two share one line, as before. Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB): the widget agent
 /// works, a Claude in a terminal, so its queue has Send Now; `/mock/queue?text=…` queues a message for it.
-/// PERSONA_SHOTS=<dir> keeps each step, named with PERSONA_APPEARANCE.
+/// Each test runs in light and dark (`-ui.scheme`); PERSONA_SHOTS=<dir> keeps each step.
 final class QueueStripTextSizeUITests: XCTestCase {
     private var hub = ""
     private let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
@@ -24,40 +24,46 @@ final class QueueStripTextSizeUITests: XCTestCase {
     }
 
     @MainActor func testTheTitleOpensTheStripAtTheLargestTextSize() throws {
-        let app = launch("UICTContentSizeCategoryAccessibilityXXXL")
-        let (strip, title, send) = parts(app)
-        shot(app, "xxxl-queued")
-        XCTAssertGreaterThan(title.frame.width, strip.frame.width / 2, "the title has no room: \(title.frame) in \(strip.frame)")
-        XCTAssertGreaterThanOrEqual(send.frame.minY, title.frame.maxY - 1, "Send Now is beside the title, not under it: \(send.frame) and \(title.frame)")
+        for look in ["light", "dark"] {
+            let app = launch("UICTContentSizeCategoryAccessibilityXXXL", look)
+            let (strip, title, send) = parts(app)
+            shot(app, "xxxl-queued-\(look)")
+            XCTAssertGreaterThan(title.frame.width, strip.frame.width / 2, "\(look): the title has no room: \(title.frame) in \(strip.frame)")
+            XCTAssertGreaterThanOrEqual(send.frame.minY, title.frame.maxY - 1, "\(look): Send Now is beside the title, not under it: \(send.frame) and \(title.frame)")
 
-        title.tap()
-        XCTAssertTrue(app.buttons["queue-item"].firstMatch.waitForExistence(timeout: 5), "a tap on the title did not open the strip:\n\(app.debugDescription)")
-        XCTAssertFalse(app.buttons["queue-send-now-confirm"].exists, "a tap on the title asked to send the queue")
-        shot(app, "xxxl-open")
+            title.tap()
+            XCTAssertTrue(app.buttons["queue-item"].firstMatch.waitForExistence(timeout: 5), "\(look): a tap on the title did not open the strip:\n\(app.debugDescription)")
+            XCTAssertFalse(app.buttons["queue-send-now-confirm"].exists, "\(look): a tap on the title asked to send the queue")
+            shot(app, "xxxl-open-\(look)")
 
-        send.tap()
-        XCTAssertTrue(app.buttons["queue-send-now-confirm"].firstMatch.waitForExistence(timeout: 5), "Send Now did not ask first:\n\(app.debugDescription)")
-        shot(app, "xxxl-send-now")
+            send.tap()
+            XCTAssertTrue(app.buttons["queue-send-now-confirm"].firstMatch.waitForExistence(timeout: 5), "\(look): Send Now did not ask first:\n\(app.debugDescription)")
+            shot(app, "xxxl-send-now-\(look)")
+            app.terminate()
+        }
     }
 
     @MainActor func testTheTitleAndSendNowShareALineAtTheDefaultSize() throws {
-        let app = launch("UICTContentSizeCategoryL")
-        let (_, title, send) = parts(app)
-        shot(app, "default-queued")
-        XCTAssertEqual(send.frame.midY, title.frame.midY, accuracy: title.frame.height / 2, "Send Now left the title's line: \(send.frame) and \(title.frame)")
+        for look in ["light", "dark"] {
+            let app = launch("UICTContentSizeCategoryL", look)
+            let (_, title, send) = parts(app)
+            shot(app, "default-queued-\(look)")
+            XCTAssertEqual(send.frame.midY, title.frame.midY, accuracy: title.frame.height / 2, "\(look): Send Now left the title's line: \(send.frame) and \(title.frame)")
 
-        title.tap()
-        XCTAssertTrue(app.buttons["queue-item"].firstMatch.waitForExistence(timeout: 5), "a tap on the title did not open the strip:\n\(app.debugDescription)")
-        shot(app, "default-open")
+            title.tap()
+            XCTAssertTrue(app.buttons["queue-item"].firstMatch.waitForExistence(timeout: 5), "\(look): a tap on the title did not open the strip:\n\(app.debugDescription)")
+            shot(app, "default-open-\(look)")
+            app.terminate()
+        }
     }
 
     // MARK: - Steps
 
-    /// The widget agent's chat at the text size `size` (a UIContentSizeCategory name).
-    @MainActor private func launch(_ size: String) -> XCUIApplication {
+    /// The widget agent's chat at the text size `size` (a UIContentSizeCategory name), in `look` (light or dark).
+    @MainActor private func launch(_ size: String, _ look: String) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", widget, "-UIPreferredContentSizeCategoryName", size]
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", widget, "-UIPreferredContentSizeCategoryName", size, "-ui.scheme", look]
         app.launchPinned()
         return app
     }
@@ -87,7 +93,6 @@ final class QueueStripTextSizeUITests: XCTestCase {
         a.lifetime = .keepAlways
         add(a)
         guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
-        let look = ProcessInfo.processInfo.environment["PERSONA_APPEARANCE"] ?? "light"
-        try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "queue-strip-\(name)-\(look).png"))
+        try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "queue-strip-\(name).png"))
     }
 }
