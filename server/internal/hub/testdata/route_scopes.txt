@@ -421,6 +421,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/kb-trash/{id}/restore
 -                    POST /api/v1/later/{id}/handled
 -                    POST /api/v1/launchers
+-                    POST /api/v1/launchers/catalog
 -                    POST /api/v1/launchers/discover
 -                    POST /api/v1/launchers/health/check
 -                    POST /api/v1/launchers/import
@@ -489,6 +490,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/minutes
 -                    POST /api/v1/recordings/{id}/minutes/todos
 -                    POST /api/v1/recordings/{id}/photos
+-                    POST /api/v1/recordings/{id}/segments
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach

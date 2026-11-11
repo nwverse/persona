@@ -135,6 +135,60 @@ from colliding with its buttons.
   the screen drew it over the bar and hid the bar's buttons; it starts at `AssistantTopBar.fogSolid`, the bar fog's solid end, and goes
   down from there. The bar, the shell's moving bar and the switcher share `fogSolid` and `fade` so they cannot drift apart.
 
+## A floating bar is over the page's overlays too (#3188)
+
+- **A layer the chat draws over itself is still under the page's floating bar.** The lifted message of a long press (`MessageLiftLayer`)
+  was the chat's own overlay, so in Persona's conversation the top bar, the switcher and their fog were drawn over it, and took the taps
+  there. A message taller than the room below the bar but shorter than the safe area fit, so it did not scroll, and its first lines stayed
+  under the bar; a longer one scrolled, but its start still ended up under the bar. The page that floats the bar draws the layer above it
+  (`MessageLiftHost`), as an Agents chat already had it with its header under the dimming.
+- **A view drawn again elsewhere wraps differently unless it gets the same offer and the same environment.** The lifted copy was offered
+  the width the message took, rounded to pixels: a bubble that hugs its widest line then lacked a hair of that line, its last character
+  went to the next line and every line after it moved, the bubble narrowed and the extra line was cut by the old height. Drawn outside the
+  chat it also lost what the chat sets around its rows (the file scope that path links need, the conversation layout, MarkdownUI's soft
+  breaks, which `AssistantText` sets outside the pressable part). `RecordsOffer` keeps the proposal the chat made; `Offers` makes it again;
+  `EnvironmentCapture` reads the whole environment (`\.self`) at the press, for one frame only, since a view that holds `\.self` updates
+  on every change to any value in it. `UIGestureRecognizerRepresentableContext` has no `environment`, and `EnvironmentValues.fontDesign` is
+  not public (read `StyleSpec.current.fontDesign`).
+- **Selecting in place, keep the words on screen.** A text view drawing the words again (TextKit) wrapped them close to the chat but not
+  the same: fonts, list markers, block spacing and wrapping all moved. The chat's words stay, and the text view lies over them with its
+  text, links and pictures clear, for the highlight and handles only, wrapping at the width the words were offered. Its layout still has to
+  match for the highlight to land on the right words; `-showLiftLines` writes each line's position in the three states for the UI tests.
+- **A view drawn again starts with fresh `@State`.** The lifted copy is a new instance: a quote the user opened in the chat came back
+  folded, and on its first frame (no height measured yet) unfolded, then folded. What must look the same in both lives outside the view,
+  keyed by the message (`RowMemo.key`, ids repeat across chats) and the block (`QuoteFold`, `replyKey`); a measured value there is
+  `@ObservationIgnored` (every row writes it) while the view keeps its own `@State` copy to redraw itself. MarkdownUI tells a block nothing
+  of where it is in its message, so two blocks with the same words share their state.
+- **Laid out is not shown.** A folded quote clips its words, but `Text.LayoutKey` still reports every line, so its hidden lines sat among
+  the chat's rows next to the paragraph after it. The folded card reports its bounds (`FoldedQuotes`); `readingShownWords` resolves them
+  and the text layouts into one value (`ShownWords`) in backgrounds and reads it in an overlay, since one `overlayPreferenceValue` reads one
+  key. Likewise a code block's title bar is no line of the message (`oneBlockInLift`), and its code's first line takes the chat's next row
+  wherever the bar put it.
+- **SwiftUI and TextKit wrap the same words at the same width differently.** A sentence of Chinese with a path in it: the chat broke it
+  after 12 characters, TextKit (1 or 2, with any `lineBreakStrategy`, the same font and width) filled the line to 15, and every line after
+  moved. A bare `Text` with the same string (with its path as a link or not) wrapped as TextKit did; what in the chat's MarkdownUI text
+  changes it was not found. Don't try
+  to reproduce the chat's line breaker: `Text.Layout.Run.characterIndices` (UTF-16 offsets) says where each of the chat's lines starts, and
+  `shouldBreakLineByWordBeforeCharacterAt` holds TextKit to those places (`WordBreaks`, `LiftLayout.follow`).
+- **MarkdownUI draws every font at a whole point.** It sizes a run as `round(size × scale)`, so inline code at 0.88 em of 17 is 15, not
+  14.96, and the first heading at 1.3 em is 22. A text view laid out to match it at the unrounded size ended a line of code most of a
+  point short. Size em values with `ReplyMetrics.points`.
+- **Laid out in Chinese, TextKit 1 handles a CJK closing bracket at a line's end differently from SwiftUI.** In a zh-Hans app both compress
+  CJK punctuation, and TextKit 2 matches SwiftUI glyph for glyph. TextKit 1 draws a line-ending 」 or ） about 3 pt narrower and starts the next
+  line half an em in (a little in, before an opening bracket). Lines ending in ，。、”： match. `LiftUITextView.wrappedStart` measures how
+  far a wrapped line starts past its indent and `LineSnap` moves it back; the narrower bracket stays (the highlight of a whole line
+  reaches the words' edge anyway).
+- A `UIScrollView` subclass cannot have a property named `dragging`: its Objective-C getter is `isDragging`'s, and the override fails.
+  `Layout` methods are not on the main actor: what they write must be `nonisolated`.
+- **UIKit only scrolls a text view's own content while a selection handle is held at its edge.** With `isScrollEnabled = false` inside a
+  SwiftUI `ScrollView`, the handle reaches the edge and the outer scroll view stays put. `LiftUITextView` follows the finger with a
+  recognizer that never recognizes and cannot be prevented (`canBePrevented(by:)` false), treats a touch that changes the selection as a
+  handle's drag, and scrolls the first enclosing `UIScrollView` from a display link, moving the dragged end of the selection with the words
+  under the finger, since a finger held still sends no touches.
+- **XCUITest sees no child of a `.combine` element.** A lifted message combined into one element has no static texts to find; the long
+  one is `.contain` (VoiceOver can then go through its parts, which scrolls it), and `isHittable` on its first line is what tells whether
+  something else is drawn over it.
+
 ## Fog under the chat's footer (#3696)
 
 The chat list and its footer (Persona's capsules, cards, the composer) are stacked, not overlaid, so the keyboard shortens the
