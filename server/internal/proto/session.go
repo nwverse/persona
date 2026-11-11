@@ -205,6 +205,10 @@ type Session struct {
 	StateSince time.Time `json:"state_since,omitempty"`
 	// Queued is input typed while the agent works, waiting to be taken (shown above the composer, not in the chat).
 	Queued []string `json:"queued,omitempty"`
+	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
+	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
+	// show them but take back, delete, move and send now only the others (#4342).
+	QueuedRelayed int `json:"queued_relayed,omitempty"`
 	// Background lists commands / agents Claude started in the background that have not reported back yet
 	// (the TUI's "2 shells still running").
 	Background []BackgroundTask `json:"background,omitempty"`

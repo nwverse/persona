@@ -785,3 +785,11 @@ A runtime can rediscover an assistant conversation with its current project dire
 session-state projection before publishing runtime rows so the original assistant or health directory and launcher
 survive snapshots and reconnects. The hub uses that directory to classify assistant history. Preserve the runtime's
 status, model, permission choices and capabilities while restoring owned metadata.
+
+## A headless Claude's queue is on its stdout, not in its transcript (#4342)
+
+`claude -p --input-format stream-json` writes `queue-operation enqueue` with no content for a message that waits, so a transcript reader
+sees a wait it can't name, and a following `dequeue` pops whatever it guessed. Give each user line a `uuid` and follow the
+`command_lifecycle` lines for it instead (queued, started, cancelled, completed). Take one back with `cancel_async_message`, and treat
+`cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
+`claude -p` script before building on it; the requests are not in the public docs.
