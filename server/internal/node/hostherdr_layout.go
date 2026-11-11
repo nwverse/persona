@@ -187,3 +187,55 @@ func fromHerdrAgent(session string, a herdr.Agent) host.Agent {
 	}
 	return out
 }
+
+// directorySpaces retains every candidate directory, rather than guessing one cwd for a multi-pane workspace.
+// Each server is queried independently so equal workspace ids in named sessions cannot collide.
+func (h *herdrHost) directorySpaces(ctx context.Context) ([]spaceDirectory, error) {
+	read := func(ctx context.Context, c *herdr.Client, session string) ([]spaceDirectory, error) {
+		wss, err := c.Workspaces(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var out []spaceDirectory
+		for _, w := range wss {
+			add := func(dir string) {
+				if dir != "" {
+					out = append(out, spaceDirectory{workspace: herdr.QualifyID(session, w.ID), cwd: dir})
+				}
+			}
+			add(w.Cwd)
+			if w.Worktree != nil {
+				add(w.Worktree.CheckoutPath)
+				add(w.Worktree.RepoRoot)
+			}
+			if w.Cwd != "" {
+				continue
+			}
+			panes, err := c.Panes(ctx, w.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range panes {
+				if p.WorkspaceID != "" && p.WorkspaceID != w.ID {
+					continue
+				}
+				add(p.Cwd)
+				if p.ForegroundCwd != "" {
+					out = append(out, spaceDirectory{workspace: herdr.QualifyID(session, w.ID), cwd: p.ForegroundCwd, fallback: true})
+				}
+			}
+		}
+		return out, nil
+	}
+	if h.named == nil {
+		return read(ctx, h.c, "")
+	}
+	others := fromNamedSessions(ctx, h.named, func(ctx context.Context, ns *herdrSession) ([]spaceDirectory, error) {
+		return read(ctx, ns.c, ns.name)
+	}, func(*herdrSession) ([]spaceDirectory, bool) { return nil, false })
+	out, err := read(ctx, h.c, "")
+	for _, spaces := range others() {
+		out = append(out, spaces...)
+	}
+	return out, err
+}

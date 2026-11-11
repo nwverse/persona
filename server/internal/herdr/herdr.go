@@ -499,12 +499,16 @@ func (c *Client) AgentGet(ctx context.Context, target string) (*Agent, error) {
 }
 
 type Workspace struct {
-	ID      string `json:"workspace_id"`
-	Label   string `json:"label"`
-	Number  int    `json:"number"`
-	Cwd     string `json:"cwd,omitempty"`
-	Branch  string `json:"branch,omitempty"`
-	Focused bool   `json:"focused,omitempty"`
+	ID       string `json:"workspace_id"`
+	Label    string `json:"label"`
+	Number   int    `json:"number"`
+	Cwd      string `json:"cwd,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Focused  bool   `json:"focused,omitempty"`
+	Worktree *struct {
+		RepoRoot     string `json:"repo_root"`
+		CheckoutPath string `json:"checkout_path"`
+	} `json:"worktree,omitempty"`
 }
 
 type Tab struct {
@@ -826,3 +830,12 @@ func (c *Client) PaneReportResume(ctx context.Context, pane, source, agent, sess
 
 // ReportSeq orders a reporter's reports (herdr drops one older than the last it took); tests fix it.
 var ReportSeq = func() int64 { return time.Now().UnixNano() }
+
+// Panes lists all panes in a workspace, including panes with no detected agent.
+func (c *Client) Panes(ctx context.Context, workspace string) ([]Agent, error) {
+	var res struct {
+		Panes []Agent `json:"panes"`
+	}
+	err := c.call(ctx, "pane.list", map[string]any{"workspace_id": workspace}, &res, "pane", "list", "--workspace", workspace)
+	return res.Panes, err
+}

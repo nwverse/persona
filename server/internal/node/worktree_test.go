@@ -76,10 +76,12 @@ func worktreeNode(t *testing.T) worktreeFixture {
 	runPullGit(t, repo, "commit", "-m", "first")
 	runPullGit(t, repo, "branch", "spare")
 	f.reply("session.snapshot", snapshot(
-		[]any{map[string]any{"workspace_id": "w1", "label": "proj", "number": 1, "cwd": repo, "branch": "main"}},
+		[]any{map[string]any{"workspace_id": "w1", "label": "proj", "number": 1, "branch": "main"}},
 		[]any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": "1", "number": 1}},
 		nil, []any{map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": repo}},
 	))
+	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj", "number": 1}}})
+	f.reply("pane.list", map[string]any{"panes": []any{map[string]any{"workspace_id": "w1", "pane_id": "w1:p1", "cwd": repo}}})
 	f.handle("worktree.create", func(p map[string]any) any {
 		path, branch := str(p["path"]), str(p["branch"])
 		args := []string{"worktree", "add", "-b", branch, "--", path}
@@ -90,14 +92,14 @@ func worktreeNode(t *testing.T) worktreeFixture {
 			return herdrFail{Code: "worktree_create_failed", Message: "Preparing worktree\n" + out}
 		}
 		return map[string]any{
-			"workspace": map[string]any{"workspace_id": "w2", "label": "proj", "number": 2, "cwd": path},
+			"workspace": map[string]any{"workspace_id": "w2", "label": "proj", "number": 2},
 			"tab":       map[string]any{"tab_id": "w2:t1"}, "root_pane": map[string]any{"pane_id": "w2:p1"},
 			"worktree": map[string]any{"path": path, "branch": branch},
 		}
 	})
 	f.handle("workspace.create", func(p map[string]any) any {
 		return map[string]any{
-			"workspace": map[string]any{"workspace_id": "w3", "label": str(p["label"]), "number": 3, "cwd": str(p["cwd"])},
+			"workspace": map[string]any{"workspace_id": "w3", "label": str(p["label"]), "number": 3},
 			"tab":       map[string]any{"tab_id": "w3:t1"}, "root_pane": map[string]any{"pane_id": "w3:p1"},
 		}
 	})
@@ -338,5 +340,106 @@ func TestPanesListAdvertisesWorktrees(t *testing.T) {
 	setWorktreeSupport(t, false)
 	if !canWorktree(w.n.hosts.Get(host.Herdr)) {
 		t.Error("an older herdr gets the git way")
+	}
+}
+
+func TestWorktreeFromPaneDirectory(t *testing.T) {
+	w := worktreeNode(t)
+	res, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
+	if err != nil || res["root"] != resolved(t, w.repo) {
+		t.Fatalf("prepare: %v, %v", res, err)
+	}
+	dest := filepath.Join(w.home, "pane-checkout")
+	res, err = request(t, w.n, "worktree.create", map[string]any{"cwd": w.repo, "branch": "pane-source", "path": dest})
+	if err != nil || res["workspace_id"] != "w2" {
+		t.Fatalf("create: %v, %v", res, err)
+	}
+	if branchOf(t, dest) != "pane-source" {
+		t.Fatal("wrong branch")
+	}
+}
+
+func TestWorktreeWithoutHoldingSpaceKeepsIsolation(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		t.Run(map[bool]string{false: "explicit", true: "automatic"}[automatic], func(t *testing.T) {
+			w := worktreeNode(t)
+			w.f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+			res, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
+			if err != nil || res["root"] != resolved(t, w.repo) {
+				t.Fatalf("prepare fallback: %v, %v", res, err)
+			}
+			dest := filepath.Join(w.home, "isolated")
+			args := map[string]any{"cwd": w.repo, "branch": "isolated", "path": dest}
+			if automatic {
+				args = map[string]any{"cwd": w.repo, "auto_name": true}
+			}
+			res, err = request(t, w.n, "worktree.create", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := str(res["path"])
+			if path == "" || path == w.repo || branchOf(t, w.repo) != "main" || branchOf(t, path) != str(res["branch"]) {
+				t.Fatalf("lost isolation: %v", res)
+			}
+			if len(w.f.trace("worktree.create")) != 0 || len(w.f.trace("workspace.create")) != 1 {
+				t.Fatal("must use Git and open a plain workspace")
+			}
+			plain := mkdir(t, filepath.Join(w.home, "not-git"))
+			if _, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": plain}); err == nil {
+				t.Fatal("accepted non-Git directory")
+			}
+		})
+	}
+}
+
+func TestSpaceHoldingPaneCandidates(t *testing.T) {
+	w := worktreeNode(t)
+	h, err := w.n.hostOfKind("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := mkdir(t, filepath.Join(w.repo, "child"))
+	alias := filepath.Join(w.home, "alias")
+	if err := os.Symlink(w.repo, alias); err != nil {
+		t.Fatal(err)
+	}
+	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
+		map[string]any{"workspace_id": "w1"}, map[string]any{"workspace_id": "w2"},
+	}})
+	w.f.handle("pane.list", func(p map[string]any) any {
+		dir := w.repo
+		if str(p["workspace_id"]) == "w2" {
+			dir = child
+		}
+		return map[string]any{"panes": []any{map[string]any{"workspace_id": p["workspace_id"], "cwd": dir, "foreground_cwd": child}}}
+	})
+	got, err := spaceHolding(t.Context(), h, filepath.Join(alias, "child"))
+	if err != nil || got != "w2" {
+		t.Fatalf("deep canonical match: %q, %v", got, err)
+	}
+	if got, err := spaceHolding(t.Context(), h, w.repo); err != nil || got != "w1" {
+		t.Fatalf("pane cwd must beat deeper foreground directory: %q, %v", got, err)
+	}
+	w.f.reply("pane.list", map[string]any{"panes": []any{map[string]any{"foreground_cwd": w.repo}}})
+	if got, err := spaceHolding(t.Context(), h, w.repo); err != nil || got == "" {
+		t.Fatalf("foreground fallback: %q, %v", got, err)
+	}
+	w.f.reply("pane.list", map[string]any{"panes": []any{}})
+	w.f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w3", "worktree": map[string]any{"repo_root": w.repo, "checkout_path": child}}}})
+	if got, err := spaceHolding(t.Context(), h, child); err != nil || got != "w3" {
+		t.Fatalf("metadata: %q, %v", got, err)
+	}
+}
+
+func TestSpaceHoldingNamedSessionDirectories(t *testing.T) {
+	h, fs := namedHerdr(t, nil)
+	dir := t.TempDir()
+	for _, f := range []*fakeHerdr{fs.own, fs.build, fs.review} {
+		f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1"}}})
+		f.reply("pane.list", map[string]any{"panes": []any{}})
+	}
+	fs.build.reply("pane.list", map[string]any{"panes": []any{map[string]any{"workspace_id": "w1", "cwd": dir}}})
+	if got, err := spaceHolding(t.Context(), h, dir); err != nil || got != "@build:w1" {
+		t.Fatalf("named lookup: %q, %v", got, err)
 	}
 }

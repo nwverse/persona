@@ -55,9 +55,19 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 		return nil, "", repo, unsupported(h)
 	}
 	if workspace == "" {
-		if workspace, err = spaceHolding(ctx, h, proto.ExpandHome(cwd, n.home)); err != nil {
+		dir := proto.ExpandHome(cwd, n.home)
+		workspace, err = spaceHolding(ctx, h, dir)
+		if err != nil && !errors.Is(err, errNoHoldingSpace) {
 			return nil, "", repo, err
 		}
+		// The requested Git directory is authoritative, even when no terminal space holds it.
+		// An empty workspace selects Git creation below, preserving checkout isolation.
+		dir, err = n.gitDir(dir)
+		if err != nil {
+			return nil, "", repo, err
+		}
+		repo, err = repoAt(ctx, dir)
+		return h, workspace, repo, err
 	}
 	dir, err := n.gitDirOf(ctx, "", workspace, kind)
 	if err != nil {
@@ -103,25 +113,55 @@ func repoAt(ctx context.Context, dir string) (worktreeRepo, error) {
 	return repo, nil
 }
 
+type spaceDirectory struct {
+	workspace, cwd string
+	fallback       bool
+}
+
+var errNoHoldingSpace = errors.New("no workspace holds this directory")
+
 // spaceHolding is the host's space whose directory is dir or holds it, the deepest such space.
 func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) {
 	l, ok := h.(host.Launcher)
 	if !ok {
 		return "", unsupported(h)
 	}
-	spaces, err := l.Spaces(ctx)
-	if err != nil {
-		return "", err
+	var dirs []spaceDirectory
+	if source, ok := h.(interface {
+		directorySpaces(context.Context) ([]spaceDirectory, error)
+	}); ok {
+		var err error
+		dirs, err = source.directorySpaces(ctx)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		spaces, err := l.Spaces(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, s := range spaces {
+			dirs = append(dirs, spaceDirectory{workspace: s.ID, cwd: s.Cwd})
+		}
 	}
 	d := realPath(filepath.Clean(dir))
 	best, depth := "", -1
-	for _, s := range spaces {
-		if c := realPath(filepath.Clean(s.Cwd)); s.Cwd != "" && within(d, c) && len(c) > depth {
-			best, depth = s.ID, len(c)
+	// A foreground process may cd elsewhere: use those directories only if no stable directory matches.
+	for _, fallback := range []bool{false, true} {
+		for _, s := range dirs {
+			if s.fallback != fallback || s.cwd == "" {
+				continue
+			}
+			if c := realPath(filepath.Clean(s.cwd)); within(d, c) && len(c) > depth {
+				best, depth = s.workspace, len(c)
+			}
+		}
+		if best != "" {
+			break
 		}
 	}
 	if best == "" {
-		return "", fmt.Errorf("%s 不在这台电脑的任何工作区里", dir)
+		return "", fmt.Errorf("%s 不在这台电脑的任何工作区里: %w", dir, errNoHoldingSpace)
 	}
 	return best, nil
 }
@@ -226,7 +266,7 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 			return res, errors.New("This terminal host cannot choose a different parent workspace")
 		}
 		created, err = w.CreateWorktreeUnder(ctx, workspace, branch, dest, parent)
-	} else if w, ok := h.(host.Worktreer); ok && w.CanWorktree() {
+	} else if w, ok := h.(host.Worktreer); ok && w.CanWorktree() && workspace != "" {
 		created, err = w.CreateWorktree(ctx, workspace, branch, dest)
 	} else {
 		created, err = n.worktreeByGit(ctx, h, repo, branch, dest)
@@ -266,7 +306,7 @@ func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd
 	if parent == "" {
 		parent = workspace
 	}
-	if !ok {
+	if !ok || workspace == "" {
 		// Hosts without their own generator use unique names through the existing checked creation path.
 		for range 8 {
 			var seed [8]byte
