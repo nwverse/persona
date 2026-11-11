@@ -15,7 +15,6 @@ struct TerminalsView: View {
     let only: String?
     @State private var lists: [String: TerminalPanes] = [:]
     @State private var failures: [String: String] = [:]
-    @State private var loaded = false
     @State private var open: TerminalTarget?
     @State private var closing: CloseTarget?
     @State private var finished: FinishedTarget?
@@ -52,7 +51,8 @@ struct TerminalsView: View {
         #if os(iOS) || os(visionOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .task { await load() }
+        // Again when the computers change: right after the app connects the list is still empty.
+        .task(id: machines.map(\.id)) { await load() }
         .refreshable { await load() }
         #if os(iOS)
         .fullScreenCover(item: $open) { t in TerminalCover(key: t.key).presentationBackground(.clear) }
@@ -87,8 +87,8 @@ struct TerminalsView: View {
                 Text("No terminals on this computer.").font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
             }
             ForEach(rows) { r in row(r, on: ref, in: list).themedRow() }
-        } else if !loaded {
-            ProgressView().frame(maxWidth: .infinity).themedRow()
+        } else {
+            ProgressView().frame(maxWidth: .infinity).themedRow() // its panes are on their way
         }
     }
 
@@ -210,7 +210,6 @@ struct TerminalsView: View {
                 }
             }
         }
-        loaded = true
     }
 
     private func newTerminal(on ref: MachineRef, space: TerminalsList.Space) {

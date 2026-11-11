@@ -410,6 +410,10 @@ struct ChatsView: View {
                     #if DEBUG
                     // `-openMachinePage <machine id>` (with `-tab dev`): that machine's projects.
                     if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openMachinePage") { openFromList(MachineRoute(id: m)) }
+                    // `-openTerminalsPage all|<machine path>` (with `-tab dev`): Terminals (#4754), every computer's or one's.
+                    if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openTerminalsPage") {
+                        openFromList(TerminalsRoute(machine: m == "all" ? nil : m))
+                    }
                     // `-openMonitor all|<machine id>` (with `-tab dev`): Machines, or one machine's page.
                     if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openMonitor") {
                         if m == "all" { openFromList(MachineListRoute()) } else { openFromList(MachineDetailRoute(id: m)) }

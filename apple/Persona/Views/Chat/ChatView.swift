@@ -2453,11 +2453,13 @@ struct ChatView: View {
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
-                         covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
-                    // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
-                    // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
-                    .layoutIsland(enabled: !usesShellComposer && !AppStyle.current.usesBeautifulUI)
+                if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
+                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
+                             covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
+                        // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
+                        // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
+                        .layoutIsland(enabled: !usesShellComposer && !AppStyle.current.usesBeautifulUI)
+                }
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.bottom, Theme.Space.s)
