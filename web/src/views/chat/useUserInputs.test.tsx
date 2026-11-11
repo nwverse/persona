@@ -19,7 +19,8 @@ describe("independent user-input metadata", () => {
   it("grows only after earlier transcript pages arrive, including a cached full first page", () => {
     const host = document.createElement("div"); const root = createRoot(host);
     let got: number | undefined;
-    function Probe({ scope, oldest }: { scope: string; oldest?: number }) { got = useRevealedInputSeq(scope, oldest); return null; }
+    let reveal = () => {};
+    function Probe({ scope, oldest }: { scope: string; oldest?: number }) { const range = useRevealedInputSeq(scope, oldest); got = range.seq; reveal = range.reveal; return null; }
     const render = (scope: string, oldest?: number) => act(() => root.render(<Probe scope={scope} oldest={oldest} />));
     destroy = () => act(() => root.unmount());
     render("a"); expect(got).toBeUndefined();
@@ -28,6 +29,7 @@ describe("independent user-input metadata", () => {
     render("a", 2301); expect(got).toBe(2301);
     render("a", 2101); expect(got).toBe(2101);
     render("b", 1); expect(got).toBeUndefined();
+    act(() => reveal()); expect(got).toBe(1);
     render("a-rewritten", 1); expect(got).toBeUndefined();
   });
 

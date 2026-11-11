@@ -781,6 +781,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
+    if (!first.current && !atEnd.current && el.scrollTop < 300) revealLoadedInputs();
     loadEarlierNearTop();
   };
 
@@ -1010,7 +1011,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
   // Only lightweight positions are fetched for navigation; older transcript bodies wait for a selection.
-  const revealedSeq = useRevealedInputSeq(`${mid}/${sid}/${tr.history ?? ""}`, tr.loading ? undefined : tr.items[0]?.seq);
+  const { seq: revealedSeq, reveal: revealLoadedInputs } = useRevealedInputSeq(`${mid}/${sid}/${tr.history ?? ""}`, tr.loading ? undefined : tr.items[0]?.seq);
   const loadedRailTicks = useMemo(() => {
     if (!fine) return NO_RAIL_TICKS;
     const ticks = navRailTicks(lines);
