@@ -555,7 +555,7 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		return &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
 	}
 	p, written, err := e.Store.updatePerson(pid, false, create, func(p *Person) bool {
-		if p.Connector != "" && p.Connector != c.Connector {
+		if p.Status == "ignored" || (p.Connector != "" && p.Connector != c.Connector) {
 			return false
 		}
 		linked = true

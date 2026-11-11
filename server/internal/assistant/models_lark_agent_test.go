@@ -132,7 +132,7 @@ func TestLarkAgentModelValidationAndProviderUse(t *testing.T) {
 	if w := request(s, http.MethodDelete, "/api/v1/launchers/lark-custom", ""); w.Code == http.StatusOK {
 		t.Fatalf("provider in use deleted: %s", w.Body.String())
 	}
-	for _, id := range []string{"inbox.agent", "translate", "schedule"} {
+	for _, id := range []string{"inbox.judge", "translate", "schedule"} {
 		p := purposeOf(t, s, id)
 		w := modelRequest(s, http.MethodPut, id, fmt.Sprintf(`{"revision":%d,"model":"other"}`, p.Revision))
 		if w.Code != http.StatusBadRequest {

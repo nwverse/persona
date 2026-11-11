@@ -600,3 +600,17 @@ for (const toolName of ['mcp__persona__report_to_supervisor', 'mcp__jarvis__repo
     assert.equal(rows().find((r) => r.session_id === SID)?.permission_mode, 'plan')
   })
 }
+
+test('forced close cancels a confirmation and retains the Agent on archive failure', async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  fake.update(a.claude.id, { pendingPermissions: [{ id: 'confirm-close', provider: 'claude', name: 'Bash', input: { command: 'echo test' } }] })
+  await until('confirmation blocked', () => rows().find(r => r.session_id === SID)?.status === 'blocked')
+  fake.handlers.archive_agent_request = () => ({ type: 'agent_archived', payload: { agentId: a.claude.id, error: 'Archive refused' } })
+  await assert.rejects(call(node, 'session.close', { session_id: SID, force: true }), /Archive refused/)
+  assert.ok(rows().some(r => r.session_id === SID), 'failed close remains visible')
+  delete fake.handlers.archive_agent_request
+  await call(node, 'session.close', { session_id: SID, force: true })
+  assert.equal(fake.requestsOf('archive_agent_request').at(-1).agentId, a.claude.id)
+  assert.equal(fake.requestsOf('agent_permission_response').filter(r => r.response?.behavior === 'allow').length, 0)
+  await until('force-archived Agent gone', () => !rows().some(r => r.session_id === SID))
+})

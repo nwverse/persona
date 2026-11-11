@@ -192,8 +192,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.effective(res: Resour
     itemsIndexed(rows, key = { _, it -> "effective-${it.first}" }) { index, (label, value) ->
         JGroupItem(GroupPosition.of(index, rows.size)) { JRow(stringResource(label), value = value) }
     }
-    larkModelMode(res, purpose)?.let { mode ->
-        item("lark-model-mode") { SettingsCaption(mode, Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
+    agentsOverrideMode(res, purpose)?.let { mode ->
+        item("agents-override-mode") { SettingsCaption(mode, Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
     }
     purpose.inheritedFrom?.takeIf { it.isNotBlank() }?.let { from ->
         item("effective-note") { SettingsCaption(stringResource(R.string.settings_src_model_inherited_from, from), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
