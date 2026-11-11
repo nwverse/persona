@@ -8,6 +8,7 @@ import type { Todo } from "../../lib/todos";
 import { ago, stateOf } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
 import { useStore, type State } from "../../lib/store";
+import { PHONE, useMedia } from "../../lib/viewport";
 import type { Session } from "../../lib/types";
 import { cx, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -65,11 +66,13 @@ function sessionIn(s: State, mid: string, sid: string): Session | undefined {
   return (s.sessions[mid] ?? []).find((x) => x.session_id === sid) ?? s.sessionSummaries.find((x) => x.machine_id === mid && x.session_id === sid);
 }
 
-/** "last active 3 minutes ago", from the Agent's latest step or update; undefined without either. */
-export function lastActive(session: Pick<Session, "activity_at" | "updated_at"> | undefined, now = Date.now()): string | undefined {
+/** "last active 3 minutes ago", from the Agent's latest step or update; undefined without either. `compact`: a phone's
+ *  narrow card, where the time alone follows the history mark ("3 min. ago"). */
+export function lastActive(session: Pick<Session, "activity_at" | "updated_at"> | undefined, now = Date.now(), compact = false): string | undefined {
   const at = session?.activity_at || session?.updated_at;
   const ts = at ? Date.parse(at) : NaN;
   if (!Number.isFinite(ts)) return undefined;
+  if (compact) return ago(at, now, "short") || undefined;
   if (now - ts < 45_000) return t("assistant-tasks.handoff_active_now");
   const when = ago(at, now);
   return when ? t("assistant-tasks.handoff_last_active", { when }) : undefined;
@@ -88,7 +91,8 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
     else if (todo) leaveChat(taskRoute(todo));
   };
   const state = session ? stateOf(session) : undefined;
-  const active = lastActive(session);
+  const phone = useMedia(PHONE);
+  const active = lastActive(session, Date.now(), phone);
   const meta = agent ? (
     <>
       {active ? (
@@ -97,7 +101,7 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
           <span className="truncate text-[12px] leading-4 text-ink-2">{active}</span>
         </>
       ) : (
-        <span className="truncate text-[12px] leading-4 text-ink-3 italic">{t("assistant-tasks.handoff_not_active")}</span>
+        <span className="truncate text-[12px] leading-4 text-ink-3">{t("assistant-tasks.handoff_not_active")}</span>
       )}
       {state && (
         <>
@@ -110,15 +114,15 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
       )}
     </>
   ) : failure ? (
-    <span className="truncate text-[12px] leading-4 text-red italic">{t("assistant-tasks.start_failed", { error: failure })}</span>
+    <span className="truncate text-[12px] leading-4 text-red">{t("assistant-tasks.start_failed", { error: failure })}</span>
   ) : handoff.ended ? (
-    <span className="truncate text-[12px] leading-4 text-ink-3 italic">{todo ? t("assistant-tasks.handoff_closed") : t("assistant-tasks.handoff_gone")}</span>
+    <span className="truncate text-[12px] leading-4 text-ink-3">{todo ? t("assistant-tasks.handoff_closed") : t("assistant-tasks.handoff_gone")}</span>
   ) : (
-    <span className="truncate text-[12px] leading-4 text-ink-3 italic">{t("assistant-tasks.starting_agent")}</span>
+    <span className="truncate text-[12px] leading-4 text-ink-3">{t("assistant-tasks.starting_agent")}</span>
   );
   const body = (
     <>
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-field transition-colors duration-150 group-hover:bg-ink">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-field sm:size-9 transition-colors duration-150 group-hover:bg-ink">
         <Icon name="cornerDownRight" size={18} stroke={2} className="text-ink transition-colors duration-150 group-hover:text-surface" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -143,7 +147,8 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
       )}
     </>
   );
-  const look = "flex w-full min-w-0 items-center gap-3.5 rounded-xl border border-line bg-surface p-4 text-left";
+  // cindy's 16 px padding and 14 px gap; a phone's narrower card gives them back to the words
+  const look = "flex w-full min-w-0 items-center gap-3 rounded-xl border border-line bg-surface p-3 text-left sm:gap-3.5 sm:p-4";
   const data = { "data-handoff-card": agent ? `${agent.mid}/${agent.sid}` : todo ? `todo:${todo}` : handoff.key };
   if (!interactive) return <div {...data} className={look}>{body}</div>;
   return (

@@ -1383,11 +1383,11 @@ function FailedTaskRow({ rowKey, todo }: { rowKey: string; todo: Todo }) {
       </div>
       {why && <div className="truncate pl-6 text-xs text-red" title={why}>{why}</div>}
       <div className="flex items-center gap-4 pl-6 text-[12.5px]">
-        <button type="button" disabled={retrying} onClick={() => retryTaskNow(todo)} className="inline-flex items-center gap-1 whitespace-nowrap font-semibold text-accent hover:underline disabled:opacity-50 disabled:hover:no-underline">
+        <button type="button" disabled={retrying} onClick={() => retryTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-accent hover:underline disabled:opacity-50 disabled:hover:no-underline">
           <Icon name="retry" size={12} />
           {retrying ? t("assistant-tasks.retrying") : t("assistant-tasks.retry")}
         </button>
-        <button type="button" onClick={() => removeTaskNow(todo)} className="inline-flex items-center gap-1 whitespace-nowrap font-semibold text-red hover:underline">
+        <button type="button" onClick={() => removeTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-red hover:underline">
           <Icon name="trash" size={12} />
           {t("assistant-tasks.remove")}
         </button>

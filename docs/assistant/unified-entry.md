@@ -366,7 +366,7 @@ web, a task the main chat dispatched is a page you go to, never a panel beside t
   - an Agent that belongs to no task opens its own page.
   - `/s/…` and `/todos?id=…` links in a reply open those pages at every width.
 - **The way back.** The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
-- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`. iOS and Android keep the dispatched line and task details for now (follow-up issue linked from #5096).
+- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`. iOS and Android keep the dispatched line and task details for now (#5110).
 
 ### Task board
 
