@@ -1,5 +1,15 @@
 # Lessons: web UI and interactions
 
+## Profile selections do not follow the catalog revision (#4528)
+
+The model-profile revision versions definitions, not the active selection or rollback. Retire earlier reads, errors,
+and authentication side effects when a newer read, action, manager generation, or credential generation takes over.
+An event received while a switch is pending needs a read after that write settles; its earlier snapshot cannot establish
+the final server state. Admit one profile write per manager across view and credential changes, because ignoring an old
+response cannot undo an already dispatched write. After it settles, refresh the current view and keep later selections
+and action errors intact. Exercise the mounted component and real API client with deferred synthetic responses, including
+old hubs without a revision and current versus retired authentication failures.
+
 ## Lazy features can add shared startup bookkeeping (#4597)
 
 The file-mutation UI loads lazily, while its credential-owner generation is shared with authentication at startup.
@@ -854,6 +864,8 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 `URL.port` is empty for both an implicit port and an explicitly written HTTP `:80` or HTTPS `:443`. When recognizing links to an Agent's dev server, retain explicit authority-port intent from the original text after validating its URL, protocol and host. Do not infer a scheme default for a URL with no port, or borrow a colon from credentials, a path, query or fragment. Regress the public helper, reply chips and click routing together; keep hub-owned pages and preview capability/session/folder checks ahead of opening a preview. Recognition alone does not establish HTTPS preview transport support.
 
 For reply tokenization (#4498), distinguish a bracketed IPv6 authority from surrounding Markdown brackets. A direct URL helper can accept the address while the prose tokenizer drops it, leaving no chip. Exercise scheme links, Markdown/autolinks and existing bare forms through the public chip renderer as well as the helper; keep URL/host admission and delimiter boundaries unchanged.
+
+An HTTP(S) URL also owns addresses embedded in its path, query or fragment (#4716). Keep balanced parentheses/brackets in that envelope and end it at an unmatched closing delimiter; otherwise a foreign URL can produce a local chip and port probe. Apply ownership to both scheme and bare candidates. Regress a genuinely separate bare address immediately after a Markdown link, not just whitespace-separated examples; a blanket until-whitespace mask would hide it too. Leave host/port validation and preview transport at their existing owners.
 
 ## Connection tests must use the form's credential choice (#1903)
 

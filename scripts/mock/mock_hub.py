@@ -1048,6 +1048,44 @@ if os.environ.get("MOCK_ROW_EDGES"):
         sess("server", ROW_NOSOURCE, "核对看板的筛选条件", "/home/me/code/report", "working", "working", "edges", 8, "nosource", 3, 6,
              "条件都对上了。", pane_id=None),
     ]
+# MOCK_PASEO=1: a computer whose engine is Paseo, as its bridge lists it (docs/integrations/paseo.md): one project, its
+# main checkout and two worktree workspaces in one space, each agent a row of its own that names its workspace
+# (slot_name without a slot_id). One agent created two others: the one that works names it as its parent (is_subagent,
+# parent_session_id), the one that waits for the user is listed without a parent while it waits, and both are its
+# background work. Its Codex agent's thread has a subagent of its own under it.
+PASEO_LEAD = "9a5e0000-0000-4000-8000-000000000002"
+PASEO_ASKS = "paseo-9a5e0000-0000-4000-8000-000000000003"
+PASEO_CODEX = "paseo-9a5e0000-0000-4000-8000-000000000004"
+if os.environ.get("MOCK_PASEO"):
+    _paseo_root = "/home/me/code/app"
+    def _paseo(sid, title, workspace, tree, branch, status, state, minutes, last, agent="claude", **kw):
+        cwd = _paseo_root if tree is None else "/home/me/.paseo/worktrees/1a2b3c4d/" + tree
+        row = dict(space_kind="paseo", space_id="prj_app", space_name="app", space_index=None, slot_id=None, slot_name=workspace,
+                   slot_index=None, pane_id=None, tab_id=None, workspace_id=None, host="paseo",
+                   source_kind="runtime", source_instance_id="paseo", repo_root=_paseo_root, worktree=cwd, workspace_cwd=cwd,
+                   branch=branch, launcher="claude" if agent == "claude" else "codex", started_by_persona=False,
+                   capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False})
+        row.update(kw)
+        return sess("server", sid, title, cwd, status, state, "", 0, "", 0, minutes, last, agent=agent, **row)
+    SESSIONS += [
+        _paseo("9a5e0000-0000-4000-8000-000000000001", "Sort the new bug reports", "Triage", None, "main", "done", "idle", 50,
+               "Sorted into three groups; two look like duplicates."),
+        _paseo(PASEO_LEAD, "Rework the login flow", "Fix the login flow", "brave-fox", "fix/login", "done", "working", 4,
+               "Two agents are checking the change.", background_working=True,
+               background=[{"id": PASEO_ASKS, "kind": "agent", "description": "Add a remember-me option", "started_at": ago(minutes=5)},
+                           {"id": PASEO_CODEX, "kind": "agent", "description": "Review the session handling", "started_at": ago(minutes=3)}]),
+        _paseo(PASEO_ASKS, "Add a remember-me option", "Fix the login flow", "brave-fox", "fix/login", "blocked", "needs_you", 1,
+               "May I run the migration on the test database?", pending_interactions=1),
+        _paseo(PASEO_CODEX, "Review the session handling", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
+               "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD),
+        _paseo("019a5e00-0000-7000-8000-000000000005", "Trace the refresh failure", "Fix the login flow", "brave-fox", "fix/login",
+               "working", "working", 0, "Following the 401 through the retry.", agent="codex", agent_name="Codex CLI",
+               source_kind="codex_history", source_thread_id="019a5e00-0000-7000-8000-000000000005", source_instance_id=None, host=None,
+               slot_name=None, is_subagent=True, parent_session_id=PASEO_CODEX, root_session_id=PASEO_LEAD,
+               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True}),
+        _paseo("9a5e0000-0000-4000-8000-000000000006", "Profile the CSV parser", "Speed up the importer", "calm-owl", "perf/importer",
+               "done", "unread", 12, "The parser is three times faster on the sample files."),
+    ]
 # MOCK_ORCA_CHILDREN=1: an Orca worktree with three child worktrees (#2073, parent_space_id), one of them with a child of
 # its own: the web folds them under the parent and sums their states on its row.
 if os.environ.get("MOCK_ORCA_CHILDREN"):
@@ -1322,7 +1360,8 @@ if os.environ.get("MOCK_AGENT_MARKS"):
                              "好的，我先看一下。", agent=agent, **extra))
 
 # MOCK_DESKTOP_APPS=1 (#3756): someone who works in the desktop apps on the MacBook, for the Agents list's By App. Claude's
-# desktop app and the Codex App each have running and offline sessions (the Codex App's chats in its projects), and two run
+# desktop app and the Codex App each have running and offline sessions (the Codex App's chats in its projects, Claude's in their
+# folders, one in the home directory: Other), and two run
 # from a terminal. Fields as the node sends them (claudebg.go, codex_registry.go).
 if os.environ.get("MOCK_DESKTOP_APPS"):
     DESKTOP_APPS = [  # (session id, agent, surface, title, status, state, project, minutes ago)
@@ -1335,15 +1374,19 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
         ("d3a0e7a0-0000-4000-8000-000000000007", "codex", "desktop", "写一个图片压缩脚本", "offline", "offline", "tools", 2880),
         ("d3a0e7a0-0000-4000-8000-000000000008", "claude", "cli", "跑一遍集成测试", "working", "working", "web-app", 8),
         ("d3a0e7a0-0000-4000-8000-000000000009", "codex", "cli", "清理旧的迁移文件", "offline", "offline", "billing", 900),
+        ("d3a0e7a0-0000-4000-8000-00000000000a", "claude", "desktop", "随手问个快捷键", "offline", "offline", "", 180),  # home: Other
+        # A Codex App chat in no project, in the folder the App makes for one: Other.
+        ("d3a0e7a0-0000-4000-8000-00000000000b", "codex", "desktop", "查一下这个报错", "offline", "offline", "~Documents/Codex/2026-11-06/w-i", 240),
     ]
     for sid, agent, surface, title, status, state, project, mins in DESKTOP_APPS:
         kw = dict(NO_SPACE, agent_surface=surface, started_by_persona=False)
+        cwd = "/Users/me/" + project[1:] if project.startswith("~") else f"/Users/me/code/{project}" if project else "/Users/me"
         if surface == "desktop" and agent == "codex":
-            kw.update(space_kind="codex_app", space_id=f"codex-project:/Users/me/code/{project}", space_name=project,
+            kw.update(space_kind="codex_app", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1],
                       agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True})
         elif surface == "desktop" and status != "offline":
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
-        SESSIONS.append(sess("macbook", sid, title, f"/Users/me/code/{project}", status, state, "", 0, "", 0, mins,
+        SESSIONS.append(sess("macbook", sid, title, cwd, status, state, "", 0, "", 0, mins,
                              "好的，我先看一下。", agent=agent, **kw))
     # The CSV chat's subagents (thread_spawn): the node lists each with its chat (codex_registry.go); the Agents list puts
     # them under that chat's Subtasks, as the Codex App does.
@@ -6070,6 +6113,14 @@ if os.environ.get("MOCK_OPENCODE"):
          "cwd": "/home/me/code/parser", "kind": "permission", "agent": "opencode", "agent_label": "opencode",
          "created_at": ago(minutes=3), "expires_at": later(minutes=27), "tool_name": "Bash", "tool_use_id": "call_rm_build",
          "summary": "rm -rf build", "tool_input": {"command": "rm -rf build"}, "always_label": "总是允许 rm *"})
+
+# MOCK_PASEO=1: the agent that waits for the user asks before it runs a command.
+if os.environ.get("MOCK_PASEO"):
+    INTERACTIONS.append(
+        {"id": "paseo_migrate_test", "machine_id": "server", "session_id": PASEO_ASKS, "session_title": "Add a remember-me option",
+         "cwd": "/home/me/.paseo/worktrees/1a2b3c4d/brave-fox", "kind": "permission", "agent": "claude",
+         "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
+         "summary": "npm run migrate -- --env test", "tool_input": {"command": "npm run migrate -- --env test"}})
 
 # Keep the exported demo fixtures unchanged; only the HTTP mock serves the expanded request inbox.
 # A conversation permission and remembered grants for scope/revocation UI checks (#5867).
@@ -10972,6 +11023,21 @@ if os.environ.get("MOCK_SELECT_TEXT") == "1":
     ITEMS[SELECT_RICH] = [
         it("user", "text", 3, text="三个页面的请求怎么合？"),
         it("assistant", "text", 2, text=SELECT_RICH_REPLY),
+    ]
+
+# MOCK_REPLY_BLOCKS=1: a reply's code blocks, inline code and quotes as Telegram draws them (#2984): a fence with its
+# language and one without, inline code, a short quote and a long one that folds.
+REPLY_BLOCKS = "a1f3c2d4-0000-4000-8000-0000005e1ec9"
+if os.environ.get("MOCK_REPLY_BLOCKS") == "1":
+    SESSIONS.append(sess("macbook", REPLY_BLOCKS, "代码和引用", "/Users/me/code/weather", "done", "read", "weather", 1, "blocks", 2, 1, "好"))
+    ITEMS[REPLY_BLOCKS] = [
+        it("user", "text", 3, text="首页的缓存怎么清？"),
+        it("assistant", "text", 2, text="先跑 `npm run build`，再清掉 `.cache` 目录（改在 `server/handlers.go`）：\n\n```ts\nexport async function clear(page: string) {\n"
+                                        "  await caches.delete(`page:${page}`)\n  return reload(page)\n}\n```\n\n不带语言的也一样：\n\n```\n"
+                                        "rm -rf .cache && npm run build\n```\n\n> 缓存键改了以后，旧缓存要等一天才过期。\n\n"
+                                        "> 上线前请确认三件事：一是首页的请求已经合并，跑过一遍回归测试；二是价格页换成了新的缓存键，"
+                                        "旧键在 CDN 上的副本会在一天内过期；三是文档页最后做，它的请求最多，改动的风险最低。"
+                                        "如果中途发现首屏时间反而变长，先回滚价格页，再看是不是缓存没命中。\n\n有问题再找我。"),
     ]
 
 # MOCK_PORTS=1: an agent running a dev server (docs/operations/ports.md): its session lists the port, its reply links it (and a
@@ -16353,6 +16419,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
