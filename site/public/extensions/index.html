@@ -667,8 +667,8 @@ dialog[open]::backdrop{animation:fade .28s ease both}
     for (const t of [...e.categories, ...e.tags]) tags.append(el('span', 'tag', t));
     $('d-search').textContent = `「${e.name}」`;
     const act = $('d-act'); act.textContent = '';
-    if (e.homepage) {
-      const a = el('a', 'btn btn-paper', '看源码和说明'); a.href = e.homepage; a.target = '_blank'; a.rel = 'noopener';
+    if (e.source) {
+      const a = el('a', 'btn btn-paper', '看源码和说明'); a.href = e.source; a.target = '_blank'; a.rel = 'noopener';
       act.append(a);
     }
     if (!dlg.open) { lastFocus = document.activeElement; dlg.showModal(); }
