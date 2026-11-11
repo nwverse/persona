@@ -344,7 +344,8 @@ export function panelSections({ providers, state, view: chosen, query, favorites
       const model: PanelModel = { id: typed, name: typed, efforts: [], custom: true };
       rows.push({ key: `typed:${p.id}\n${typed}`, kind: "typed", provider: p, model, setup: { provider: p.id, model: typed }, current: false, customized: false });
     }
-    if (rows.length) out.push({ key: `provider:${p.id}`, kind: "provider", provider: p, rows });
+    // a list on its way under rows already shown (the running model's while its list is read): the spinner too
+    if (rows.length) out.push({ key: `provider:${p.id}`, kind: "provider", provider: p, rows, ...(p.loading ? { loading: true } : {}) });
   }
   return out;
 }
@@ -412,7 +413,8 @@ export function effortColorAt(stops: string[], position: number): string {
 
 /** A context window as the flyout writes it: 200K, 1M. */
 export function contextSize(tokens: number): string {
-  if (tokens >= 1_000_000) return `${+(tokens / 1_000_000).toFixed(1)}M`;
+  // 999,600 rounds to 1000K: that is 1M
+  if (tokens >= 1_000_000 || Math.round(tokens / 1_000) >= 1_000) return `${+(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
   return String(tokens);
 }

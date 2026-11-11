@@ -45,14 +45,14 @@ export function SessionModelPanel({ session, anchor, onClose }: { session: Sessi
     if (!steps || !(await apply(steps))) return false;
     // a switch waits for the next message: say so, in the words the pill now shows
     const next = config.provider !== own && steps.length ? pendingView(latest.current, (name) => modelList(mid, name)) : null;
-    if (next) toast(t("chat-modelpill.switch_scheduled", { target: `${next.provider} · ${next.model}` }), "ok");
+    if (next) toast(t("chat-modelpanel.switch_scheduled", { target: `${next.provider} · ${next.model}` }), "ok");
     return true;
   };
   const onApplyCurrent = async (patch: { effort?: string; fast?: boolean }) => {
     const s = latest.current;
     const steps: ModeStep[] = [];
     if (patch.effort && patch.effort !== s.effort) steps.push({ effort: patch.effort });
-    const speed = speedStep(s, patch.fast);
+    const speed = speedStep(s, patch.fast, true);
     if (speed) steps.push(speed);
     return apply(steps);
   };

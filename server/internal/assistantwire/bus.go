@@ -95,6 +95,10 @@ const (
 	// CodeMeetingEnded: a message into a meeting's room that ended (docs/assistant/meeting-minutes.md "Messages from
 	// elsewhere"): the hub answers 409 meeting_ended, and the apps write in the follow-up instead.
 	CodeMeetingEnded = "meeting_ended"
+	// CodeLauncherOtherKind: a launcher of another agent kind picked for a message in an existing assistant
+	// conversation (Data: conversation_agent, launcher, launcher_agent, delivered "none"): the hub answers 409, nothing
+	// was sent, and the conversation keeps its agent (docs/assistant/assistant.md, #4662).
+	CodeLauncherOtherKind = "launcher_other_kind"
 )
 
 // HTTPRequest is http.request's params: an app's request on one of Routes, with an escaped URL path (header without

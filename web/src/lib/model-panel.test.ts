@@ -290,6 +290,7 @@ describe("geometry and colors", () => {
   it("writes context windows short", () => {
     expect(contextSize(200_000)).toBe("200K");
     expect(contextSize(1_000_000)).toBe("1M");
+    expect(contextSize(999_600)).toBe("1M");
     expect(contextSize(272_000)).toBe("272K");
     expect(contextSize(1_500_000)).toBe("1.5M");
   });

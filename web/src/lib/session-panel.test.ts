@@ -46,17 +46,17 @@ describe("another launcher of the engine", () => {
     expect(work.locked).toBeUndefined();
     expect(work.typable).toBe(true);
     expect(work.models!.map((m) => m.id)).toEqual(["default", "glm-5.3"]);
-    expect(provider(session(), "work", {}).unavailable).toBe(t("chat-modelpill.other_provider"));
+    expect(provider(session(), "work", {}).unavailable).toBe(t("chat-modelpanel.other_provider"));
     // the models that switch at once are still the session's own launcher's
     expect(sessionPanel(session(), launchers, listOf, on).state.recommended).toEqual(["claude"]);
   });
 
   it("another engine, a Codex thread and an agent that can't switch its model keep their reasons", () => {
-    expect(provider(session(), "cx").unavailable).toBe(t("chat-modelpill.other_engine", { from: "Claude Code", to: "Codex" }));
+    expect(provider(session(), "cx").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
     const codex = session({ agent: "codex", source_kind: "codex_app_server", launcher: "cx", capabilities: { send: true }, model: "gpt-5.5", efforts: ["low", "high"] });
-    expect(provider(codex, "cx").unavailable).toBe(t("chat-modelpill.model_fixed", { agent: "Codex" }));
-    expect(provider(codex, "work").unavailable).toBe(t("chat-modelpill.other_engine", { from: "Codex", to: "Claude Code" }));
-    expect(provider(session({ status: "offline", state: "offline" }), "work").unavailable).toBe(t("chat-modelpill.other_provider"));
+    expect(provider(codex, "cx").unavailable).toBe(t("chat-modelpanel.model_fixed", { agent: "Codex" }));
+    expect(provider(codex, "work").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" }));
+    expect(provider(session({ status: "offline", state: "offline" }), "work").unavailable).toBe(t("chat-modelpanel.other_provider"));
   });
 
   it("one that fixes its own model offers what it runs by default, only", () => {
@@ -71,7 +71,7 @@ describe("a switch that waits for the next message", () => {
   it("is the panel's pending setup, with the warning note; none for the session's own launcher", () => {
     const { state } = sessionPanel(session({ pending_switch: { launcher: "work", model: "glm-5.3", effort: "low", at: "2026-11-12T10:00:00Z" } }), launchers, listOf, on);
     expect(state.pending).toEqual({ provider: "work", model: "glm-5.3", effort: "low" });
-    expect(state.note).toBe(t("chat-modelpill.pending_note", { provider: "work" }));
+    expect(state.note).toBe(t("chat-modelpanel.pending_note", { provider: "work" }));
     // no model picked: the launcher's default entry
     expect(sessionPanel(session({ pending_switch: { launcher: "work" } }), launchers, listOf, on).state.pending).toEqual({ provider: "work", model: "default" });
     const none = sessionPanel(session({ pending_switch: { launcher: "claude" } }), launchers, listOf, on).state;

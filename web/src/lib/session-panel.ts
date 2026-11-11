@@ -77,6 +77,9 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
     if (e.list === undefined) {
       if (e.error) p.error = e.error;
       else p.loading = true;
+      // the model it runs stays there while its list is read or couldn't be: its flyout (effort, Fast, ultracode) works
+      // as the old popover's tabs did with no list
+      if (mine && s.model) p.models = [panelModel({ id: s.model, name: modelLabel(s.model) }, kind, true, s, false)];
     } else {
       let models = (e.list?.models ?? []).map((m) => panelModel(m, kind, mine && m === row, s));
       // a launcher that fixes its own --model takes no model with a switch: its default entry, only
@@ -88,9 +91,9 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
     if (other) {
       if (typedModelOffered(kind, e.list)) p.typable = true;
     } else if (!mine) {
-      p.unavailable = kind === engine ? t("chat-modelpill.other_provider") : t("chat-modelpill.other_engine", { from: agentName(engine), to: agentName(kind) });
+      p.unavailable = kind === engine ? t("chat-modelpanel.other_provider") : t("chat-modelpanel.other_engine", { from: agentName(engine), to: agentName(kind) });
     } else if (!modelSwitch) {
-      p.unavailable = t("chat-modelpill.model_fixed", { agent: agentName(engine) });
+      p.unavailable = t("chat-modelpanel.model_fixed", { agent: agentName(engine) });
     } else {
       if (e.list?.locked) p.locked = t("composer.locked");
       if (typedModelOffered(engine, e.list)) p.typable = true;
@@ -107,7 +110,7 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
   const ps = s.pending_switch;
   if (ps?.launcher && ps.launcher !== own) {
     state.pending = cleanSetup({ provider: ps.launcher, model: ps.model || defaultModel(listOf(ps.launcher).list?.models ?? [])?.id || "", effort: ps.effort });
-    state.note = t("chat-modelpill.pending_note", { provider: ps.launcher });
+    state.note = t("chat-modelpanel.pending_note", { provider: ps.launcher });
   }
   const busy = modelSwitch ? modelBusy(s) : "";
   if (busy) state.busy = busy;
@@ -137,7 +140,8 @@ export function pickPlan(s: Session, config: PanelConfig, listOf: (launcher: str
   if (!same) steps.push({ model: config.model });
   const effort = config.effort || (sessionEngine(s) === "agy" ? row?.default_effort : undefined);
   if (effort && effort !== s.effort) steps.push({ effort });
-  const speed = speedStep(s, config.fast);
+  // a saved setup without Fast is Standard (cleanSetup drops `fast: false`)
+  const speed = speedStep(s, Boolean(config.fast));
   if (speed) steps.push(speed);
   return steps;
 }
@@ -157,9 +161,11 @@ function switchPlan(s: Session, config: PanelConfig, list: LauncherModels | null
   return [step];
 }
 
-/** The speed a setup asks for (Codex's service tier): only where the thread has a Fast speed, and only when it changes. */
-export function speedStep(s: Session, fast: boolean | undefined): ModeStep | undefined {
+/** The speed a setup asks for (Codex's service tier): only where the thread has a Fast speed, and (a pick) only when it
+ *  changes. `always`: the flyout's switch, sent whatever the session says: the session learns a speed only from the push
+ *  after the agent took it, so Fast on and straight back off must send the second tap too. */
+export function speedStep(s: Session, fast: boolean | undefined, always = false): ModeStep | undefined {
   if (fast === undefined || !hasFast(s)) return undefined;
   const tier = fast ? "priority" : "default";
-  return tier !== (s.service_tier ?? "default") ? { service_tier: tier } : undefined;
+  return always || tier !== (s.service_tier ?? "default") ? { service_tier: tier } : undefined;
 }

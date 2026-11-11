@@ -222,7 +222,7 @@ describe("an Agent's pill", () => {
     expect(panel.props!.anchor).toBe(pill());
     expect(panel.props!.providers.map((p) => p.id)).toEqual(["claude", "gateway", "cx"]);
     expect(panel.props!.state).toMatchObject({ current: { provider: "gateway", model: "opus", effort: "high" }, recommended: ["gateway"] });
-    expect(provider("cx").unavailable).toBe(t("chat-modelpill.other_engine", { from: "Claude Code", to: "Codex" }));
+    expect(provider("cx").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
     // a second click closes it
     await act(async () => pill()!.click());
     expect(host.querySelector('[data-testid="panel"]')).toBeNull();
@@ -300,7 +300,7 @@ describe("an Agent's pill", () => {
     await show(codex);
     expect(requestModelPicker(`mac-${machine}/s1`)).toBe(false); // no model switch: `/model` goes as text
     await open();
-    expect(provider("cx").unavailable).toBe(t("chat-modelpill.model_fixed", { agent: "Codex" }));
+    expect(provider("cx").unavailable).toBe(t("chat-modelpanel.model_fixed", { agent: "Codex" }));
     expect(panel.props!.state.recommended).toEqual([]);
     expect(provider("cx").models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], fast: true });
     expect(await act(() => panel.props!.onApplyCurrent!({ fast: true }))).toBe(true);
@@ -327,7 +327,7 @@ describe("an Agent's pill", () => {
     expect(await act(() => panel.props!.onPick({ provider: "claude", model: "haiku", effort: "low" }))).toBe(true);
     expect(modes()).toEqual([{ launcher: "claude", model: "haiku", effort: "low" }]);
     expect(getSession(s.machine_id, "s1")?.pending_switch).toMatchObject({ launcher: "claude", model: "haiku", effort: "low" });
-    expect(toast).toHaveBeenCalledWith(t("chat-modelpill.switch_scheduled", { target: "claude · Haiku 5.5" }), "ok");
+    expect(toast).toHaveBeenCalledWith(t("chat-modelpanel.switch_scheduled", { target: "claude · Haiku 5.5" }), "ok");
     // the pill shows it waiting
     act(() => root.render(<AgentModelPill session={getSession(s.machine_id, "s1")!} />));
     await flush();
@@ -349,7 +349,7 @@ describe("an Agent's pill", () => {
     expect(pill()!.getAttribute("data-model-pill")).toBe("pending");
     expect(pill()!.textContent).toContain("Haiku 5.5");
     await open();
-    expect(panel.props!.state.note).toBe(t("chat-modelpill.pending_note", { provider: "claude" }));
+    expect(panel.props!.state.note).toBe(t("chat-modelpanel.pending_note", { provider: "claude" }));
     expect(panel.props!.state.pending).toMatchObject({ provider: "claude", model: "haiku" });
     expect(await act(() => panel.props!.onPick({ provider: "gateway", model: "opus", effort: "high" }))).toBe(true);
     expect(modes()).toEqual([{ launcher: "gateway" }]);
