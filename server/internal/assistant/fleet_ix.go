@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -180,7 +181,8 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	}
 	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
 	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
-	report := ix.Kind == proto.IxPermission && ix.ToolName == "mcp__persona__report_to_supervisor"
+	report := ix.Kind == proto.IxPermission && (ix.ToolName == "mcp__persona__report_to_supervisor" ||
+		ix.ToolName == "mcp__"+compat.MCPServer+"__report_to_supervisor")
 	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
 		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
 			plans, err := s.conversationPlans(ctx, todo.Origin)

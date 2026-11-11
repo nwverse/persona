@@ -52,6 +52,11 @@ const assistantIdleCompact = standardWindow / 4 * 3
 // schedule_followup waited for a tap on the phone, so a follow-up firing at night just stalled.
 const assistantAllowedTools = "mcp__persona"
 
+// assistantBuiltinTools keeps the headless assistant's file, shell, web, skill and sub-agent capabilities without
+// the software-development, notebook, worktree, LSP, workflow and Claude-specific scheduling surfaces. Persona MCP
+// tools are not affected by this built-in allow-list; scheduling and user questions use their Persona tools instead.
+const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch"
+
 type assistantProc struct {
 	id       string
 	agent    string // "claude" (stream-json) or "codex" (app-server, assistant_codex.go)
