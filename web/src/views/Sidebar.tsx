@@ -548,12 +548,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todosLoaded = useStore((s) => s.todosLoaded);
   const launches = useStore((s) => Object.values(s.launches).filter((launch) => launch.phase !== "ready"));
   const [dimFilters, setDimFilters] = useState<AgentDimensionFilters>(DEFAULT_DIMENSION_FILTERS);
-  const [chatList, setChatList] = useState<boolean>(() => {
-    const saved = localStorage.getItem("persona.agentChatList");
-    if (saved === "1") return true;
-    if (saved === "0") return false;
-    return !foldable && !storedValue("persona.agentGrouping");
-  });
+  // chat-list rows only for someone who picked them in the Filter menu; the grouped list is the default (#4397)
+  const [chatList, setChatList] = useState<boolean>(() => localStorage.getItem("persona.agentChatList") === "1");
   const toggleChatList = () => {
     setChatList((prev) => {
       const next = !prev;
