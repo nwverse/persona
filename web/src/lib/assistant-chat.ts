@@ -128,6 +128,15 @@ export function usePickedEffort(key: string): string | undefined {
   return useSyncExternalStore(subscribe, () => efforts.get(key));
 }
 
+/** Drop key's whole pick, launcher, model and effort together: none of it outlives the others (the new-conversation
+ *  page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
+export function dropPick(key: string) {
+  picks.delete(key);
+  models.delete(key);
+  efforts.delete(key);
+  listeners.forEach((l) => l());
+}
+
 function subscribe(l: () => void) {
   listeners.add(l);
   return () => {

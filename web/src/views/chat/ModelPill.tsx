@@ -11,7 +11,7 @@ import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
 import { effortTitle } from "../../lib/session-actions";
-import { launcherOffered, pickLauncher, usePickedEffort, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
+import { dropPick, launcherOffered, usePickedEffort, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import { assistantLaunchers, modelList, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, type PillSetup } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
@@ -213,10 +213,11 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   useEffect(() => {
     if (mid) void readAssistantLaunchers(mid);
   }, [mid]);
-  // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default
+  // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
+  // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {
     if (!picked || (session && kept) || launcherOffered(info?.launchers ?? null, picked)) return;
-    pickLauncher(key, undefined);
+    dropPick(key);
     toast(t("chat-modelpill.pick_dropped", { launcher: picked }), "info");
   }, [key, picked, info, session, kept]);
   const setup = assistantSetup(chat, info);
