@@ -101,6 +101,9 @@ const output = (async () => {
       continue
     }
     emit(msg)
+    if (msg.type === 'system' && msg.subtype === 'init' && options.tools?.length === 0 && options.mcpServers?.persona?.type === 'sdk') {
+      log(`guest tools: ${JSON.stringify({ tools: msg.tools ?? [], mcp_servers: msg.mcp_servers ?? [] })}`)
+    }
     if (msg.type === 'result' && turns > 0) {
       turns--
       closeWhenIdle()

@@ -500,7 +500,7 @@ func watchAssistantStderr(logger *log.Logger, p *assistantProc, stderr io.ReadCl
 	sc := bufio.NewScanner(stderr)
 	for sc.Scan() {
 		l := sc.Text()
-		if strings.Contains(l, "rror") {
+		if strings.Contains(l, "rror") || strings.Contains(l, "agent-sdk bridge: guest tools:") {
 			logger.Printf("assistant %s: %s", id[:8], l)
 		}
 		if clean := strings.TrimSpace(ansiRe.ReplaceAllString(l, "")); clean != "" {
