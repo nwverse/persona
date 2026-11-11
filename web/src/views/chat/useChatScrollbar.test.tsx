@@ -18,7 +18,7 @@ beforeEach(() => {
   root = createRoot(host);
   sc = document.createElement("div");
   Object.defineProperties(sc, { offsetWidth: { value: 500 }, clientWidth: { value: 490 } });
-  sc.getBoundingClientRect = () => ({ right: 500 } as DOMRect);
+  sc.getBoundingClientRect = () => ({ right: 500, top: 0, bottom: 600 } as DOMRect);
   commits = 0;
   act(() => root.render(<StrictMode><Profiler id="scrollbar" onRender={() => commits++}><Harness el={sc} /></Profiler></StrictMode>));
 });
@@ -61,6 +61,16 @@ describe("native conversation scrollbar", () => {
     expect(sc.dataset.scrollbarVisible).toBeUndefined();
     mouse("mousedown", 495);
     window.dispatchEvent(new Event("blur"));
+    wait();
+    expect(sc.dataset.scrollbarVisible).toBeUndefined();
+  });
+  it("fades after a native drag releases outside without any intervening mousemove", () => {
+    mouse("mousedown", 495);
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 400, clientY: 200 }));
+    wait();
+    expect(sc.dataset.scrollbarVisible).toBeUndefined();
+    mouse("mousedown", 495);
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 495, clientY: 700 }));
     wait();
     expect(sc.dataset.scrollbarVisible).toBeUndefined();
   });

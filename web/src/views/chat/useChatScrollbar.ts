@@ -21,9 +21,10 @@ export function useChatScrollbar(scroller: HTMLDivElement | null) {
     };
     const scroll = () => { show(); fade(); };
     const move = (event: MouseEvent) => {
-      const right = scroller.getBoundingClientRect().right;
+      const bounds = scroller.getBoundingClientRect();
       const edge = Math.max(CHAT_SCROLLBAR.edgeWidth, scroller.offsetWidth - scroller.clientWidth);
-      const next = event.clientX >= right - edge && event.clientX <= right;
+      const next = event.clientX >= bounds.right - edge && event.clientX <= bounds.right
+        && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
       if (next === hovered) return;
       hovered = next;
       if (hovered) show();
@@ -34,7 +35,8 @@ export function useChatScrollbar(scroller: HTMLDivElement | null) {
       move(event);
       if (event.button === 0 && hovered) { dragging = true; show(); }
     };
-    const up = () => { dragging = false; fade(); };
+    // Native thumb drags may suppress mousemove. Recheck the release point rather than retaining stale edge hover.
+    const up = (event: MouseEvent) => { dragging = false; move(event); fade(); };
     const blur = () => { dragging = false; leave(); };
     scroller.dataset.chatScrollbar = "native";
     scroller.addEventListener("scroll", scroll, { passive: true });

@@ -88,6 +88,7 @@ async function run(theme, width, { touch = false, large = false, fallback = fals
     if (!touch) await page.locator(RAIL).waitFor();
     if (large) await page.evaluate(() => document.documentElement.dataset.textSize = "large");
     const sc = page.locator(CHAT);
+    const beforeScroll = await geometry(page);
     await page.mouse.move(width / 2, 300);
     await page.mouse.wheel(0, -800);
     await page.waitForFunction(chat => document.querySelector(chat).scrollTop < document.querySelector(chat).scrollHeight - document.querySelector(chat).clientHeight - 100, CHAT);
@@ -98,7 +99,7 @@ async function run(theme, width, { touch = false, large = false, fallback = fals
       else {
         assert.equal(Math.round(g.right - g.gutter - g.navRight), 16);
         assert.ok(g.contentRight <= g.navLeft - 3, "Text stays clear of the rail even in a narrow panel");
-        const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest("[data-nav-rail]") !== null, [g.right - Math.max(g.gutter / 2, 2), g.top + 50]);
+        const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest("[data-nav-rail]") != null, [g.right - Math.max(g.gutter / 2, 2), g.top + 50]);
         assert.equal(hit, false, "The scrollbar edge cannot hit the rail");
       }
       return g;
@@ -113,7 +114,9 @@ async function run(theme, width, { touch = false, large = false, fallback = fals
       results.screenshots.push(`${name}-idle.png`);
       await check(`${name} quiet fade without layout shift`, async () => {
         const g = await geometry(page);
-        assert.equal(g.gutter, (await sc.evaluate(el => el.offsetWidth - el.clientWidth)));
+        assert.equal(g.gutter, beforeScroll.gutter);
+        assert.equal(g.contentRight, beforeScroll.contentRight);
+        assert.equal(g.navRight, beforeScroll.navRight);
         assert.equal(await sc.evaluate(el => getComputedStyle(el).scrollbarColor), "rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)");
         return { color: "transparent", gutter: g.gutter };
       });
@@ -144,6 +147,15 @@ async function run(theme, width, { touch = false, large = false, fallback = fals
           return { before: middle.scrollTop, after: after.scrollTop };
         });
         await page.mouse.up();
+        await page.mouse.down();
+        await page.mouse.move(x - 90, thumbY - 100, { steps: 10 });
+        await page.mouse.up();
+        // No subsequent pointer movement: Chrome suppresses mousemove during a native thumb drag.
+        await page.waitForFunction(chat => !document.querySelector(chat).dataset.scrollbarVisible, CHAT);
+        await check(`${name} drag release outside clears stale hover`, async () => {
+          assert.equal(await sc.getAttribute("data-scrollbar-visible"), null);
+          return { releaseOutside: true, subsequentPointerMove: false };
+        });
         await page.mouse.move(width / 2, 300);
       }
     } else {
