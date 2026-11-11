@@ -511,7 +511,11 @@ export function createPaseoBridge(deps = {}, options = {}) {
   /** Closing a session is archiving its agent: it stops, and leaves Paseo's list (and this one). */
   async function close(params) {
     const agent = agentFor(params.session_id)
-    await paseo.request('archive_agent_request', { agentId: agent.id })
+    if (params.force && !(agent.pendingPermissions?.length > 0)) throw new RpcError('The Agent is no longer waiting for confirmation', 'agent_busy')
+    // The CLI's archive --force sends this same request; the daemon closes the provider runtime.
+    const res = await paseo.request('archive_agent_request', { agentId: agent.id })
+    if (res?.error) throw new RpcError(`Paseo: ${res.error}`, 'paseo')
+    if (!res?.archivedAt) throw new RpcError('Paseo did not confirm the archive', 'paseo')
     remove(agent.id)
   }
 

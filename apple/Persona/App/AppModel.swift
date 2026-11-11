@@ -199,6 +199,9 @@ final class AppModel {
     var latestAnswerFor: SessionKey?
     /// A hub link's message to land on once its chat shows (HubPageRouting, #2696); taken by that chat.
     var messageJump: MessageJump?
+    /// A refused send's Open Terminal (a dialog holds that session's terminal, #3752): its chat opens the terminal
+    /// and takes it.
+    var terminalAsk: SessionKey?
     /// The phone writes waiting for Allow / Deny, one shown at a time (#4456).
     @ObservationIgnored let phoneConfirmations = PhoneConfirmations()
     /// The one on screen (RootView / MacRootView's alert).
@@ -1096,6 +1099,26 @@ final class AppModel {
             assistantConfig = st
         } catch {
             if showsPage(of: api) { assistantConfig?.mainTasksQuiet = was }
+            show(error)
+        }
+    }
+
+    /// Whether the main conversation folds its background rounds (docs/apple/ios.md "Background rounds"): on until the
+    /// hub says off, an older hub and settings not read yet included.
+    var mainBackgroundFolded: Bool { assistantConfig?.backgroundFolded ?? true }
+
+    /// Settings › Assistant › Fold Background Rounds. Shown at once, put back if the hub says no.
+    func setMainBackgroundFolded(_ on: Bool) async {
+        guard let api, var shown = assistantConfig else { return }
+        let was = shown.mainBackgroundFolded
+        shown.mainBackgroundFolded = on
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(mainBackgroundFolded: on)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.mainBackgroundFolded = was }
             show(error)
         }
     }

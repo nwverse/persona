@@ -4441,7 +4441,8 @@ type KBDetail struct {
 	ID   string `json:"id"`
 	// Where it is on the manager's machine, for its own file tools.
 	Path string `json:"path"`
-	// The entity's own fields (meta.json).
+	// The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+	// Status uses the same locked_fields and provenance as other corrected fields.
 	Meta     json.RawMessage      `json:"meta"`
 	Summary  string               `json:"summary,omitempty"`
 	Log      []string             `json:"log,omitempty"`
@@ -4562,12 +4563,14 @@ type KBUpdateParams struct {
 	Name           string   `json:"name,omitempty"`
 	// A project's: short or long.
 	ProjectKind string `json:"project_kind,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Goal        string `json:"goal,omitempty"`
-	MyRole      string `json:"my_role,omitempty"`
-	Note        string `json:"note,omitempty"`
-	Importance  string `json:"importance,omitempty"`
-	Relevance   *int   `json:"relevance,omitempty"`
+	// People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+	// ignored. Omitted or empty keeps the current status; active restores a person.
+	Status     string `json:"status,omitempty"`
+	Goal       string `json:"goal,omitempty"`
+	MyRole     string `json:"my_role,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Importance string `json:"importance,omitempty"`
+	Relevance  *int   `json:"relevance,omitempty"`
 	// Replaces the tags; an empty list clears them, none keeps them.
 	Tags    []string `json:"tags,omitzero"`
 	Summary string   `json:"summary,omitempty"`

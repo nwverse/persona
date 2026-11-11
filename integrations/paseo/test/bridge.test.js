@@ -579,22 +579,38 @@ test('Paseo restarting: the bridge connects again and keeps the sessions; gone f
   assert.ok(logs.some((l) => /away/.test(l)))
 })
 
-test('a read-only supervisor report runs once without permission or mode updates', async (t) => {
+for (const toolName of ['mcp__persona__report_to_supervisor', 'mcp__jarvis__report_to_supervisor']) {
+  test(`a read-only ${toolName} runs once without permission or mode updates`, async (t) => {
+    const { fake, node, a, rows } = await setup(t)
+    fake.update(a.claude.id, { currentModeId: 'plan' })
+    await until('plan mode', () => rows().find((r) => r.session_id === SID)?.permission_mode === 'plan')
+    node.resolve = (ix) => {
+      assert.equal(ix.kind, 'permission')
+      assert.equal(ix.tool_name, toolName)
+      return { allow: true }
+    }
+    const modesBefore = fake.requestsOf('set_agent_mode_request').length
+    fake.permission(a.claude.id, { id: 'readonly-report', provider: 'claude', name: toolName, kind: 'tool',
+      input: { kind: 'done', text: 'Inspection complete.' },
+      suggestions: [{ type: 'addRules', rules: [{ toolName: toolName }], behavior: 'allow', destination: 'session' },
+        { type: 'setMode', mode: 'bypassPermissions' }] })
+    await until('report response', () => fake.requestsOf('agent_permission_response').length === 1)
+    assert.deepEqual(fake.requestsOf('agent_permission_response')[0].response, { behavior: 'allow' })
+    assert.equal(fake.requestsOf('set_agent_mode_request').length, modesBefore)
+    assert.equal(rows().find((r) => r.session_id === SID)?.permission_mode, 'plan')
+  })
+}
+
+test('forced close cancels a confirmation and retains the Agent on archive failure', async (t) => {
   const { fake, node, a, rows } = await setup(t)
-  fake.update(a.claude.id, { currentModeId: 'plan' })
-  await until('plan mode', () => rows().find((r) => r.session_id === SID)?.permission_mode === 'plan')
-  node.resolve = (ix) => {
-    assert.equal(ix.kind, 'permission')
-    assert.equal(ix.tool_name, 'mcp__persona__report_to_supervisor')
-    return { allow: true }
-  }
-  const modesBefore = fake.requestsOf('set_agent_mode_request').length
-  fake.permission(a.claude.id, { id: 'readonly-report', provider: 'claude', name: 'mcp__persona__report_to_supervisor', kind: 'tool',
-    input: { kind: 'done', text: 'Inspection complete.' },
-    suggestions: [{ type: 'addRules', rules: [{ toolName: 'mcp__persona__report_to_supervisor' }], behavior: 'allow', destination: 'session' },
-      { type: 'setMode', mode: 'bypassPermissions' }] })
-  await until('report response', () => fake.requestsOf('agent_permission_response').length === 1)
-  assert.deepEqual(fake.requestsOf('agent_permission_response')[0].response, { behavior: 'allow' })
-  assert.equal(fake.requestsOf('set_agent_mode_request').length, modesBefore)
-  assert.equal(rows().find((r) => r.session_id === SID)?.permission_mode, 'plan')
+  fake.update(a.claude.id, { pendingPermissions: [{ id: 'confirm-close', provider: 'claude', name: 'Bash', input: { command: 'echo test' } }] })
+  await until('confirmation blocked', () => rows().find(r => r.session_id === SID)?.status === 'blocked')
+  fake.handlers.archive_agent_request = () => ({ type: 'agent_archived', payload: { agentId: a.claude.id, error: 'Archive refused' } })
+  await assert.rejects(call(node, 'session.close', { session_id: SID, force: true }), /Archive refused/)
+  assert.ok(rows().some(r => r.session_id === SID), 'failed close remains visible')
+  delete fake.handlers.archive_agent_request
+  await call(node, 'session.close', { session_id: SID, force: true })
+  assert.equal(fake.requestsOf('archive_agent_request').at(-1).agentId, a.claude.id)
+  assert.equal(fake.requestsOf('agent_permission_response').filter(r => r.response?.behavior === 'allow').length, 0)
+  await until('force-archived Agent gone', () => !rows().some(r => r.session_id === SID))
 })

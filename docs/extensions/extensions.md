@@ -1525,7 +1525,7 @@ An extension contributes `api` to provide a set of app-facing endpoints `/api/v1
 An extension contributes `assistant`:
 
 - `skills`: skill directories in the package (each with a `SKILL.md`). The hub brings them in `assistant.prepare` to the computer that runs the assistant (each skill's files only once per computer, after that only a digest;
-  those the node reports as "missing" are brought again next time). The node puts them in `~/.persona/plugin-skills/<name>` and copies them into the assistant directory like built-in skills; the user's own skill with the same name takes precedence; they are removed from the assistant directory when the extension is disabled or uninstalled.
+  those the node reports as "missing" are brought again next time). The assistant's check of its directories every minute compares the skills' digests as well as the CLAUDE.md, so a skill that an upgrade changes reaches that computer within a minute even when the CLAUDE.md stays the same (#4256). The node puts them in `~/.persona/plugin-skills/<name>` and copies them into the assistant directory like built-in skills; the user's own skill with the same name takes precedence; they are removed from the assistant directory when the extension is disabled or uninstalled.
   In the skill list their source is `plugin`. One extension's skills total at most 8 MB.
 - `instructions`: a markdown file in the package, appended after the assistant's CLAUDE.md (starting with `<!-- plugin <id> -->`).
 - `gate`: a JSON file in the package, a **command gate** (#1468): a command in the extension's skills that calls an HTTP API as the user (`<command> METHOD PATH [BODY] [curl args]`; the command carries its own credentials).

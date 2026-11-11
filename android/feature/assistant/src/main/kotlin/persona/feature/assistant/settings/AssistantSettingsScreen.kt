@@ -137,6 +137,7 @@ private fun AssistantSettingsDetails(
         SettingsPart.Home -> SettingsHome(shown, machine, machineName, controller.phoneZone, onBack, ::refresh,
             open = { part = it }, sheet = { sheet = it }, follow = { scope.launch { controller.setFollowPhone(it) } },
             quietTasks = { scope.launch { controller.setMainTasksQuiet(it) } },
+            foldBackground = { scope.launch { controller.setMainBackgroundFolded(it) } },
             owner = owner, permission = { scope.launch { controller.setDefaultPermission(it) } })
         SettingsPart.Notes -> NotesPart(shown, onBack = { part = SettingsPart.Home }) { text -> controller.saveNotes(text) }
         SettingsPart.Memory -> MemoryPart(shown, machine, machineName, onBack = { part = SettingsPart.Home },
@@ -207,6 +208,7 @@ private fun SettingsHome(
     onBack: () -> Unit, onRefresh: () -> Unit, open: (SettingsPart) -> Unit, sheet: (SettingsSheet) -> Unit,
     follow: (Boolean) -> Unit,
     quietTasks: (Boolean) -> Unit = {},
+    foldBackground: (Boolean) -> Unit = {},
     owner: String = persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER,
     permission: (String) -> Unit = {},
 ) {
@@ -286,6 +288,15 @@ private fun SettingsHome(
                         leadingIcon = PhIcons.BellSimple, enabled = !state.busy) },
                 ))
                 item("quiet-caption") { Caption(stringResource(R.string.assistant_settings_quiet_caption)) }
+            }
+
+            // #4314: shown only by a hub that has the setting (an older one folds with no way to change it here).
+            config.mainBackgroundFolded?.let { folded ->
+                rows("background", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_background_folded), folded, foldBackground,
+                        leadingIcon = PhIcons.Stack, enabled = !state.busy) },
+                ))
+                item("background-caption") { Caption(stringResource(R.string.assistant_settings_background_folded_caption)) }
             }
 
             item("zone") { JSectionHeader(stringResource(R.string.assistant_settings_zone)) }
