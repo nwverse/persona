@@ -100,9 +100,9 @@ export function useSessionPanels(at: string, pane: { mid: string; sid: string } 
       own = left.pane ? (belongsTo(p, left.pane) ? p : null) : p && p.kind !== "link" ? p : null;
       memory = leaving(memory, left.key, own, own?.kind === "files" ? places.get(directoryPanelKey(own)) : undefined);
     }
-    // a session's terminal / files / Git belong to that conversation: moving to another page closes them (a link, a
-    // task and an agent stay, unless a Persona chat being left owns them)
-    if (p && (own || (p.kind !== "link" && p.kind !== "task" && p.kind !== "agent" && !(p.kind !== "file" && pane && p.mid === pane.mid && p.sid === pane.sid)))) closePanel();
+    // a session's terminal / files / Git belong to that conversation: moving to another page closes them (a link stays,
+    // unless a Persona chat being left owns it)
+    if (p && (own || (p.kind !== "link" && !(p.kind !== "file" && pane && p.mid === pane.mid && p.sid === pane.sid)))) closePanel();
     if (key) {
       const r = arriving(memory, key, getPanel());
       memory = r.memory;

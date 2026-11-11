@@ -55,7 +55,7 @@ describe("the memory", () => {
     expect(belongsTo(gitA, B)).toBe(false);
     expect(belongsTo({ kind: "file", mid: "m1", path: "/work/web/a.ts" }, A)).toBe(true);
     expect(belongsTo({ kind: "link", url: "https://example.com" }, A)).toBe(false);
-    expect(belongsTo({ kind: "task", todo: "t1" }, A)).toBe(false);
+    expect(belongsTo({ kind: "plan", mid: "m1", sid: "a" }, A)).toBe(false);
     expect(belongsTo(gitA, null)).toBe(false);
   });
 });
@@ -139,8 +139,8 @@ describe("moving between Persona chats", () => {
     return null;
   };
   const show = (chat?: string) => act(() => root.render(createElement(Page, { chat })));
-  const agent: Panel = { kind: "agent", mid: "m1", sid: "s1" };
-  const task: Panel = { kind: "task", todo: "t1" };
+  const agent: Panel = { kind: "plan", mid: "m1", sid: "s1" };
+  const task: Panel = { kind: "file", mid: "m1", path: "/notes/today.md" };
 
   beforeEach(() => {
     sessionStorage.clear();

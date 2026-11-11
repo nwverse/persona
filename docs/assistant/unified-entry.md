@@ -160,8 +160,9 @@ rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
-the existing task details. The dispatch answer has only a small line naming what it dispatched ("Dispatched: <title> · Open", or each
-title when there are several); each opens that task's details, as its tray row does, not the tray (#3700). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat.
+the existing task details. On iOS and Android the dispatch answer has only a small line naming what it dispatched ("Dispatched: <title> · Open", or each
+title when there are several); each opens that task's details, as its tray row does, not the tray (#3700). The web draws a hand-off card
+for each Agent instead, which opens that Agent's page ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat.
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
@@ -178,7 +179,7 @@ or `todo_…` ids, while PR and issue numbers stay), from the whole report, off 
 answer is dropped. With no model, an error or an empty answer there is no line, and the row shows `text` as before.
 `text` keeps the Agent's words in one line; `detail` keeps the whole report (Markdown, at most 2000 characters) when it
 differs from `text`. Tapping the row opens the task's details, which show the report as written (`detail ?? text`) with
-Markdown rendered (web: over the Agent's chat in the task panel, folding to its title line, and on the to-do's page; Android:
+Markdown rendered (web: on the to-do's page; Android:
 in the task sheet). Neither field reaches a prompt, the
 supervision message, a briefing, a card or a push: the supervisor still reads the report from its signal. Report feed
 items stay as they were. Mock: `MOCK_TASKS=1 MOCK_TASKS_REPORTS=1` has an English report with a Chinese line.
@@ -245,7 +246,7 @@ to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-tra
 - Removal: any non-running task (failed to start, finished, stopped, completed, or "Starting" that hub never reported back on) can be removed, following the Agents page's Close interaction.
   Long-press a task card / pill / collapsed row for "Remove task," swipe left on the task board for Remove, or use ⋯ at the top right of task details. Removal deletes the to-do.
   Confirm first if it ever had an Agent (the Agent and transcript remain in Agents); a task that never started is removed directly.
-- Web behaves the same (#1142): failed tasks are red with "Didn't Start" and Remove on the card. Right-click a task card / pill / collapsed row for "Remove task…," or use ⋯ at the top right of the task panel.
+- Web behaves the same (#1142): failed tasks are red with "Didn't Start" and Remove on the card. Right-click a task card / pill / collapsed row for "Remove task…," or use Remove on the task's Needs you row (#5096).
   Confirmation uses browser `confirm()`. "Starting" tasks left by older hubs are also recognized as "Didn't Start" from the error recorded in the plan card.
 - Retry (#1396): failed-start cards have Retry beside Remove, also available in task details. Hub retries that task exactly as specified in the plan
   (machine, directory, prompt, launcher / model, permissions, title), using the same to-do: immediately reopen it, clear the error (including red text on the plan card), and change the card in place to "Starting."
@@ -342,6 +343,30 @@ lines, and in the user's own color and alignment they read as something the user
   card instruction list, so Persona's routed hand-offs remain separate folded feed lines instead of being hidden.
   Tests: `DispatchedTasksTests`, `TaskSheetExpandTests`, `DispatchedTaskCardTests`; synthetic hub:
   `apple/PersonaUITests/Fixtures/dispatch_hub.py` (`PERSONA_MOCK_HUB`, screenshots with `PERSONA_SHOTS`).
+- The web has no task details (#5096): everything that opened them opens the task's Agent's page, as below.
+
+### Hand-off cards (web, #5096)
+
+The owner asked that this part of the web chat follow cindy exactly (its `SessionHandoffCard`, 2026-11-12). On the
+web, a task the main chat dispatched is a page you go to, never a panel beside the chat:
+
+- **One card per Agent.** Each Agent a dispatch started or a task took over is one full-width card where the dispatch is in the chat, stacked by plan order, with no heading over them. This covers a started plan, a standalone `task` item, and a message that started a new Agent for its task (`routed` with `new_agent`).
+  - **Head:** a round ↳ mark, the Agent session's title (the task's until it has one) and a badge: **New**, or **Already active** when the task took over an Agent that was running already.
+  - **Second line:** "last active …" and the Agent's state word. The state shows that an Agent needs you without opening anything.
+  - **End:** ↗.
+  - cindy also shows a short session id. The Assistant's chat keeps ids out of sight (super rule 4), so here the id is only in the card's tooltip.
+  - cindy's third badge, Resumed, has no case: Persona never wakes a stopped Agent, and a task whose Agents all stopped gets a new one, which is New.
+- **The badge's data.** A `task` feed item made of a running Agent carries `body.wake = "active"`. The hub writes it for agent_supervise, agent_send with a task, an Agent that became a task when its turn ended, and a task moved to another conversation (`taskCard` in `server/internal/assistant/agent_control.go`). Items without it are New, as every item before the field.
+- **Before an Agent is up.** The card stands for the task. Its second line says the Agent is starting, why it didn't start (red), that the task closed before an Agent started, or that the task no longer exists.
+  - While the to-do exists, the card opens the to-do's page.
+  - A task that didn't start has **Retry** and **Remove** on its Needs you row, where it waits on the user.
+- **Where everything opens.** Every entry of the main chat that opened task details opens a page:
+  - entries that open a task: the dock's pills, Needs you and In progress rows, task lines, the board, decisions, the Today card, injected task lines, links;
+  - where it goes: the task's most pressing Agent (`mostUrgentAgent`), or the to-do's page while no Agent is on it;
+  - an Agent that belongs to no task opens its own page.
+  - `/s/…` and `/todos?id=…` links in a reply open those pages at every width.
+- **The way back.** The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
+- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`. iOS and Android keep the dispatched line and task details for now (follow-up issue linked from #5096).
 
 ### Task board
 
@@ -834,7 +859,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
 - Data: `AppModel.goingAgents` derives from the existing session list and updates only when pill-visible content changes. No new polling, and no dock redraw on every push.
   Filtering: `DockAgent.shown` (`apple/Shared/Tasks.swift`); unit tests `DockAgentTests`; UI tests `TaskDockAgentTests` (`MOCK_TASKS_DOCK=pair` for two pills, otherwise six).
 - No chat-stream cards for manual Agents: they were not started from the chat.
-- Web does the same (#1275): `dockAgents` (`web/src/lib/todos.ts`) filters and sorts; tapping a pill opens that Agent's chat in the side panel (`AgentPanel`); "All N" goes to To-dos.
+- Web does the same (#1275): `dockAgents` (`web/src/lib/todos.ts`) filters and sorts; tapping a pill opens that Agent's page (#5096); "All N" goes to To-dos.
 - Step 4 (#996 and this step's iOS work):
   - **Day sections**: `ChatLines.daySections` adds a date above each day's first row (Today / Yesterday / month, day, weekday), only in assistant chats.
   - **Old task cards collapse**: non-today `task` entries become one line (`TaskLine`: state, title, progress); tapping opens details.
