@@ -1546,10 +1546,17 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Keep []int `json:"keep"`
 		}
 		_ = json.Unmarshal(params, &a)
+		if n.isAssistantSession(p.SessionID) { // a Persona conversation's queue is claude's, over stream-json (#4342)
+			return n.assistantEditQueue(ctx, p.SessionID, a.Keep)
+		}
 		queue, err := n.editQueue(ctx, p.SessionID, a.Keep)
 		return map[string]any{"queue": queue}, err
 	case "session.queue.send_now": // #6088
-		if err := n.sendQueuedNow(ctx, p.SessionID); err != nil {
+		send := n.sendQueuedNow
+		if n.isAssistantSession(p.SessionID) {
+			send = n.assistantSendNow // #4342
+		}
+		if err := send(ctx, p.SessionID); err != nil {
 			return nil, err
 		}
 		return map[string]any{"sent": true}, nil

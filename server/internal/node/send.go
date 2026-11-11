@@ -84,6 +84,11 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 			return err
 		}
 	} else {
+		// A session of the desktop app's sidebar that nothing runs: the app opens it, and the message goes to its inbox,
+		// not to a claude --resume of ours (claudedesktop_open.go).
+		if handled, err := n.sendThroughDesktopApp(ctx, id, text, images); handled {
+			return err
+		}
 		// On a machine whose default host is a runtime (Paseo) the session is continued there (runtimecontrol.go).
 		if _, ok := engineRuntimes[n.defaultKind()]; ok {
 			return n.continueInRuntime(ctx, id, text, images, opts.ClientMsgID)
