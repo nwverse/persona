@@ -303,7 +303,7 @@ Chat page:
     PersonaKit `LoopCommand` matches `web/src/lib/loop-command.ts`. Screenshot `-showLoopDraft "/loop 10m Check CI"`.
   - Model: the session's launcher list, the rows New Agent offers for it (Default, the agent's models with their versions, the IDs typed before; `RunningModelLists`, #3754), an alias named by the version it stands for (Opus → Opus 5.5) so it reads apart from the versions beside it; the fixed `/model` aliases (Default / Opus / Sonnet / Haiku) only until the list is read or when it can't be. Selection sends `/model <id>`; absent for Codex, internal Codex fork and headless assistant.
     Assistant home uses launcher list (former model label moved here).
-  - Dictation: `Dictation` (`SFSpeechRecognizer` Chinese + `AVAudioEngine`), live recognized text appended to draft; tap again or send stops.
+  - Dictation: `Dictation` (`SFSpeechRecognizer` in the language the owner speaks, "Dictation language" below, + `AVAudioEngine`), live recognized text appended to draft; tap again or send stops.
   - Permission/effort above input (`SessionModeBar` / `NewSessionModePicker`) remain, not merged into toolbar; rationale PLAN PromptBar v2.
   - DEBUG `-showPromptMenu mention|command|attach|model` opens after a few seconds for screenshots.
 - Model API errors (`APIErrorCard`): Claude Code's final "API Error: 502 …" after retries and hub "API 错误：…" ("API error") notices become error cards,
@@ -970,6 +970,15 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   An in-App setting rather than only system per-App language: docs/protocol/i18n.md requires a common setting; Match System must use docs/protocol/i18n.md rules (French → English, Traditional → Simplified Chinese), which Bundle matching cannot provide;
   watch and extensions lack their own entry points; Mac's system per-App language is deeply buried. Both are the same value: the App writes its result to `AppleLanguages` (also used by the system's per-App language),
   and system-settings changes become a new choice on the next App open.
+- **Dictation language** (#5005): on-device recognition (`SFSpeechRecognizer`) hears only the one language it is set to, and the interface language
+  is not always the one spoken (an English iPhone whose owner speaks Chinese heard English). `DictationLanguage` picks it at each tap on a mic, first match wins:
+  the owner's choice (Settings › Appearance › Language › Dictation, Automatic by default, `DictationLanguageSection`); the conversation's language, from the draft and the
+  owner's own recent messages in that chat (`ShellComposerBar.dictationHints`, `DictationLanguage.ownerTexts`: not another session's, a channel's, a meeting's or Persona's
+  injected lines) when `NLLanguageRecognizer` is at least 80% sure; the last sure choice (`dictation.language.recent`, written only when it changes), so a new chat follows the last one;
+  the interface language; then `zh-CN`. Within a language the region comes from the owner's preferred languages, then the phone's region, then the language's usual one;
+  only locales the phone recognizes are picked. Recognizing through the realtime voice service instead (mixed Chinese and English, #2083) was weighed in #5005: it needs the
+  network, a set-up voice extension and the composer's audio leaving the phone, and its fallback would still need this choice. `DictationLanguageTests`;
+  `-tab settings -openAppearance language` opens the page.
 - **When effective**: Foundation chooses language at process start; `String(localized:)` cannot change at runtime (changing `Bundle`'s class or `AppleLanguages` only affected SwiftUI `Text`, leaving mixed Chinese and English),
   so choices **take effect next time the App opens**, explained in Settings; Mac has "Reopen now". Launch argument `-AppleLanguages (ja)` overrides for this run only, without saving (screenshots, tests).
 - **Watch, extensions**: watch follows iPhone, which sends `language` in WatchConnectivity application context; watch writes its own `AppleLanguages`; before receipt, uses its system language.

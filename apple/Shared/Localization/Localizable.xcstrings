@@ -93,6 +93,52 @@
       },
       "extractionState": "manual"
     },
+    "Automatic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动"
+          }
+        }
+      }
+    },
+    "Automatic listens for the language you write in the chat, else the one it last listened for, else Persona's language. Choose a language if it often guesses wrong." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic listens for the language you write in the chat, else the one it last listened for, else Persona's language. Choose a language if it often guesses wrong."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動：チャットで書いている言語で聞き取ります。なければ前回の言語、それもなければ Persona の表示言語を使います。よく聞き間違えるときは言語を選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动：按你在对话里写的语言听，没有就用上次听的语言，再没有就用 Persona 的界面语言。如果常常听错，可以指定一种语言。"
+          }
+        }
+      }
+    },
     "Clear the %@ filter": {
       "extractionState": "manual",
       "localizations": {
@@ -112,6 +158,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "清除「%@」筛选"
+          }
+        }
+      }
+    },
+    "Dictation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dictation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音声入力"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "听写"
           }
         }
       }
