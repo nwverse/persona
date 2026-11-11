@@ -646,7 +646,7 @@ fun ReadinessScreen(
     var testMessage by remember { mutableStateOf<Int?>(null) }
     val machines by sessions.machines.collectAsState()
     fun refresh() { scope.launch {
-        val detected = system ?: withContext(Dispatchers.IO) { PhoneReadiness.system() }
+        val detected = system ?: withContext(Dispatchers.IO) { detectedPhoneSystem(context) }
         system = detected
         items = PhoneReadiness.items(context, detected)
         if (detected.name == PhoneReadiness.HyperOS) { delay(1_000); items = PhoneReadiness.items(context, detected) }
