@@ -1,6 +1,6 @@
 // A decision answered on its Needs you row (#3804): the real web app with synthetic HTTP/WS only; it never connects to a
-// user's hub or conversation. Two decisions wait: one taken by default at its deadline, one never taken by default.
-// node web/e2e/decision-row.mjs <web URL> --shots <directory> [--chromium <executable>]
+// user's hub or conversation. Two answerable decisions and a legacy note-only review wait.
+// node web/e2e/decision-row.mjs <web URL> --shots <directory> [--large] [--chromium <executable>]
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -154,8 +154,14 @@ async function run(browser, size, theme, language) {
       const primary = await row.locator("[data-decision-option]").first().evaluate((el) => el.closest("button").className);
       assert(primary.includes("bg-ink"), "the recommended option is the solid button");
       assert(shown >= 1);
+      const separate = await row.evaluate((el) => {
+        const footer = el.querySelector("[data-decision-actions]").getBoundingClientRect();
+        return [...el.querySelectorAll("[data-decision-option]")].every((label) => label.closest("button").getBoundingClientRect().bottom <= footer.top + 1);
+      });
+      assert(separate, "deferral controls never cover the decision option buttons");
     }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false, "no horizontal page overflow");
+    await rollout.scrollIntoViewIfNeeded(); // keep this decision's whole action group in the evidence capture
     await page.waitForTimeout(300); // the entry has turned to its selected colors
     await page.screenshot({ path: name("tray") });
     // the menu: the options that did not fit, then the three answers that are no option

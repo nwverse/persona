@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 const taskReviewDismissalsKey = "assistant.task_review_dismissals"
@@ -98,7 +99,7 @@ func (s *Service) listDecisionReviews(ctx context.Context, list []listedTodo) er
 	return nil
 }
 
-var errDecisionReviewConflict = errors.New("decision review already handled or changed")
+var errDecisionReviewConflict = i18n.ErrEnglish("assistant-tasks.decision_review_changed")
 
 func (s *Service) changeDecisionDismissal(ctx context.Context, id string, at time.Time, receipt string, undo bool) (*decisionReview, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
@@ -174,7 +175,7 @@ func (s *Service) taskReviewDismissalRoutes() {
 	register := func(path string, undo bool) {
 		s.handle("POST /api/v1/todos/{id}/"+path, func(w http.ResponseWriter, r *http.Request) {
 			if !fullRole(r) {
-				apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change todos"))
+				apierr.Write(w, http.StatusForbidden, i18n.ErrEnglish("http-status.forbidden"))
 				return
 			}
 			var in struct {
@@ -186,7 +187,7 @@ func (s *Service) taskReviewDismissalRoutes() {
 			err := json.NewDecoder(r.Body).Decode(&in)
 			at, parseErr := time.Parse(time.RFC3339Nano, in.ReviewAt)
 			if err != nil || parseErr != nil || at.IsZero() || undo && in.DismissalID == "" {
-				apierr.Write(w, http.StatusBadRequest, errors.New("review_at and, for undo, dismissal_id are required"))
+				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("assistant-tasks.decision_review_fields"))
 				return
 			}
 			state, err := s.changeDecisionDismissal(r.Context(), r.PathValue("id"), at, in.DismissalID, undo)

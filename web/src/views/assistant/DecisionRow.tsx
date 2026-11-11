@@ -173,6 +173,7 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
           {t("assistant-decisionrow.responded")}
         </p>
       )}
+      <div className={footer ? "sticky -bottom-2.5 bg-field" : undefined}>
       {answering.state === "done" ? (
         <p data-decision-done className="truncate text-[12.5px] text-ink-2" title={answering.text}>
           {answering.text}
@@ -209,6 +210,7 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
         </div>
       )}
       {footer}
+      </div>
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} side="top" align="right" width={264} items={items} />}
     </div>
   );

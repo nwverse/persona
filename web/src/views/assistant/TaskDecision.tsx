@@ -71,7 +71,7 @@ export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
     if (admission.current || !current()) return;
     later(decisionLaterKey(todo));
   };
-  const controls = <div data-decision-actions className="sticky -bottom-2.5 -mx-3 -mb-2.5 mt-1 flex items-center gap-2 border-t border-line bg-field px-3 py-2.5">
+  const controls = <div data-decision-actions className={`${ask && askOptions(ask).length ? "" : "sticky -bottom-2.5 "}-mx-3 -mb-2.5 mt-1 flex items-center gap-2 border-t border-line bg-field px-3 py-2.5`}>
     <Button className="min-h-11" disabled={busy} onClick={defer}>{t("assistant-tasks.later")}</Button>
     <Button className="min-h-11" disabled={busy || !round} busy={dismissing} onClick={dismiss}>{t("assistant-tasks.dismiss_draft")}</Button>
   </div>;

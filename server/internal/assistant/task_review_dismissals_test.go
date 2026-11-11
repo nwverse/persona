@@ -9,8 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestTaskReviewDismissalErrorsLocalized(t *testing.T) {
+	for _, lang := range []i18n.Lang{"en", "zh-Hans", "ja"} {
+		for _, key := range []string{"assistant-tasks.decision_review_changed", "assistant-tasks.decision_review_fields"} {
+			body := apierr.LocalizedBody(409, "", i18n.ErrEnglish(key), lang)
+			want := i18n.T(lang, key)
+			if got := body["error"]; got != want || want == key {
+				t.Fatalf("%s %s: got %v, want %s", lang, key, got, want)
+			}
+		}
+	}
+}
 
 func dismissalEnv(t *testing.T, st *memStore, at time.Time, ask bool) *todoEnv {
 	t.Helper()
