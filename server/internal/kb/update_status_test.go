@@ -44,6 +44,35 @@ func TestPersonStatusUpdate(t *testing.T) {
 	}
 }
 
+func TestPersonStatusList(t *testing.T) {
+	e := editEngine(t)
+	for _, status := range []string{"", "active", "ignored", "self"} {
+		if err := e.Store.PutPerson(&Person{ID: "person-" + status, Status: status, Tagging: Tagging{Tags: []string{"work"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tag := range []string{"", "work"} {
+		list := e.List(KindPerson, tag)
+		if len(list) != 3 {
+			t.Fatalf("tag %q: listed %d people, want 3", tag, len(list))
+		}
+		for _, entry := range list {
+			if entry.ID == "person-ignored" {
+				t.Fatalf("tag %q: ignored person is listed", tag)
+			}
+		}
+	}
+	detail, err := e.Get(KindPerson, "person-ignored", 0)
+	var read Person
+	if err != nil || json.Unmarshal(detail.Meta, &read) != nil || read.Status != "ignored" {
+		t.Fatalf("ignored person cannot be read explicitly: %+v, %v", detail, err)
+	}
+	editApply(t, e, KindPerson, "person-ignored", Update{Status: "active"})
+	if list := e.List(KindPerson, ""); len(list) != 4 {
+		t.Fatalf("restored person is not listed: %+v", list)
+	}
+}
+
 func TestPersonStatusRejectsUnknownWithoutWriting(t *testing.T) {
 	for _, status := range []string{"paused", "done", "merged", "unknown"} {
 		for _, extension := range []string{"", "curator"} {
