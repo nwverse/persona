@@ -13,8 +13,6 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/github"
-	larkcliconnector "github.com/nwverse/persona/server/internal/connector/larkcli"
-	larkcliadapter "github.com/nwverse/persona/server/internal/larkcli"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -602,7 +600,7 @@ func (h *Manager) registerConnectors() {
 		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
 			h.logf("larkcli profile sync: %v", err)
 		}
-		lc := larkcliconnector.New(larkcliadapter.Config{Bin: h.cfg.Lark.CLI.Bin, Profile: h.effectiveLarkCLIProfile(context.Background())})
+		lc := h.newLarkCLIConnector(h.effectiveLarkCLIProfile(context.Background()))
 		if err := h.addConnector(lc); err != nil {
 			h.logf("larkcli connector: %v", err)
 		}

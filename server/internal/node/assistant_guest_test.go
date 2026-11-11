@@ -267,6 +267,10 @@ func TestMeetingRoomStartsUnderItsID(t *testing.T) {
 	if st, _ := n.state.get(id); !slices.Equal(st.Guest, tools) || st.GuestKind != guestMeeting || st.Cwd != cwd {
 		t.Fatalf("state = %+v", st)
 	}
+	// It signs in as the assistant's conversations did: never a new private profile, a config directory with no login.
+	if st, _ := n.state.get(id); st.ConfigDir == "" || strings.Contains(st.ConfigDir, filepath.Join("profiles", "claude")) {
+		t.Fatalf("the room runs in profile %q", st.ConfigDir)
+	}
 	if !n.knowsConversation(room) {
 		t.Fatal("the node does not know the room it started")
 	}
@@ -426,9 +430,36 @@ func TestMeetingRoomIsAnAssistantConversation(t *testing.T) {
 	}
 }
 
-// A room's own --settings keeps of the start's settings only the launcher's environment, login and model, and
-// Persona's own hooks when no plugin carries them: an alias launcher's settings file (a user settings file) brings
-// none of its hooks, plugins, output style, status line, permissions or skill switches into the room.
+// A new room that names no profile signs in as the assistant's conversations did ("legacy"), never in a new private
+// profile, a config directory with no login; a profile it names, a resumed room, another guest and a scoped node keep
+// the usual choice.
+func TestMeetingRoomStartProfile(t *testing.T) {
+	n, _ := testNode(t)
+	for _, c := range []struct {
+		asked, kind string
+		resume      bool
+		want        string
+	}{
+		{"", guestMeeting, false, meetingRoomProfile},
+		{"~/.claude-work", guestMeeting, false, "~/.claude-work"},
+		{"", guestMeeting, true, ""},
+		{"", "", false, ""},
+	} {
+		if got := n.startProfile(c.asked, c.kind, c.resume); got != c.want {
+			t.Errorf("startProfile(%q, %q, %v) = %q, want %q", c.asked, c.kind, c.resume, got, c.want)
+		}
+	}
+	n.sessionScope = &nodeSessionScope{}
+	if got := n.startProfile("", guestMeeting, false); got != "" {
+		t.Errorf("a scoped node's room asks for %q: the scope is its only profile", got)
+	}
+}
+
+// A room's own --settings keeps of the start's settings and of its profile's settings.json only the environment,
+// login and model (the start's over the profile's, env by name), and Persona's own hooks when no plugin carries them:
+// an alias launcher's settings file or the profile's (user settings files) brings none of its hooks, plugins, output
+// style, status line, permissions or skill switches into the room. The profile's file is the only place a gateway's
+// token may be (--setting-sources project leaves it out): without it the room was not logged in.
 func TestMeetingRoomSettingsKeepNothingOfTheLaunchers(t *testing.T) {
 	n, home := testNode(t)
 	n.dir = filepath.Join(home, ".persona")
@@ -457,12 +488,20 @@ func TestMeetingRoomSettingsKeepNothingOfTheLaunchers(t *testing.T) {
 		"permissions":    map[string]any{"allow": []any{"Bash"}},
 		"skillOverrides": map[string]any{"notes": true},
 	})
+	profile := filepath.Join(home, ".claude")
+	writeJSON(filepath.Join(profile, "settings.json"), map[string]any{
+		"env":          map[string]any{"ANTHROPIC_BASE_URL": "https://home-gateway.example.com", "ANTHROPIC_AUTH_TOKEN": "profile-token"},
+		"apiKeyHelper": "home-key-helper",
+		"hooks":        map[string]any{"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "cat ~/diary.md"}}}}},
+		"outputStyle":  "Learning",
+		"permissions":  map[string]any{"defaultMode": "bypassPermissions"},
+	})
 	merged, err := n.mergeLauncherSettings("work", "~/.claude/settings.work.json", ours, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, personaHooks := range []bool{true, false} {
-		path, err := n.meetingRoomSettingsFile(room, cwd, merged, personaHooks)
+		path, err := n.meetingRoomSettingsFile(room, cwd, profile, merged, personaHooks)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -470,7 +509,8 @@ func TestMeetingRoomSettingsKeepNothingOfTheLaunchers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, bad := range []string{"notes.md", "outputStyle", "Explanatory", "enabledPlugins", "notes@me", "statusLine", "my-status", "permissions", "skillOverrides"} {
+		for _, bad := range []string{"notes.md", "diary.md", "outputStyle", "Explanatory", "Learning", "enabledPlugins", "notes@me", "statusLine", "my-status",
+			"permissions", "bypassPermissions", "skillOverrides", "home-gateway", "home-key-helper"} {
 			if strings.Contains(string(raw), bad) {
 				t.Errorf("hooks in settings %v: the room's settings carry the launcher's %s: %s", personaHooks, bad, raw)
 			}
@@ -484,8 +524,8 @@ func TestMeetingRoomSettingsKeepNothingOfTheLaunchers(t *testing.T) {
 		if err := json.Unmarshal(raw, &s); err != nil {
 			t.Fatal(err)
 		}
-		if s.Env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || s.Env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" || s.APIKeyHelper != "work-key-helper" ||
-			s.Model != "work-model" {
+		if s.Env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || s.Env["ANTHROPIC_AUTH_TOKEN"] != "profile-token" ||
+			s.Env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" || s.APIKeyHelper != "work-key-helper" || s.Model != "work-model" {
 			t.Errorf("hooks in settings %v: the launcher's environment or login lost: %s", personaHooks, raw)
 		}
 		if personaHooks != strings.Contains(string(raw), "/opt/persona/personad") || personaHooks != (s.Hooks != nil) {

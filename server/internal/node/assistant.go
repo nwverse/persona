@@ -358,7 +358,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return "", errGuestAgent
 	}
 	if agent == "claude" {
-		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, execution.Runtime, executionOption(options).ConfigDir, resume)
+		asked := n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
+		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, execution.Runtime, asked, resume)
 		if err != nil {
 			return "", err
 		}

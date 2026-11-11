@@ -60,6 +60,8 @@ data class ChatAppBindings(
     /** Tasks from the assistant's conversations (docs/assistant/unified-entry.md); null where the hub group has none. */
     val tasks: persona.core.domain.tasks.TasksStore? = null,
     val agentShares: AgentSharesProvider? = null,
+    /** Worktree status and removal by this group's own machine ids (#4532); built per call for the current route. */
+    val worktrees: (() -> persona.core.contracts.api.AgentCreationService?)? = null,
 )
 
 interface ChatWiringSource {
@@ -199,6 +201,7 @@ fun ChatDestination(
         services.interactions(), services.sessions(), onBack = onHistoryBack ?: navigator::back,
         onTerminal = onTerminal ?: { navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) },
         chrome = ChatChromeBindings(actions = wiring?.actions.takeUnless { historyReadOnly }, connection = wiring?.connection,
+            worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
             onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
             onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },
             onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
