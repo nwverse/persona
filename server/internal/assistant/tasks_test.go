@@ -364,7 +364,10 @@ func TestTaskTrust(t *testing.T) {
 	}
 	h := newServiceOn(t, newFakeHub(), database)
 	h.trustKinds(context.Background(), []PlanTask{{Machine: "box", Cwd: "/code/app"}, {Machine: "box", Cwd: "/code/docs", Readonly: true}})
-	list := h.trustList(context.Background())
+	list, err := h.trustList(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(list) != 2 || list[0].Key != "box|/code/app|edit" || list[1].Readonly != true {
 		t.Fatalf("list = %+v", list)
 	}
