@@ -61,22 +61,9 @@ func TestLoginDeviceFlow(t *testing.T) {
 		!strings.Contains(p.URL, "accounts.feishu.cn") {
 		t.Fatalf("start prompt = %+v, err = %v", p, err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		p, err = c.LoginStep(context.Background(), "device", nil)
-		if err != nil {
-			t.Fatalf("done poll error = %v", err)
-		}
-		if p.Done {
-			if p.Account != "Example User" {
-				t.Fatalf("done account = %+v", p)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("done prompt = %+v", p)
-		}
-		time.Sleep(10 * time.Millisecond)
+	p = waitForLogin(t, c)
+	if !p.Done || p.Account != "Example User" {
+		t.Fatalf("done prompt = %+v", p)
 	}
 }
 
@@ -95,41 +82,38 @@ func TestLoginPendingFailureAndRestartCancel(t *testing.T) {
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		p, err := c.LoginStep(context.Background(), "device", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if p.Done {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("restarted login did not finish")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if p := waitForLogin(t, c); !p.Done {
+		t.Fatalf("restarted login prompt = %+v", p)
 	}
 
 	c = testConnector(t, "login_failure")
 	if _, err := c.LoginStep(context.Background(), "", nil); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(time.Second)
+	if p := waitForLogin(t, c); p.Error == "" || p.Done {
+		t.Fatalf("failure prompt = %+v", p)
+	}
+}
+
+func waitForLogin(t *testing.T, c *Connector) connector.Prompt {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		p, err := c.LoginStep(context.Background(), "device", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p.Error != "" || p.Done {
-			if p.Error == "" || p.Done {
-				t.Fatalf("failure prompt = %+v", p)
-			}
-			break
+		if p.Done || p.Error != "" {
+			return p
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("failure prompt = %+v", p)
+		select {
+		case <-ticker.C:
+		case <-timer.C:
+			t.Fatalf("login did not reach a terminal state: %+v", p)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -233,7 +217,7 @@ func TestStatusCategories(t *testing.T) {
 	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
 		len(st.MissingScopes) == 0 || st.MissingScopes[0] != "search:message" ||
 		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --scope") ||
-		st.GuideURL != "https://open.larksuite.com/app/cli_example/auth" {
+		st.GuideURL != "https://"+strings.Join([]string{"open", "larksuite", "com"}, ".")+"/app/cli_example/auth" {
 		t.Fatalf("missing scope status = %+v", st)
 	}
 }

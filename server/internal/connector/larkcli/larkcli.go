@@ -322,10 +322,11 @@ func permissionURL(appID, brand string) string {
 	if strings.TrimSpace(appID) == "" {
 		return ""
 	}
+	domain := "feishu.cn"
 	if strings.EqualFold(strings.TrimSpace(brand), "lark") {
-		return "https://open.larksuite.com/app/" + appID + "/auth"
+		domain = "larksuite.com"
 	}
-	return "https://open.feishu.cn/app/" + appID + "/auth"
+	return "https://open." + domain + "/app/" + appID + "/auth"
 }
 
 // LoginStep starts and polls lark-cli's blocking device login. The process is
