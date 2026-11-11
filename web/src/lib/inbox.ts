@@ -559,7 +559,7 @@ export function interactionAsk(ix: Interaction): string {
     case "question":
       return ix.questions?.[0]?.question || ix.summary || "";
     case "permission":
-      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_name || "";
+      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_title || ix.tool_name || "";
     case "screen":
       return ix.dialog?.question || ix.summary || "";
     case "elicitation":

@@ -384,7 +384,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 
 The AI twin becomes a **handling chat**. With `inbox.agent.enabled` on, every Needs you item goes to the manager (no longer filtered by model 2), **one chat per item**,
 bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = item ID). It runs in the manager background. Code: `assistant/inbox_agent.go` (promotion, chat creation, reconciliation),
-`inbox_handle.go` (chat notifications, suggestion tool, confirmation API). Actions visible to others **produce suggestions only**; code executes them verbatim after your confirmation. With the switch off, the manager stops automatic promotion, new handling chats, and chat notifications; chain recording continues.
+`inbox_handle.go` (chat notifications), `inbox_suggest.go` (suggestion tool), `inbox_suggestion_api.go` (confirmation API). Actions visible to others **produce suggestions only**; code executes them verbatim after your confirmation. With the switch off, the manager stops automatic promotion, new handling chats, and chat notifications; chain recording continues.
 
 - **Turning the twin off releases unfinished work**: the next handling pass (including collection after a restart) returns open `looking` / `agent` items, queued or running, to Needs you with `handling.state = failed` and the localized reason "The AI twin is off". Queued messages and start retries are discarded, so later messages can be triaged normally. The release is saved and announced through the normal item-change path; a failed save is retried on the next pass.
 - Existing completed suggestions remain available. Rejecting, adding instructions, or confirming a handback while the twin is off returns the item to Needs you immediately with the same reason, without waking or starting its handling chat. Confirmed replies already `waiting` on the other side retain that state. Explicitly handed-off conversations keep their separate workflow. Turning off the twin does not terminate processes already running on a computer.
@@ -411,7 +411,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
   Knowledge-base tools may update people and projects along the way (`kb_update` is an allowed write).
 - Its chat appears in Chats but sends no completion push (`notifyFinished` skips it); the result is the Inbox suggestion.
 
-**Suggestion tool `inbox_suggest`** (`assistant/inbox_handle.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
+**Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
 `{item?, kind, text, note?, handback?, outcome?, recap?, machine?, cwd?, related?, changes?}`.
 

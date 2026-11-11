@@ -80,9 +80,9 @@ export function hasModes(s: Session | undefined): boolean {
   return !s.agent || s.agent === "claude";
 }
 
-/** Only the effort chip: the node lists the levels it takes (`efforts`: a Codex thread on its app-server), and the phone may write to it. */
+/** The effort chip and its speed submenu for protocol-driven Codex threads with advertised choices. */
 export function hasEffortOnly(s: Session | undefined): boolean {
-  return Boolean(s && !s.assistant && !hasModes(s) && s.efforts?.length && sessionCan(s, "send"));
+  return Boolean(s && !s.assistant && !hasModes(s) && (s.efforts?.length || s.service_tiers?.length) && sessionCan(s, "send"));
 }
 
 /** The effort menu's choices: the session's own levels when the node lists them, Claude Code's otherwise. */
