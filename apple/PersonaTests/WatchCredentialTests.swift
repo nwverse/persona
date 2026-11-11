@@ -39,6 +39,18 @@ import Testing
         #expect(Set(all.names.keys) == ["", "g2"])
     }
 
+    /// What `unpair` pushes once every hub is forgotten (#1870): no credential and nothing missing, so the watch drops the
+    /// one it holds and shows "Not paired yet", not "No watch credential yet".
+    @Test func aPhoneWithNoHubLeftTellsTheWatchItIsNotPaired() {
+        let model = AppModel()
+        model.registry = HubRegistry()
+        let all = model.watchConfigs()
+        #expect(all.configs.isEmpty)
+        #expect(all.missing == [])
+        #expect(all.names.isEmpty)
+        #expect(all.deviceIDs == [:])
+    }
+
     /// An older phone's message has no `missing`; a newer one's still reads on an older watch (unknown keys are skipped).
     @Test func theMessageReadsBothWays() throws {
         let old = try JSONDecoder().decode(WatchConfigs.self, from: Data(#"{"configs":{},"names":{}}"#.utf8))
