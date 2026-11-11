@@ -26,19 +26,20 @@ import (
 // main; its top-level fields are named so that they can be served from that route unchanged once it is.
 const (
 	// replyWaitEvent: the owner's message to an assistant conversation got its first reply text. Detail: state (what the
-	// conversation was doing when the message came, the wait* constants), wait (seconds), main; unanswered when no
-	// text came within replyWaitMax (wait is then that bound); by "turn_end" when the turn's end stood in for a text
-	// the session list never showed changing.
+	// conversation was doing when the message came, the wait* constants), wait (seconds), main, open_tasks (the open
+	// tasks when the message came; absent when not known); unanswered when no text came within replyWaitMax (wait is
+	// then that bound); by "turn_end" when a turn's end stood in for a text the session list never showed changing.
 	replyWaitEvent = "reply_wait"
 	// roundEvent: an assistant conversation's round ended. Detail: source (who started it, the round* constants and
-	// the message sources), seconds, main.
+	// the message sources), seconds, main; stopped when it ended without a turn's end (interrupted, its process gone).
 	roundEvent = "round"
 	// queueWaitEvent: a queued system message was delivered. Detail: kind (as roundEvent's source), wait (seconds since
 	// it was first queued), depth (the queue's length with it when it was added), main.
 	queueWaitEvent = "queue_wait"
 	// askOutcomeEvent: an agent's or the assistant's card ended. Detail: interaction (its id; not "id", which the
 	// delegate's marks of a card are read back by), kind (the card's, "ask_user" for the
-	// assistant's own question), by (askByOwner, askByAssistant or askByRemembered), status, after (seconds).
+	// assistant's own question), by (askByOwner, askByAssistant or askByRemembered), status, after (seconds); expired
+	// when the card ended because nobody answered it in time.
 	askOutcomeEvent = "ask_outcome"
 )
 
@@ -71,13 +72,25 @@ const (
 // Variables for the tests.
 var (
 	// availInputFor: a noted input starts the conversation's next round when that starts within this long (resuming a
-	// stopped conversation takes a while).
+	// stopped conversation takes a while). An owner message to an idle conversation that started no turn in this
+	// long was not delivered (a refused send) and is no wait.
 	availInputFor = 5 * time.Minute
 	// availQueuedGrace: an input noted during a round that did not take it starts the next round within this long of
 	// the round's end; later, it was taken into the round it came in.
 	availQueuedGrace = 15 * time.Second
 	// replyWaitMax: an owner message with no reply text this long after it is recorded unanswered.
 	replyWaitMax = 30 * time.Minute
+)
+
+const (
+	// availSentKeep: how long an owner message's client_msg_id is remembered, to tell its replay.
+	availSentKeep = time.Hour
+	// availReplayFor: a replayed message's session.user_spoke and its assistant.send_params come within this long of
+	// each other, in either order.
+	availReplayFor = 5 * time.Second
+	// availMarkBefore: how long before the read's window the marks of whose answer a card's was (delegate_start,
+	// standing_authorized) are still read: the card may have been taken up before the window began.
+	availMarkBefore = 48 * time.Hour
 )
 
 type availInput struct {
@@ -93,6 +106,16 @@ type availRound struct {
 type availWait struct {
 	at    time.Time
 	state string
+	// tasks: the open tasks when the message came; -1 when the to-dos are not loaded.
+	tasks int
+	// began: a turn was seen starting after the message. queued: its node showed the message waiting behind the
+	// running turn. Text counts as the reply only after one of them: until then it is the running round's own.
+	began, queued bool
+	// ended: the round the message came in ended with neither seen. Unless a turn starts at once, the message was
+	// taken into that round and its end stands in for the reply.
+	ended time.Time
+	// fresh: the owner's latest message opened it: that message turning out a replay takes it back.
+	fresh bool
 }
 
 // availBook is what the metrics need between two events, in memory: a restart loses the rounds and waits under way.
@@ -102,6 +125,10 @@ type availBook struct {
 	inputs map[[2]string]availInput // the input a conversation's next round starts with
 	rounds map[[2]string]availRound // the rounds under way
 	waits  map[[2]string]availWait  // the owner's earliest message still without a reply
+	// sent: the client_msg_id of the owner's messages of the last availSentKeep; replayed: the conversations a
+	// replay was seen for whose session.user_spoke has not come yet.
+	sent     map[string]time.Time
+	replayed map[[2]string]time.Time
 	// waiting is len(waits): the session lists are not looked at while nobody waits.
 	waiting atomic.Int32
 }
@@ -110,7 +137,14 @@ func (b *availBook) init() {
 	if b.known == nil {
 		b.known, b.inputs = map[[2]string]bool{}, map[[2]string]availInput{}
 		b.rounds, b.waits = map[[2]string]availRound{}, map[[2]string]availWait{}
+		b.sent, b.replayed = map[string]time.Time{}, map[[2]string]time.Time{}
 	}
+}
+
+// dropWait forgets k's wait; with b.mu held.
+func (b *availBook) dropWait(k [2]string) {
+	delete(b.waits, k)
+	b.waiting.Store(int32(len(b.waits)))
 }
 
 // availInput notes that an input from source goes to machine's assistant conversation now.
@@ -141,6 +175,22 @@ func (msg relayMsg) queuedAs(old relayMsg) relayMsg {
 	return msg
 }
 
+// availOpenTasks is how many tasks are open now; -1 when the to-dos are not loaded.
+func (s *Service) availOpenTasks() int {
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	if !s.todos.loaded {
+		return -1
+	}
+	n := 0
+	for _, t := range s.todos.todos {
+		if t != nil && t.DoneAt == nil && !t.Cancelled() {
+			n++
+		}
+	}
+	return n
+}
+
 // availOwnerSpoke: the owner's message for machine's assistant conversation was accepted. The earliest one without a
 // reply is what the reply wait is measured from.
 func (s *Service) availOwnerSpoke(r SessionRef, now time.Time) {
@@ -148,28 +198,77 @@ func (s *Service) availOwnerSpoke(r SessionRef, now time.Time) {
 		return
 	}
 	k := [2]string{r.MachineID, r.SessionID}
-	working := false
-	if c, ok := s.nodeSession(r.MachineID, r.SessionID); ok {
-		working = c.Status == proto.StatusWorking
-	}
+	c, listed := s.nodeSession(r.MachineID, r.SessionID)
+	working := listed && c.Status == proto.StatusWorking
+	tasks := s.availOpenTasks()
 	b := &s.avail
 	b.mu.Lock()
 	b.init()
-	if _, waits := b.waits[k]; !waits {
+	if at, ok := b.replayed[k]; ok {
+		delete(b.replayed, k)
+		if now.Sub(at) < availReplayFor {
+			b.mu.Unlock()
+			return // a replay of a message already counted (availOwnerSent saw it first)
+		}
+	}
+	if w, waits := b.waits[k]; waits {
+		w.fresh = false
+		b.waits[k] = w
+	} else {
+		// A round still in the book of a conversation its node lists as stopped never ended (interrupted, its
+		// process gone): the conversation is idle.
+		round, onRound := b.rounds[k]
+		onRound = onRound && (!listed || working)
 		state := waitIdle
-		if round, ok := b.rounds[k]; ok {
+		switch {
+		case onRound && round.source == roundOwner:
+			state = waitOwnerRound
+		case onRound:
 			state = waitBackground
-			if round.source == roundOwner {
-				state = waitOwnerRound
-			}
-		} else if working {
+		case working:
 			state = waitUnknownRound
 		}
-		b.waits[k] = availWait{at: now, state: state}
+		b.waits[k] = availWait{at: now, state: state, tasks: tasks, fresh: true}
 		b.waiting.Store(int32(len(b.waits)))
 	}
 	b.mu.Unlock()
 	s.availInput(r.MachineID, r.SessionID, roundOwner, now)
+}
+
+// availOwnerSent: the owner's message id (its client_msg_id) for machine's conversation is about to be sent
+// (assistant.send_params). The hub says session.user_spoke before it knows a message for a replay of one it already
+// delivered, so a second sight of an id takes back the wait that replay opened, or keeps it from opening.
+func (s *Service) availOwnerSent(machine, session, id string, now time.Time) {
+	if machine == "" || session == "" || id == "" {
+		return
+	}
+	k := [2]string{machine, session}
+	b := &s.avail
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.init()
+	at, seen := b.sent[id]
+	if !seen || now.Sub(at) >= availSentKeep {
+		if len(b.sent) >= 256 {
+			for old, at := range b.sent {
+				if now.Sub(at) >= availSentKeep {
+					delete(b.sent, old)
+				}
+			}
+		}
+		b.sent[id] = now
+		return
+	}
+	w, waits := b.waits[k]
+	switch {
+	case !waits:
+		b.replayed[k] = now // its session.user_spoke is still on the way
+	case w.fresh && now.Sub(w.at) < availReplayFor:
+		b.dropWait(k)
+		if in, ok := b.inputs[k]; ok && in.source == roundOwner {
+			delete(b.inputs, k)
+		}
+	}
 }
 
 // availConversation: k (machine, session) is one of the assistant's conversations, as far as is known without
@@ -201,17 +300,34 @@ func (s *Service) availTurnStarted(machine, session string, newTurn bool, now ti
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.init()
-	if _, open := b.rounds[k]; open && !newTurn {
-		return // the same round seen again (a reconnect)
+	in, noted := b.inputs[k]
+	noted = noted && now.Before(in.until)
+	if _, open := b.rounds[k]; open && !newTurn && !noted {
+		// The same round seen again (a reconnect). With an input waiting to start a round it is a new one: the round
+		// in the book stopped unseen (its node went away with it), and is dropped rather than carried on.
+		return
 	}
 	source := roundOther
-	if in, ok := b.inputs[k]; ok {
-		if now.Before(in.until) {
-			source = in.source
-		}
-		delete(b.inputs, k)
+	if noted {
+		source = in.source
 	}
-	b.rounds[k] = availRound{source: source, started: now} // one that never ended (interrupted, its node gone) is dropped
+	delete(b.inputs, k)
+	b.rounds[k] = availRound{source: source, started: now}
+}
+
+// closeRound takes k's round out of the book as it ends at now; with b.mu held. An input noted while it ran starts
+// the next round when that follows at once, however long ago it was noted.
+func (b *availBook) closeRound(k [2]string, now time.Time) (availRound, bool) {
+	round, ok := b.rounds[k]
+	if !ok {
+		return round, false
+	}
+	delete(b.rounds, k)
+	if in, ok := b.inputs[k]; ok {
+		in.until = now.Add(availQueuedGrace)
+		b.inputs[k] = in
+	}
+	return round, true
 }
 
 // availTurnEnded: machine's session finished a turn: its round is recorded, and an owner message the round started
@@ -221,34 +337,93 @@ func (s *Service) availTurnEnded(ctx context.Context, machine, session string, n
 	b := &s.avail
 	b.mu.Lock()
 	b.init()
-	round, ok := b.rounds[k]
+	round, ok := b.closeRound(k, now)
 	if !ok {
 		b.mu.Unlock()
 		return
 	}
-	delete(b.rounds, k)
-	if in, ok := b.inputs[k]; ok {
-		// Noted while the round ran: it starts the next round only when that follows at once.
-		if grace := now.Add(availQueuedGrace); grace.Before(in.until) {
-			in.until = grace
-			b.inputs[k] = in
-		}
-	}
-	wait, answered := b.waits[k]
-	if answered = answered && !round.started.Before(wait.at); answered {
-		delete(b.waits, k)
-		b.waiting.Store(int32(len(b.waits)))
+	wait, waits := b.waits[k]
+	answered := waits && !round.started.Before(wait.at)
+	switch {
+	case answered:
+		b.dropWait(k)
+	case waits && !wait.began: // began: this end is of the round before the one the message started, come late
+		wait.ended = now // came during this round: answered by it, unless a turn starts at once (availSeen)
+		b.waits[k] = wait
 	}
 	b.mu.Unlock()
 	main := s.isMain(ctx, session)
 	s.workEvent(machine, session, roundEvent, map[string]any{"source": round.source, "seconds": now.Sub(round.started).Seconds(), "main": main})
 	if answered {
-		s.workEvent(machine, session, replyWaitEvent, map[string]any{"state": wait.state, "wait": now.Sub(wait.at).Seconds(), "main": main, "by": "turn_end"})
+		s.replyWaited(machine, session, wait, now.Sub(wait.at), main, map[string]any{"by": "turn_end"})
 	}
 }
 
+// availStopped: machine's session went from working to stopped without a turn's end (interrupted, its process gone):
+// the round is over all the same, and its time was spent.
+func (s *Service) availStopped(machine, session string, now time.Time) {
+	k := [2]string{machine, session}
+	b := &s.avail
+	b.mu.Lock()
+	b.init()
+	round, ok := b.closeRound(k, now)
+	b.mu.Unlock()
+	if !ok {
+		return
+	}
+	s.workEvent(machine, session, roundEvent, map[string]any{"source": round.source, "seconds": now.Sub(round.started).Seconds(),
+		"main": s.isMain(context.Background(), session), "stopped": true})
+}
+
+// replyWaited records wait as over after waited.
+func (s *Service) replyWaited(machine, session string, wait availWait, waited time.Duration, main bool, more map[string]any) {
+	detail := map[string]any{"state": wait.state, "wait": waited.Seconds(), "main": main}
+	if wait.tasks >= 0 {
+		detail["open_tasks"] = wait.tasks
+	}
+	for k, v := range more {
+		detail[k] = v
+	}
+	s.workEvent(machine, session, replyWaitEvent, detail)
+}
+
+// What became of a wait at a look (availWait.look).
+const (
+	waitOn         = iota
+	waitReplied    // the reply's text showed
+	waitTaken      // taken into the round it came in, which ended
+	waitUnanswered // no reply within replyWaitMax
+	waitDropped    // never delivered: no wait
+)
+
+// look is what became of the wait as its conversation's node lists it now: status, text (changed is whether the last
+// text differs from the list before) and what is queued behind its turn. began is whether a turn is seen starting.
+// The wait itself is updated.
+func (w *availWait) look(status string, began, changed bool, queued int, now time.Time) int {
+	if began {
+		w.began, w.ended = true, time.Time{}
+	}
+	if queued > 0 {
+		w.queued, w.ended = true, time.Time{}
+	}
+	switch {
+	// The reply: text once nothing of the owner's is queued any more. For a message that came during a round, only
+	// after its node showed it queued or a turn started: before, the text is that round's own (a node that lists no
+	// queue cannot say when the message is taken in).
+	case changed && queued == 0 && (w.state == waitIdle || w.began || w.queued):
+		return waitReplied
+	case w.state == waitIdle && !w.began && now.Sub(w.at) > availInputFor:
+		return waitDropped
+	case !w.ended.IsZero() && status != proto.StatusWorking && queued == 0 && now.Sub(w.ended) > availQueuedGrace:
+		return waitTaken
+	case now.Sub(w.at) > replyWaitMax:
+		return waitUnanswered
+	}
+	return waitOn
+}
+
 // availSeen looks at machine's session as its node lists it now (was: as it listed it before): the first change of
-// its last text after the owner's message, with nothing of theirs still queued behind the turn, is the reply.
+// its last text after the owner's message is the reply (availWait.look).
 func (s *Service) availSeen(machine string, sess *proto.Session, was turnPrev, now time.Time) {
 	b := &s.avail
 	if b.waiting.Load() == 0 {
@@ -257,20 +432,72 @@ func (s *Service) availSeen(machine string, sess *proto.Session, was turnPrev, n
 	k := [2]string{machine, sess.SessionID}
 	b.mu.Lock()
 	wait, ok := b.waits[k]
-	replied := ok && sess.LastText != "" && sess.LastText != was.LastText && len(sess.Queued) == 0
-	gaveUp := ok && !replied && now.Sub(wait.at) > replyWaitMax
-	if replied || gaveUp {
-		delete(b.waits, k)
-		b.waiting.Store(int32(len(b.waits)))
+	if !ok {
+		b.mu.Unlock()
+		return
+	}
+	// A turn starting: from a known stopped turn, or, for a message to an idle conversation, from anything (it may
+	// have been resumed from offline).
+	began := sess.Status == proto.StatusWorking && was.Status != proto.StatusWorking &&
+		(wait.state == waitIdle || was.Status == proto.StatusDone || was.Status == proto.StatusIdle || was.Status == proto.StatusInterrupted)
+	what := wait.look(sess.Status, began, sess.LastText != "" && sess.LastText != was.LastText, len(sess.Queued), now)
+	if what == waitOn {
+		b.waits[k] = wait
+	} else {
+		b.dropWait(k)
 	}
 	b.mu.Unlock()
-	switch {
-	case replied:
-		s.workEvent(machine, sess.SessionID, replyWaitEvent, map[string]any{"state": wait.state, "wait": now.Sub(wait.at).Seconds(),
-			"main": s.isMain(context.Background(), sess.SessionID)})
-	case gaveUp:
-		s.workEvent(machine, sess.SessionID, replyWaitEvent, map[string]any{"state": wait.state, "wait": replyWaitMax.Seconds(),
-			"main": s.isMain(context.Background(), sess.SessionID), "unanswered": true})
+	s.availWaitOver(machine, sess.SessionID, wait, what, now)
+}
+
+// availWaitOver records a wait that ended as what (not waitOn).
+func (s *Service) availWaitOver(machine, session string, wait availWait, what int, now time.Time) {
+	if what == waitOn || what == waitDropped {
+		return
+	}
+	main := s.isMain(context.Background(), session)
+	switch what {
+	case waitReplied:
+		s.replyWaited(machine, session, wait, now.Sub(wait.at), main, nil)
+	case waitTaken:
+		s.replyWaited(machine, session, wait, wait.ended.Sub(wait.at), main, map[string]any{"by": "turn_end"})
+	case waitUnanswered:
+		s.replyWaited(machine, session, wait, replyWaitMax, main, map[string]any{"unanswered": true})
+	}
+}
+
+// availSweep ends the waits no list will: those of machine's conversations its node no longer lists (list is its
+// whole list), and those of a machine that sent no list for longer than replyWaitMax.
+func (s *Service) availSweep(machine string, list []proto.Session, now time.Time) {
+	b := &s.avail
+	if b.waiting.Load() == 0 {
+		return
+	}
+	type over struct {
+		k    [2]string
+		wait availWait
+		what int
+	}
+	var done []over
+	b.mu.Lock()
+	for k, wait := range b.waits {
+		if k[0] == machine {
+			if slices.ContainsFunc(list, func(c proto.Session) bool { return c.SessionID == k[1] }) {
+				continue
+			}
+		} else if now.Sub(wait.at) <= replyWaitMax+time.Minute {
+			continue
+		}
+		// Gone or silent: as a look at a stopped conversation with nothing new.
+		if what := wait.look(proto.StatusOffline, false, false, 0, now); what != waitOn {
+			done = append(done, over{k, wait, what})
+			delete(b.waits, k)
+		}
+	}
+	b.waiting.Store(int32(len(b.waits)))
+	b.mu.Unlock()
+	for _, o := range done {
+		s.availWaitOver(o.k[0], o.k[1], o.wait, o.what, now)
 	}
 }
 
@@ -300,8 +527,11 @@ func (s *Service) availAskEnded(r InteractionResolved, now time.Time) {
 	if ix.ToolName == "ask_user" {
 		kind = "ask_user"
 	}
-	s.workEvent(ix.MachineID, ix.SessionID, askOutcomeEvent, map[string]any{"interaction": ix.ID, "kind": kind, "by": by,
-		"status": r.Status, "after": max(now.Sub(ix.CreatedAt).Seconds(), 0)})
+	detail := map[string]any{"interaction": ix.ID, "kind": kind, "by": by, "status": r.Status, "after": max(now.Sub(ix.CreatedAt).Seconds(), 0)}
+	if r.Resolution.Dismiss && r.Resolution.Reason == proto.DismissedExpired {
+		detail["expired"] = true
+	}
+	s.workEvent(ix.MachineID, ix.SessionID, askOutcomeEvent, detail)
 }
 
 // ---- the read ----
@@ -338,6 +568,9 @@ type replyWaitStats struct {
 type replyWaitDay struct {
 	Day string `json:"day"`
 	replyWaitStats
+	// OpenTasks: the most tasks open when one of the day's messages came (acceptance A1 compares a day with ten or
+	// more against a day with none); absent when no wait of the day knew.
+	OpenTasks *int `json:"open_tasks,omitempty"`
 }
 
 type roundDay struct {
@@ -347,18 +580,23 @@ type roundDay struct {
 	// Seconds and Rounds by what started the round: owner, supervision, followup, patrol, conversation, notice, other.
 	Seconds map[string]float64 `json:"seconds"`
 	Rounds  map[string]int     `json:"rounds"`
-	// BackgroundShare: the share of Seconds spent on rounds the owner did not start.
+	// BackgroundShare: of the Seconds whose round's start is known (all but "other"), the share the owner did not
+	// start.
 	BackgroundShare float64 `json:"background_share"`
 }
 
 type queueWaits struct {
-	ByKind map[string]queueWaitStats `json:"by_kind"`
+	// ByKind: every assistant conversation's; MainByKind: the main conversation's alone.
+	ByKind     map[string]queueWaitStats `json:"by_kind"`
+	MainByKind map[string]queueWaitStats `json:"main_by_kind"`
 	// QueuedNow: the conversations with system messages waiting now, the longest wait first.
 	QueuedNow []queuedNow `json:"queued_now"`
 }
 
 type queueWaitStats struct {
 	waitStats
+	// MaxSeconds: the longest one of them waited.
+	MaxSeconds float64 `json:"max_seconds"`
 	// MaxDepth: the longest the queue was when one of them was added, itself included.
 	MaxDepth int `json:"max_depth"`
 }
@@ -377,6 +615,7 @@ const (
 	askWhoStanding   = "standing_authorization"
 	askWhoDefault    = "default"
 	askWhoDismissed  = "dismissed" // ended without an answer: dismissed, cancelled, withdrawn
+	askWhoExpired    = "expired"   // ended because nobody answered it in time
 )
 
 // taskAsk is one answered task card of the acceptance book (availabilityAsks), for summarizeAvailability.
@@ -393,11 +632,12 @@ func waitsOf(v []float64) waitStats {
 	return waitStats{N: len(v), Median: v[len(v)/2], P90: v[min(len(v)-1, len(v)*9/10)]}
 }
 
-// summarizeAvailability reads the four metrics out of events (oldest first); days are loc's. asks and queued are
-// what is not an event: the answered task cards and the queues as they are now.
-func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location, asks []taskAsk, queued []queuedNow) availabilityStats {
+// summarizeAvailability reads the four metrics out of the events since since (events: oldest first, and from
+// availMarkBefore earlier for the marks of whose answer a card's was); days are loc's. asks and queued are what is
+// not an event: the answered task cards and the queues as they are now.
+func summarizeAvailability(hours int, since time.Time, events []db.WorkEvent, loc *time.Location, asks []taskAsk, queued []queuedNow) availabilityStats {
 	out := availabilityStats{Hours: hours, ReplyWait: replyWaits{All: map[string]replyWaitStats{}, Main: map[string]replyWaitStats{}, MainDays: []replyWaitDay{}},
-		BackgroundShare: []roundDay{}, QueueWait: queueWaits{ByKind: map[string]queueWaitStats{}, QueuedNow: queued},
+		BackgroundShare: []roundDay{}, QueueWait: queueWaits{ByKind: map[string]queueWaitStats{}, MainByKind: map[string]queueWaitStats{}, QueuedNow: queued},
 		AskOutcome: map[string]map[string]waitStats{}}
 	if out.QueueWait.QueuedNow == nil {
 		out.QueueWait.QueuedNow = []queuedNow{}
@@ -418,14 +658,28 @@ func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location,
 		}
 	}
 	replyAll, replyMain, replyDays := map[string]*waits{}, map[string]*waits{}, map[string]*waits{}
+	dayTasks := map[string]int{}
 	days := map[[2]string]*roundDay{}
-	queue, depth := map[string][]float64{}, map[string]int{}
+	type queued1 struct {
+		v     []float64
+		depth int
+	}
+	queue, queueMain := map[string]*queued1{}, map[string]*queued1{}
+	addQueue := func(m map[string]*queued1, kind string, wait float64, depth int) {
+		q := m[kind]
+		if q == nil {
+			q = &queued1{}
+			m[kind] = q
+		}
+		q.v, q.depth = append(q.v, wait), max(q.depth, depth)
+	}
 	// The cards a standing authorization answered, and those the delegate was deciding on: which of the assistant's
 	// answers were theirs.
 	standing, delegated := map[string]bool{}, map[string]bool{}
 	type outcome struct {
 		id, kind, by, status string
 		after                float64
+		expired              bool
 	}
 	var outcomes []outcome
 	counted := map[string]bool{} // a card's first end counts (an answer changed later ends it again)
@@ -441,6 +695,9 @@ func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location,
 			return 0
 		}
 		main, _ := e.Detail["main"].(bool)
+		if e.At.Before(since) && e.Kind != "standing_authorized" && e.Kind != "delegate_start" {
+			continue
+		}
 		switch e.Kind {
 		case replyWaitEvent:
 			unanswered, _ := e.Detail["unanswered"].(bool)
@@ -448,7 +705,11 @@ func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location,
 			add(replyAll, state, num("wait"), unanswered)
 			if main {
 				add(replyMain, state, num("wait"), unanswered)
-				add(replyDays, e.At.In(loc).Format(time.DateOnly), num("wait"), unanswered)
+				day := e.At.In(loc).Format(time.DateOnly)
+				add(replyDays, day, num("wait"), unanswered)
+				if _, known := e.Detail["open_tasks"]; known {
+					dayTasks[day] = max(dayTasks[day], int(num("open_tasks")))
+				}
 			}
 		case roundEvent:
 			k := [2]string{e.At.In(loc).Format(time.DateOnly), e.SessionID}
@@ -463,8 +724,10 @@ func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location,
 			d.Rounds[source]++
 		case queueWaitEvent:
 			kind := cmp.Or(str("kind"), roundNotice)
-			queue[kind] = append(queue[kind], num("wait"))
-			depth[kind] = max(depth[kind], int(num("depth")))
+			addQueue(queue, kind, num("wait"), int(num("depth")))
+			if main {
+				addQueue(queueMain, kind, num("wait"), int(num("depth")))
+			}
 		case "standing_authorized":
 			standing[str("interaction")] = true
 		case "delegate_start":
@@ -472,7 +735,8 @@ func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location,
 		case askOutcomeEvent:
 			if id := str("interaction"); !counted[id] {
 				counted[id] = true
-				outcomes = append(outcomes, outcome{id: id, kind: str("kind"), by: str("by"), status: str("status"), after: num("after")})
+				expired, _ := e.Detail["expired"].(bool)
+				outcomes = append(outcomes, outcome{id: id, kind: str("kind"), by: str("by"), status: str("status"), after: num("after"), expired: expired})
 			}
 		}
 	}
@@ -486,13 +750,21 @@ func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location,
 		out.ReplyWait.Main[k] = stats(w)
 	}
 	for day, w := range replyDays {
-		out.ReplyWait.MainDays = append(out.ReplyWait.MainDays, replyWaitDay{Day: day, replyWaitStats: stats(w)})
+		d := replyWaitDay{Day: day, replyWaitStats: stats(w)}
+		if n, known := dayTasks[day]; known {
+			d.OpenTasks = &n
+		}
+		out.ReplyWait.MainDays = append(out.ReplyWait.MainDays, d)
 	}
 	slices.SortFunc(out.ReplyWait.MainDays, func(a, b replyWaitDay) int { return cmp.Compare(b.Day, a.Day) })
 	for _, d := range days {
+		// A round nobody saw start ("other": a new conversation's first message is the owner's, a background task's
+		// report is not) is on neither side of the share.
 		total := 0.0
-		for _, sec := range d.Seconds {
-			total += sec
+		for source, sec := range d.Seconds {
+			if source != roundOther {
+				total += sec
+			}
 		}
 		if total > 0 {
 			d.BackgroundShare = (total - d.Seconds[roundOwner]) / total
@@ -502,13 +774,18 @@ func summarizeAvailability(hours int, events []db.WorkEvent, loc *time.Location,
 	slices.SortFunc(out.BackgroundShare, func(a, b roundDay) int {
 		return cmp.Or(cmp.Compare(b.Day, a.Day), cmp.Compare(a.Conversation, b.Conversation))
 	})
-	for kind, v := range queue {
-		out.QueueWait.ByKind[kind] = queueWaitStats{waitStats: waitsOf(v), MaxDepth: depth[kind]}
+	for kind, q := range queue {
+		out.QueueWait.ByKind[kind] = queueWaitStats{waitStats: waitsOf(q.v), MaxSeconds: slices.Max(q.v), MaxDepth: q.depth}
+	}
+	for kind, q := range queueMain {
+		out.QueueWait.MainByKind[kind] = queueWaitStats{waitStats: waitsOf(q.v), MaxSeconds: slices.Max(q.v), MaxDepth: q.depth}
 	}
 	afters := map[[2]string][]float64{}
 	for _, o := range outcomes {
 		who := o.by
 		switch {
+		case o.expired:
+			who = askWhoExpired
 		case o.status != "resolved":
 			who = askWhoDismissed
 		case o.by != askByAssistant:
@@ -619,12 +896,12 @@ func (s *Service) availabilityRoutes() {
 		}
 		now := time.Now()
 		since := now.Add(-time.Duration(hours) * time.Hour)
-		events, err := st.WorkEvents(r.Context(), since)
+		events, err := st.WorkEvents(r.Context(), since.Add(-availMarkBefore))
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		apierr.WriteJSON(w, summarizeAvailability(hours, events, s.location(r.Context()), s.availabilityAsks(r.Context(), since),
+		apierr.WriteJSON(w, summarizeAvailability(hours, since, events, s.location(r.Context()), s.availabilityAsks(r.Context(), since),
 			s.availabilityQueued(r.Context(), now)))
 	})
 }

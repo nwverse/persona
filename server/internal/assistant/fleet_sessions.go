@@ -76,11 +76,15 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		if sess.Status != prev && sess.Status != proto.StatusWorking && !(prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle)) {
 			// Stopped with no end seen (a restart, an interrupt, a card): a meeting turn there is over (meeting_turns.go).
 			s.meetingTurnStopped(machine, sess.SessionID, sess, prev == "")
+			if id := sess.SessionID; prev == proto.StatusWorking { // by id: a closure over sess would put every row on the heap
+				s.inOrder(func() { s.availStopped(machine, id, now) }) // its round is over (availability.go)
+			}
 		}
 		if sess.Status == proto.StatusWorking && backgroundRunning(sess) && !s.meetingTurnNow(machine, sess.SessionID) {
 			s.turnsBook().sawBackground(key, now)
 		}
 	}
+	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.fleetKeepPrevious(machine, list)
 	s.sessionsChanged(machine)
 	// Messages from other conversations, for those no longer running; the todos' links and herdr marks.

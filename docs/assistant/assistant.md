@@ -788,10 +788,11 @@ an app or a briefing yet. Each number in one sentence:
   first reply text after it, split by what the conversation was doing when the message came (`idle`, on a round the
   owner started `owner_round`, on a round they did not `background_round`).
 - **Background share** (`background_share`): per day and conversation, the round time and the number of rounds by
-  what started the round (`owner`, `supervision`, `followup`, `patrol`, `conversation`, `notice`, `other`), and the
-  share of that time the owner did not start.
+  what started the round (`owner`, `supervision`, `followup`, `patrol`, `conversation`, `notice`, `other`), and, of
+  the time whose round's start is known (all but `other`), the share the owner did not start.
 - **Queue wait** (`queue_wait`): for each system message queued behind a conversation's turn, the seconds from
-  queueing to delivery and the queue's length when it was added, by kind, plus what is queued right now.
+  queueing to delivery and the queue's length when it was added, by kind (median, 90th percentile, longest), for all
+  conversations and for the main one alone, plus what is queued right now.
 - **Ask outcome** (`ask_outcome`): per card kind, how many cards each of the owner, a supervisor, the delegate, a
   standing authorization or the default at a decision's deadline answered, and after how many seconds.
 
@@ -801,29 +802,50 @@ owner message (`reply_wait`), per ended round (`round`), per delivered queued me
 card (`ask_outcome`); the read joins `ask_outcome` with the `delegate_start` and `standing_authorized` events that
 already existed and with the task cards of the acceptance book.
 
+Against the proposal's acceptance rows: A1 reads `reply_wait.main_days`, where each day carries its 90th percentile
+and `open_tasks`, the most tasks open when one of that day's messages came; A2 reads the main conversation's
+`background_share`; A3 reads `queue_wait.main_by_kind` (`max_seconds`) and `queued_now` (`oldest_seconds`), which do
+not know whether the owner was away; A4 is #4601's number and is not part of this read.
+
 What the numbers do and do not say:
 
 - **Reply text** is the first change of the conversation's last text in its node's session list once nothing of the
   owner's is still queued behind the turn, so it is about a second coarse and is the first written text block, not the
-  first streamed token. A reply the list never showed changing counts when its round ends, and a message with no reply
-  within 30 minutes is recorded `unanswered` at that bound. Several messages sent before a reply count as one wait,
-  from the first. The first message of a new conversation is not measured.
+  first streamed token. A reply the list never showed changing counts when its round ends (`by: turn_end`), and a
+  message with no reply within 30 minutes is recorded `unanswered` at that bound. Several messages sent before a
+  reply count as one wait, from the first. The first message of a new conversation is not measured.
+- **A message that comes during a round**: text counts as its reply only after the node showed the message queued
+  or a new turn started; before that the text is the running round's own. Only a headless Claude Code that reports
+  its queue ("Interjecting while it answers" above) shows a message being taken into the
+  running round. On Codex, a runtime, the Agent SDK bridge or an older Claude Code the list shows no queue, so a
+  message taken into the running round is counted to that round's end (`by: turn_end`), which overstates its wait;
+  one that waits for the round to end is counted to the first text of the round that follows.
+- **What is no wait**: a message to an idle conversation that started no turn within 5 minutes (its send was
+  refused, its machine was offline) is dropped, not counted `unanswered`; a replay of a message already delivered
+  (the same `client_msg_id` within an hour) opens no wait. A send that failed while a background round started within
+  those 5 minutes is still counted, against that round's text.
 - **Rounds**: the manager names a round after the last input it sent or accepted before the round started. `notice`
   is a task notice, a late `ask_user` answer or a spawned conversation's report; `other` is a round whose input the
-  manager did not see (a new conversation's first message, a background task reporting back, a round under way when
-  the manager restarted, which also reads `unknown_round` for a wait). A message taken into a running round
-  (interjecting) does not start a round of its own. A recorded meeting's batches are side exchanges and are not rounds.
+  manager did not see (a new conversation's first message, which is the owner's; a background task reporting back,
+  which is not; a round under way when the manager restarted, which also reads `unknown_round` for a wait), so it is
+  listed but left out of the share. A message taken into a running round (interjecting) does not start a round of its
+  own. A round that stopped without a turn's end (interrupted, its process gone) is recorded up to the stop, with
+  `stopped` in its row. A recorded meeting's batches are side exchanges and are not rounds.
 - **Queue wait** counts delivered messages only: a notice dropped because its card was answered meanwhile is not a
   wait. A supervision message or notice that replaces a queued one keeps the first one's queueing time.
-- **Ask outcome**: `dismissed` is a card that ended without an answer; `remembered` an "Always allow in this session"
-  kept earlier. An answer the assistant gave counts as the `delegate`'s when the delegate had taken the card up
-  (`delegate_start`), as a `standing_authorization`'s when one answered it, else as a `supervisor`'s (a conversation's
-  `interaction_answer`). Cards that expire unanswered are not counted, and the task cards (`decision`, `conclusion`, `verify`)
-  are those the acceptance book still holds, so a card whose task was closed or asked again has left the count.
+- **Ask outcome**: `dismissed` is a card that ended without an answer, `expired` one that ended because nobody
+  answered it in time (where the card's end says so; a hub that keeps the cards itself sends a bare dismissal, which
+  reads `dismissed`), `remembered` an "Always allow in this session" kept earlier. An answer the assistant gave counts
+  as the `delegate`'s when the delegate had taken the card up (`delegate_start`, looked for up to 48 hours before the
+  read's window), as a `standing_authorization`'s when one answered it, else as a `supervisor`'s (a conversation's
+  `interaction_answer`); a card the delegate handed on and a supervisor then answered reads `delegate`. The task
+  cards (`decision`, `conclusion`, `verify`) are those the acceptance book still holds, so a card whose task was
+  closed or asked again has left the count.
 - Rounds and waits under way are in the manager's memory: a manager restart loses those, not the recorded rows.
 
 The route is a separate one because the north-star read of #4601 is not on `main`; its four top-level fields are
-named so that they can be served from that read unchanged once it is.
+named so that they can be served from that read unchanged once it is. The reply wait starts at the manager's
+`session.user_spoke`, not at the hub's message outcome the proposal names, for the same reason.
 
 ## Chat titles
 
