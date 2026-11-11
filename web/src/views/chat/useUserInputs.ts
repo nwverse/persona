@@ -2,6 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { api, sessionPath } from "../../lib/api";
 import { validUserInputIndex, type UserInputIndex } from "../../lib/user-input-index";
 
+export function useRevealedInputSeq(scope: string, oldestSeq: number | undefined): number | undefined {
+  const [range, setRange] = useState<{ scope: string; oldest: number; revealed?: number } | null>(null);
+  useEffect(() => {
+    if (oldestSeq === undefined) return;
+    setRange((previous) => {
+      if (previous?.scope !== scope) return { scope, oldest: oldestSeq };
+      if (oldestSeq >= previous.oldest) return previous;
+      return { scope, oldest: oldestSeq, revealed: oldestSeq };
+    });
+  }, [scope, oldestSeq]);
+  return range?.scope === scope ? range.revealed : undefined;
+}
+
 /** Separate lightweight metadata from transcript loading; never fetch older bodies for a hover or a scroll frame. */
 export function useUserInputs(mid: string, sid: string, history: string | undefined, newestInput: string | undefined, enabled: boolean, reload?: () => void): UserInputIndex | null {
   const scope = `${mid}/${sid}/${history ?? ""}`;

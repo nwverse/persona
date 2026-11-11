@@ -5,12 +5,14 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 
-const [address, directory] = process.argv.slice(2);
+const [address, directory, count = "678", conversation = "main"] = process.argv.slice(2);
 const base = new URL(address);
 assert.ok(["127.0.0.1", "localhost", "[::1]"].includes(base.hostname));
 assert.ok(!base.username && !base.password && !base.search && !base.hash && base.pathname === "/");
 const output = resolve(directory); await mkdir(output, { recursive: true });
-const COUNT = 36, MID = "example-node", SID = "synthetic-history", RAIL = "[data-nav-rail]";
+const COUNT = Number(count), MID = "example-node", SID = "synthetic-history", RAIL = "[data-nav-rail]";
+assert.ok(Number.isSafeInteger(COUNT) && COUNT >= 2);
+const INITIAL_MARKS = Math.min(COUNT, 50);
 const inputs = Array.from({ length: COUNT }, (_, i) => ({ id: `test-input-${String(i).padStart(3, "0")}#0`, seq: i * 4 + 1 }));
 const items = inputs.flatMap((input, i) => [
   { ...input, role: "user", kind: "text", client_msg_id: `test-send-${i}`, queued: i % 8 === 0,
@@ -28,8 +30,9 @@ const deadline = setTimeout(() => { console.error("TIMEOUT full-history navigati
 
 function pageFor(before = 0) {
   const eligible = inputs.filter((input) => !before || input.seq < before);
-  const start = eligible.length > 2 ? eligible.at(-2).seq : eligible[0]?.seq ?? 0;
-  return { items: items.filter((item) => item.seq >= start && (!before || item.seq < before)), has_more: eligible.length > 2, history: index.history, to_seq: before ? before - 1 : items.at(-1).seq };
+  const pageSize = before ? 50 : 2;
+  const start = eligible.length > pageSize ? eligible.at(-pageSize).seq : eligible[0]?.seq ?? 0;
+  return { items: items.filter((item) => item.seq >= start && (!before || item.seq < before)), has_more: eligible.length > pageSize, history: index.history, to_seq: before ? before - 1 : items.at(-1).seq };
 }
 
 try {
@@ -56,7 +59,7 @@ try {
       }
       const json = {
         "/sessions": { sessions: [session], total: 1, has_more: false }, [`/sessions/${MID}/${SID}/info`]: session,
-        "/machines": { machines: [machine] }, "/assistant": { machine_id: MID, conversations: [] },
+        "/machines": { machines: [machine] }, "/assistant": { machine_id: MID, main: SID, conversations: [session] },
         "/interactions": { interactions: [] }, "/todos": { todos: [] }, "/mutes": { spaces: [], sessions: [], allowed: [] },
         "/pins": { spaces: [], sessions: [], sections: [] }, "/agents/sessions": { sessions: [] }, "/agents/prefs": {},
         "/managers": { managers: [], default_id: "" }, "/personas": { personas: [] }, "/assistant/personas": { personas: [] },
@@ -73,7 +76,7 @@ try {
     });
     const page = await context.newPage(); page.setDefaultTimeout(20_000);
     page.on("pageerror", error => run.pageErrors.push(error.message));
-    await page.goto(new URL(`/s/${MID}/${SID}`, base).href);
+    await page.goto(new URL(conversation === "main" ? "/" : `/s/${MID}/${SID}`, base).href);
     await page.locator(`${RAIL} button[data-tick]`).first().waitFor();
     await page.waitForFunction(() => document.querySelectorAll("[data-user-bubble]").length === 2);
     const chat = page.locator("[data-chat-scroll]"); const box = await chat.boundingBox();
@@ -85,30 +88,41 @@ try {
     await shot("before-two-loaded");
     release();
     await page.waitForFunction(([rail, total]) => document.querySelector(rail)?.dataset.navTotal === String(total) && document.querySelector(rail)?.dataset.navSource === "server", [RAIL, COUNT]);
-    run.afterTicks = await page.locator(`${RAIL} button[data-tick]`).count(); assert.equal(run.afterTicks, COUNT);
+    run.afterTicks = await page.locator(`${RAIL} button[data-tick]`).count(); assert.equal(run.afterTicks, INITIAL_MARKS);
     assert.equal(await page.locator("[data-user-bubble]").count(), 2, "Index loading must not load every transcript body");
     assert.equal(run.olderReads, 0);
     const widths = await page.locator(`${RAIL} [data-nav-mark]`).evaluateAll(marks => marks.map(mark => parseFloat(mark.style.width)));
     assert.ok(widths.every(width => width === 6), "All idle marks stay equally short");
     await shot("after-server-total");
     const first = page.locator(`${RAIL} [data-tick='0']`);
+    const firstOrdinal = COUNT - INITIAL_MARKS + 1;
+    assert.ok((await first.getAttribute("aria-label")).includes(String(firstOrdinal)), "Labels use full-history ordinals");
     await first.hover(); assert.equal(run.olderReads, 0, "Hover does not fetch old transcript bodies");
     await page.locator("[data-nav-preview]").waitFor(); await shot("hover");
+    assert.ok((await page.locator("[data-nav-preview]").textContent()).includes(String(firstOrdinal)));
     await first.click();
     await page.waitForFunction(([id]) => {
       const row = document.querySelector(`[data-line='seg:${id}']`)?.firstElementChild;
       const sc = document.querySelector("[data-chat-scroll]");
       return row && sc && row.getBoundingClientRect().top - sc.getBoundingClientRect().top >= -2 && row.getBoundingClientRect().top - sc.getBoundingClientRect().top <= 32;
-    }, [inputs[0].id]);
+    }, [inputs[COUNT - INITIAL_MARKS].id]);
     assert.ok(run.olderReads > 0, "The unloaded target must fetch earlier pages before positioning");
-    assert.equal(await page.locator(`${RAIL} button[data-tick]`).count(), COUNT);
     await page.mouse.move(box.x + 40, box.y + box.height / 2);
     await page.waitForFunction(() => !document.querySelector("[data-nav-preview]"));
+    if (COUNT > 50) {
+      await chat.evaluate(el => { el.scrollTop = 1; });
+      await page.mouse.wheel(0, -500);
+      await page.waitForFunction(() => document.querySelectorAll("[data-nav-rail] button[data-tick]").length > 50);
+      run.afterScrollTicks = await page.locator(`${RAIL} button[data-tick]`).count();
+      assert.ok(run.afterScrollTicks > INITIAL_MARKS && run.afterScrollTicks < COUNT);
+    } else {
+      assert.equal(await page.locator(`${RAIL} button[data-tick]`).count(), COUNT);
+    }
     await page.waitForFunction(() => [...document.querySelectorAll("[data-nav-mark]")].every(mark => parseFloat(getComputedStyle(mark).width) === 6));
-    await shot("oldest-loaded-and-positioned");
+    await shot("earlier-loaded");
     assert.deepEqual(run.pageErrors, []);
-    run.oldestPositioned = true;
-    console.log(`PASS ${run.name}: initial user bodies=${run.initialBodies}, ticks ${run.beforeTicks}->${run.afterTicks}, server total=${run.serverTotal}, oldest loaded/positioned=true, older reads=${run.olderReads}`);
+    run.selectedInputPositioned = true;
+    console.log(`PASS ${run.name}: initial user bodies=${run.initialBodies}, marks ${run.beforeTicks}->${run.afterTicks}->${run.afterScrollTicks ?? COUNT}, global total=${run.serverTotal}, selected input=${firstOrdinal}, backward reads=${run.olderReads}`);
     await context.close();
   }
   results.status = "pass";
