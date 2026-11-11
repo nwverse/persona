@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -252,10 +253,11 @@ func (s *Service) trustList(ctx context.Context) ([]trustKind, error) {
 			continue
 		}
 		// A legacy machine ID or a directory can contain '|'. Neither side of the separator is recoverable from the
-		// key alone, so expose the whole key as an identifier for older clients, never as a resolved directory.
+		// key alone. A path-escaped identifier retains the whole key in older clients' lastPathComponent titles;
+		// it is not a resolved directory.
 		mode := parts[len(parts)-1]
 		if mode == "read" || mode == "edit" {
-			out = append(out, trustKind{Key: k, Cwd: k, Readonly: mode == "read", Ambiguous: true})
+			out = append(out, trustKind{Key: k, Cwd: url.PathEscape(k), Readonly: mode == "read", Ambiguous: true})
 		}
 	}
 	slices.SortFunc(out, func(a, b trustKind) int { return strings.Compare(a.Key, b.Key) })

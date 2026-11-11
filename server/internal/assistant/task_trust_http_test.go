@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -130,10 +131,11 @@ func TestTaskTrustHTTPPersistentKeysAndLegacyClient(t *testing.T) {
 		}
 		ambiguous := strings.Count(key, "|") > 2
 		if ambiguous {
-			if !kind.Ambiguous || kind.Machine != "" || kind.Cwd != key {
+			identifier := url.PathEscape(key)
+			if !kind.Ambiguous || kind.Machine != "" || kind.Cwd != identifier {
 				t.Errorf("ambiguous key %q misrepresented: %+v", key, kind)
 			}
-			if legacy.Kinds[i].Machine != "" || legacy.Kinds[i].Cwd != key {
+			if legacy.Kinds[i].Machine != "" || legacy.Kinds[i].Cwd != identifier {
 				t.Errorf("legacy decoder cannot distinguish %q: %+v", key, legacy.Kinds[i])
 			}
 		} else if kind.Ambiguous || kind.Machine != task.Machine || kind.Cwd != task.Cwd || raw.Kinds[i]["ambiguous"] != nil {
@@ -196,7 +198,7 @@ func TestTaskTrustHTTPAmbiguousCollisionKeepsMatching(t *testing.T) {
 		}
 	}
 	list := taskTrustList(t, s)
-	if len(list.Kinds) != 1 || !list.Kinds[0].Ambiguous || list.Kinds[0].Machine != "" || list.Kinds[0].Cwd != trustKey(machinePipe) {
+	if len(list.Kinds) != 1 || !list.Kinds[0].Ambiguous || list.Kinds[0].Machine != "" || list.Kinds[0].Cwd != url.PathEscape(trustKey(machinePipe)) {
 		t.Fatalf("ambiguous collision must not choose a machine/directory pair: %+v", list)
 	}
 	if w := taskTrustRequest(s, http.MethodDelete, list.Kinds[0].Key, roleFull); w.Code != http.StatusOK {
@@ -205,6 +207,45 @@ func TestTaskTrustHTTPAmbiguousCollisionKeepsMatching(t *testing.T) {
 	for _, task := range []PlanTask{machinePipe, directoryPipe} {
 		if s.planStartsAtOnce(ctx, []PlanTask{task}) {
 			t.Fatal("deleted collision still admits a matching edit task")
+		}
+	}
+}
+
+// Apple clients predating ambiguous use NSString.lastPathComponent(cwd) as the row title. A single escaped path
+// component preserves the entire distinct identifier there, even when the original keys share a last path component.
+func TestTaskTrustHTTPLegacyTitleDistinguishesOpaqueKeys(t *testing.T) {
+	ctx := context.Background()
+	st := &memStore{}
+	s := newServiceOn(t, newFakeHub(), st)
+	tasks := []PlanTask{
+		{Machine: "example|node", Cwd: "/same"},
+		{Machine: "different|node", Cwd: "/same"},
+		{Machine: "example|node", Cwd: "/%2F|é🚀"},
+		{Machine: "example|node", Cwd: "//|é🚀"},
+	}
+	s.trustKinds(ctx, tasks)
+	list := taskTrustList(t, s)
+	if len(list.Kinds) != len(tasks) {
+		t.Fatalf("legacy client received %d rows, want %d", len(list.Kinds), len(tasks))
+	}
+	titles := make(map[string]bool)
+	for _, kind := range list.Kinds {
+		title := path.Base(kind.Cwd) // no slash: the same projection as NSString.lastPathComponent
+		decoded, err := url.PathUnescape(kind.Cwd)
+		if !kind.Ambiguous || kind.Machine != "" || strings.Contains(kind.Cwd, "/") || title != kind.Cwd || err != nil || decoded != kind.Key {
+			t.Errorf("key lost in legacy title: %+v, title %q, decoded %q, error %v", kind, title, decoded, err)
+		}
+		if titles[title] {
+			t.Errorf("duplicate legacy title %q", title)
+		}
+		titles[title] = true
+		if w := taskTrustRequest(s, http.MethodDelete, kind.Key, roleFull); w.Code != http.StatusOK {
+			t.Errorf("delete exact key %q: %d %s", kind.Key, w.Code, w.Body.String())
+		}
+	}
+	for _, task := range tasks {
+		if s.planStartsAtOnce(ctx, []PlanTask{task}) {
+			t.Errorf("deleted key still admits %q", trustKey(task))
 		}
 	}
 }
@@ -345,7 +386,7 @@ func TestTaskTrustHTTPConcurrentListAndWrites(t *testing.T) {
 				return
 			}
 			for _, row := range response.Kinds {
-				if !row.Ambiguous || row.Cwd != row.Key || row.Machine != "" {
+				if !row.Ambiguous || row.Cwd != url.PathEscape(row.Key) || row.Machine != "" {
 					done <- fmt.Errorf("bad concurrent row: %+v", row)
 					return
 				}
