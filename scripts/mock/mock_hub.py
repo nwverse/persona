@@ -6468,8 +6468,10 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
 
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
+# /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
+SCREEN_MULTI_INTERACTIONS = []
 if os.environ.get("MOCK_SCREEN_MULTI"):
-    INTERACTIONS.append(
+    SCREEN_MULTI_INTERACTIONS.append(
         {"id": "scr_macbook_review_5c1d2e3f4a5b", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
          "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
          "screen": "←  ☒ 环境  ☐ 平台  ☐ 通知  ✔ Submit  →\n哪些平台要一起发？\n❯ 1. [✔] 手机\n     iPhone 版本。\n"
@@ -6484,6 +6486,7 @@ if os.environ.get("MOCK_SCREEN_MULTI"):
                         {"key": "4", "label": "Type something", "kind": "type_something", "keys": ["4"], "checked": True,
                          "text": "平板也看一眼"},
                         {"key": "5", "label": "Chat about this", "kind": "chat", "keys": ["5"]}]}})
+    INTERACTIONS.extend(copy.deepcopy(SCREEN_MULTI_INTERACTIONS))
 # MOCK_SCREEN_STEPS=1: a terminal AskUserQuestion of three questions read off the screen (Claude Code 2.1.316) that
 # answers as the terminal does (#2970): ← and → move between the tabs, an answer moves on to the next one, and after an
 # answer that names its option the node submits the review tab once every question has one (keys alone never do).
@@ -10178,7 +10181,7 @@ LAUNCHER_PRESETS = [
 # "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
 # too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
-PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "import": None}
+PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
@@ -10227,10 +10230,55 @@ def _provider_apply(l, b):
         else: l.pop("has_headers", None)
 
 
+# POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
+# hub embeds. Exact rows only (the hub also lets an unlisted newer generation inherit; the mock does not).
+MODEL_CATALOG_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "internal", "assistant",
+                                  "models_catalog.json")
+_MODEL_CATALOG = {}
+
+
+def _catalog_key(model_id, dated=True):
+    """normalizeCatalogID (lower case, nothing up to the last /, no trailing [1m]), and without dated a trailing
+    -YYYYMMDD too (catalogGenerationKey)."""
+    key = model_id.strip().lower().rsplit("/", 1)[-1].removesuffix("[1m]")
+    if dated: return key
+    while True:
+        prev, key = key, re.sub(r"-\d{8}$", "", key.removesuffix("[1m]")).removesuffix("[1m]")
+        if key == prev: return key
+
+
+def _catalog_route(h, body):
+    if not _MODEL_CATALOG:
+        with open(MODEL_CATALOG_JSON, encoding="utf-8") as f:
+            for m in json.load(f)["models"]:
+                _MODEL_CATALOG[m["id"].lower()] = m
+    try:
+        ids = json.loads(body or b"{}").get("ids")
+        ids = [] if ids is None else ids
+        if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids): raise ValueError
+    except (ValueError, AttributeError):
+        h.send_json({"error": "请求格式不对：ids 要是模型 ID 的列表"}, 400); return
+    if len(ids) > 100:
+        h.send_json({"error": "一次最多查 100 个模型 ID"}, 400); return
+    if any(len(x.strip().encode()) > 200 for x in ids):
+        h.send_json({"error": "模型 ID 最长 200 字节"}, 400); return
+    PROVIDER_LOG["catalog"].append(ids)
+    out, seen = [], set()
+    for model_id in (x.strip() for x in ids):
+        if not model_id or model_id in seen: continue
+        seen.add(model_id)
+        row = _MODEL_CATALOG.get(_catalog_key(model_id)) or _MODEL_CATALOG.get(_catalog_key(model_id, dated=False))
+        if row: out.append({"id": model_id, **{k: v for k, v in row.items() if k != "id"}})
+    h.send_json({"models": out})
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
     "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route)."""
+    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
+    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    if p == "/api/v1/launchers/catalog" and method == "POST":
+        _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
@@ -14382,7 +14430,8 @@ def png(w, h, rgb):
 # …&slow=S: it answers S seconds late (the small window's "Connecting…"); …&down=1: it hangs up on everyone, now and on
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
-               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False}
+               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False,
+               "events": []}  # clipboard writes (node / rfb) and keys, in the order they came (#3075: ⌘V after the write)
 # MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
 # numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
 # with "2:node" it sends none, as macOS's does, and MacBook's computer status carries them as the node reads them
@@ -14393,6 +14442,69 @@ FAKE_EXTENDED = FAKE_DISPLAYS > 1 and "node" not in _displays[1:]
 FAKE_W, FAKE_H = 480 * FAKE_DISPLAYS, 300
 FAKE_NODE_DISPLAYS = [{"id": i + 1, "x": 240 * i, "y": 0, "width": 240, "height": 150, **({"main": True} if i == 0 else {})}
                       for i in range(FAKE_DISPLAYS)] if FAKE_DISPLAYS > 1 and not FAKE_EXTENDED else []
+# MOCK_SCREEN_BG=black|white|gray|terminal (#3075): the mock Mac is 1920×1080 as a real one is, one plain color (a
+# terminal: near black with lines of light-gray text), and like macOS's its Screen Sharing sends no pointer (the app
+# draws its own); MOCK_SCREEN_CURSOR=1 sends macOS's arrow when asked, as other servers do (the Cursor pseudo-encoding:
+# its 1× pixels, black with a white outline, and its mask). GET /mock/screen-password?bg=… changes the background on
+# the screens connected (the pointer's look over each, VNCTests.testThePointerReads).
+FAKE_BG = {"kind": os.environ.get("MOCK_SCREEN_BG", "")}
+FAKE_BG_COLORS = {"black": (0, 0, 0), "white": (255, 255, 255), "gray": (128, 128, 128), "terminal": (30, 30, 32)}
+FAKE_TEXT = (204, 204, 204)
+if FAKE_BG["kind"]:
+    FAKE_W, FAKE_H = 1920, 1080
+# macOS's arrow at 1× as its Screen Sharing sends it ("#" black, "o" white), its hot spot at its tip.
+FAKE_ARROW = ["oo........", "o#o.......", "o##o......", "o###o.....", "o####o....", "o#####o...", "o######o..", "o#######o.",
+              "o########o", "o########o", "o#####oooo", "o##o##+o..", "o+ooo##o..", ".o+.o##+o.", "....o+##o.", ".....o++o.",
+              "......oo.."]
+FAKE_ARROW_HOT = (1, 1)
+
+
+def fake_cursor_rect():
+    """The Cursor pseudo-encoding of FAKE_ARROW: x, y the hot spot; its pixels in the client's format (B G R and a
+    byte of padding); then its mask, a bit a pixel, rows padded to a byte."""
+    w, h = len(FAKE_ARROW[0]), len(FAKE_ARROW)
+    shade = {"#": 0, "o": 255, "+": 128}
+    px, mask = b"", b""
+    for row in FAKE_ARROW:
+        bits = 0
+        for i, ch in enumerate(row):
+            v = shade.get(ch, 0)
+            px += bytes([v, v, v, 0])
+            if ch in shade: bits |= 1 << (((w + 7) // 8) * 8 - 1 - i)
+        mask += bits.to_bytes((w + 7) // 8, "big")
+    return struct.pack(">HHHHi", FAKE_ARROW_HOT[0], FAKE_ARROW_HOT[1], w, h, -239) + px + mask
+
+
+def fake_text(x, y):
+    """1 where a terminal's text is: lines 36 pixels apart, characters 16 wide, of lengths that vary, with spaces."""
+    if not (40 <= x < 1400 and 40 <= y < 760): return 0
+    line, ly = divmod(y - 40, 36)
+    col, lx = divmod(x - 40, 16)
+    return 1 if ly < 18 and lx < 11 and col < (line * 37) % 70 + 8 and (col * 7 + line) % 11 else 0
+
+
+def fake_bg_rect(z):
+    """The whole of a plain background in ZRLE: solid tiles, and two-color ones where a terminal has text."""
+    base = FAKE_BG_COLORS.get(FAKE_BG["kind"], (0, 0, 0))
+    cp = lambda c: bytes([c[2], c[1], c[0]])
+    out = bytearray()
+    for ty in range(0, FAKE_H, 64):
+        for tx in range(0, FAKE_W, 64):
+            tw, th = min(64, FAKE_W - tx), min(64, FAKE_H - ty)
+            if FAKE_BG["kind"] != "terminal" or not (tx < 1400 and ty < 760 and tx + tw > 40 and ty + th > 40):
+                out += b"\x01" + cp(base)
+                continue
+            out += bytes([2]) + cp(base) + cp(FAKE_TEXT)
+            for j in range(th):
+                acc = n = 0
+                for i in range(tw):
+                    acc = acc << 1 | fake_text(tx + i, ty + j); n += 1
+                    if n == 8: out.append(acc); acc = n = 0
+                if n: out.append(acc << (8 - n))
+    comp = z.compress(bytes(out)) + z.flush(zlib.Z_SYNC_FLUSH)
+    return struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, 16) + struct.pack(">I", len(comp)) + comp
+
+
 # The displays' numbers, 3×5 cells each, drawn 12 pixels a cell.
 FAKE_DIGITS = {1: [".#.", "##.", ".#.", ".#.", "###"], 2: ["###", "..#", "###", "#..", "###"],
                3: ["###", "..#", "###", "..#", "###"], 4: ["#.#", "#.#", "###", "..#", "..#"]}
@@ -14500,9 +14612,22 @@ def fake_screen_sharing():
             c.sendall(struct.pack(">HH", FAKE_W, FAKE_H) + fmt + struct.pack(">I", len(name)) + name)
             FAKE_SCREEN["conns"].append(conn)
             encodings, z, t, sent = [], zlib.compressobj(6), 0, False
-            frame = fake_frame()
+            frame = [] if FAKE_BG["kind"] else fake_frame()
+
+            def redraw():  # a plain background again (?bg=…), on the update request the client left waiting
+                if 16 not in encodings: return
+                with lock:
+                    c.sendall(struct.pack(">BxH", 0, 1) + fake_bg_rect(z))
+                FAKE_SCREEN["frames"] += 1
+            conn["redraw"] = redraw
 
             def update(rects, extended=False):
+                if FAKE_BG["kind"]:
+                    cursor = -239 in encodings and os.environ.get("MOCK_SCREEN_CURSOR") == "1"
+                    with lock:
+                        c.sendall(struct.pack(">BxH", 0, 1 + cursor) + (fake_cursor_rect() if cursor else b"") + fake_bg_rect(z))
+                    FAKE_SCREEN["frames"] += 1
+                    return
                 body = b""
                 if extended:  # ExtendedDesktopSize: reason 0, status 0, the framebuffer's size, then each display
                     body += struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, -308) + struct.pack(">B3x", FAKE_DISPLAYS)
@@ -14525,10 +14650,11 @@ def fake_screen_sharing():
                     encodings = list(struct.unpack(">%di" % n, exact(c, 4 * n)))
                 elif kind == 3:
                     exact(c, 9)
+                    conn["waiting"] = sent
                     if not sent:
                         sent = True
                         update([(0, 0, FAKE_W, FAKE_H)], extended=FAKE_EXTENDED and -308 in encodings)
-                    elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1":  # a box moving at ~30 frames a second
+                    elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1" and not FAKE_BG["kind"]:  # a box moving at ~30 frames a second
                         time.sleep(1 / 30)
                         old = (80 + (t * 7) % 300, 120 + (t * 3) % 120)
                         t += 1
@@ -14540,6 +14666,7 @@ def fake_screen_sharing():
                         update([(0, 0, 2, 1), (x0, y0, min(FAKE_W - x0, abs(new[0] - old[0]) + 40), min(FAKE_H - y0, abs(new[1] - old[1]) + 40))])
                 elif kind == 4:  # a key: what is typed on the lock screen ("Unlock", #1507 a-2), Return as \n
                     down, _, key = struct.unpack(">BHI", exact(c, 7))
+                    FAKE_SCREEN["events"].append({"key": key, "down": bool(down)})
                     if down and key == 0xff0d: FAKE_SCREEN["typed"] += "\n"
                     elif down and (0x20 <= key <= 0xff): FAKE_SCREEN["typed"] += chr(key)
                     elif down and key >= 0x01000000: FAKE_SCREEN["typed"] += chr(key - 0x01000000)
@@ -14557,6 +14684,7 @@ def fake_screen_sharing():
                 elif kind == 6:  # the client's clipboard
                     exact(c, 3); n = struct.unpack(">I", exact(c, 4))[0]
                     FAKE_SCREEN["clipboard"] = exact(c, n).decode("latin-1")
+                    FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "rfb"})
                 else: return
         except OSError:
             pass
@@ -17564,8 +17692,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(GIT_PULL_STATE)
         if p == "/mock/screen-password":  # MOCK_SCREEN=fake: the Mac's password changed; who signed in how; what was typed
             if "p" in q: FAKE_SCREEN["password"] = q["p"][0]
-            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="")
+            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[])
             if "clip" in q: fake_screen_clip(q["clip"][0])  # the Mac copied this
+            if "bg" in q and q["bg"][0] in FAKE_BG_COLORS and FAKE_BG["kind"]:  # another background (MOCK_SCREEN_BG)
+                FAKE_BG["kind"] = q["bg"][0]
+                for conn in list(FAKE_SCREEN["conns"]):
+                    if conn.pop("waiting", False):
+                        try: conn["redraw"]()
+                        except OSError: pass
             if "slow" in q: FAKE_SCREEN["slow"] = float(q["slow"][0])
             if "down" in q:
                 FAKE_SCREEN["down"] = q["down"][0] == "1"
@@ -17573,7 +17707,8 @@ class H(BaseHTTPRequestHandler):
                     try: conn["sock"].shutdown(socket.SHUT_RDWR)
                     except OSError: pass
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
-                                   "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"]})
+                                   "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
+                                   "events": FAKE_SCREEN["events"][-200:]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -17850,10 +17985,11 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT)
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            codex = {x["id"] for x in CODEX_INTERACTIONS}
-            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in codex] + copy.deepcopy(CODEX_INTERACTIONS)
-            RESOLVED[:] = [r for r in RESOLVED if r["id"] not in codex]
-            INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in codex]
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS  # the cards back, unanswered
+            ids = {x["id"] for x in again}
+            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
+            RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
+            INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in ids]
             return self.send_json({"ok": True})
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
@@ -18568,6 +18704,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"pane": pane["pane"], "terminal": pane["terminal"], "tab_id": pane["tab_id"]})
         if p.startswith("/api/v1/machines/") and p.endswith("/computer/clipboard") and os.environ.get("MOCK_SCREEN") == "fake":
             FAKE_SCREEN["clipboard"] = json.loads(self.last_body or b"{}").get("text", "")  # pbcopy on the Mac (#1343)
+            FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "node"})
             return self.send_json({"ok": True})
         if p == "/test/lark-pins/state" and os.environ.get("MOCK_LARK_PINS"):
             req = json.loads(self.last_body or b"{}")
