@@ -497,6 +497,7 @@ struct RecordingDetailView: View {
     /// The transcript line a timestamp jumped to, lit for a moment.
     @State private var lit: Int?
     @State private var minutes = RecordingMinutesModel()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -507,7 +508,7 @@ struct RecordingDetailView: View {
         .themedPage()
         // Each new revision (more text, the end) may bring or change the minutes; while they are on their way, ask again.
         .task(id: "\(library.entry(id)?.revision ?? 0)|\(minutes.round)") { await followMinutes() }
-        .navigationTitle("Record [Recordings Section ef2821]")
+        .navigationTitle("Recording")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             if library.entries.contains(where: \.isRolling) {
@@ -553,10 +554,6 @@ struct RecordingDetailView: View {
                         .font(Theme.Font.secondary).foregroundStyle(.secondary)
                 }
                 if transcription.current == id { ProgressView().tint(Theme.accent) }
-            } footer: {
-                Text(entry.isRolling
-                    ? String(localized: "Rolling keeps the last \(Int(RecordingRolling.keepHours)) hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.")
-                    : String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge."))
             }
             if entry.isRolling {
                 rollingSections(entry)
@@ -566,12 +563,13 @@ struct RecordingDetailView: View {
                     if entry.sentences.isEmpty {
                         Text("No transcript yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
                     }
+                    let ids = Self.stableIDs(entry.sentences)
                     ForEach(Array(entry.sentences.enumerated()), id: \.offset) { index, sentence in
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
                             Text(RecordingFormat.clock(sentence.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
                             Text(sentence.text).font(Theme.Font.body).textSelection(.enabled)
                         }
-                        .id(RecordingDetailView.anchor(index))
+                        .id(ids[index])
                         .listRowBackground(lit == index ? Theme.accentTint : nil)
                         .accessibilityIdentifier(lit == index ? "recording-sentence-lit" : "recording-sentence")
                     }
@@ -597,7 +595,17 @@ struct RecordingDetailView: View {
                         .accessibilityIdentifier("recording-delete")
                 }
             }
+            // The retention text is read once, at the end: not between the header and the minutes.
+            Section {
+                EmptyView()
+            } footer: {
+                Text(entry.isRolling
+                    ? String(localized: "Rolling keeps the last \(Int(RecordingRolling.keepHours)) hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.")
+                    : String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge."))
+            }
         }
+        // The minutes unfold when they arrive (Reduce Motion: at once).
+        .animation(reduceMotion ? nil : Theme.Motion.reveal, value: minutes.state)
     }
 
     private func followMinutes() async {
@@ -608,13 +616,23 @@ struct RecordingDetailView: View {
         }
     }
 
-    /// A transcript line's scroll anchor.
-    static func anchor(_ index: Int) -> String { "sentence-\(index)" }
+    /// A transcript line's identity: where it starts, in milliseconds, so a row keeps its identity when text is added before
+    /// or after it (a line at the same start gets a number after it).
+    static func stableIDs(_ sentences: [RecordingSentence]) -> [String] {
+        var seen: [Int: Int] = [:]
+        return sentences.map { sentence in
+            let millis = Int((sentence.start * 1000).rounded())
+            let count = seen[millis, default: 0]
+            seen[millis] = count + 1
+            return count == 0 ? "sentence-\(millis)" : "sentence-\(millis)-\(count)"
+        }
+    }
 
     /// To the transcript line said at `seconds` (a timestamp in the minutes), lit for two seconds.
     private func jump(to seconds: Double, in entry: RecordingEntry, proxy: ScrollViewProxy) {
         guard let index = RecordingMinutes.sentenceIndex(at: seconds, in: entry.sentences) else { return }
-        withAnimation(Theme.Motion.layout) { proxy.scrollTo(Self.anchor(index), anchor: .center) }
+        let ids = Self.stableIDs(entry.sentences)
+        withAnimation(reduceMotion ? nil : Theme.Motion.layout) { proxy.scrollTo(ids[index], anchor: .center) }
         lit = index
         Task {
             try? await Task.sleep(for: .seconds(2))
@@ -718,12 +736,15 @@ struct RecordingMeetingFacts: View {
     var meeting: RecordingMeeting
 
     var body: some View {
-        if let start = meeting.start, let end = meeting.end {
-            Label((start..<max(end, start)).formatted(.interval.month().day().hour().minute()), systemImage: Theme.Icon.calendarEvent)
-                .font(Theme.Font.secondary).foregroundStyle(.secondary)
-        }
-        if let location = meeting.location {
-            Label(location, systemImage: Theme.Icon.place).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+        // When and where on one line.
+        let when: String? = {
+            guard let start = meeting.start, let end = meeting.end else { return nil }
+            return (start..<max(end, start)).formatted(.interval.month().day().hour().minute())
+        }()
+        let line = [when, meeting.location].compactMap { $0 }.joined(separator: " · ")
+        if !line.isEmpty {
+            Label(line, systemImage: when == nil ? Theme.Icon.place : Theme.Icon.calendarEvent)
+                .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
         }
         if !meeting.attendees.isEmpty {
             Label(ListFormatter.localizedString(byJoining: meeting.attendees), systemImage: Theme.Icon.people)
