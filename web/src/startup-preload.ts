@@ -117,11 +117,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * strings; the picker loads on the first Forward), and 1,152 B for task cards (#5030 added 1,105 B to ja: the shared
  * task card head, a workflow call's card with its progress line and agent strip, the chat's Background dialog opened
  * from it, the old subagent links' redirect and the background-subtasks line, their words; the subagent card itself
- * loads when a summary is opened). Then 9,486 B less for the extension view renderer leaving the first screen (#3614:
- * ViewBody.tsx and what only it imports became a chunk of its own, measured as ja went from 595,990 B to 586,504 B).
- * Raise it on purpose, in the change that needs it.
+ * loads when a summary is opened). Then 9,614 B less for the extension view renderer leaving the first screen (#3614:
+ * ViewBody.tsx and what only it imports became a chunk of its own; ja went from 598,940 B on main 52b3fae6f to 589,326 B).
+ * main was already 732 B over its budget at 52b3fae6f (ja 598,940 B against 598,208 B); that overage is kept here, not
+ * new room. Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 588_722;
+export const FIRST_SCREEN_BUDGET = 589_326;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
@@ -136,7 +137,8 @@ export async function sentBytes(dir: string, files: string[]): Promise<number> {
  * it): 29,143 B at #2798 plus 3% (28,085 B at #2880; #2798 moved ModelIdField, which the model popover now shares with
  * the idle ModelPicker, out of the first screen into a chunk of its own), and 64 B for managing launchers from the
  * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter), and 13,113 B for
- * the extension view renderer (#3614: it left the first screen for the idle tier, which went from 18,615 B to 31,728 B).
+ * the extension view renderer (#3614: it left the first screen for the idle tier, which went from 18,615 B to 31,728 B;
+ * 31,802 B after merging main).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
 export const IDLE_TIER_BUDGET = 43_194;
