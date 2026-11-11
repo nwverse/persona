@@ -7,6 +7,8 @@ struct SourceMessage: View, Equatable {
     var item: Item
     var source: MessageSource
     var showsSource = true
+    /// A scheduled task's or a follow-up's prompt stays hidden: only its one-line notice shows (`ChatLines.hidesPrompt`).
+    var hidesPrompt = false
     @State private var open = false
     @State private var fullText: String?
     @State private var loadError: String?
@@ -15,11 +17,12 @@ struct SourceMessage: View, Equatable {
     @Environment(\.chatPin) private var pin
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
-        a.item == b.item && a.source == b.source && a.showsSource == b.showsSource
+        a.item == b.item && a.source == b.source && a.showsSource == b.showsSource && a.hidesPrompt == b.hidesPrompt
     }
 
     private var pinKey: String { "source-" + item.id }
     private var rawText: String {
+        if hidesPrompt { return Injected.of(item)?.line ?? "" }
         guard let fullText else { return MessageSource.body(item) }
         var whole = item
         whole.text = fullText
@@ -29,7 +32,8 @@ struct SourceMessage: View, Equatable {
     }
     private var text: String { ContextRef.parse(rawText).rest }
     private var folds: Bool {
-        item.fullSize != nil || text.count > Theme.MessageSource.foldCharacters || text.split(separator: "\n").count > Theme.MessageSource.previewLines
+        guard !hidesPrompt else { return false }
+        return item.fullSize != nil || text.count > Theme.MessageSource.foldCharacters || text.split(separator: "\n").count > Theme.MessageSource.previewLines
     }
 
     var body: some View {
@@ -37,7 +41,7 @@ struct SourceMessage: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, Theme.Space.xxl)
             .chatPinned(pinKey)
-            .messageActionBar(id: item.id, text: text, isUser: false, date: item.ts)
+            .messageActionBar(id: item.id, text: text, isUser: false, date: item.ts, from: source.mention)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("message-source-" + item.id)
             .task(id: open) {
@@ -73,8 +77,8 @@ struct SourceMessage: View, Equatable {
                     .lineLimit(Theme.MessageSource.previewLines)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("message-source-preview")
-            } else {
-                let d = RowMemo.assistant(RowMemo.key(memoScope, pinKey + (fullText == nil ? "" : "-full"))) { _ in AssistantRowText(text) }
+            } else if !hidesPrompt || !text.isEmpty {
+                let d = RowMemo.assistant(RowMemo.key(memoScope, pinKey + (hidesPrompt ? "-line" : "") + (fullText == nil ? "" : "-full"))) { _ in AssistantRowText(text) }
                 Markdown(d.markdown)
                     .markdownSoftBreakMode(.lineBreak)
                     .markdownTheme(.persona)

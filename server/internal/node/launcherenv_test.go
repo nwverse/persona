@@ -78,6 +78,34 @@ func TestManagedEnvUnchangedForOldLaunchers(t *testing.T) {
 	}
 }
 
+// A provider stored with a trailing /v1 before the hub dropped it on saving (#4886) still launches against
+// <base>/v1/messages, as its Test connection did; Codex and agy bases are not ANTHROPIC_BASE_URL and keep theirs.
+func TestManagedEnvDropsATrailingV1FromMessagesBases(t *testing.T) {
+	for _, c := range []struct {
+		l         proto.ManagedLauncher
+		key, want string
+	}{
+		{proto.ManagedLauncher{Name: "a", BaseURL: "https://gw.example.com/v1", APIKey: "sk-test-1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com"},
+		{proto.ManagedLauncher{Name: "a", BaseURL: "https://gw.example.com/team/v1", Model: "m1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com/team"},
+		{proto.ManagedLauncher{Name: "a", Kind: "api", API: "messages", BaseURL: "https://gw.example.com/v1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com"},
+		{proto.ManagedLauncher{Name: "a", Agent: "omp", BaseURL: "https://gw.example.com/v1"}, "ANTHROPIC_BASE_URL", "https://gw.example.com"},
+		{proto.ManagedLauncher{Name: "a", Agent: "codex", API: "messages", BaseURL: "https://api.example.com/v1"}, "OPENAI_BASE_URL", "https://api.example.com/v1"},
+		{proto.ManagedLauncher{Name: "a", Agent: "agy", BaseURL: "https://gemini.example.com/v1"}, "GOOGLE_GEMINI_BASE_URL", "https://gemini.example.com/v1"},
+	} {
+		if got := envValue(managedEnv(c.l), c.key); got != c.want {
+			t.Errorf("%+v: %s=%q, want %q", c.l, c.key, got, c.want)
+		}
+		if c.key == "ANTHROPIC_BASE_URL" {
+			if got := managedSettingsEnv(c.l)[c.key]; got != c.want {
+				t.Errorf("settings env %+v: %s=%q, want %q", c.l, c.key, got, c.want)
+			}
+			if got := providerEnv(c.l, "", "", true)[c.key]; got != c.want {
+				t.Errorf("main conversation %+v: %s=%q, want %q", c.l, c.key, got, c.want)
+			}
+		}
+	}
+}
+
 func TestProviderEnv(t *testing.T) {
 	const gw = "https://gw.example.com"
 	models := []proto.ProviderModel{
@@ -259,8 +287,8 @@ func TestMainConversationKeepsItsOwnWindowAndLevel(t *testing.T) {
 }
 
 func TestLaunchKeepsTheAssistantsOwnWindowAndLevel(t *testing.T) {
-	clear := []string{"ANTHROPIC_*", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL"}
-	env := []string{"ANTHROPIC_MODEL=m", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000", "CLAUDE_CODE_EFFORT_LEVEL=high"}
+	clear := []string{"ANTHROPIC_*", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CONFIG_DIR"}
+	env := []string{"ANTHROPIC_MODEL=m", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000", "CLAUDE_CODE_EFFORT_LEVEL=high", "CLAUDE_CONFIG_DIR=/tmp/provider-profile"}
 	c, e := launchEnvFor(clear, env, true)
 	if !slices.Equal(c, []string{"ANTHROPIC_*"}) || !slices.Equal(e, []string{"ANTHROPIC_MODEL=m"}) {
 		t.Fatalf("assistant: %v %v", c, e)

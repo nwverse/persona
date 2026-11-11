@@ -52,6 +52,12 @@ type PaneItem struct {
 	Title     string `json:"title,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// Foreground is the program in front of a pane with no agent ("zsh" at its prompt, "vim", "npm"…), as the host
+	// names it; nothing on the screen is read (#4754). "" when the host could not say in time.
+	Foreground string `json:"foreground,omitempty"`
+	// AgentSession is the stopped agent whose terminal this is: a pane Persona opened for that session, with no agent
+	// in it now (#4754). "Close finished terminals" closes these (panes.close_finished).
+	AgentSession string `json:"agent_session,omitempty"`
 }
 
 // NewShellResult is what panes.new opened.
@@ -99,6 +105,22 @@ type WorktreePrepare struct {
 	ChooseParent bool `json:"choose_parent,omitempty"`
 	// AutomaticName permits an unnamed create. The host owns naming when supported, otherwise the node chooses a unique name.
 	AutomaticName bool `json:"automatic_name,omitempty"`
+	// Composer exposes the owning runtime's creation choices; absent on older nodes.
+	Composer *WorktreeComposer `json:"composer,omitempty"`
+}
+
+type WorktreeComposer struct {
+	Capabilities []string         `json:"capabilities"`
+	Project      string           `json:"project"`
+	BaseRef      string           `json:"base_ref"`
+	Refs         []string         `json:"refs"`
+	Presets      []WorktreePreset `json:"presets"`
+}
+
+type WorktreePreset struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name,omitempty"`
+	Directories []string `json:"directories"`
 }
 
 // WorktreeAdded is the worktree worktree.add made for a new agent (#6115): its checkout, its branch, the repository's root.
@@ -149,4 +171,25 @@ type WorktreeCreateResult struct {
 	Terminal          string `json:"terminal,omitempty"`
 	Path              string `json:"path"`
 	Branch            string `json:"branch"`
+}
+
+// WorktreeDeletePreview binds confirmation to a host-owned instance and an opaque, short-lived node token.
+type WorktreeDeletePreview struct {
+	WorkspaceID  string `json:"workspace_id"`
+	Kind         string `json:"kind"`
+	HostID       string `json:"host_id"`
+	InstanceID   string `json:"instance_id"`
+	Path         string `json:"path"`
+	Branch       string `json:"branch"`
+	Dirty        int    `json:"dirty"`
+	Folder       bool   `json:"folder"`
+	PreviewToken string `json:"preview_token"`
+}
+
+// WorktreeDeleteResult reports completion separately from runtime acceptance or an ambiguous transport outcome.
+type WorktreeDeleteResult struct {
+	WorkspaceID   string `json:"workspace_id"`
+	Removed       bool   `json:"removed"`
+	State         string `json:"state"`
+	BranchDeleted bool   `json:"branch_deleted,omitempty"`
 }

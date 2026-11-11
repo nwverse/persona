@@ -88,8 +88,10 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 	return cwd, err
 }
 
-// prepareSpaceIf is prepareSpace; onlyChanged skips the node when the CLAUDE.md is the one this hub last wrote there
-// (refreshInstructions), and it answers whether it was written.
+// prepareSpaceIf is prepareSpace; onlyChanged skips the node when it would get what this hub last gave it there, the
+// same CLAUDE.md and plugin skills (refreshInstructions), and it answers whether it was written. An answer that brings
+// a skill's files always goes: plugins.assistant hands them out once, so skipping would leave the old files on the
+// machine until the CLAUDE.md changed.
 func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
 	if s.isWorkMachine(machine) {
 		return "", false, errWorkAssistant
@@ -117,9 +119,11 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
 	}
 	key := machine + "\x00" + dir
-	if onlyChanged {
+	digests, files := skillDigests(plugins.Skills)
+	given := preparedState{md: md, skills: digests}
+	if onlyChanged && !files {
 		s.preparedMu.Lock()
-		same := s.preparedMD[key] == md
+		same := s.prepared[key] == given
 		s.preparedMu.Unlock()
 		if same {
 			return "", false, nil
@@ -135,10 +139,16 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		return "", false, err
 	}
 	s.preparedMu.Lock()
-	if s.preparedMD == nil {
-		s.preparedMD = map[string]string{}
+	if s.prepared == nil {
+		s.prepared = map[string]preparedState{}
 	}
-	s.preparedMD[key] = md
+	if len(prep.Need) > 0 {
+		// The node lacks some skills: their files come with the next plugins.assistant (plugins.skills_need below), and
+		// the next refresh prepares this directory again, so its copies are made from them.
+		delete(s.prepared, key)
+	} else {
+		s.prepared[key] = given
+	}
 	s.preparedMu.Unlock()
 	if len(prep.Need) > 0 {
 		if err := s.appCall(ctx, AppPlugins, PluginsSkillsNeed, map[string]any{"machine_id": machine, "names": prep.Need}, nil); err != nil {
@@ -146,6 +156,27 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		}
 	}
 	return prep.Cwd, true, nil
+}
+
+// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md and the plugin skills (skillDigests).
+type preparedState struct{ md, skills string }
+
+// skillDigests are the plugin skills of a plugins.assistant answer as prepareSpaceIf compares them, each one's plugin,
+// name and digest; files says whether any comes with its files.
+func skillDigests(raw json.RawMessage) (digests string, files bool) {
+	var skills []struct {
+		Name   string                     `json:"name"`
+		Plugin string                     `json:"plugin"`
+		Digest string                     `json:"digest"`
+		Files  map[string]json.RawMessage `json:"files"`
+	}
+	_ = json.Unmarshal(raw, &skills) // null from a manager without plugins: none
+	var b strings.Builder
+	for _, sk := range skills {
+		fmt.Fprintf(&b, "%s/%s %s\n", sk.Plugin, sk.Name, sk.Digest)
+		files = files || len(sk.Files) > 0
+	}
+	return b.String(), files
 }
 
 // instructionsEvery is how often refreshInstructions looks at the CLAUDE.md the assistant's machine should have.
@@ -171,7 +202,8 @@ func (s *Service) instructionsLoop(ctx context.Context) {
 }
 
 // refreshInstructions writes the assistant's and the health space's CLAUDE.md on the assistant's machine when they
-// differ from the ones this hub last wrote there (none yet after a start: both are written).
+// differ from the ones this hub last wrote there (none yet after a start: both are written), and their plugin skills
+// when those changed (prepareSpaceIf).
 func (s *Service) refreshInstructions(ctx context.Context) {
 	if s.hello(ctx).Assistant.Standby {
 		return // a mesh member: the center's assistant is the one in use (docs/mesh.md)
@@ -205,6 +237,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
+		if p.PermissionMode == "" {
+			p.PermissionMode = proto.ModeBypass
+		}
 	}
 	var cwd string
 	var err error
@@ -218,9 +253,18 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.ConfigDir != "" {
+		params["config_dir"] = p.ConfigDir
+	}
 	if p.GuestTools != nil {
 		// The node starts it with no built-in tools and only these of Persona's (node/assistant_guest.go).
 		params["guest"] = map[string]any{"tools": p.GuestTools}
+	}
+	if p.NewSessionID != "" {
+		params["new_session_id"] = p.NewSessionID // node/assistant_guest.go: under this id, once
+	}
+	if p.ClientMsgID != "" {
+		params["client_msg_id"] = p.ClientMsgID // its first message's (node/node.go assistant.send)
 	}
 	purpose := p.Purpose
 	if purpose == "" {
@@ -237,6 +281,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	if err := s.applyModel(ctx, purpose, params); err != nil {
 		return proto.Session{}, err
+	}
+	if params["launch"] != "headless" {
+		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
 	}
 	if err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
@@ -352,8 +399,9 @@ type mainHandoff struct {
 
 // mainBook holds the main conversation still while it changes, and the handoff with no database.
 type mainBook struct {
-	mu      sync.Mutex
-	handoff mainHandoff
+	mu        sync.Mutex
+	handoff   mainHandoff
+	execution mainExecutionBook
 }
 
 func (s *Service) loadHandoff(ctx context.Context) mainHandoff {
@@ -393,7 +441,7 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
-		v.Main = sess.SessionID
+		v.Main, v.MainMachineID = sess.SessionID, sess.MachineID
 		return nil
 	}); err != nil {
 		s.logf("assistant: save main: %v", err)
@@ -425,12 +473,12 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	if old == "" {
 		return "", false, nil
 	}
-	machine, c, found := s.findSession(ctx, old, cfg.MachineID)
+	machine, c, found := s.findSession(ctx, old, cfg.mainRouteMachine())
 	if found && (c.Status == proto.StatusWorking || (c.Compaction != nil && c.Compaction.State == proto.CompactionRunning)) {
 		return "", false, &rpc.Error{Code: "busy", Message: i18n.T(s.lang(ctx), "assistant-start.main_busy")}
 	}
 	if !found {
-		machine = cfg.MachineID
+		machine = cfg.mainRouteMachine()
 	}
 	now := time.Now().UTC()
 	handoff := mainHandoff{From: old, MachineID: machine, Until: now}
@@ -450,7 +498,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
-		v.Main = ""
+		v.Main, v.MainMachineID = "", ""
 		v.Former = slices.DeleteFunc(v.Former, func(f FormerMain) bool { return f.SessionID == old })
 		v.Former = append([]FormerMain{{MachineID: machine, SessionID: old, Until: now}}, v.Former...)
 		if len(v.Former) > maxFormerMains {
@@ -699,7 +747,13 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 	if text, ok := p.Params["text"].(string); ok {
 		p.Params["text"] = prompts.ProtectUserMessage(text)
 	}
-	return s.sendParams(ctx, p)
+	sent, _ := p.Params["text"].(string)
+	out, err := s.sendParams(ctx, p)
+	if err == nil && p.Human { // the hub's word: a person's own app sent it (secret_handoff.go handoffUserTurn)
+		id, _ := p.Params["client_msg_id"].(string)
+		s.humanSent.note(p.SessionID, id, sent)
+	}
+	return out, err
 }
 
 // sendParams also serves manager-generated notices, which must not be marked as
@@ -710,6 +764,9 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		params = map[string]any{}
 	}
 	params["is_main"] = false
+	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
+		return nil, err // an ended room: 409 meeting_ended (meeting_room.go)
+	}
 	if s.isGuest(ctx, p.MachineID, p.SessionID) {
 		// A guest conversation keeps what it started on: no launcher, model, runtime or mode picked for a message
 		// (the node refuses a change too, node/assistant_guest.go).
@@ -719,7 +776,7 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		return params, nil
 	}
 	cfg := s.settings(ctx)
-	main := cfg.Main != "" && cfg.Main == p.SessionID && cfg.MachineID == p.MachineID
+	main := cfg.Main != "" && cfg.Main == p.SessionID && cfg.mainRouteMachine() == p.MachineID
 	if !main {
 		if _, known := s.session(ctx, p.MachineID, p.SessionID); !known {
 			return params, nil
@@ -751,11 +808,11 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 // ids typed for that launcher before), so a model the gateway dropped does not fail every later turn.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any) error {
 	cfg := s.settings(ctx)
-	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine
+	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
-	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine || s.isTaskConversation(ctx, machine, sid)
+	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
 		m = strings.TrimSpace(m)

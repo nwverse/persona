@@ -1,5 +1,23 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A task trust key combines a machine and directory with an unescaped delimiter (#4421). Either field can contain
+  that delimiter, and an old ID need not obey current registration rules, so a split can assign the rule to the wrong
+  place. Keep its exact key for matching and deletion; mark an ambiguous listing and give older clients the key as a
+  path-escaped identifier, so a path-component title retains it. A failed settings read is not an empty list:
+  propagate it to the list caller while retaining the fail-closed admission and no-overwrite behavior of writers.
+  Exercise the handler after service reconstruction.
+
+- Reusing a topic to-do must retire the previous plan's execution binding (#3985). Released or dismissed Agents let
+  a later plan take over the same to-do, while the old plans stay in storage. A historical `TodoID` match cannot
+  impose that plan's read-only constraint on the current session. Clear old execution bindings under the takeover
+  reservation before launching the replacement; keep `ReuseTodo` as history. Plan creation order is not start order,
+  and retries can change `UpdatedAt`. Cover both directions of permission changes, memory, storage and restart.
+
+- Unavailable context is not nonexistent data (#3780, #3862). When a privacy switch excludes earlier meetings, carry
+  that policy into both answer prompts: do not promise earlier minutes or render an empty lookup as “none with
+  minutes.” Keep goldens for disabled, enabled-with-results and enabled-without-results modes. Tool descriptions must
+  also distinguish expired transcripts from meeting minutes retained forever by default.
+
 - A to-do's `origin` is what makes it a task, for the hub and every app (#1852, #1909). The hub tests `origin != ""` in some 70 places (receipts, the done judgment, reopening on a new turn, retiring a finished task's Agents, retitling, outcome records, Today, MCP tool text), and web, iOS and Android pick a conversation's tasks by it. A to-do that only relates to a conversation, such as a question nobody answered, keeps that conversation in its own record, not in `origin`: an `isAskTodo` skip in `todosOf` hid it from the snapshot alone, while the apps showed it as a task whose Agent was starting and a hand-off got it closed by the judge. Before giving a new kind of to-do an origin, read every `t.Origin` use and the apps' task filters.
 
 - A read-modify-write of shared assistant state needs a lock and a read that can fail (#2192). `ensureToday` looked for the day's card and then appended one, and `assistant_feed` has no unique key, so concurrent opens of a chat each made a card. A plan's tasks are one blob that `movePlan` writes whole, so tasks whose starts failed together wrote back each other's old errors. `trustKinds` read `tasks.trust` through a read that answered an empty map on error and wrote that back over every kind remembered before. Serialize the writers of one key (`cardLocks`, `patchPlanTask`, `trustMu`), read again under the lock instead of writing back a copy read earlier, skip the write when the read failed, and answer from the rows that were saved (`saveWrites`), not from memory. Where DST starts at midnight, `time.Date(y, m, d, 0, 0, 0, 0, loc)` is 23:00 the day before: take the date from `now` and the day's start from `dayStart`.
@@ -59,6 +77,8 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Key assistant prepare state and generated CLI wrappers by the same canonical directory (2026-11-06, #5831). Per-directory connector and CLI maps alone still leave a shared `assistant-bin` vulnerable: preparing another manager can remove a command or replace its connector when both use the same command name. Scope skill synchronization and process PATH too, and check CLI permissions using the authenticated assistant process's directory. Test two directories with disjoint connectors and a shared CLI name, then prepare or sign out one and verify the other's permissions and wrapper remain unchanged; include symlink aliases and unprepared directories. For `skills.list` callers that omit `cwd`, preserve discovery when the only prepared directory is non-default: prefer a prepared default, then the sole prepared directory, and never choose arbitrarily among several. An empty connector list still counts as prepared.
 
 - Reintroducing a retired model purpose must not read its dormant settings record (2026-11-06, #5921). Lark /agent uses a new override namespace and revision sequence, inheriting Agents until a new user save. Keep category-default assignment from creating an opt-in binding, include overrides in provider-in-use checks, and determine client editability from writable fields rather than `category_id != id`. Tests must seed the old record directly, then verify new conversation startup parameters before override, after save, and after reset; merely asserting the resolved binding misses startup precedence.
+
+- A second opt-in model override shows where the first was keyed by ID (#4232). Setting the AI twin apart like Lark /agent needed no new server path, but every client special-cased `id == "lark.agent"` for its status words, reset label and effort rule, so the twin's row and editor would have kept a category's wording (no "Separately configured", "Restore Default" instead of "Follow Agents") while being an override. Recognize such a row by data (`parent: "agent.new"` and writable `fields`) and keep ID checks for wording that really is one purpose's. Server tests start the twin through its own path (`startInboxAgent`), not the conversation route, and check that a save writes only its own key.
 
 - Model-settings HTTP labels must use `requestCtxLang(ctx)`, not `s.lang(ctx)` (2026-11-06, #5057). The latter reads only the hub's language, so catalog-driven launcher role labels can still ignore a client's `Accept-Language`. Test sequential requests with a different hub language, both discovered-model and fallback-model paths, and unchanged model IDs. MCP-only refusals remain original model text; they must not become exemptions for real HTTP, push or approval-card copy.
 
@@ -157,6 +177,14 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
   changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
   the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+- **What is handed out only once must not be dropped by a shortcut** (#4256). `plugins.assistant` gives a machine a
+  skill's files once and counts them as sent when it answers, but the minute refresh asked for them before deciding that
+  an unchanged CLAUDE.md needed no `assistant.prepare`, and dropped them: after an upgrade that changed only a skill, the
+  assistant's machine kept the old files for over an hour. The node then reported the skill missing
+  (`plugin_skills_need`), the files were queued to go again, and the next refresh dropped them the same way. Now the
+  refresh compares the skills' names and digests too, never skips an answer that brings files, and prepares a directory
+  again on its next round when the node reported skills missing there. For "the new skill has no effect", compare the
+  modification time of `~/.persona/plugin-skills/<name>/.persona-plugin` on the assistant's machine with the upgrade's.
 
 - Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.
 - **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
@@ -195,7 +223,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   " | " and with empty ones skipped (a trailing `||` adds no junk), clipped and escaped like any other cell. When
   changing how a table row is laid out, compare its card with its fallback.
 
-- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `clipMarkdown` (`assistant/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string.
+- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `clipMarkdown` (`assistant/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string. The same trap caught the task report's item body (#4093): it drew the answer with `CardMarkdown` *after* `clipMarkdown`, which flattens a chart to its title on its own, so the owner read the report with no numbers. Any Markdown a client draws that is clipped first must have `PersonaCards` run before the clip.
 
 - **A finished run's last write into the progress card has to wait out a card rate limit** (#3915). The progress tick
   answers 230020 by pausing its updates (`prog.quietUntil`), but the answer's write comes right after a tick's, and a
@@ -214,3 +242,90 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   docs promise ("Timed out, see the app"); a run with no card gets that line as a card of its own. Plugin channels, which
   send a note as plain text, stop being silent the same way. When a step ends a run without an answer, give it a note, or
   check what the sink does with a quiet end and no card.
+
+- **A quiet ending still needs a card to land on** (#4101). `channel.Run.Decide` ends a held run whose background work
+  reported back in a turn without words as `Quiet`, and the Feishu sink answered a quiet end only by rewriting the run's
+  card — but a held run gave its card back with its message, so the owner was told "N background tasks are still running"
+  and then heard nothing when they finished. The sink now builds the ending line for every quiet end and, with no card,
+  posts it as a card of its own (the same rule #3930's timeout relies on). The result stays quiet: the line is
+  "Done · took X", not an empty answer. With no card left it is posted for every ending except a message the owner
+  recalled, which gets no card of its own (that one only gets the card the run still has rewritten), and the line says
+  how the wait ended (#4228); and the quiet branch must not swallow errors the way it first did (#4229): a card update
+  refused for anything but a rate limit falls back to that card of its own, and an unreachable failure is returned so
+  `finishChannelRun` keeps the run and tries again — posting under an idempotency key made from the run id (`endKey`),
+  because the first attempt may have landed before its answer was lost.
+
+- **A card nests a list by four spaces per level, not by the Markdown rule** (#4180). Lark's Markdown component documents
+  one nesting level as four leading spaces (a list's sub-items are indented four spaces per level), while CommonMark — and
+  so a model writing an answer — indents a sub-item by its parent marker's width: two spaces under "- ", three under
+  "1. ". The answer's Markdown was passed through unchanged, so every nested list arrived as a flat list of siblings and
+  the hierarchy the answer was written with was gone. `CardMarkdown` now maps each item's observed indentation to a level
+  and writes four spaces per level (`listIndent` in `feishubot/card.go`) in one pass over the whole answer, so the levels
+  carry across a fenced code block and a list goes on around it; a list item's continuation lines, a list inside a
+  blockquote, and four-or-more-space indented code at the left margin stay as written, and a paragraph at the left margin
+  ends the list. Test the conversion through `CardMarkdown` and through the answer builder (`answerCards`).
+
+- **A list shown to a client holds the thing it names, not the records that produce it** (#4184). `feishu.view`'s
+  `agents` is "the Agents you have talked to in Lark", but it was built by walking the chat's thread bindings — and the
+  chat binds *every* card it posts about a conversation (the list card "Chat here" was pressed on, each progress card,
+  each answer card, each finished card), so one Agent talked to for a while filled the settings section with dozens of
+  copies of itself, in map order, keyed alike on both clients (web and iOS key those rows by session id). Fold the
+  bindings by machine + session, let the newest name the row, and sort it (rows of the same time by session): the same
+  source, read as what the field means. A test that binds three cards of one Agent along with two other Agents, and
+  loads the view ten times, shows it. The settings pages are the only readers — web and iOS key the rows by session id,
+  Android draws them in order — so none of them changes.
+
+- A read-only worker must be able to report while staying in plan mode (#4201). Denying `ExitPlanMode` does not remove
+  the provider's separate permission request for `report_to_supervisor`. Recognize both built-in namespaces with
+  `compat.MCPToolNames`: Paseo preserves the requested name, including the compatibility alias (#4318). Allow only
+  that tool for a supervised task with a current started read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
+  the terminal hook and Paseo then send no permission or mode update. Reuse `PlanTask.TodoID`, whose old bindings are
+  retired on takeover, rather than treating a historical read-only plan as authority for a new writable worker.
+
+- **A quiet ending is still an ending: it has to say how the run ended** (#4228). `channel.Run.Decide` returned a held
+  run's quiet result (`&Result{Quiet: true}`) from an early branch, before the `End` below it was computed — and it left
+  `Stopped` empty too — so `End` stayed `EndDone` whatever had happened, and once #4101 posted that line as a card of its
+  own the owner was told "Done" about a turn that was interrupted, hit a model API error, or lost its computer. Both
+  endings now come from one `endOf(rd, l)` (the turn's last notice, the failed turn, an offline machine), and the sink
+  posts the card of a quiet end unless it was recalled (`end != channel.EndRecalled`), not only when it ended as done:
+  gating the post on `EndDone` would have made every bad quiet ending silent instead. A branch that answers a run owes
+  it the same ending fields as the normal path.
+
+- **A model asked for an option's label copies whatever the input put next to it** (#3929). `delegate_input.md` lists an option as `label：description`, and with Chinese descriptions the delegation model often answered the whole line (`表驱动：和这个包现有的测试一致`): #3923's live runs saw it in 4 of 4, 2 of 5 and 1 of 4 runs of three cases. `interactionAnswers` found no such option, so a choice the assistant had decided to answer went to the user. `optionLabel` (`assistant/tools_apps.go`) now maps an answer to a label only when it writes out exactly one option, its label then a separator (`：`, `:`, a dash, or brackets) and that option's own description, with quotes or spaces; anything else is still refused. Don't widen it to prefixes or the model's own words after a label: those are free text, and a refused answer only costs the user one question. When a prompt shows options with extra text, expect it back and test the hub's check with the exact line the prompt renders.
+
+- **A new scheduled-task `repeat` must survive the apps that don't know it** (#4399). iOS decodes an unknown `repeat`
+  as `once`, and Android and the web send it back as they got it, all without the new rule's field. A `PUT` without
+  `cron` therefore keeps a cron task's `repeat` and `cron` and saves only the rest; otherwise switching such a task
+  off on an older iPhone turned it into a one-off with no time. Keep the new rule's own field out of a body whose
+  task doesn't have one (`cron` is sent only when set), and gate the editor on the hello feature (`task_cron`).
+
+## Cancel confirmation-blocked Agents without granting approval (#4277)
+
+Keep force archive separate from ordinary busy checks. A cancellation path must close the provider or terminal,
+reject or withdraw pending cards, and keep other work protected. A cached blocked inventory after close can undo
+a newly saved archive unless the closed timestamp fences that old snapshot. Persist the archive and a future
+close timestamp in one write before closing, then replace it with the real close time. A failed close removes
+the provisional record with an independent bounded context, including when the request was cancelled.
+Paseo's CLI `archive --force` skips
+a client-side busy check; its archive request has no force field and closes the provider runtime. Check the actual
+archive receipt before removing the Agent from a bridge's local list.
+
+## Standing authorization and notification evidence (#4398)
+
+A quoted instruction in task notes is not a durable grant. Keep explicit grants in manager storage, require the user's
+own approval when adding them, and compare revisions when a setting approval can race App revocation. Recheck the
+grant after condition reads and serialize its final answer against deletion in the database. Commit the answer and
+its task decision together before sending it to a hook. A plan approval must select `default` explicitly: an empty
+mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
+creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
+
+## A card the chat waits on must be in the chat (#4883)
+
+A Persona conversation's first Bash waited three and a half minutes for approval while its card was only inside the
+closed Needs you tray on the web (Android too) and on the Home overview; the owner typed "what happened?" twice and
+thought the assistant had hung. A request that blocks the turn is drawn above the composer on every client, like an
+Agent's; a tray or overview may count it and link to it, never be its only place. The same incident: a message typed
+mid-turn got no reply for minutes because the mid-turn note went in only with the optional background setting on, and
+the only line between tool calls was English to a Chinese owner. The node now always adds the note to a busy Claude
+(`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
+user's language in process text too.

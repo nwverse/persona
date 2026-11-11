@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
-import { recordingClock, transcriptTarget, type KBDetail, type MinutesPoint, type RecordingView } from "../../lib/kb";
+import { citedPhoto, formatSpan, minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesPoint, type RecordingView } from "../../lib/kb";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
-import { Button, copyText, toast } from "../../ui/atoms";
+import { Button, copyText, cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Card, SectionTitle, TonePill } from "./KBParts";
+import { PhotoCite, type MeetingPhotos } from "./RecordingPhotos";
 
 type Props = {
   detail: KBDetail;
@@ -15,10 +16,14 @@ type Props = {
   refresh: () => Promise<boolean>;
   onSaved: () => void;
   onJump: (id: string) => void;
+  /** The meeting's photos (#3862 phase 3): an item citing one shows it in place of its transcript time. */
+  photos?: MeetingPhotos;
 };
 
-/** Minutes are retained during regeneration; suggested actions become to-dos only on explicit confirmation. */
-export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved, onJump }: Props) {
+/** Minutes are retained during regeneration; suggested actions become to-dos only on explicit confirmation. A trimmed
+ *  recording (its transcript expired, #3780) keeps its minutes and their to-dos, but they can't be made again. An item
+ *  may cite a meeting photo instead of a transcript line (`"photo": n`): its thumbnail goes to it under **Photos**. */
+export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved, onJump, photos }: Props) {
   const heading = useId();
   const [busy, setBusy] = useState(false);
   const [needsRefresh, setNeedsRefresh] = useState(false);
@@ -29,6 +34,16 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   const minutes = detail.minutes;
   const state = detail.meta?.minutes_state;
   const remaining = minutes?.actions?.filter((action) => !action.todo_id) ?? [];
+
+  // Until when a trimmed one's minutes stay: the assistant's minutes_days in effect, when its hub says.
+  const [minutesDays, setMinutesDays] = useState<unknown>();
+  useEffect(() => {
+    if (!rec.trimmedAt) return;
+    let live = true;
+    api<{ minutes_days?: unknown }>("/assistant", auth).then((a) => { if (live && current()) setMinutesDays(a.minutes_days); }, () => {});
+    return () => { live = false; };
+  }, [rec.trimmedAt, auth, current]);
+  const keptUntil = rec.trimmedAt ? minutesKeptUntil(rec.startedAt, minutesDays) : undefined;
 
   useEffect(() => {
     if (state !== "pending") return;
@@ -80,7 +95,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
 
   if (detail.meta?.kind !== "meeting" && rec.partial) return null;
   const disabled = busy || needsRefresh;
-  const canGenerate = !!minutes || state === "failed" || (!rec.partial && !state);
+  const canGenerate = !rec.trimmedAt && (!!minutes || state === "failed" || (!rec.partial && !state));
   const time = (at: number) => {
     const clock = recordingClock(rec.startedAt, at);
     const target = transcriptTarget(rec.lines, at);
@@ -97,14 +112,19 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
       </button>
     );
   };
+  // An item's source: the photo it cites, else its time in the transcript.
+  const cite = (item: { at: number; photo?: number }) => {
+    const n = citedPhoto(item);
+    return n ? <PhotoCite n={n} at={item.at} rec={rec} photos={photos} onJump={onJump} /> : time(item.at);
+  };
   const points = (title: string, items?: MinutesPoint[]) => items?.length ? (
     <div className="px-4 py-3.5">
       <h3 className="mb-2 text-[13px] font-semibold text-ink">{title}</h3>
       <ul className="space-y-2">
         {items.map((item, i) => (
-          <li key={i} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] leading-relaxed">
+          <li key={i} className={cx("flex flex-wrap gap-x-3 gap-y-1 text-[13px] leading-relaxed", citedPhoto(item) ? "items-center" : "items-baseline")}>
             <p className="min-w-0 flex-1 break-words text-ink">{[item.who, item.text].filter(Boolean).join(" · ")}</p>
-            {time(item.at)}
+            {cite(item)}
           </li>
         ))}
       </ul>
@@ -121,7 +141,10 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
           </Button>}
         </div>
       } />
-      {(state === "pending" || state === "failed") && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
+      {rec.trimmedAt && <p data-minutes-kept className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
+        {minutesDays === 0 ? t("knowledge-kbdetail.minutes_kept_forever") : keptUntil ? t("knowledge-kbdetail.minutes_kept_until", { date: keptUntil }) : t("knowledge-kbdetail.minutes_transcript_expired")}
+      </p>}
+      {!rec.trimmedAt && (state === "pending" || state === "failed") && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
         {t(state === "failed" ? "knowledge-kbdetail.minutes_failed" : minutes ? "knowledge-kbdetail.minutes_updating" : "knowledge-kbdetail.minutes_writing")}
       </p>}
       {!minutes && !state && rec.partial && <p className="px-1 text-[12.5px] text-ink-3">{t("knowledge-kbdetail.minutes_waiting")}</p>}
@@ -132,7 +155,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
         <div className="px-4 py-3.5">
           <h3 className="break-words text-[14px] font-semibold leading-relaxed text-ink">{minutes.title}</h3>
           <div className="mt-1.5 space-y-1 break-words text-[12.5px] leading-relaxed text-ink-2">
-            {minutes.when && <p>{minutes.when}</p>}
+            {(minutes.start || minutes.when) && <p data-minutes-when>{formatSpan(minutes.start, minutes.end, minutes.when)}</p>}
             {minutes.where && <p>{t("knowledge-kbdetail.minutes_where", { where: minutes.where })}</p>}
             {!!minutes.attendees?.length && <p>{t("knowledge-kbdetail.minutes_attendees", { attendees: minutes.attendees.join(" · ") })}</p>}
           </div>
@@ -149,7 +172,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
             {minutes.actions.map((action) => <li key={action.id} className="py-2 first:pt-0 last:pb-0">
               <p className="break-words text-[13px] leading-relaxed text-ink">{[action.who, action.what, action.by, action.due_date && t("knowledge-kbdetail.minutes_due", { date: action.due_date })].filter(Boolean).join(" · ")}</p>
               <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-                {time(action.at)}
+                {cite(action)}
                 {action.todo_id ? <TonePill>{t("knowledge-kbdetail.minutes_added")}</TonePill> :
                   <Button tone="secondary" disabled={disabled} onClick={() => void run([action.id])}>{t("knowledge-kbdetail.minutes_add_todo")}</Button>}
               </div>

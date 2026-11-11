@@ -1,4 +1,8 @@
 {
+  "close_agent": "关掉这个 Agent",
+  "close_agent_confirm": "关闭并归档",
+  "close_agent_cancel": "取消",
+  "close_agent_hint": "取消待处理确认并关闭这个 Agent？对话会保留。",
   "approve_not_allowed": "此会话不允许审批",
   "already_answered": "这张卡片已经回答过了",
   "prompt_changed": "电脑上的对话框变了，已按新的屏幕重新生成",
@@ -26,7 +30,7 @@
   "request_changes": "打回修改",
   "approve": "批准",
   "approve_mode": "批准方式",
-  "permission_kicker": "需要你授权",
+  "permission_kicker": "在等你批准",
   "permission_title": "允许使用 {tool}？",
   "denied_message": "用户拒绝了",
   "deny": "拒绝",

@@ -2,14 +2,15 @@
 // list grouping and ranking, search results merged by entry with the words marked, which tags a row has room for,
 // the timeline, the profile without what the header shows, and the message "Ask Persona" sends. The iOS app is the
 // reference (apple/Persona/Views/Knowledge/KnowledgeView.swift, apple/Shared/Knowledge.swift).
+import type { TopicPoint } from "./kb-points";
 import { formatDate, t } from "../i18n";
 import { contextBody } from "./context-body";
 import type { Session } from "./types";
 
-export const KB_KINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
+export const KB_KINDS = ["projects", "topics", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
 export type KBKind = (typeof KB_KINDS)[number];
 
-export const KIND_TITLE: Record<KBKind, string> = { projects: t("lib-kb.kind_projects"), chats: t("lib-kb.kind_chats"), people: t("lib-kb.kind_people"), docs: t("lib-kb.kind_docs"), meetings: t("lib-kb.kind_meetings"), events: t("lib-kb.kind_events"), recordings: t("lib-kb.kind_recordings") };
+export const KIND_TITLE: Record<KBKind, string> = { projects: t("lib-kb.kind_projects"), topics: t("lib-kb.kind_topics"), chats: t("lib-kb.kind_chats"), people: t("lib-kb.kind_people"), docs: t("lib-kb.kind_docs"), meetings: t("lib-kb.kind_meetings"), events: t("lib-kb.kind_events"), recordings: t("lib-kb.kind_recordings") };
 
 export function isKind(k: unknown): k is KBKind {
   return typeof k === "string" && (KB_KINDS as readonly string[]).includes(k);
@@ -35,7 +36,7 @@ export interface KBEntry {
   relevance: number;
   tags?: string[] | null;
   updated?: string;
-  /** projects: "short · active" (kind · status); chats: dm / group… */
+  /** projects: "short · active" (kind · status); chats: dm / group…; topics: how many knowledge points, in decimal */
   extra?: string;
 }
 
@@ -74,12 +75,24 @@ export interface KBDetail {
   segments?: KBSegment[] | null;
   /** Recordings may retain older minutes while a newer revision is pending or failed. */
   minutes?: RecordingMinutes | null;
+  /** topics: the knowledge points (docs/assistant/knowledge.md "Knowledge points"). */
+  points?: TopicPoint[] | null;
+}
+
+/** A topic's point count from its list entry (extra) or its metadata (points). */
+export function topicPointCount(e: Pick<KBEntry, "kind" | "extra">, meta?: Record<string, unknown> | null): number | null {
+  if (e.kind !== "topics") return null;
+  if (typeof meta?.points === "number") return meta.points;
+  const n = Number.parseInt(e.extra ?? "", 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 export interface MinutesPoint {
   text: string;
   at: number;
   who?: string;
+  /** The meeting photo it cites instead of a transcript line (#3862 phase 3): its `n`; `at` is then the photo's. */
+  photo?: number;
 }
 
 export interface MinutesAction {
@@ -90,6 +103,8 @@ export interface MinutesAction {
   due_date?: string;
   at: number;
   todo_id?: string;
+  /** The meeting photo it cites instead of a transcript line (#3862 phase 3): its `n`; `at` is then the photo's. */
+  photo?: number;
 }
 
 export interface RecordingMinutes {
@@ -97,7 +112,11 @@ export interface RecordingMinutes {
   revision: number;
   generated_at: string;
   title: string;
+  /** The hub's fixed-format span ("2026-11-10 14:00–15:10"), shown only without `start` / `end` (an older hub). */
   when: string;
+  /** The recording's span (RFC 3339, #4713), formatted here like the app's other dates (`formatSpan`). */
+  start?: string;
+  end?: string;
   where?: string;
   attendees?: string[];
   points?: MinutesPoint[];
@@ -125,10 +144,31 @@ export interface RecordingAsk {
   answer: string;
   lang?: string;
   speak?: boolean;
-  sources?: { kind: string; id: string; name: string; when?: string }[] | null;
+  /** An earlier meeting's `when` / `start` / `end` are its minutes' (#4713). */
+  sources?: { kind: string; id: string; name: string; when?: string; start?: string; end?: string }[] | null;
   error?: string;
   asked_at: string;
   answered_at?: string;
+  /** A room meeting's (#3862, "Asking the room"): how it is answered once its first attempt went out (`room` or
+   *  `material`), and the lines a heard question was made of. */
+  via?: string;
+  heard?: KBSegment[] | null;
+}
+
+/** A room meeting's room conversation as `GET …/live` and `detail.meta` give it (docs/assistant/meeting-minutes.md
+ *  "Fields on `GET …/live` and `detail.meta`", #3862). `state` and `problem` are open sets: an unknown state reads as
+ *  `starting`; the ids come once it has started. */
+export interface MeetingRoom {
+  state: string;
+  machine_id?: string;
+  session_id?: string;
+  problem?: string;
+}
+
+/** One of a meeting's conversations (its follow-up), by ids. */
+export interface MeetingConversation {
+  machine_id: string;
+  session_id: string;
 }
 
 /** `GET /api/v1/recordings/{id}/live`: how far the attending session has been fed, and the meeting's questions. */
@@ -140,6 +180,101 @@ export interface RecordingLive {
   /** Open set: attendee_unavailable, attendee_not_allowed, live_full today. */
   problem?: string;
   asks?: RecordingAsk[] | null;
+  /** The meeting conversation (#3862): the private mark (absent until chosen), a room meeting's room, the follow-up once
+   *  made, and each part's revision (`room`, `asks`, `private`, `followup`; numbers that only go up). `photos` has a
+   *  revision here and no field: its list is `GET …/photos` (phase 3). */
+  private?: boolean;
+  room?: MeetingRoom;
+  followup?: MeetingConversation;
+  revs?: Record<string, number>;
+}
+
+/** One of a meeting's photos as `GET /api/v1/recordings/{id}/photos` lists them (docs/assistant/meeting-minutes.md
+ *  "Phase 3: photos", #3862): `n` counts from 1 per recording and is never reused, `at` is seconds from the start,
+ *  `text` what the phone recognized in it, `caption` the owner's words, `note` the room's description, `cited` whether
+ *  the current minutes cite it, `forwarded` whether it went into the room. Its image is `GET …/photos/{n}`. */
+export interface RecordingPhoto {
+  n: number;
+  id: string;
+  at: number;
+  mime: string;
+  width: number;
+  height: number;
+  text?: string;
+  caption?: string;
+  note?: string;
+  cited: boolean;
+  forwarded: boolean;
+  added_at: string;
+}
+
+/** The photo a minutes item cites (`"photo": n`), when it names one. */
+export function citedPhoto(item: { photo?: unknown }): number | undefined {
+  return Number.isInteger(item.photo) && (item.photo as number) > 0 ? (item.photo as number) : undefined;
+}
+
+/** `GET …/photos`'s list read defensively, oldest first: entries without a positive whole `n` or a string `id` are left
+ *  out, blank texts read as absent. */
+export function recordingPhotos(v: unknown): RecordingPhoto[] {
+  const raw = v && typeof v === "object" && !Array.isArray(v) ? (v as { photos?: unknown }).photos : undefined;
+  if (!Array.isArray(raw)) return [];
+  const out: RecordingPhoto[] = [];
+  for (const x of raw as Record<string, unknown>[]) {
+    if (!x || typeof x !== "object" || !Number.isInteger(x.n) || (x.n as number) <= 0 || typeof x.id !== "string" || !x.id) continue;
+    const words = (k: "text" | "caption" | "note") => (typeof x[k] === "string" && (x[k] as string).trim() ? { [k]: (x[k] as string).trim() } : {});
+    out.push({
+      n: x.n as number, id: x.id, at: typeof x.at === "number" && Number.isFinite(x.at) ? Math.max(0, x.at) : 0,
+      mime: str(x.mime) ?? "", width: Number(x.width) || 0, height: Number(x.height) || 0,
+      ...words("text"), ...words("caption"), ...words("note"),
+      cited: x.cited === true, forwarded: x.forwarded === true, added_at: str(x.added_at) ?? "",
+    });
+  }
+  return out.sort((a, b) => a.n - b.n);
+}
+
+/** What `detail.meta` (or a `GET …/live`) says of a recording's meeting conversation (#3862): well-formed values only. */
+export interface MeetingMeta {
+  room?: MeetingRoom;
+  followup?: MeetingConversation;
+  private?: boolean;
+}
+
+/** The room, follow-up and private mark a recording's metadata carries, read defensively. */
+export function meetingMeta(meta?: Record<string, unknown> | null): MeetingMeta {
+  const out: MeetingMeta = {};
+  const room = meetingRoom(meta?.room);
+  if (room) out.room = room;
+  const followup = meetingConversation(meta?.followup);
+  if (followup) out.followup = followup;
+  if (typeof meta?.private === "boolean") out.private = meta.private;
+  return out;
+}
+
+/** A room as the apps read it: an object with a string state; its ids only both together, its problem only when given. */
+export function meetingRoom(v: unknown): MeetingRoom | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const r = v as Record<string, unknown>;
+  if (typeof r.state !== "string") return undefined;
+  return { state: r.state, ...meetingConversation(r), ...(typeof r.problem === "string" && r.problem ? { problem: r.problem } : {}) };
+}
+
+/** A conversation's ids, both non-empty strings, or nothing. */
+export function meetingConversation(v: unknown): MeetingConversation | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const r = v as Record<string, unknown>;
+  return typeof r.machine_id === "string" && r.machine_id && typeof r.session_id === "string" && r.session_id
+    ? { machine_id: r.machine_id, session_id: r.session_id } : undefined;
+}
+
+/** Whether a recording is a meeting as #2981 counts them (`kind: meeting` or minutes asked for): only those take the
+ *  private mark (docs/assistant/meeting-minutes.md "The private mark"). */
+export function countsAsMeeting(meta?: Record<string, unknown> | null): boolean {
+  return meetingKind(meta) || meta?.minutes_asked === true;
+}
+
+/** Whether a recording's `kind` is `meeting`: only those take photos (#3862 phase 3, `409 not_meeting` otherwise). */
+export function meetingKind(meta?: Record<string, unknown> | null): boolean {
+  return str(meta?.kind)?.trim().toLowerCase() === "meeting";
 }
 
 /** A line a search found: `path` relative to the data dir, `n` its line number in that file. */
@@ -288,6 +423,11 @@ export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): Entr
         footer: t("lib-kb.ignored_footer"),
       },
     ];
+  } else if (kind === "topics") {
+    // Topics are curated as a whole: one list, the ones with the most knowledge first after any importance set by hand.
+    const n = (e: KBEntry) => topicPointCount(e) ?? 0;
+    const sorted = [...items].sort((a, b) => importanceRank(a.importance) - importanceRank(b.importance) || n(b) - n(a) || a.name.localeCompare(b.name));
+    out = [{ key: "all", title: tag ? `#${tag}` : t("lib-kb.section_all"), items: sorted }];
   } else if (tag) {
     out = [{ key: "tag", title: `#${tag}`, items: list }];
   } else {
@@ -526,6 +666,7 @@ export function entryFromDetail(base: KBEntry | undefined, d: KBDetail): KBEntry
   const line = str(m.one_line) || str(m.note);
   if (line) e.one_line = line;
   if (e.kind === "projects" && str(m.kind)) e.extra = `${str(m.kind)} · ${str(m.status) || "active"}`;
+  if (e.kind === "topics" && typeof m.points === "number") e.extra = String(m.points);
   return e;
 }
 
@@ -587,6 +728,9 @@ export interface RecordingView {
   attendance?: "listener" | "participant";
   /** The session that attends; absent: the main chat. */
   attendingSession?: { machineId: string; sessionId: string };
+  /** When its transcript expired with `recording_days` and only the minutes were kept (`meta.trimmed_at`, #3780); absent
+   *  while it is whole. */
+  trimmedAt?: string;
 }
 
 /** Local wall-clock time shared by minutes and transcript; offsets when the start is unknown. */
@@ -631,6 +775,7 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   const role = str(meta?.attendance);
   const attending = meta?.attending_session as { machine_id?: unknown; session_id?: unknown } | null | undefined;
   const machineId = str(attending?.machine_id), sessionId = str(attending?.session_id);
+  const trimmed = str(meta?.trimmed_at);
   return {
     startedAt: Number.isFinite(t0) ? started : undefined,
     duration: Number.isFinite(secs) && secs > 0 ? durationLabel(secs) : undefined,
@@ -641,7 +786,16 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
     ...(role === "listener" || role === "participant" ? { attendance: role } : {}),
     // Both ids or none: anything else names no session, and the main chat attends.
     ...(machineId && sessionId ? { attendingSession: { machineId, sessionId } } : {}),
+    ...(trimmed && Number.isFinite(Date.parse(trimmed)) ? { trimmedAt: trimmed } : {}),
   };
+}
+
+/** The day a trimmed recording's minutes go (#3780): `days` (the assistant's `minutes_days` in effect) after it
+ *  started, as a date; undefined when either is unknown or days is 0 (forever). */
+export function minutesKeptUntil(startedAt: string | undefined, days: unknown): string | undefined {
+  const start = Date.parse(startedAt ?? "");
+  if (!Number.isFinite(start) || typeof days !== "number" || !Number.isInteger(days) || days <= 0) return undefined;
+  return yearMonthDay(new Date(start + days * 86_400_000));
 }
 
 /** 3733 → "1 h 2 min"; 200 → "3 min 20 s"; 42 → "42 s" (in Chinese). */
@@ -674,6 +828,17 @@ export function formatAt(iso: string, now = new Date()): string {
   return d.getFullYear() === now.getFullYear()
     ? t("lib-kb.at_this_year", { date: monthDay(d), weekday: weekday(d), time: hm })
     : t("lib-kb.at_other_year", { date: yearMonthDay(d), time: hm });
+}
+
+/** A span the hub sends as `start` / `end` (RFC 3339) in this app's dates, as `formatAt` says a time (#4713): "Fri, Oct 30
+ *  14:00–15:10", with the end's date too when it is another day. `fallback` (the hub's fixed-format `when`) when either
+ *  is missing or unreadable: a hub from before them. */
+export function formatSpan(start: string | undefined, end: string | undefined, fallback = "", now = new Date()): string {
+  const s = new Date(start ?? "");
+  const e = new Date(end ?? "");
+  if (!start || !end || Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return fallback;
+  const sameDay = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth() && s.getDate() === e.getDate();
+  return sameDay ? `${formatAt(start, now)}–${pad(e.getHours())}:${pad(e.getMinutes())}` : `${formatAt(start, now)} – ${formatAt(end, now)}`;
 }
 
 /** "2026-10-30" → "Fri, Oct 30", with the year when it is not this one. */

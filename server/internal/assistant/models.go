@@ -58,6 +58,7 @@ type ModelPurpose struct {
 	Name          string       `json:"name"`
 	Group         string       `json:"group"`
 	Kind          string       `json:"kind"`
+	Launch        string       `json:"launch,omitempty"` // derived from the purpose, never stored or edited
 	Parent        string       `json:"parent,omitempty"`
 	MachineID     string       `json:"machine_id,omitempty"`
 	Override      ModelBinding `json:"override"`
@@ -71,10 +72,35 @@ type ModelPurpose struct {
 	Runtimes      []string     `json:"runtimes,omitempty"` // assistant only: the runtimes it can run on
 }
 
+// launch is the purpose's execution form, independent of its provider or runtime.
+// API and plugin purposes never launch a process, even when their parent does.
+func (p ModelPurpose) launch() string {
+	if p.Kind != "launcher" {
+		return ""
+	}
+	for _, id := range []string{p.ID, p.Parent} {
+		switch id {
+		case "assistant", "schedule", "inbox.agent", "lark.agent":
+			return "headless"
+		case "agent.new":
+			return "engine"
+		}
+		if strings.HasPrefix(id, "task.") {
+			return "headless"
+		}
+	}
+	return ""
+}
+
 var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate"}
 
-// The catalog also includes an opt-in override; category-default assignment must not write it.
-var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeLarkAgent)
+// The catalog also includes the opt-in overrides of Agents (agentsOverride), in the order of Agents' uses;
+// category-default assignment must not write them.
+var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent)
+
+// agentsOverride: a use of Agents the user may set apart, the AI twin (#4232) or Lark /agent. With nothing saved it
+// follows Agents; every other use follows its category only.
+func agentsOverride(id string) bool { return id == purposeAgent || id == purposeLarkAgent }
 
 // modelPurposes are the uses; Name, Group and Uses hold catalog names (assistant-models), read in a language by
 // localized.
@@ -96,6 +122,7 @@ var modelPurposes = []ModelPurpose{
 	{ID: "kb.dedupe", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.items", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.moments", Group: "group_processing", Kind: "api", Parent: "kb"},
+	{ID: "kb.topics", Group: "group_processing", Kind: "api", Parent: "kb"}, // knowledge points by topic (kb/topics.go)
 	{ID: "assistant.title", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // New chat: a direction or a quick chat (route.go)
 	{ID: "agent.title", Group: "group_processing", Kind: "api", Parent: "kb"},
@@ -160,19 +187,19 @@ var errModelConflict = i18n.Err("assistant-models.err_conflict")
 
 func modelKey(id string) string { return "model_config." + id }
 
-// Lark /agent and a task's own use were retired with category-only settings. A fresh namespace keeps dormant records
-// (model_config.lark.agent, model_config.task.<id>) inert, including their revisions. Only a new user save creates
-// such a record.
+// The AI twin, Lark /agent and a task's own use were retired with category-only settings. A fresh namespace keeps
+// dormant records (model_config.inbox.agent, model_config.lark.agent, model_config.task.<id>) inert, including their
+// revisions. Only a new user save creates such a record.
 func modelRecordKey(id string) string {
-	if id == purposeLarkAgent || isTaskPurpose(id) {
+	if agentsOverride(id) || isTaskPurpose(id) {
 		return "model_config.overrides.v1." + id
 	}
 	return modelKey(id)
 }
 
 func modelRecordID(p ModelPurpose) string {
-	// Lark /agent, an extension's purpose and a task's own use have records of their own.
-	if p.CategoryID != "" && p.ID != purposeLarkAgent && !isExtensionPurpose(p.ID) && !isTaskPurpose(p.ID) {
+	// The AI twin, Lark /agent, an extension's purpose and a task's own use have records of their own.
+	if p.CategoryID != "" && !agentsOverride(p.ID) && !isExtensionPurpose(p.ID) && !isTaskPurpose(p.ID) {
 		return p.CategoryID
 	}
 	return p.ID
@@ -192,8 +219,9 @@ type modelsState struct {
 
 	customMu sync.Mutex // one change of the remembered typed ids at a time (models_custom.go)
 
-	zshrcMu sync.Mutex
-	zshrc   map[string][]proto.Launcher // machine → its rc-file launchers (nil: not asked since the start)
+	zshrcMu         sync.Mutex
+	zshrc           map[string][]proto.Launcher // machine → its rc-file launchers (nil: not asked since the start)
+	zshrcRefreshing bool                        // one background refresh fills the last-seen snapshot at a time
 	// zshrcSync: how each machine's list came in the last time they were asked (设置 › 模型供应商's 各台电脑).
 	zshrcSync map[string]LauncherSync
 

@@ -17,7 +17,7 @@ import { uuid } from "./format";
 import { openPanel } from "./panel";
 import { navigate, parse as parseRoute } from "./router";
 import { BASE, stripBase } from "./base";
-import { contextBody } from "./context-body";
+import { contextXML } from "./context-xml";
 import { otherManager } from "./manager-choice";
 import { localhostLink, PREVIEW_FEATURE } from "./preview";
 import type { PortLink } from "./port-links";
@@ -33,7 +33,7 @@ export type LinkRoute =
   | { kind: "session"; mid: string; sid: string } // persona://session/<machine>/<session>: that conversation
   | { kind: "agent"; mid: string; sid: string } // this hub's /s/<machine>/<session>: that agent's chat in the panel
   | { kind: "task"; id: string } // this hub's /todos?id=<todo>: that task in the panel
-  | { kind: "conversation"; sid: string } // this hub's /persona/<id>: that assistant conversation, in place
+  | { kind: "conversation"; sid: string; mid?: string; manager?: string } // this hub's /persona/<id>: that assistant conversation, in place (with the computer and manager its address names)
   | { kind: "web" } // any other http(s) page: a new tab
   | { kind: "system" } // mailto: / tel:: the browser hands it to the system
   | { kind: "none" }; // anything else (javascript:, other apps' schemes, not a URL): not followed
@@ -137,7 +137,11 @@ function hubPage(u: URL, origin: string | string[], base: string): LinkRoute | n
     return null;
   }
   if (p[0] === "s" && p[1] && p[2] && p.length === 3) return { kind: "agent", mid: p[1], sid: p[2] };
-  if (assistantPath(p[0]) && p[1] && p[1] !== "new" && p.length === 2) return { kind: "conversation", sid: p[1] };
+  if (assistantPath(p[0]) && p[1] && p[1] !== "new" && p.length === 2) {
+    const mid = u.searchParams.get("machine");
+    const manager = u.searchParams.get("manager");
+    return { kind: "conversation", sid: p[1], ...(mid ? { mid } : {}), ...(manager ? { manager } : {}) };
+  }
   if (p[0] === "todos" && p.length <= 2) {
     const id = p[1] || u.searchParams.get("id");
     if (id) return { kind: "task", id };
@@ -252,7 +256,7 @@ export function openLink(url: string, title?: string, manager?: string) {
       else openPanel({ kind: "task", todo: r.id });
       return;
     case "conversation":
-      navigate({ name: "persona", sid: r.sid });
+      navigate({ name: "persona", sid: r.sid, ...(r.mid ? { mid: r.mid } : {}), ...(r.manager ? { manager: r.manager } : {}) });
       return;
     case "doc":
     case "moments":
@@ -303,39 +307,23 @@ export function prefetchLink(url: string | undefined, manager?: string) {
 /** A piece of a page the user picked (LinkSheet.swift ContextRef). `text` is "(whole document)" in Chinese for a whole document. */
 export interface ContextRef {
   id: string;
-  /** "workspace": a folder on a computer picked in the @ menu, carrying `machine` and `cwd` (docs/protocol/protocol.md "Tags in messages"). */
-  kind: "context" | "edit" | "workspace";
+  /** "workspace": a folder on a computer picked in the @ menu, carrying `machine` and `cwd` (docs/protocol/protocol.md "Tags in messages").
+   *  "forward": a message forwarded from another chat (lib/forward.ts, docs/protocol/protocol.md "Forwarded messages"). */
+  kind: "context" | "edit" | "workspace" | "forward";
   title: string;
   url: string;
   text: string;
-  /** Extra attributes written on the tag after kind / title / url (a workspace's `machine` and `cwd`). */
+  /** Extra attributes written on the tag after kind / title / url (a workspace's `machine` and `cwd`, a forward's `msg` and metadata). */
   attrs?: Record<string, string>;
+  /** A forward's line under its card over the box: which computer it comes from and where it goes. Shown, never sent. */
+  route?: string;
 }
 
 // i18n-ignore: a marker inside <persona-context>, the app (QuoteViews.swift) matches it
 export const WHOLE = "（整篇）";
 
-function escAttr(s: string) {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/** `<persona-context kind="…" title="…" url="…">\ntext\n</persona-context>`, as the phone writes it. */
-export function contextXML(r: Pick<ContextRef, "kind" | "title" | "url" | "text" | "attrs">): string {
-  const body = contextBody(r.text);
-  const extra = Object.entries(r.attrs ?? {})
-    .filter(([k]) => /^[a-z_]+$/.test(k) && k !== "kind" && k !== "title" && k !== "url")
-    .map(([k, v]) => ` ${k}="${escAttr(v)}"`)
-    .join("");
-  return `<persona-context kind="${escAttr(r.kind)}" title="${escAttr(r.title)}" url="${escAttr(r.url)}"${extra}>\n${body}\n</persona-context>`;
-}
-
-/** A message with its picked contexts in front (ChatView.swift sendText). */
-export function withContexts(refs: Pick<ContextRef, "kind" | "title" | "url" | "text" | "attrs">[], text: string, hasImages = false): string {
-  const typed = text.trim();
-  if (!refs.length) return typed;
-  const body = typed || (hasImages ? t("lib-links.see_images") : t("lib-links.see_context"));
-  return `${refs.map(contextXML).join("\n")}\n\n${body}`;
-}
+// writing the tags: lib/context-xml.ts (no store, no router: New agent and the tests take it alone)
+export { contextXML, withContexts } from "./context-xml";
 
 /** "AI edit": the picked text and what to do with it, sent at once (LinkSheet.swift sendEdit). */
 export function editMessage(r: Pick<ContextRef, "title" | "url" | "text">, ask: string): string {

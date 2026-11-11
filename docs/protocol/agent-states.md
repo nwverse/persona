@@ -7,12 +7,12 @@ whether there's a pending interaction, and whether the user has looked at it in 
 
 | State | Meaning | From herdr | Persona adds | Color |
 | --- | --- | --- | --- | --- |
-| `needs_you` Needs you | Stuck somewhere a person must step in | `blocked` (a question / confirm box in the TUI) | A pending question, plan, permission or terminal interaction (herdr still shows working while a hook holds it) | Red, breathing |
+| `needs_you` Needs you | Stuck somewhere a person must step in | `blocked` (a question / confirm box in the TUI) | A pending question, plan, permission or terminal interaction (herdr still shows working while a hook holds it) | Blue, breathing |
 | `working` Working | Running | `working` | Claude: herdr reports `done` / `idle` / `unknown`, but the session has hooks (Persona's, or the global report-only ones) and the hook turn count says the turn isn't over (see "Hook turn signals" below); for sessions without hooks, the terminal title shows Claude Code's working spinner glyph (◐◓◑◒; older versions used braille dots), or the transcript shows this turn has started and not ended (no `turn_duration`, not interrupted) and was written within 45 seconds (#2069; if the transcript shows the turn ended, herdr's state is used). "Written" is its newest timestamped line, not the file's mtime: Claude Code rewrites its trailing metadata in place while idle (#5967); or the turn has stopped but its background commands / sub-Agents / Monitor / workflow are still running (#2228, #2935: when they finish they hand it the result and it carries on; assistant chats excluded) | Amber, breathing |
 | Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count | Amber, faded, still |
 | `unread` Unread | A turn finished and the result hasn't been seen | `done` (never focused in herdr) | And not viewed in the App since it finished | Green |
 | `idle` Seen | Finished and seen, waiting for input | `idle` (seen in herdr) | Or herdr still says `done` but it was viewed in the App | Gray |
-| `offline` Not running | Not in the host, only a transcript; sending a message does `--resume` | — | — | Light gray |
+| `offline` Not running | Not in the host, only a transcript. An Agent of a terminal engine is read-only (#4754): a message is refused (`agent_stopped`), and Resume on its terminal page brings it back (`--resume`) | — | — | Light gray |
 | `interrupted` Interrupted by restart | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
 
@@ -28,13 +28,17 @@ iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs
 forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; older apps still show Seen):
 
 - **What it asks** (`asks`): the node takes the question to the user from the turn's whole last reply (`last_text` is only its
-  first 200 runes, and the question is usually at the end) with `transcript.AskOf`, rules only, no model: one of the last three
+  first 200 runes, and the question is usually at the end) with `closeout.AskOf` (the words through `transcript.AskOf`), rules only, no model: one of the last three
   sentences ending in a question mark, or carrying a phrase that hands a decision over (要不要 / 要我 / 是否需要 / 请确认 / 选哪个 /
   告诉我 / 跟我说一声 / 选定后…, "Should I / Do you want / Let me know…", ますか / でしょうか…). Code blocks don't count, nor a
   phrase when the close says there is nothing to decide (没有需要你拍板的问题; a real question mark before it still counts), nor a reply a newer message came after (the user already
   answered; a host's answer such as botmux's counts the same way when the host gives its time). Marks inside inline code and links end no sentence (`user?.name`,
   `…?w=1` ask nothing; the question keeps their words), an ASCII `?` only ends a sentence before a space or the line's end, and a Chinese sentence ending in
-  吗 asks even without its question mark (not 么 / 呢: "…为什么。" is a statement). The node marks the session `asks_read`; only without it (an older node, a
+  吗 asks even without its question mark (not 么 / 呢: "…为什么。" is a statement). A reply whose closeout
+  (`../assistant/agent-work.md` "Closeout") says `status="done"` with no `missing` and no `waiting` line asks nothing,
+  wherever its question stands (#4110, `closeout.WaitsOnNobody`): it is the Agent's own word that the turn waits on
+  nobody, so a closing question is conversation or an offer, as triage reads the same closeout. `not_done`, `blocked`,
+  `done` with something missing or waited for, and no closeout at all leave the words to decide, as before. The node marks the session `asks_read`; only without it (an older node, a
   host that does not say) the manager reads `last_text` itself, and only when it was not cut.
 - **Still waiting** (`awaits_reply`, the manager's): Unread or Seen, no pending interaction (that is Needs You), no model
   error, no background work or `/loop`, and either the triage says it waits on the user (not put off on its card:
@@ -93,6 +97,13 @@ Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
   in a herdr pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
+- **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
+  hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
+  the session as `blocked` with the dialog's first line as `attention_reason`, so the manager makes its screen card. The pane is read again every
+  3 s while the dialog stays, until it is gone (or after 3 minutes); keys pressed into the pane drop what was read at once.
+  Why: Claude Code 2.1.322 runs the PermissionRequest hooks for its own safety checks ("Dangerous rm operation …", asked in bypass mode too)
+  but ignores an allow for them. The phone's Always Allow closed the card, herdr kept saying working, and the dialog held the terminal with
+  nothing on the phone to answer it: every message was refused as `dialog_open`.
 
 - **Has hooks and `prompts > completed`**: Working, overriding herdr's `done`.
 - **Has hooks, `prompts == completed`, and a `Stop` was seen**: not working; a leftover spinner glyph in the terminal title doesn't count. Exception: if the transcript has a turn written after the `Stop` (with a 5-second grace for the closing lines) that hasn't ended,
@@ -183,8 +194,13 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
 DSH (`docs/integrations/dsh.md`): `space_kind` is `dsh`, the space is the session's directory (`space_id` = directory, `space_name` = directory name), no slots;
 state comes from the plugin: running → working, a permission / question waiting → blocked, otherwise done (the hub splits it into Unread / Seen by whether it's been seen, as usual).
 
+Codex App (`docs/integrations/codex.md` ("Sessions in the Codex desktop App (App-local IPC)")): `space_kind` is `codex_app`, the space is a project of the App's sidebar
+(`space_id` = `codex-project:<repository root>`, `space_name` = the App's name for it) or its chats in no project (`codex-chats:<CODEX_HOME>`);
+`space_index` is the project's place in the App's sidebar, from 1 (its `project-order`), absent for a project the App does not order and for chats in no project.
+
 Paseo (`docs/integrations/paseo.md` ("Which sessions appear")): `space_kind` is `paseo`, the space is a Paseo project (`space_id` = project record id, `space_name` = project name);
-a repository's main checkout and its worktrees share a space; the slot is a Paseo workspace (`slot_id` = workspace id, `slot_name` = workspace title).
+a repository's main checkout and its worktrees share a space. No slots (#4493): a workspace's Agents are separate conversations, not the panes of one tab;
+`slot_name` alone carries the Paseo workspace's title, as the Agent's place label.
 
 opencode (`docs/integrations/opencode.md`): those in herdr panes are herdr sessions (`space_kind` is `herdr`); those outside herdr (web, other terminals) are runtime sessions,
 `space_kind` is `opencode`, the space is the session's directory, no slots, and state comes from the plugin (running → working, waiting on a permission → blocked, otherwise done / idle depending on whether there's an assistant message).

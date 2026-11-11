@@ -8,10 +8,11 @@ extension MarkdownUI.Theme {
     /// The base size is the body level's (`Theme.Level.body`: 17 on the iPhone, 13 on the Mac, where a fixed 17 put
     /// replies and profiles a size above the user's bubble, #779); MarkdownUI scales it with Dynamic Type (a
     /// ScaledMetric relative to .body), so a reply and the user's bubble are one size at every setting. Headings follow
-    /// `Theme.Font`: the first is the title level (1.3 em), the others the heading level (body size, semibold), told
-    /// apart by the space above them; code blocks are the code level. Paragraphs have the body's line height (1.45:
-    /// 0.26 em over SF's own 1.19). On the Mac, where ScaledMetric does not follow Small / Standard / Large, the base size is
-    /// times `Theme.Font.scale` (#833) and the theme is made again when it changes (once on the iPhone).
+    /// `Theme.Font`: the first is the title level (1.3 em), the second and third the heading level (body size, semibold),
+    /// told apart by the space above them, the rest a step smaller in a quieter ink (`minorHeading`); code blocks are the
+    /// code level. Paragraphs have the body's line height (1.45: 0.26 em over SF's own 1.19). On the Mac, where
+    /// ScaledMetric does not follow Small / Standard / Large, the base size is times `Theme.Font.scale` (#833) and the
+    /// theme is made again when it changes (once on the iPhone).
     @MainActor static var persona: MarkdownUI.Theme { personaAtScale.value }
     @MainActor private static let personaAtScale = PerTextScale { makePersona() }
 
@@ -19,26 +20,39 @@ extension MarkdownUI.Theme {
         MarkdownUI.Theme()
             .text { FontSize(Theme.Level.body.size * Theme.Font.scale) }
             .code {
+                #if os(macOS)
                 FontFamilyVariant(.monospaced)
                 FontSize(.em(ReplyMetrics.inlineCode))
                 BackgroundColor(Theme.codeBackground)
+                #else
+                // In the body's color on light gray, tappable to copy (#2984, `CodeCopyMarkdown`): applied after a
+                // link's style, so a copy link keeps it; a path that opens is linked as plain words and stays blue.
+                // Monospaced as the code blocks are, which holds because the blocks give their runs their fonts (`runFonts`).
+                FontFamilyVariant(.monospaced)
+                FontSize(.em(ReplyMetrics.inlineCode))
+                ForegroundColor(Theme.primaryText)
+                BackgroundColor(Theme.inlineCodeBackground)
+                #endif
             }
             .strong { FontWeight(.semibold) }
             .link { ForegroundColor(Theme.accent) }
             .heading1 { config in
-                config.label.markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
+                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
                     .markdownTextStyle { FontWeight(.bold); FontSize(.em(ReplyMetrics.heading1.size)) }
             }
             .heading2 { config in
-                config.label.markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
+                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .heading3 { config in
-                config.label.markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
+                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
+            .heading4 { config in minorHeading(config) }
+            .heading5 { config in minorHeading(config) }
+            .heading6 { config in minorHeading(config) }
             .paragraph { config in
-                config.label.fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
+                config.label.runFonts().fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
                     .markdownMargin(top: 0, bottom: ReplyMetrics.paragraphBottom)
             }
             .listItem { config in config.label.markdownMargin(top: .em(ReplyMetrics.itemTop)) }
@@ -56,18 +70,47 @@ extension MarkdownUI.Theme {
                     RenderedBlock(kind: kind, source: config.content.trimmingCharacters(in: .whitespacesAndNewlines)) { plainCodeBlock(config) }
                         .markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
                 } else {
+                    // The Mac is frozen (docs/apple/mac.md): its code blocks keep their hover Copy.
+                    #if os(macOS)
                     plainCodeBlock(config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
+                    #else
+                    ReplyCodeBlock(config: config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
+                    #endif
                 }
             }
             .blockquote { config in
+                #if os(macOS)
                 config.label
                     .padding(.leading, Theme.Space.m)
                     .overlay(alignment: .leading) { Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: Theme.Size.bar) }
                     .markdownTextStyle { ForegroundColor(.secondary) }
+                #else
+                ReplyQuote(config: config)
+                #endif
             }
             .table { config in FittedTable(config: config) } // fits the width it gets; scrolls only when it cannot
-            .tableCell { config in FittedTableCell(config: config) }
+            .tableCell { config in FittedTableCell(config: config).runFonts() }
     }
+}
+
+/// A block's words each keep their own font (#2984). The style's font design set on the root (RootView's `fontDesign`)
+/// replaces every run's font with the system one of that design, a monospaced or named one included, so inline code was
+/// drawn in the body font. Under a block that draws words the design is cleared and given to its runs as their family
+/// instead (read from the style: SwiftUI has no public environment value for it), and inline code's monospaced variant
+/// holds. The Mac is frozen: it keeps the root's design.
+struct RunFonts: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+        #else
+        content.markdownTextStyle { FontFamily(.system(StyleSpec.current.fontDesign)) }.fontDesign(nil)
+        #endif
+    }
+}
+
+extension View {
+    /// The block's runs keep their fonts under the style's font design (`RunFonts`).
+    func runFonts() -> some View { modifier(RunFonts()) }
 }
 
 extension MarkdownUI.Theme {
@@ -83,6 +126,18 @@ extension MarkdownUI.Theme {
         .macHoverActions {
             MacHoverButton(title: String(localized: "Copy Code [Message Views fa2611]"), symbol: Theme.Icon.copy) { MacHover.copy(config.content, said: String(localized: "Code copied")) }
         }
+    }
+
+    /// H4–H6 (#3863): MarkdownUI's own were the bare text, so `#### Notes` read as the next paragraph's first line. A step
+    /// below the third level (the secondary level's size), semibold in the quieter ink, more space above than below.
+    /// Its label is built as heading1–3's are: a modifier theirs gains (the style's run fonts, say) belongs here too.
+    @MainActor static func minorHeading(_ config: BlockConfiguration) -> some View {
+        config.label.markdownMargin(top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
+            .markdownTextStyle {
+                FontWeight(.semibold)
+                FontSize(.em(ReplyMetrics.heading4.size))
+                ForegroundColor(Theme.Reply.secondaryInk)
+            }
     }
 }
 
@@ -159,9 +214,12 @@ struct ImageViewing: Identifiable {
 struct UserBubble: View, Equatable {
     @Environment(\.rowMemoScope) private var memoScope
     var item: Item
+    /// The extension that opened the conversation with this message (#3758): 「来自 飞书 /agent」 under it. Set by the chat
+    /// page on the conversation's first message only.
+    var external: AutoConversationSource? = nil
     /// Only the message itself: the chat page re-evaluates its body on every hub push, and without this every row on
     /// screen (and in the lazy list's buffer) ran its body again too (about 45 a push on a long Persona conversation).
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external }
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
 
@@ -189,8 +247,13 @@ struct UserBubble: View, Equatable {
                 }
             }
             if let openFile { FileChips(paths: d.chips, open: openFile) }
-            // Came in from a channel (WeChat, the Feishu bot…): 「来自 微信」 under it.
-            if ChannelSource.possible(item.clientMsgID) { ChannelSourceLine(clientMsgID: item.clientMsgID) }
+            // Came in from a channel (WeChat, the Feishu bot…): 「来自 微信」 under it; an extension opened the conversation
+            // with it: 「来自 飞书 /agent」.
+            if ChannelSource.possible(item.clientMsgID) {
+                ChannelSourceLine(clientMsgID: item.clientMsgID)
+            } else if let external {
+                ExternalSourceLine(source: external)
+            }
             if d.cardSource != nil {
                 Text("From a card").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                     .accessibilityIdentifier("assistant-card-source")
@@ -255,7 +318,7 @@ struct PeerMessage: View {
             .padding(.trailing, Theme.Space.xxl)
             .chatPinned(pinKey)
             .messageLongPress(id: item.id) { card }
-            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
+            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from)
     }
 
     /// The message in its card (also what a long press lifts).
@@ -296,7 +359,8 @@ struct PeerMessage: View {
 /// A message just sent from this phone, before the transcript has it: drawn like a sent bubble right away, with a
 /// quiet clock while the request runs, the clock and "Sends when connected" while it waits for the network (Outbox.swift),
 /// and a red "Resend" when it failed. A long press gives an action bar like a sent message's, with Copy, Select Text and
-/// Share (#6427): one that never went out can be copied rather than typed again.
+/// Share (#6427): one that never went out can be copied rather than typed again. One only on this phone (failed or
+/// waiting) ends the bar in Delete / Don't Send, as its mark's menu does (#4626).
 struct PendingBubble: View {
     var msg: PendingMessage
     var retry: () -> Void
@@ -352,6 +416,10 @@ struct PendingBubble: View {
                         ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
                     }
                     .accessibilityLabel("Failed to send. Resend or delete.")
+                    // The menu's items as actions too: VoiceOver's Actions rotor, and the Runtime CLI (`activate`
+                    // `action:`), which cannot touch a menu's items.
+                    .accessibilityAction(named: Text("Resend"), retry)
+                    .accessibilityAction(named: Text("Delete"), discard)
                 }
                 let split = MessageComments.inBubble(shown)
                 UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
@@ -366,7 +434,9 @@ struct PendingBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .messageActionBar(id: msg.id.uuidString, text: shown, isUser: true, date: msg.createdAt, pending: true)
+        // The bar's last item on one only on this phone (#4626): what its mark's menu says, doing the same.
+        .messageActionBar(id: msg.id.uuidString, text: shown, isUser: true, date: msg.createdAt, pending: true,
+                          delete: .of(msg, run: discard))
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
@@ -985,7 +1055,7 @@ struct RecapDrawer: View {
                                 Text(Self.written(ts, latest: n == 0 && items.count > 1))
                                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                             }
-                            Markdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(item.text ?? ""))))
+                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(item.text ?? "")))))
                                 .markdownTheme(.persona)
                                 .markdownSoftBreakMode(.lineBreak)
                                 .textSelection(.enabled)
@@ -1027,6 +1097,7 @@ struct StreamingText: View {
                 .padding(.top, parts.done.last.map { StreamChunks.gap(after: $0, before: parts.tail) } ?? 0)
         }
         .markdownSoftBreakMode(.lineBreak) // as the finished reply (`AssistantText`)
+        .environment(\.replyStreaming, true) // its quotes fold once it is done
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -1045,7 +1116,7 @@ nonisolated enum StreamTail {
         memo(tail) { tail in
             var shown = StreamRepair.repair(StreamRepair.plainOpenFence(tail) { RenderedFence.kind($0) != nil })
             if StreamRepair.end(of: tail) == .text { shown += " ▍" }
-            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(shown))))
+            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(shown)))))
         }
     }
 }
@@ -1076,11 +1147,11 @@ nonisolated enum WebLinks {
 /// Parsed Markdown per text: MarkdownUI parses (cmark) in `Markdown.init`, on every redraw of the row.
 nonisolated enum MarkdownMemo {
     private static let memo = TextMemo<MarkdownContent>(limit: 128)
-    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
+    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
 
     private static let pathsMemo = TextMemo<PathMarkdown>(limit: 128)
     /// Where the paths are in the same Markdown (`content`).
-    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
+    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
 }
 
 /// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「File viewer」), the code
@@ -1100,13 +1171,25 @@ struct LinkedMarkdown: View {
     var body: some View { Markdown(content) }
 
     private var content: MarkdownContent {
-        // Only a message with paths reads the presence (and is drawn again when an answer comes).
-        guard !paths.paths.isEmpty, let model, let scope else { return plain }
-        let there = paths.paths.filter { model.filePresence.linkable($0, in: scope) }
-        guard !there.isEmpty else { return plain }
+        // In a chat on the iPhone and iPad a tap on inline code copies it (#2984): its spans are links the chat's
+        // `openURL` answers (`CodeCopyMarkdown`), the ones linked to a file first.
+        #if os(iOS)
+        let copies = scope != nil
+        #else
+        let copies = false
+        #endif
         let paths = paths
+        // Only a message with paths reads the presence (and is drawn again when an answer comes).
+        guard !paths.paths.isEmpty, let model, let scope else {
+            return copies ? Self.memo(key + "\u{1}") { _ in MarkdownContent(CodeCopyMarkdown.linked(paths.source)) } : plain
+        }
+        let there = paths.paths.filter { model.filePresence.linkable($0, in: scope) }
+        guard !there.isEmpty else {
+            return copies ? Self.memo(key + "\u{1}") { _ in MarkdownContent(CodeCopyMarkdown.linked(paths.source)) } : plain
+        }
         return Self.memo(key + "\u{0}" + there.joined(separator: "\n")) { _ in
-            MarkdownContent(paths.linked { there.contains($0) }.markdown)
+            let linked = paths.linked(plainCode: copies) { there.contains($0) }.markdown
+            return MarkdownContent(copies ? CodeCopyMarkdown.linked(linked) : linked)
         }
     }
 }
@@ -1158,9 +1241,9 @@ nonisolated struct AssistantRowText {
     /// limit) and its pictures, videos and sounds; documents aside (their cards).
     let chips: [String]
     init(_ text: String) {
-        // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); links end where `Links` says,
-        // not at the next space; formulas as pictures.
-        let source = Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(text)))
+        // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); bold next to CJK punctuation
+        // closes (`CJKEmphasis`, #3863); links end where `Links` says, not at the next space; formulas as pictures.
+        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(text))))
         markdown = MarkdownContent(source)
         let paths = PathMarkdown(source)
         self.paths = paths

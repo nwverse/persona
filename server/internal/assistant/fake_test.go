@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // fakeHub is the hub as the assistant sees it in unit tests: its hello, the machines with their sessions, a node on
@@ -40,6 +41,7 @@ type fakeHub struct {
 	zshrc         map[string][]proto.Launcher        // a machine\'s own launchers.list (over launcherList)
 	rcFiles       map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers map[string]bool                    // a machine whose launchers.list answers only when the call gives up
+	launcherGate  chan struct{}                      // when set, every launchers.list answer waits for this gate
 	agentModels   map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
 	modelsLocked  map[string]string                  // launchers.models's locked, by launcher
 	managed       map[string][]proto.ManagedLauncher // what each node was given (launchers.managed)
@@ -71,13 +73,15 @@ type fakeHub struct {
 	slowSnapshots time.Duration // the connectors' live states come this late (nothing: there are none)
 	liveStates    []any         // the connectors' live states (connectors.snapshots), when they come at once
 	snapshotAsks  int           // connectors.snapshots calls
+	hungChannel   string        // the channel whose program never answers a send (hangChannel)
 	replies       []string      // the model's answers, in turn (the last one again when they run out)
 	answers       []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown     bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
 	noModel       bool
 	asked         []modelCall
 	pushes        []Notification
-	events        []string // the type of each event the apps were sent
+	events        []string         // the type of each event the apps were sent
+	liveEvents    []map[string]any // the meeting_live events as sent
 	snaps         []Snapshot
 
 	// Agents a task starts (session.start a1, a2…) and what was sent to them; a machine offline, a node refusing.
@@ -86,6 +90,8 @@ type fakeHub struct {
 	agents       int
 	offline      map[string]bool
 	failStart    error
+	refuseUltra  error                     // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
+	startFailed  string                    // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any          // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error                     // worktree.create's answer when set
 	slowStart    bool                      // session.start blocks until the call's context ends, then answers with its error (a node that builds the session before answering late)
@@ -96,7 +102,9 @@ type fakeHub struct {
 	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
 	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
 	outcomeAsked []modelCall
-	retired      []string // session.retire's session ids
+	retired      []string         // the session ids of session.retire and of session.stop with retire (the done and idle passes)
+	retireArgs   []map[string]any // what each of those calls asked
+	stopped      []string         // session.stop's session ids without retire (a cancelled task's agent)
 	retireErr    error
 	tokens       map[string][]map[string]map[string]string // todo.sync_session_tokens, by machine, in order
 
@@ -125,9 +133,12 @@ type fakeHub struct {
 	hubCards       []proto.Interaction // interactions.list: what the hub has up
 	told           []told              // the manager's fleet.* events (Tell)
 	failSend       error               // session.send fails with it
+	sentOnce       []map[string]any    // session.send_once params, in order
 	failSendOnce   map[string]error    // session.send_once fails with these, by "machine/session"
 	failInterrupt  error               // session.interrupt fails with it
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
+	// refuseConfigDir: assistant.send with a config_dir fails as the hub refuses it for a node too old for one
+	refuseConfigDir bool
 
 	// The launchers' health (launcher_health.go): launchers.check's answers by "machine/launcher" (none: it works),
 	// the checks and repairs asked for, launchers.repair's answer (nil: the node has no such method) and what a repair
@@ -143,7 +154,8 @@ type fakeHub struct {
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
 	// doctor is each machine's node.doctor claude-version detail (none: the report has no such check).
-	doctor map[string]string
+	doctor      map[string]string
+	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
 	// questions it got.
 	auth      map[string]proto.ClaudeAuthStatus
@@ -241,6 +253,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if sid, _ := a["session_id"].(string); f.failSendOnce[p.Device+"/"+sid] != nil {
 			return nil, f.failSendOnce[p.Device+"/"+sid]
 		}
+		f.sentOnce = append(f.sentOnce, a)
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers
@@ -303,6 +316,17 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		name, _ := a["name"].(string)
 		return json.Marshal(map[string]any{"agent": launcherAgent(name)})
 	case DeviceLaunchersList:
+		if f.launcherGate != nil {
+			gate := f.launcherGate
+			f.mu.Unlock()
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				f.mu.Lock()
+				return nil, ctx.Err()
+			}
+			f.mu.Lock()
+		}
 		if f.slowLaunchers[p.Device] {
 			f.mu.Unlock()
 			<-ctx.Done()
@@ -376,7 +400,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case deviceNodeDoctor:
 		checks := []map[string]string{}
 		if detail, ok := f.doctor[p.Device]; ok {
-			checks = append(checks, map[string]string{"name": "claude-version", "status": "ok", "detail": detail})
+			checks = append(checks, map[string]string{"name": "claude-version", "status": "ok", "state": f.doctorState[p.Device], "detail": detail})
 		}
 		return json.Marshal(map[string]any{"ok": true, "checks": checks})
 	case DeviceAssistantPrepare:
@@ -388,6 +412,10 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		f.guestPrepared = append(f.guestPrepared, a)
 		return json.Marshal(map[string]any{"cwd": "/home/me/.persona/guest"})
+	case "worktree.status":
+		return json.Marshal(proto.WorktreeStatus{})
+	case "workspace.resolve":
+		return json.Marshal(proto.Workspace{Cwd: a["path"].(string), Available: true})
 	case DeviceWorktreePrepare, DeviceWorktreeCreate: // the machine's engine: checkouts under /wt/<repo>
 		a["method"] = p.Method
 		f.worktrees = append(f.worktrees, a)
@@ -403,6 +431,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, fmt.Errorf("%s: %w", p.Device, apierr.ErrOffline)
 		}
 		f.starts = append(f.starts, a)
+		if f.refuseUltra != nil && a["ultracode"] == true {
+			return nil, f.refuseUltra
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -414,7 +445,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.failStart
 		}
 		f.agents++
-		return json.Marshal(map[string]any{"session": proto.Session{SessionID: fmt.Sprintf("s%d", f.agents), Cwd: a["cwd"].(string), Agent: "claude"}})
+		return json.Marshal(map[string]any{"session": proto.Session{SessionID: fmt.Sprintf("s%d", f.agents), Cwd: a["cwd"].(string), Agent: "claude",
+			StartError: f.startFailed}})
 	case DeviceSessionSend:
 		if f.failSend != nil {
 			return nil, f.failSend
@@ -429,7 +461,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.retireErr
 		}
 		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
+	case deviceSessionStop:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		if retire, _ := a["retire"].(bool); retire {
+			f.retired = append(f.retired, a["session_id"].(string))
+			f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "retire": true})
+		} else {
+			f.stopped = append(f.stopped, a["session_id"].(string))
+		}
+		return json.RawMessage(`{"stopped":true}`), nil
 	case deviceTodoTokens:
 		var t struct {
 			Tokens map[string]map[string]string `json:"tokens"`
@@ -444,8 +488,18 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.failAssistant != nil {
 			return nil, f.failAssistant
 		}
+		if _, set := a["config_dir"]; set && f.refuseConfigDir {
+			return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
+		}
 		f.sends = append(f.sends, a)
 		id, _ := a["session_id"].(string)
+		if want, _ := a["new_session_id"].(string); id == "" && want != "" { // a new conversation under the id asked for
+			if f.known[want] {
+				return json.Marshal(map[string]any{"session_id": want, "existed": true})
+			}
+			id = want
+			f.known[id] = true
+		}
 		if id == "" { // a new conversation
 			f.made++
 			id = fmt.Sprintf("s%d", f.made)
@@ -460,6 +514,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 }
 
 func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, error) {
+	if err := f.hungAppCall(ctx, p); err != nil {
+		return nil, err
+	}
 	if f.inbox != nil { // outside the lock: a round calls back into the assistant
 		if out, ok, err := f.inbox.answer(ctx, p); ok {
 			return out, err
@@ -489,7 +546,9 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	case AppConnectors + " " + ConnectorsSignedIn:
 		return json.Marshal(map[string]any{"connectors": []string{}, "clis": map[string]string{}, "lark_cli": f.larkCLI})
 	case AppPlugins + " " + PluginsAssistant:
-		return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})
@@ -535,6 +594,11 @@ func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {
 	_ = json.Unmarshal(b.Message, &ev)
 	f.mu.Lock()
 	f.events = append(f.events, ev.Type)
+	if ev.Type == "meeting_live" {
+		var live map[string]any
+		_ = json.Unmarshal(b.Message, &live)
+		f.liveEvents = append(f.liveEvents, live)
+	}
 	receipt := f.readHooks.receipt
 	f.mu.Unlock()
 	if receipt != nil && ev.Type == "assistant_feed" && ev.Item.Kind == feedReceipt {
@@ -620,6 +684,14 @@ func (f *fakeHub) pushed() []Notification {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]Notification(nil), f.pushes...)
+}
+
+// started is a copy of the session.start parameters so far: a task starts its agent on a goroutine of its own, which
+// appends to f.starts under f.mu.
+func (f *fakeHub) started() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.starts)
 }
 
 // pushedBy is pushed once there is a push, or at deadline: a watcher records a run before it pushes it, so a test

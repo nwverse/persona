@@ -382,10 +382,12 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Assistant: func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 			return bh.Answer(ctx, method, params)
 		},
-		AssistantEvent:   func(event string, params json.RawMessage) { bh.TellLocal(event, params) },
-		AssistantTools:   func() []proto.Tool { return svc.toolsNow() },
-		AssistantMachine: func() string { return svc.mainMachine(context.Background()) },
-		Ask:              func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
+		AssistantEvent: func(event string, params json.RawMessage) { bh.TellLocal(event, params) },
+		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
+		// The model providers' keys that are references, for their provider extensions' details (launcher_secrets.go).
+		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
+		AssistantMachine:   func() string { return svc.mainMachine(context.Background()) },
+		Ask:                func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
@@ -406,8 +408,10 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	// providers' keys are sealed with its own secret.key.
 	svc = New(Options{Hub: bh, Store: func() Store { return database }, Logf: logf, Devices: devs,
 		KB: &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, ID: o.ID})
+		Trust: devs, ID: o.ID, Build: version})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
+	// When the north star's recording began (north_star.go).
+	go svc.northStarStarted(ctx)
 	if o.Ready != nil {
 		o.Ready(func(ctx context.Context) (bool, string) { return managerIdle(ctx, bh, svc, ext) })
 	}

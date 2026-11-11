@@ -66,12 +66,6 @@
     <string name="agents_count_pair">%1$s, %2$s</string>
     <string name="agents_flag_space_pinned">Space pinned</string>
     <string name="agents_flag_space_muted">Space muted</string>
-    <string name="agents_kind_todo">To-do</string>
-    <string name="agents_kind_project">Project</string>
-    <plurals name="agents_count_todos">
-        <item quantity="one">1 to-do</item>
-        <item quantity="other">%1$d to-dos</item>
-    </plurals>
     <string name="agents_kind_space">Space</string>
     <string name="agents_view_todo">View to-do</string>
     <string name="agents_history_unknown_folder">Unknown folder</string>
@@ -80,10 +74,13 @@
     <string name="agents_range_all">All</string>
     <string name="agents_range_history">History</string>
     <string name="agents_grouping_current">Grouping: %1$s</string>
+    <string name="agents_group_by">Group By</string>
+    <string name="agents_only_machine">Only %1$s</string>
+    <string name="agents_only_machine_hint">Shows all machines</string>
     <string name="agents_grouping_repo">By repository</string>
     <string name="agents_grouping_state">By status</string>
     <string name="agents_grouping_todo">By to-do</string>
-    <string name="agents_grouping_machine_space">By computer and space</string>
+    <string name="agents_grouping_project">By project</string>
     <string name="agents_menu_compact">Compact list</string>
     <string name="agents_menu_detailed">Detailed list</string>
     <string name="agents_menu_collapse_all">Collapse all</string>
@@ -95,6 +92,7 @@
     <string name="agents_filter_needs_you">Needs you</string>
     <string name="agents_filter_unread">Unread</string>
     <string name="agents_filter_working">Working</string>
+    <string name="agents_filter_background_waiting">Waiting in the background</string>
     <string name="agents_history_check_resume">Check resume result</string>
     <string name="agents_history_resume">Continue this session</string>
     <string name="agents_todo_move_title">Move to another to-do</string>
@@ -132,6 +130,8 @@
     <string name="agents_row_draft_attachments_text">Draft with attachments: %1$s</string>
     <string name="agents_row_pinned">Pinned</string>
     <string name="agents_row_muted">Muted</string>
+    <string name="agents_row_closeout_contradicted">The hub found its closeout claim untrue</string>
+    <string name="agents_row_not_finished">Not finished</string>
     <string name="agents_action_open_read_only">Open read-only</string>
     <string name="agents_action_delete_chat">Delete chat</string>
     <string name="agents_action_unpin">Unpin</string>
@@ -146,6 +146,7 @@
     <string name="agents_action_stop_loop">Stop loop</string>
     <string name="agents_action_handoff">Hand to Persona</string>
     <string name="agents_action_mark_read">Mark as read</string>
+    <string name="agents_action_interrupt">Interrupt</string>
     <string name="agents_action_copy_resume">Copy resume command</string>
     <string name="agents_action_copy_directory">Copy directory</string>
     <string name="agents_action_open_session">Open session</string>
@@ -155,8 +156,8 @@
     <string name="agents_repo_worktree">Worktree</string>
     <string name="agents_card_question">Claude has a question</string>
     <string name="agents_card_question_by">%1$s has a question</string>
-    <string name="agents_card_permission">Needs your permission</string>
-    <string name="agents_card_permission_by">%1$s needs your permission</string>
+    <string name="agents_card_permission">Waiting for your approval</string>
+    <string name="agents_card_permission_by">%1$s is waiting for your approval</string>
     <string name="agents_card_plan">Plan awaiting approval</string>
     <string name="agents_card_screen">Terminal needs you</string>
     <string name="agents_card_other">Needs you</string>
@@ -212,6 +213,7 @@
     <string name="agents_notice_renamed">Renamed</string>
     <string name="agents_notice_deleted">Chat deleted</string>
     <string name="agents_notice_attached">Joined live</string>
+    <string name="agents_notice_interrupted">Interrupted</string>
     <string name="agents_notice_stop_loop_offline">Connect to the hub to stop the loop</string>
     <string name="agents_notice_stop_loop_sent">Stop request sent; the hub will update the loop\'s state</string>
     <string name="agents_notice_operations_missing">Session actions aren\'t connected yet</string>
@@ -361,6 +363,7 @@
     <string name="agents_todo_delete_action">Delete</string>
     <string name="agents_todo_done_failed">Couldn\'t complete the to-do: %1$s</string>
     <string name="agents_todo_delete_failed">Couldn\'t delete the to-do: %1$s</string>
+    <string name="agents_todo_state_didnt_start">Didn\'t start</string>
     <string name="agents_todo_start_failed">Couldn\'t start: %1$s</string>
     <string name="agents_todo_in_progress">In progress</string>
     <plurals name="agents_todo_agents">
@@ -511,7 +514,10 @@
     <string name="agents_herdr_why_timeout">herdr took too long to come up; check again in a moment</string>
     <string name="agents_empty_no_computer_title">No computers yet</string>
     <string name="agents_empty_no_computer_hint">Add one and Persona can work on it for you.</string>
-    <string name="agents_page_loaded">%1$d of %2$d sessions loaded</string>
+    <plurals name="agents_page_loaded">
+        <item quantity="one">%1$d of %2$d session loaded</item>
+        <item quantity="other">%1$d of %2$d sessions loaded</item>
+    </plurals>
     <string name="agents_page_more">Load more</string>
     <string name="agents_page_previous">Load earlier sessions</string>
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
@@ -521,7 +527,29 @@
     <string name="agents_todos_section_pr">PR to merge</string>
     <string name="agents_todos_section_other">Other open</string>
     <string name="agents_todos_section_shelved">Shelved</string>
-    <string name="agents_todos_summary">%1$d open · %2$d shelved · %3$d done</string>
+    <string name="agents_todos_filter_button">Filter and sort</string>
+    <string name="agents_todos_filter_show">Show</string>
+    <string name="agents_todos_sort_by">Sort by</string>
+    <string name="agents_todos_filter_all">All</string>
+    <string name="agents_todos_filter_no_due">No due date</string>
+    <string name="agents_todos_filter_today">Today</string>
+    <string name="agents_todos_filter_week">This week</string>
+    <string name="agents_todos_filter_month">This month</string>
+    <string name="agents_todos_sort_recent">Recent activity</string>
+    <string name="agents_todos_sort_due">Due date</string>
+    <string name="agents_todos_sort_priority">Priority</string>
+    <string name="agents_todos_filter_clear">Clear the %1$s filter</string>
+    <string name="agents_todos_filter_hidden_waiting">%1$d more waiting on you, not in %2$s</string>
+    <string name="agents_todos_filter_show_all">Show all</string>
+    <string name="agents_todos_filter_empty_today">Nothing due today</string>
+    <string name="agents_todos_filter_empty_week">Nothing due this week</string>
+    <string name="agents_todos_filter_empty_month">Nothing due this month</string>
+    <string name="agents_todos_filter_empty_no_due">Every to-do has a due date</string>
+    <string name="agents_todos_filter_empty_hint">Try another filter.</string>
+    <plurals name="agents_todos_filter_count">
+        <item quantity="one">%d to-do</item>
+        <item quantity="other">%d to-dos</item>
+    </plurals>
     <string name="agents_todo_restore">Restore</string>
     <string name="agents_todo_pr_moved">%1$s · moved %2$s</string>
     <string name="agents_todo_pr">PR</string>

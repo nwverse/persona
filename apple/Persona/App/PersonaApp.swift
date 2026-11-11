@@ -99,6 +99,9 @@ struct PersonaApp: App {
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
                 model.suspendLinks()
+                #if os(iOS)
+                QuickAction.publish() // the home screen menu with the conversations' titles as they are now (#2191)
+                #endif
             }
         }
         #if os(visionOS)
@@ -109,6 +112,13 @@ struct PersonaApp: App {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    #if os(iOS)
+    /// Upright on an iPhone, but for the live screen's page (`AppOrientation`, #3075).
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        AppOrientation.mask
+    }
+    #endif
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up

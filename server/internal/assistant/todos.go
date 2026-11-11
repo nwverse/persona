@@ -386,9 +386,10 @@ func (s *Service) todosLoaded() bool {
 func (s *Service) todosChanged(ctx context.Context) {
 	s.event(ctx, map[string]any{"type": "todos"})
 	s.todoChangedSoon()
-	s.remindSoon()     // a reminder set, moved or done (todo_plan.go)
-	s.boardChanged()   // a to-do closed, reopened or gone leaves "Please verify"
-	s.interruptsSoon() // an interrupted receipt of it may read cancelled, rerouted or done now (interruptions.go)
+	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
+	s.boardChanged()      // a to-do closed, reopened or gone leaves "Please verify"
+	s.interruptsSoon()    // an interrupted receipt of it may read cancelled, rerouted or done now (interruptions.go)
+	s.directionTreeSoon() // its direction's tasks and counts (direction_tree.go)
 }
 
 // linksChanged: which todo an agent works for changed (or a todo's title, or whether it is done): the hub is told
@@ -452,8 +453,12 @@ func (s *Service) createTodo(ctx context.Context, title, notes, origin, planID s
 
 // createTaskTodo is createTodo for a plan's task, in the knowledge-base project the task names (a slug; "" for none).
 func (s *Service) createTaskTodo(ctx context.Context, title, notes, origin, planID, project string) (Todo, error) {
+	return s.createTaskTodoAs(ctx, "todo_"+randomHex(8), title, notes, origin, planID, project)
+}
+
+func (s *Service) createTaskTodoAs(ctx context.Context, id, title, notes, origin, planID, project string) (Todo, error) {
 	now := time.Now().UTC()
-	return s.insertTodo(ctx, db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
+	return s.insertTodo(ctx, db.TodoRow{ID: id, Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
 		Origin: origin, PlanID: planID, Quiet: s.quietTask(ctx, origin), Project: project})
 }
 
@@ -735,6 +740,7 @@ func (s *Service) closedTaskOf(ctx context.Context, mid, sid string) (Todo, bool
 var errTodosUnavailable = errors.New("todos service unavailable")
 
 func (s *Service) todoRoutes() {
+	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()
 	s.todoRetitleRoute()
@@ -751,6 +757,10 @@ func (s *Service) todoRoutes() {
 			list = append(list, listedTodo{Todo: formatTodo(copyTodoLocked(t))})
 		}
 		s.todos.mu.RUnlock()
+		if err := s.listDecisionReviews(r.Context(), list); err != nil {
+			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
+			return
+		}
 		asks := s.todoAsks(r.Context()) // once the todos are let go: it reads them itself
 		for i := range list {
 			list[i].Todo = s.withBrief(list[i].Todo) // what was asked and who carried it (task_brief.go)
@@ -1207,6 +1217,10 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	t.Notes = row.Notes
 	becameDone := t.DoneAt == nil && row.DoneAt != nil
 	reopened := t.DoneAt != nil && row.DoneAt == nil
+	var reopenedEvent map[string]any
+	if reopened {
+		reopenedEvent = reopenedDetail(t, row) // before t changes: who had closed it, and when
+	}
 	t.DoneAt = row.DoneAt
 	t.StartError = row.StartError
 	t.DoneBy, t.DoneReason, t.ReopenedAt = row.DoneBy, row.DoneReason, row.ReopenedAt
@@ -1235,6 +1249,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	if reopened {
 		s.dropSourcePlan(id) // what was planned to be told may not be what it comes to now (todo_source.go)
 		s.dropReopenedCheck(id)
+		s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
 	}
 	if closing != nil {
 		s.threadPost(id, *closing) // after the lock: it looks the todo up again

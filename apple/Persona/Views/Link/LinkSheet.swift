@@ -25,8 +25,16 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
     /// Which part of the message is quoted (`part="selection"`: words picked in Select Text, #4549); nil for all of it.
     /// Readers that do not know it read the block as a quote of the message.
     var part: String? = nil
+    /// The block's other attributes as written: a forward's metadata (`ForwardMessage`, docs/protocol/protocol.md
+    /// "Forwarded messages"), a workspace's machine and folder. Kept so a block read back writes the same attributes.
+    var extra: [String: String]? = nil
+    /// The composer's line under a forward over the box: where it comes from and where it goes. Shown, never sent.
+    var route: String? = nil
 
     var host: String { URL(string: url)?.host ?? url }
+
+    /// The extra attributes in the order they are written: a forward's metadata first, then any others by name.
+    static let extraOrder = ["role", "author", "chat", "project", "machine", "time"]
 
     var xml: String {
         func esc(_ s: String) -> String {
@@ -35,12 +43,18 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
         }
         let msgAttr = msg.isEmpty ? "" : " msg=\"\(esc(msg))\""
         let partAttr = part.map { " part=\"\(esc($0))\"" } ?? ""
-        return "<persona-context kind=\"\(kind)\" title=\"\(esc(title))\" url=\"\(esc(url))\"\(msgAttr)\(partAttr)>\n\(ContextText.inBlock(text))\n</persona-context>"
+        let extras = extra ?? [:]
+        let names = Self.extraOrder.filter { extras[$0] != nil } + extras.keys.filter { !Self.extraOrder.contains($0) }.sorted()
+        let extraAttrs = names.compactMap { name in extras[name].map { " \(name)=\"\(esc($0))\"" } }.joined()
+        return "<persona-context kind=\"\(kind)\" title=\"\(esc(title))\" url=\"\(esc(url))\"\(msgAttr)\(partAttr)\(extraAttrs)>\n\(ContextText.inBlock(text))\n</persona-context>"
     }
 
     /// One `<persona-context>` block, its attributes in any order and any of them missing (a Lark /agent request's context has no url).
     private static let tagRe = try! NSRegularExpression(pattern: "<" + HubNaming.contextPattern + #"\b([^>]*)>\s*([\s\S]*?)\s*</"# + HubNaming.contextPattern + #">\s*"#)
     private static let attrRe = try! NSRegularExpression(pattern: #"(\w+)="([^"]*)""#)
+
+    /// The attributes that have fields of their own; the rest go to `extra`.
+    private static let ownAttributes: Set<String> = ["kind", "title", "url", "msg", "part"]
 
     /// The contexts in a message and the message without them.
     private static let memo = TextMemo<(refs: [ContextRef], rest: String)>()
@@ -63,8 +77,10 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
             }
             // Provenance and protected-user sentinels are transport metadata, never selectable context cards.
             guard a["kind"] != "message-source" else { continue }
+            let extra = a.filter { !Self.ownAttributes.contains($0.key) }
             refs.append(ContextRef(kind: a["kind"] ?? "context", title: a["title"] ?? "", url: a["url"] ?? "",
-                                   text: ns.substring(with: m.range(at: 2)), msg: a["msg"] ?? "", part: a["part"]))
+                                   text: ns.substring(with: m.range(at: 2)), msg: a["msg"] ?? "", part: a["part"],
+                                   extra: extra.isEmpty ? nil : extra))
         }
         let rest = tagRe.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "")
         return (refs, rest.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -83,6 +99,7 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
         case "instructions": Theme.Icon.info
         case "doc": Theme.Icon.document
         case "edit": Theme.Icon.ai
+        case ForwardMessage.kind: Theme.Icon.forwardMessage
         default: Theme.Icon.quote
         }
     }
@@ -113,7 +130,11 @@ struct LinkSheet: View {
     @Environment(\.dismiss) private var dismiss
     let target: LinkTarget
     var key: SessionKey? = nil
+    /// Opens another of the session's dev servers in the card (ChatView): a forwarded page's subtitle lists them (#150).
+    var choosePreview: ((PreviewOption) -> Void)? = nil
     @State private var title = ""
+    @State private var choosing = false
+    @State private var chosen: PreviewOption?
     @State private var editing: ContextRef?
     @State private var instruction = ""
     /// Opens full screen (2026-10-28: half a screen was too little to read); pull down to 0.6 to see the chat again.
@@ -135,8 +156,16 @@ struct LinkSheet: View {
                         .environment(\.docPick) { text, kind in pick(text, kind: kind) }
                 }
             } else {
-                PooledWebView(url: target.url, title: $title) { selected, kind in pick(selected, kind: kind) }
-                    .ignoresSafeArea(.container, edges: .bottom) // full screen: the page runs under the home indicator
+                #if os(iOS)
+                if let key, target.forwarded != nil {
+                    // A machine's dev server from a chat: the preview's bar under it (#150).
+                    PreviewPage(url: target.url, key: key, title: $title) { selected, kind in pick(selected, kind: kind) }
+                } else {
+                    page
+                }
+                #else
+                page
+                #endif
             }
         }
         .presentationDetents([.fraction(0.6), .large], selection: $detent)
@@ -144,6 +173,15 @@ struct LinkSheet: View {
         .presentationBackground(Theme.pageBackground) // pages with a clear background let the chat show through
         .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.6))) // the chat stays usable behind
         .presentationContentInteraction(.resizes) // a swipe up grows the sheet before it scrolls the page
+        #if os(iOS)
+        .sheet(isPresented: $choosing, onDismiss: {
+            if let o = chosen { chosen = nil; choosePreview?(o) }
+        }) {
+            if let key, let cwd = model.session(key)?.cwd {
+                PreviewChooser(key: key, cwd: cwd) { o in chosen = o; choosing = false }
+            }
+        }
+        #endif
         .alert("Have an Agent Edit This", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             TextField(String(localized: "How should it change?"), text: $instruction)
             Button("Cancel", role: .cancel) { instruction = "" }
@@ -153,12 +191,41 @@ struct LinkSheet: View {
         }
     }
 
+    private var page: some View {
+        PooledWebView(url: target.url, title: $title) { selected, kind in pick(selected, kind: kind) }
+            .ignoresSafeArea(.container, edges: .bottom) // full screen: the page runs under the home indicator
+    }
+
+    /// A forwarded page whose chat's hub has previews: its subtitle lists the session's other servers.
+    private var canChoose: Bool {
+        #if os(iOS)
+        guard let key, target.forwarded != nil, choosePreview != nil else { return false }
+        return model.features(key.group).contains(PreviewLogic.feature)
+        #else
+        false
+        #endif
+    }
+
     private var header: some View {
         HStack(spacing: Theme.Space.m) {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(title.isEmpty ? (isFeishuDoc ? String(localized: "Lark Doc") : feishuRoute != nil ? String(localized: "Moments") : (target.forwarded != nil ? nil : target.url.host) ?? String(localized: "Web Pages")) : title)
                     .font(Theme.Font.secondaryStrong).lineLimit(1)
-                Text(target.forwarded ?? target.url.host ?? target.url.absoluteString).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                if canChoose {
+                    Button { Haptics.tap(); choosing = true } label: {
+                        HStack(spacing: Theme.Space.xxs) {
+                            Text(target.forwarded ?? "").lineLimit(1)
+                            ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong)
+                        }
+                        .font(Theme.Font.label)
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(String(localized: "Lists this session's dev servers"))
+                    .accessibilityIdentifier("link-servers")
+                } else {
+                    Text(target.forwarded ?? target.url.host ?? target.url.absoluteString).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
             Spacer(minLength: 6)
             if isFeishuDoc, key != nil {
@@ -225,6 +292,10 @@ struct LinkSheet: View {
 
 /// WKWebViews kept warm: the links of the latest answers load in the background, so opening one shows a finished
 /// page. All share the default (on-disk) website data store, so assets and logins carry over.
+/// On iPhone, iPad and Vision Pro a view serves one opening of its link: once a sheet has shown it, the pool lets it go
+/// (`release`, from `PooledWebView`), so a later tap on the link starts on the link's own page with no back/forward
+/// history, not where the last opening was left (#4074). The Mac's panel (frozen, apple/Mac/Link) still reuses its views:
+/// its Open in Separate Window moves the view on screen, page and history, into the window.
 @MainActor
 final class WebViewPool {
     static let shared = WebViewPool()
@@ -264,6 +335,18 @@ final class WebViewPool {
 
     /// The view for this url if the pool has one (nothing is loaded).
     func existing(for url: URL) -> SelectableWebView? { views[url.absoluteString] }
+
+    /// The sheet that showed `v` for `url` has closed. The pool drops `v`, with the page the user browsed to and its
+    /// back/forward history, and starts a fresh view on the link, so tapping it again opens the link's own page at once
+    /// (#4074). A machine's dev server is asked only when its page is opened, as before. A view the pool no longer
+    /// holds (pushed out by newer links while it was shown) changes nothing.
+    func release(_ v: WKWebView, for url: URL) {
+        let key = url.absoluteString
+        guard views[key] === v else { return }
+        views[key] = nil
+        order.removeAll { $0 == key }
+        if !Self.isLoopback(url) { _ = view(for: url) }
+    }
 
     /// The sheet's Refresh: the page again from the server, not from the cache. A view that never got a page (its first
     /// load failed: `url` is nil) loads it afresh.
@@ -324,22 +407,33 @@ final class SelectableWebView: WKWebView {
 struct PooledWebView: UIViewRepresentable {
     var url: URL
     @Binding var title: String
+    /// Told where the page is (the preview's bar, #150).
+    var nav: WebNav? = nil
     var onPick: (String, String) -> Void
 
     func makeUIView(context: Context) -> SelectableWebView {
         let v = WebViewPool.shared.view(for: url)
         v.removeFromSuperview()
         v.onPick = onPick
+        context.coordinator.url = url
         context.coordinator.observe(v) { title = $0 }
+        nav?.attach(v)
         return v
     }
 
     func updateUIView(_ v: SelectableWebView, context: Context) { v.onPick = onPick }
 
+    /// The sheet has closed: this opening's page and history go with it, and the next tap on the link starts fresh (#4074).
+    static func dismantleUIView(_ v: SelectableWebView, coordinator: Coordinator) {
+        if let url = coordinator.url { WebViewPool.shared.release(v, for: url) }
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     @MainActor
     final class Coordinator {
+        /// The link this view was taken for: the pool's key, which the page the user browsed to no longer is.
+        var url: URL?
         private var token: NSKeyValueObservation?
         private var onTitle: ((String) -> Void)?
         func observe(_ v: WKWebView, title: @escaping (String) -> Void) {

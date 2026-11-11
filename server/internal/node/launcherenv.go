@@ -238,7 +238,9 @@ func providerShaped(l proto.ManagedLauncher) bool {
 // stored (or the hub could not open it), neither credential, so Claude uses whatever sign-in it has; no model, none of
 // the model variables. The Haiku tier is HaikuModel, else SmallModel (what it was), else the model.
 func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation bool) map[string]string {
-	env := map[string]string{"ANTHROPIC_BASE_URL": l.BaseURL}
+	// Claude Code adds /v1/messages: a provider stored with a trailing /v1, from a hub before it dropped it, would
+	// otherwise call /v1/v1/messages though Test connection passed.
+	env := map[string]string{"ANTHROPIC_BASE_URL": l.LaunchBaseURL()}
 	if l.BaseURL != "" && providerShaped(l) {
 		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 		env["API_TIMEOUT_MS"] = strconv.Itoa(cmp.Or(l.TimeoutMS, gatewayTimeoutMS))
@@ -375,8 +377,8 @@ func pinnedEnv(env map[string]string) map[string]string {
 }
 
 // launchEnvFor is what `personad launch` drops from the shell and sets for a launcher (the node's clear and env lists):
-// in the assistant's process (PERSONA_ASSISTANT=1), neither touches perStartEnv, so its own compact window and
-// thinking level stay.
+// in the assistant's process (PERSONA_ASSISTANT=1), neither touches perStartEnv or CLAUDE_CONFIG_DIR, so its own
+// compact window, thinking level and recorded profile stay. Terminal Agents retain the provider's full environment.
 func launchEnvFor(clear, env []string, assistant bool) ([]string, []string) {
 	if !assistant {
 		return clear, env
@@ -384,8 +386,9 @@ func launchEnvFor(clear, env []string, assistant bool) ([]string, []string) {
 	clear = slices.DeleteFunc(slices.Clone(clear), func(c string) bool { return slices.Contains(perStartEnv, c) })
 	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
-		return slices.Contains(perStartEnv, k)
+		return slices.Contains(perStartEnv, k) || k == "CLAUDE_CONFIG_DIR"
 	})
+	clear = slices.DeleteFunc(clear, func(k string) bool { return k == "CLAUDE_CONFIG_DIR" })
 	return clear, env
 }
 

@@ -4,12 +4,26 @@ import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
 import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
 
-// Missing session metadata is not permission to write; legacy sources retain their existing behavior.
+// Missing session metadata is not permission to write. A native row (no source_kind) that carries capabilities is held
+// to them, as every other source is: a stopped Agent's row says read and terminal only (#4754). A native row without
+// them (every row from an older node) keeps its existing behavior: it may do everything.
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
   if (!s) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
   if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
-  return !s.source_kind || s.capabilities?.[operation] === true;
+  if (!s.source_kind && !s.capabilities) return true;
+  return s.capabilities?.[operation] === true;
+}
+
+/** A stopped Agent (#4754, docs/integrations/engines.md "Agents run in a terminal"): an Agent of a terminal engine that is
+ *  not running. Its row keeps its conversation and its terminal and takes no messages; the one way back is Resume on its
+ *  terminal page. Only a node that knows it says so (capabilities read and terminal, no send): an older node's offline
+ *  row has no capabilities and keeps today's behavior. */
+export function isStoppedAgent(s: Session | undefined): boolean {
+  if (!s || s.source_kind || s.assistant) return false;
+  if (s.status !== "offline" && s.status !== "interrupted") return false;
+  const c = s.capabilities;
+  return Boolean(c && c.read === true && c.terminal === true && !c.send);
 }
 
 /** A script request explicitly outside a session has no session-source approval
@@ -178,18 +192,20 @@ export function shortPath(p?: string): string {
   return p.replace(/^\/(Users|home|data\d*\/home)\/[^/]+/, "~");
 }
 
-export function ago(iso?: string, now = Date.now()): string {
+/** `style` "narrow" is for a crowded row's end ("13m ago" in English; Chinese reads the same in every style). */
+export function ago(iso?: string, now = Date.now(), style: Intl.RelativeTimeFormatStyle = "long"): string {
   if (!iso) return "";
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts) || ts < 86400_000) return "";
   const s = Math.round((now - ts) / 1000);
+  const opts: Intl.RelativeTimeFormatOptions = { numeric: "auto", style };
   // "Just now" rather than Intl's "now" for under a minute
   if (s < 45) return t("lib-format.just_now");
-  if (s < 3600) return formatRelative(-Math.round(s / 60), "minute");
-  if (s < 86400) return formatRelative(-Math.round(s / 3600), "hour");
+  if (s < 3600) return formatRelative(-Math.round(s / 60), "minute", opts);
+  if (s < 86400) return formatRelative(-Math.round(s / 3600), "hour", opts);
   // Days by the local calendar, not by 24 h spans: yesterday morning seen late tonight is yesterday, not the day before yesterday (#4281).
   const days = calendarDays(ts, now);
-  if (days < 7) return formatRelative(-days, "day");
+  if (days < 7) return formatRelative(-days, "day", opts);
   return formatDate(ts, { month: "numeric", day: "numeric" });
 }
 

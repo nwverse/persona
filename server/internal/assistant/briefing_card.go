@@ -50,6 +50,22 @@ func (s *Service) briefCard(f *briefFacts, label, answer string) (card *feishubo
 	}
 	room := briefBudget{bytes: reportCardMaxBytes - briefTailBytes - len(c.JSON()), els: reportCardMaxElements - briefSpareEls - len(c.Body.Elements)}
 
+	// The north star first: the report opens with it (north_star.go).
+	var star []briefBlock
+	for _, line := range f.NorthStarLines {
+		star = append(star, briefBlock{md: feishubot.EscapeMarkdown(line), plain: line})
+	}
+	if len(star) > 0 {
+		room.section(c, &plain, l, i18n.T(l, "assistant-north_star.heading"), star, len(star))
+	}
+
+	var confirmations []briefBlock
+	confirmations = append(confirmations, briefBlock{md: feishubot.EscapeMarkdown(f.Confirmations.summary(l)), plain: f.Confirmations.summary(l)})
+	for _, line := range f.ConfirmationLines {
+		confirmations = append(confirmations, briefBlock{md: feishubot.EscapeMarkdown(line), plain: line})
+	}
+	room.section(c, &plain, l, i18n.T(l, "assistant-confirmations.heading"), confirmations, len(confirmations))
+
 	// Waiting for you: the board's rows that hold an Agent up.
 	var waiting []briefBlock
 	for i, r := range f.Waiting {

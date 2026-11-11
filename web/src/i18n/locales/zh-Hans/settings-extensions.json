@@ -1,4 +1,7 @@
 {
+  "package_downloads": "扩展包下载 {downloads} 次",
+  "package_downloads_label": "扩展包下载量",
+  "package_downloads_definition": "扩展包所有版本的累计下载次数，不是用户数或 Persona 安装数。",
   "redraw": "重新画",
   "intro": "扩展给 Persona 加上新的连接器、语音对话等能力：hub 自带的、写在 manager.json 里的和装在 hub 机器上的都列在这里。",
   "title": "扩展",
@@ -118,7 +121,7 @@
   "up_to_date": "未发现新版本",
   "check_updates": "检查更新",
   "check_updates_hint": "检查扩展市场是否有新版本；确认前不会安装。",
-  "global_upgrade_off": "这个助手已关闭自动升级；此扩展的设置会保留。",
+  "global_upgrade_off": "这个助手已关闭自动升级扩展，此扩展的自动升级暂停。你的设置会保留，重新打开后恢复。",
   "not_provided": "未提供",
   "reported_version": "程序自报版本（未批准）",
   "extension_id": "扩展 ID",

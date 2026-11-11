@@ -10,7 +10,6 @@ struct ShellHome: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
     @Environment(\.shellRailEdge) private var railEdge
-    @Environment(\.managerSwitcherRoom) private var switcherRoom
     var pending: PendingStart?
     var error: String?
     @Binding var launcher: String?
@@ -55,7 +54,7 @@ struct ShellHome: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .dismissesKeyboardOnTap()
-        .contentMargins(.top, AssistantTopBar.room(railEdge) + switcherRoom, for: .scrollContent)
+        .contentMargins(.top, AssistantTopBar.room(railEdge), for: .scrollContent)
         // Room to scroll the last things to ask clear of the fade.
         .contentMargins(.bottom, pending == nil ? Self.fade : ChatView.newestGap, for: .scrollContent)
         .onPreferenceChange(WelcomeFold.self) { room.fold = $0 }
@@ -82,7 +81,7 @@ struct ShellHome: View {
                         .onDisappear { room.card = 0 }
                 }
                 if pending == nil, !mentionOpen {
-                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge) + switcherRoom), openInbox: openInbox).shellScaled()
+                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge)), openInbox: openInbox).shellScaled()
                 }
                 if let m = model.assistantManagerOffline { ManagerOfflineNote(manager: m) }
                 StarterComposer(disabled: pending != nil || model.assistantManagerOffline != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
