@@ -108,8 +108,6 @@ const (
 // plan cards waiting for "Start" and the failed scheduled runs (no tool lists them), the calendar and the chats that
 // @ the user.
 var snapshotOmits = []func(*prompts.SnapshotOmit){
-	func(o *prompts.SnapshotOmit) { o.Muted = true },
-	func(o *prompts.SnapshotOmit) { o.Done = true },
 	func(o *prompts.SnapshotOmit) { o.Waiting = true },
 	func(o *prompts.SnapshotOmit) { o.Routines = true },
 	func(o *prompts.SnapshotOmit) { o.Followups = true },
@@ -212,12 +210,39 @@ func (s *Service) ProfileChanged(context.Context) {
 	s.prefs.mu.Unlock()
 }
 
+// snapshotAgentGroup is the live snapshot category a session belongs in before muted sessions are separated. The
+// empty string means it is not in the snapshot; done and the time-limited categories use UpdatedAt, as the snapshot
+// always has (not Work.TurnAt).
+func snapshotAgentGroup(c proto.Session, now time.Time) string {
+	recent := now.Sub(c.UpdatedAt) < 24*time.Hour
+	w := c.Work
+	switch {
+	case c.State == proto.StateNeedsYou:
+		return "needs_you"
+	case c.State == proto.StateWorking:
+		return "working"
+	case c.AwaitsReply && c.State == proto.StateIdle && recent:
+		return "awaiting" // seen, its question unanswered (#5096)
+	// A decision with no card up (cards off, muted, "Not now") is not "Needs you": the lists, the badges and the Live
+	// Activity go by the state (docs/protocol/agent-states.md), so it stays "Unread" with what it waits for, or is seen.
+	case w != nil && w.Phase == proto.WorkBlocked && w.On != proto.WaitUser && c.State != proto.StateUnread && recent:
+		return "waiting" // the hub waits it out (an unread one is left for the user)
+	case w != nil && w.Phase == proto.WorkDone && recent:
+		return "done"
+	case c.State == proto.StateUnread && recent:
+		return "unread"
+	default:
+		return ""
+	}
+}
+
 // snapshotAgents sorts the agents by what they need: the work state (agents_work.go, docs/assistant/agent-work.md) says what a stopped one
 // waits for or concluded. Each has its page in the web app at web ("" for none). The muted ones (the agent or its
 // space) are in none of the others: the Live Activity, the Agents badge and the inbox leave them out
 // (docs/apple/live-activity.md), so "Needs you" here does too; they are told apart, for when the user asks about them (#4562).
 func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web string) (needs, unread, awaiting, waiting, done, muted []prompts.SnapshotAgent,
 	working []prompts.SnapshotAgent, workflows []prompts.SnapshotWorkflow) {
+	now := time.Now()
 	for _, m := range devices {
 		list, off, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
@@ -226,7 +251,7 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			a := prompts.SnapshotAgent{Label: agentLabel(c), Machine: m.ID, Session: short(c.SessionID),
 				Link: sessionLink(web, m.ID, c.SessionID, false), Ultracode: ultracodeState(c.Ultracode), Plan: snapshotPlan(c)}
-			for _, w := range runningWorkflows(c, time.Now()) {
+			for _, w := range runningWorkflows(c, now) {
 				w.Agent, w.Machine, w.Session = a.Label, a.Machine, a.Session
 				workflows = append(workflows, w)
 			}
@@ -238,34 +263,28 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 				a.Line = c.Asks // what it asks (#5096)
 			}
 			a.Line = clip(oneLine(a.Line), 160)
-			recent := time.Since(c.UpdatedAt) < 24*time.Hour
-			var into *[]prompts.SnapshotAgent
-			switch {
-			case c.State == proto.StateNeedsYou:
-				into = &needs
-			case c.State == proto.StateWorking:
-				if !off[c.SessionID] {
-					working = append(working, a)
-					continue
-				}
-				into = &muted
-			case c.AwaitsReply && c.State == proto.StateIdle && recent:
-				into = &awaiting // seen, its question unanswered (#5096)
-			// A decision with no card up (cards off, muted, "Not now") is not "Needs you": the lists, the badges and the Live
-			// Activity go by the state (docs/protocol/agent-states.md), so it stays "Unread" with what it waits for, or is seen.
-			case w != nil && w.Phase == proto.WorkBlocked && w.On != proto.WaitUser && c.State != proto.StateUnread && recent:
-				into = &waiting // the hub waits it out (an unread one is left for the user)
-			case w != nil && w.Phase == proto.WorkDone && recent:
-				into = &done
-			case c.State == proto.StateUnread && recent:
-				into = &unread
-			default:
+			group := snapshotAgentGroup(c, now)
+			if group == "" {
 				continue
 			}
 			if off[c.SessionID] {
-				into = &muted
+				muted = append(muted, a)
+				continue
 			}
-			*into = append(*into, a)
+			switch group {
+			case "needs_you":
+				needs = append(needs, a)
+			case "working":
+				working = append(working, a)
+			case "awaiting":
+				awaiting = append(awaiting, a)
+			case "waiting":
+				waiting = append(waiting, a)
+			case "done":
+				done = append(done, a)
+			case "unread":
+				unread = append(unread, a)
+			}
 		}
 	}
 	return needs, unread, awaiting, waiting, done, muted, working, workflows
