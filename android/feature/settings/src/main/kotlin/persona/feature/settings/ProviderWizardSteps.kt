@@ -166,7 +166,7 @@ internal fun LazyListScope.doneStep(state: NewProviderState, added: WizardAdded)
     }
 }
 
-/** What "Now using it: main conversation, new Agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
+/** What "Now using it: main conversation, new agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
 internal data class AssignSummary(val assigned: ResText?, val kept: List<ResText>)
 
 internal fun assignSummary(result: ProviderAdded, asked: Boolean): AssignSummary {

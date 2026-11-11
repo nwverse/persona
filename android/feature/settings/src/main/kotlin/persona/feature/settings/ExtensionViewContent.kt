@@ -260,7 +260,7 @@ internal fun GroupedItem(item: ExtensionViewItem, state: ExtensionViewState, han
             if (item.kind == "toggle") {
                 JSwitchRow(item.label.orEmpty(), value == "true", { on -> handle.edit(name, if (on) "true" else "false") }, subtitle = detail, enabled = enabled)
             } else if (item.kind in setOf("date", "time", "datetime")) {
-                JRow(item.label.orEmpty(), subtitle = detail, value = ExtensionViewText.whenText(item.kind, value).ifEmpty { item.placeholder ?: stringResource(R.string.settings_ext_not_chosen) },
+                JRow(item.label.orEmpty(), subtitle = detail, value = ExtensionViewText.whenText(item.kind, value, currentLocale).ifEmpty { item.placeholder ?: stringResource(R.string.settings_ext_not_chosen) },
                     leadingIcon = if (item.kind == "time") PhIcons.Clock else PhIcons.CalendarBlank, enabled = enabled, onClick = { handle.pick(item) })
             } else if (item.kind == "multichoice") {
                 val chosen = ExtensionViewText.multi(value)

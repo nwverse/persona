@@ -2195,6 +2195,78 @@ def _triage_fixture():
 
 if os.environ.get("MOCK_TODO_TRIAGE") == "1":
     TODOS_INIT.extend(_triage_fixture())
+
+
+# MOCK_TODO_LIST=1|calm|failed (#3712, #3740): only these to-dos, for the To-dos list's header, filter and sort
+# screenshots. Every section has rows; due dates fall today, later this week, later this month, before today (an open PR,
+# overdue) and nowhere; two are high priority, two low; a fix and its regression test share issue #412 (one row,
+# "1 related"). The selected-cache decision waits on the owner (an ask). calm: nothing needs the owner. failed: also three
+# closed to-dos whose agent never started (#3713), one in the same plan as a to-do that really finished.
+def _todo_list_fixture(variant):
+    out = []
+    local = NOW.astimezone()
+    today = local.date()
+    week_end = today + timedelta(days=6 - today.weekday())  # Monday-first, as the calendar view in zh-Hans
+    nxt = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_end = nxt - timedelta(days=1)
+
+    def day(n, cap=None):
+        d = today + timedelta(days=n)
+        return (min(d, cap) if cap else d).isoformat()
+
+    def agent(n, title, cwd, state, minutes, last, **kw):
+        sid = f"c3d5e7f9-0000-4000-8000-{3712000 + n:012d}"
+        status = {"working": "working", "needs_you": "blocked", "unread": "done", "idle": "idle"}[state]
+        space = cwd.rstrip("/").rsplit("/", 1)[-1]
+        SESSIONS.append(sess("macbook", sid, title, cwd, status, state, space, 7, "1", 1, minutes, last, **kw))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=minutes + 30), "released_at": None,
+                "title": title, "cwd": cwd, "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def todo(tid, title, minutes, agents=(), **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 600),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": list(agents), "priority": ""}
+        t.update(kw)
+        out.append(t)
+
+    evening = local.replace(hour=18, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    p = "/Users/me/code/persona"
+    if variant != "calm":
+        todo("tl_migrate", "数据库升级到 18", 12, [agent(1, "数据库升级", "/home/me/code/shop-api", "needs_you", 12,
+             "要不要先在备份库上演练一遍？", pending=1)], due_at=evening.isoformat().replace("+00:00", "Z"))
+        todo("tl_cache", "选缓存方案", 120, [agent(2, "缓存方案", p, "idle", 120, "测试已通过，是否继续更换缓存方案？")],
+             priority="high")
+    todo("tl_inbox", "收件箱分拣加批量操作", 4, [agent(3, "收件箱批量操作", p, "working", 4, "批量标记已处理的接口写好了，正在补单测。")],
+         due_date=day(2, week_end), priority="high")
+    todo("tl_widget", "修小组件横屏崩溃", 1, [agent(4, "小组件横屏", "/Users/me/code/weather", "working", 1,
+         "在模拟器里复现了横屏崩溃，正在改布局。")], due_date=day(9, month_end))
+    todo("tl_push_fix", "修复 #412 推送丢失", 50, [agent(5, "推送丢失", p, "unread", 50, "修好了：重连后补拉漏掉的推送，单测已加。")])
+    todo("tl_push_test", "#412 推送丢失：补回归测试", 60 * 20, [agent(6, "推送回归测试", p, "idle", 60 * 20, "回归测试写完了。")],
+         priority="low")
+    todo("tl_speed", "网页加载提速", 60, done_at=ago(hours=1), done_by="review", done_reason="验收通过", due_date=day(0),
+         delivery={"state": "live", "at": ago(hours=1)})
+    todo("tl_search_pr", "设置页加搜索", 60 * 24 * 6, [agent(7, "设置页搜索", p, "idle", 60 * 24 * 6, "PR 已经开好了，等合并。")],
+         stage="review", pr_url="https://github.com/example/app/pull/31", due_date=day(-4),
+         delivery={"state": "pr", "gate": "等你批准合并", "unblock": "user", "at": ago(days=6)})
+    todo("tl_minutes", "整理本周会议纪要", 125, [agent(8, "会议纪要", "/Users/me/work", "idle", 125, "纪要初稿放在知识库里了。")],
+         due_date=day(3, week_end), priority="low")
+    todo("tl_nas", "给 NAS 配自动备份", 180, origin="", due_date=day(17, month_end))
+    for i, title in enumerate(["排查 node 内存上涨", "试一下新的启动器", "清理旧的构建缓存", "看一下日志轮转", "调研新引擎", "修 Android 深色模式的边框"]):
+        todo(f"tl_stale_{i}", title, 60 * 24 * (3 + i), [agent(20 + i, title, p, "idle", 60 * 24 * (3 + i), "先到这里。")])
+    for i, (title, days) in enumerate([("换一套设置页图标", 2), ("整理发布说明", 3), ("博客迁移到 Astro", 4), ("接入支付回调", 5)]):
+        todo(f"tl_done_{i}", title, 60 * 24 * days, done_at=ago(days=days), **({"due_date": day(-8)} if i == 0 else {}))
+    if variant == "failed":
+        failed = dict(done_at=ago(hours=12), start_error="rpc: connection closed", agents=[])
+        todo("tl_failed_rce", "修复控制台远程执行漏洞", 60 * 12, plan_id="plan_tl_rce", **failed)
+        todo("tl_rce_done", "控制台远程执行漏洞：上线验证", 60 * 10, plan_id="plan_tl_rce", done_at=ago(hours=10), done_by="review",
+             done_reason="验收通过")
+        todo("tl_failed_panel_a", "部署自托管面板", 60 * 24, **dict(failed, done_at=ago(hours=24)))
+        todo("tl_failed_panel_b", "部署自托管面板", 60 * 28, **dict(failed, done_at=ago(hours=28)))
+    return out
+
+
+_TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
+if _TODO_LIST:
+    TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 TODOS = copy.deepcopy(TODOS_INIT)
 
 
@@ -2270,6 +2342,9 @@ TODO_ASKS = {
     "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
+if _TODO_LIST and _TODO_LIST != "calm":  # MOCK_TODO_LIST: the cache decision waits on the owner
+    TODO_ASKS["tl_cache"] = {"outcome": "decide", "verdict": "🤔 要你拍板：测试已通过，是否继续更换缓存方案？",
+                             "recommend": "保留当前缓存，下次再评估新方案"}
 
 # MOCK_ORPHANED=1 (#3618, docs/assistant/todos.md "Nobody is working on this"): open to-dos whose agents are gone, as GET
 # /api/v1/todos carries it, on to-dos whose agents have stopped, one per reason: closed after a model error (the PR
