@@ -110,9 +110,11 @@ export function pickPlan(s: Session, config: PanelConfig, list: LauncherModels |
   return steps;
 }
 
-/** The speed a setup asks for (Codex's service tier): only where the thread has a Fast speed, and only when it changes. */
-export function speedStep(s: Session, fast: boolean | undefined): ModeStep | undefined {
+/** The speed a setup asks for (Codex's service tier): only where the thread has a Fast speed, and (a pick) only when it
+ *  changes. `always`: the flyout's switch, sent whatever the session says: the session learns a speed only from the push
+ *  after the agent took it, so Fast on and straight back off must send the second tap too. */
+export function speedStep(s: Session, fast: boolean | undefined, always = false): ModeStep | undefined {
   if (fast === undefined || !hasFast(s)) return undefined;
   const tier = fast ? "priority" : "default";
-  return tier !== (s.service_tier ?? "default") ? { service_tier: tier } : undefined;
+  return always || tier !== (s.service_tier ?? "default") ? { service_tier: tier } : undefined;
 }

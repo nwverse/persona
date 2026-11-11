@@ -41,7 +41,7 @@ export function SessionModelPanel({ session, anchor, onClose }: { session: Sessi
     const s = latest.current;
     const steps: ModeStep[] = [];
     if (patch.effort && patch.effort !== s.effort) steps.push({ effort: patch.effort });
-    const speed = speedStep(s, patch.fast);
+    const speed = speedStep(s, patch.fast, true);
     if (speed) steps.push(speed);
     return apply(steps);
   };

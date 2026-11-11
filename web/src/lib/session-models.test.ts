@@ -253,6 +253,9 @@ describe("a speed change", () => {
     expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), true)).toBeUndefined();
     expect(speedStep(session(), true)).toBeUndefined();
     expect(speedStep(session({ service_tiers: tiers }), undefined)).toBeUndefined();
+    // the flyout's switch goes whatever the session says (its speed arrives only with the push)
+    expect(speedStep(session({ service_tiers: tiers }), false, true)).toEqual({ service_tier: "default" });
+    expect(speedStep(session(), false, true)).toBeUndefined();
   });
 });
 
