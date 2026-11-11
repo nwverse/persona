@@ -251,6 +251,12 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
   (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
+## `ANTHROPIC_BASE_URL` is the gateway root: Claude Code adds `/v1/messages` (2026-11-12, #4886)
+
+- **A tolerant probe hides a wrong address**: measured with Claude Code 2.1.322 against a fake gateway, `ANTHROPIC_BASE_URL=http://host/v1` sends `POST /v1/v1/messages?beta=true` (`/prefix/v1` → `/prefix/v1/v1/messages`). The manager's connection test and its own direct calls accepted a base with or without `/v1`, so a provider pasted as `https://gw/v1` passed Test connection and then failed every Agent with 404. Whatever turns an address into a request must be the same function on the test path and the launch path; here it is `proto.MessagesBaseURL`.
+- **A normalizer applied twice must be idempotent**: the hub stores its result and the node applies it again at launch. Dropping only one `/v1` made `https://gw/v1/v1` test as `/v1/v1/messages` and launch as `/v1/messages`; the function drops a whole run.
+- **Not every base is an `ANTHROPIC_BASE_URL`**: Responses / Chat Completions bases and Codex's `OPENAI_BASE_URL` include `/v1` by convention (`https://api.openai.com/v1`), and the web sends `api: "messages"` for every launcher, Codex ones included. Decide by the agent and protocol together (`ManagedLauncher.MessagesBase`), never by `api` alone.
+
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 
 Deleting a meeting room stopped its `claude -p` and removed the transcript at once; a moment later the file was back

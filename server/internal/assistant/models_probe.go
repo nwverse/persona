@@ -133,8 +133,12 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	return t, nil
 }
 
-// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled.
+// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled. A Messages base is read as the node hands it
+// to Claude Code (proto.MessagesBaseURL), so a test passes for the address Agents will call.
 func (t probeTarget) endpoint(path string) string {
+	if messagesAPI(t.api) {
+		return proto.MessagesBaseURL(t.base) + "/v1/" + path
+	}
 	if strings.HasSuffix(t.base, "/v1") {
 		return t.base + "/" + path
 	}
