@@ -514,6 +514,68 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	if err := s.saveHandoff(ctx, handoff); err != nil {
 		return "", false, err
 	}
+	if err := s.putAwayMain(ctx, machine, old, now); err != nil {
+		return "", false, err
+	}
+	s.logf("assistant: main conversation %s put away (carried over: %v)", short(old), carried)
+	return old, carried, nil
+}
+
+// clearMain clears the main conversation's context in place (the apps' "Clear context" and /clear, as Cindy's /clear
+// does): a turn it is on stops with its process, which is closed whether it works or not (nothing it ran in the
+// background starts another turn there), a question it waits on is taken back, and it is put away as newMain puts it,
+// with nothing carried over. What an earlier newMain left for the next conversation is dropped too, so the next message
+// to the main conversation starts a new one with a fresh context (startMain): no --resume, no handoff. Nothing is
+// deleted. It answers the old conversation's id ("" when there was none).
+func (s *Service) clearMain(ctx context.Context, expect string) (string, error) {
+	s.main.mu.Lock()
+	defer s.main.mu.Unlock()
+	cfg := s.settings(ctx)
+	old := cfg.Main
+	if expect != "" && expect != old {
+		return "", &rpc.Error{Code: "main_changed", Message: i18n.T(s.lang(ctx), "assistant-start.main_changed")}
+	}
+	if err := s.saveHandoff(ctx, mainHandoff{}); err != nil {
+		return "", err
+	}
+	if old == "" {
+		return "", nil
+	}
+	machine, c, found := s.findSession(ctx, old, cfg.mainRouteMachine())
+	if found {
+		s.closeMain(ctx, machine, c)
+	} else {
+		machine = cfg.mainRouteMachine()
+	}
+	if err := s.putAwayMain(ctx, machine, old, time.Now().UTC()); err != nil {
+		return "", err
+	}
+	s.logf("assistant: main conversation %s cleared", short(old))
+	return old, nil
+}
+
+// closeMain ends the main conversation's process for clearMain: its turn stops as with the Stop button (a Feishu
+// request it reports on is stopped with it), and a question it waits on is taken back. Only Persona's own headless
+// process is closed: one the user resumed in a terminal (a pane) is theirs, and the node's session.close would close
+// that terminal. A failure is only logged: the conversation is put away all the same, and an offline machine runs no
+// turn of it.
+func (s *Service) closeMain(ctx context.Context, machine string, c proto.Session) {
+	s.withdrawAskUser(c.SessionID)
+	if c.PaneID == "" {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := s.call(cctx, machine, "session.close", map[string]any{"session_id": c.SessionID}, nil)
+		cancel()
+		if err != nil {
+			s.logf("assistant: close the main conversation %s: %v", short(c.SessionID), err)
+		}
+	}
+	s.UserStopped(ctx, SessionRef{MachineID: machine, SessionID: c.SessionID})
+}
+
+// putAwayMain makes old no longer the main conversation: first among the former ones (its machine keeps listing it),
+// renamed "旧主对话 · 至 M月D日" by the user's hand (autonaming leaves it) and archived; sending to it again brings it back
+// (unarchiveOnSend). The caller holds s.main.mu.
+func (s *Service) putAwayMain(ctx context.Context, machine, old string, now time.Time) error {
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
 		v.Main, v.MainMachineID = "", ""
@@ -524,7 +586,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 		}
 		return nil
 	}); err != nil {
-		return "", false, err
+		return err
 	}
 	local := now.In(s.location(ctx))
 	s.titleSet(machine, old, fmt.Sprintf("旧主对话 · 至 %d月%d日", local.Month(), local.Day()), titleByUser)
@@ -532,8 +594,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 		s.logf("assistant: archive the old main conversation %s: %v", short(old), err)
 	}
 	s.settingsChanged(ctx)
-	s.logf("assistant: main conversation %s put away (carried over: %v)", short(old), carried)
-	return old, carried, nil
+	return nil
 }
 
 // findSession is the session id on the machine preferred, else on any machine (false when none lists it).
@@ -733,6 +794,21 @@ func (s *Service) startRoutes() {
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true, "archived": old, "carried": carried})
+	})
+	s.handle("POST /api/v1/assistant/main/clear", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Expect string `json:"expect"` // the main conversation the app shows: refused when it is another by now
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		old, err := s.clearMain(r.Context(), in.Expect)
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"ok": true, "archived": old})
 	})
 }
 
