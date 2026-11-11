@@ -150,22 +150,25 @@ func (s *Service) writeInboxSince(w http.ResponseWriter, all bool, since string)
 		writeInboxAnswer(w, raws, nil, cursor, false, asOf, s.inboxTriage())
 		return
 	}
-	var changed [][]byte
-	present := make(map[string]bool, len(ids))
+	changed, removed := inboxDelta(old, now, ids, raws)
+	writeInboxAnswer(w, changed, removed, cursor, true, asOf, s.inboxTriage())
+}
+
+// inboxDelta is the list now (ids and their bytes in order, with its snapshot) against the one then: the bytes of the
+// items new or changed, in the list's order, and the ids gone, sorted.
+func inboxDelta(then, now *inboxSnapshot, ids []string, raws [][]byte) (changed [][]byte, removed []string) {
 	for i, id := range ids {
-		present[id] = true
-		if sum, ok := old.items[id]; !ok || sum != now.items[id] {
+		if sum, ok := then.items[id]; !ok || sum != now.items[id] {
 			changed = append(changed, raws[i])
 		}
 	}
-	var removed []string
-	for id := range old.items {
-		if !present[id] {
+	for id := range then.items {
+		if _, ok := now.items[id]; !ok {
 			removed = append(removed, id)
 		}
 	}
 	slices.Sort(removed)
-	writeInboxAnswer(w, changed, removed, cursor, true, asOf, s.inboxTriage())
+	return changed, removed
 }
 
 // writeInboxAnswer writes a list answered for `since`, its keys sorted as encoding/json writes a map's: as_of, cursor,
