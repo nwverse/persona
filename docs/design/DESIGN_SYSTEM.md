@@ -279,6 +279,15 @@ Reduce Motion:
 - Some states stay filled in every style (`keepsFill`, `apple/Shared/Design/IconSpec.swift`).
 - Beside text, size an icon with a font level. In a box, use `Size.mark*`, `icon*`, `well*` or `avatar*` with `scaledFrame`. Details in `docs/apple/icons.md`.
 - Raw symbol names still appear in about 87 baselined places (settings rows, Lark, notification actions, controls).
+- Extension catalog artwork uses `ExtensionLogo` with the existing `ExtensionRemoteImage` loader on market rows,
+  market details and installed-extension settings. HTTPS artwork is fitted rather than cropped, sized with existing
+  `Theme.Size` tokens, decorative beside the extension name, and falls back to `Theme.Icon.plugins` while loading or
+  unavailable. `ExtensionImageCache` coalesces URL/pixel-size requests and downscales with ImageIO off the main thread;
+  decoded thumbnails have an 8 MiB / 128-entry bound and public requests send no hub credentials or cookies.
+  Market and installed lists rank cumulative GHCR package downloads across all versions (not active installations)
+  descending, then lowercase name and stable market/item identity; an absent count ranks with zero and is not displayed.
+  No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
+  version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
 
 `Theme.Icon.phoneControl` (`iphone.radiowaves.left.and.right`) is the assistant operating an iPhone through a computer:
@@ -910,3 +919,16 @@ to the initiating app rather than a reusable device token. Password sign-in requ
 remaining available for self-signed deployments. This changes connection features only, without selecting a model,
 speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTextField, JButton and SettingsCaption;
 Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
+
+## Checking typed credentials by themselves (#4881)
+
+Where a form exists to connect to something with an address or key the user types (the web provider wizard's preset
+key step and its custom gateway's Connect step), the check runs without a button: once what it needs is valid and has
+stopped changing for 0.7 s, it runs once for that input. It never runs on opening something already saved, only after
+its connection fields change; fields that play no part in the connection (a name) never block or repeat it. A line
+says it will check by itself, then shows progress with a spinner, then the result; a failure keeps the server's words
+and offers to run it again (Retry on the Connect step). Manual buttons, where the form has them, and the note that a
+test may cost a little stay. Once the check found what the next step needs, that step's button is the one primary
+action (section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path
+already answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and
+status-line styles and adds no setting.

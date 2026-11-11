@@ -114,6 +114,13 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				}
 			}
 			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+		} else if sup, ok := s.defaultPlanSupervisor(ctx, p.Conversation, t.Parent); ok {
+			// Any other conversation's task is the main conversation's to supervise (#4669): its signals go there, and
+			// the planning conversation hears when it ends (taskEndedNotice). The main conversation sees its card too.
+			if t.ReuseTodo == "" {
+				s.taskCard(ctx, sup, todo.ID)
+			}
+			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
 		}
 		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
 			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)

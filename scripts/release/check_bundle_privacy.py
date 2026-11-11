@@ -486,6 +486,11 @@ def remove_public_relay_url(text, configured_url, path="/relay"):
     return re.sub(r"(?<!" + boundary + ")" + re.escape(url) + r"(?!" + boundary + ")", "", text)
 
 
+def verified_public_file(path):
+    with open(path, "rb") as source:
+        return verified_public_js(path, source.read())
+
+
 def public_download_url(cfg):
     """The update URL every published personad carries and the one path it may have: publish.update_url as configured
     (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl (persona_config.update_url)."""
@@ -510,7 +515,7 @@ def main():
     # Hermes stores the same pinned public resource as strings in the main executable, not as a .js file.
     # Its longer JavaScript tokens use the resource's existing short-word boundary; every other binary stays strict.
     hermes_public_js = not whole_short and os.path.isfile(os.path.join(root, "Persona")) and any(
-        verified_public_js(os.path.join(dirpath, filename), open(os.path.join(dirpath, filename), "rb").read())
+        verified_public_file(os.path.join(dirpath, filename))
         for dirpath, _, filenames in os.walk(root) for filename in filenames)
     bad = []
     for dirpath, dirnames, files in os.walk(root):

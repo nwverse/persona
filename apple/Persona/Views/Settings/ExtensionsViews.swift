@@ -113,7 +113,7 @@ private struct ExtensionRowLabel: View {
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
-            SettingsRow(title: plugin.name, symbol: Theme.Icon.plugins, tint: ExtensionStateDot.tone(plugin), value: ExtensionText.summary(plugin, auth: auth))
+            SettingsRow(title: plugin.name, symbol: Theme.Icon.plugins, tint: ExtensionStateDot.tone(plugin), value: ExtensionText.summary(plugin, auth: auth), iconURL: plugin.iconURL)
         } else {
             LabeledContent {
                 HStack(spacing: Theme.Space.sm) {
@@ -124,7 +124,11 @@ private struct ExtensionRowLabel: View {
                 Label {
                     Text(plugin.name).lineLimit(1)
                 } icon: {
-                    ThemedIcon(Theme.Icon.plugins)
+                    if ExtensionImageCache.url(plugin.iconURL) != nil {
+                        ExtensionLogo(url: plugin.iconURL, side: Theme.Size.iconL)
+                    } else {
+                        ThemedIcon(Theme.Icon.plugins)
+                    }
                 }
             }
         }
@@ -279,8 +283,7 @@ struct ExtensionDetailView: View {
     @ViewBuilder private var header: some View {
         Section {
             HStack(spacing: Theme.Space.m) {
-                Image(systemName: Theme.Icon.plugins).resizable().scaledToFit().foregroundStyle(Theme.accent)
-                    .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
+                ExtensionLogo(url: page.detail?.plugin.iconURL)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(page.detail?.plugin.name ?? page.id).font(Theme.Font.heading).lineLimit(1)
                     HStack(spacing: Theme.Space.sm) {

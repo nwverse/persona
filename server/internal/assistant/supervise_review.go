@@ -454,6 +454,10 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 	if ok && accepted && row.DoneAt != nil {
 		s.goRecordTaskOutcome(before, *row.DoneAt)
 	}
+	if t, now := s.todoNow(id); ok && now {
+		// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).
+		go s.taskEndedNotice(context.WithoutCancel(ctx), t, accepted, reason)
+	}
 	return ok, nil
 }
 
