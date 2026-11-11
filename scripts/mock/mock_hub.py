@@ -1632,6 +1632,20 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_RECENT=1 (#4873): more of the user's own conversations, so the sidebar's Recent (the newest five that are not the main
+# conversation or a leader) has more than it lists and All chats holds the rest. Synthetic titles.
+if os.environ.get("MOCK_RECENT") == "1":
+    for i, (title, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles
+        ("1112 | 规划 | 周末去杭州的行程", 60 * 2, "两天的安排排好了。"),
+        ("1112 | 写作 | 给物业的报修邮件", 60 * 7, "邮件草稿在这里。"),
+        ("1111 | 研究 | 家用净水器怎么选", 60 * 26, "三款的对比如下……"),
+        ("1109 | 整理 | 孩子的疫苗时间表", 60 * 24 * 3, "下一针在 12 月。"),
+        ("1106 | 学习 | 每天 20 分钟西班牙语", 60 * 24 * 6, "第 6 课的单词表。"),
+    ]):
+        c = assistant_sess(f"mine{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
+        c["origin"] = "user"
+        ASSISTANT.append(c)
+
 # MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
 # /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
@@ -10093,8 +10107,14 @@ def providers_route(h, method, p, q, body):
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
         h.send_json(PROVIDER_LOG); return True
-    b = json.loads(body or b"{}") if method != "GET" else {}
-    if not MOCK_PROVIDERS and b.get("preset"): return False
+    if MOCK_PROVIDERS:
+        b = json.loads(body or b"{}") if method != "GET" else {}
+    else:  # a body that is not this wizard's goes on to the routes after this one
+        try:
+            b = json.loads(body or b"{}")
+        except ValueError:
+            return False
+        if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/import":
         machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
         if machine == "studio":
