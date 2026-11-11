@@ -168,10 +168,14 @@ const still = async (page, name) => {
 };
 
 /** The picture attached to the main chat's composer, and the editor opened from its tile. */
-async function openEditor(page, w) {
+async function openEditor(page, w, attached) {
   const input = page.locator('main input[type="file"]').first();
   await input.waitFor({ state: "attached" });
   await input.setInputFiles({ name: "trail.png", mimeType: "image/png", buffer: await picture(page) });
+  // the composer with the picture in it, nothing edited: the same before and after
+  await page.getByRole("button", { name: w.tile.replace("{name}", "trail.png"), exact: true }).waitFor();
+  await page.mouse.move(0, 0);
+  await attached?.();
   // low on the left: the remove button's touch area covers the tile's top right
   await page.getByRole("button", { name: w.tile.replace("{name}", "trail.png"), exact: true }).click({ position: { x: 14, y: 42 } });
   const dialog = page.getByRole("dialog", { name: w.title, exact: true });
@@ -210,7 +214,7 @@ async function runBefore(browser, combo) {
   const tag = `${lang}-${theme}-${phone ? "390" : "1440"}`;
   const w = words(lang);
   const { ctx, page, errors } = await open(browser, combo);
-  const dialog = await openEditor(page, w);
+  const dialog = await openEditor(page, w, () => still(page, `before-${tag}-attached`));
   await still(page, `before-${tag}-open`);
   await (await drag(page, dialog, [0.3, 0.3], [0.55, 0.6]))();
   await still(page, `before-${tag}-box`);
@@ -228,7 +232,7 @@ async function runAfter(browser, combo) {
   const stop = recording ? await record(ctx, page, `recording-${tag}`) : null;
   // the recording run walks the same steps; its stills would only overwrite the ones taken already
   const shot = recording ? async () => {} : still;
-  const dialog = await openEditor(page, w);
+  const dialog = await openEditor(page, w, () => shot(page, `after-${tag}-attached`));
   if ((await button(dialog, w.box).getAttribute("aria-pressed")) !== "true") fail(`${tag}: the editor does not open on Box`);
   if (!(await button(dialog, w.undo).isDisabled()) || !(await button(dialog, w.redo).isDisabled())) fail(`${tag}: Undo / Redo enabled with nothing done`);
   await shot(page, `after-${tag}-open`);
