@@ -101,7 +101,7 @@ func TestSendValidatesTheResolvedAssistantLauncher(t *testing.T) {
 		setSettings(t, s, func(v *Settings) { v.Main = "main" })
 		f.setSessions("server", proto.Session{SessionID: "main", Assistant: true})
 		p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "main", Params: map[string]any{"text": "hi"}})
-		if err != nil || p["launcher"] != "cx" || p["model"] != nil {
+		if err != nil || p["launcher"] != "cx" || p["model"] != "old-model" { // cx's list can't be read: kept (launcherHasModel)
 			t.Fatalf("resolved default was not replaced with a verified compatible launcher of its kind: %v %v", p, err)
 		}
 	})

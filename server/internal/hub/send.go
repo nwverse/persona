@@ -269,7 +269,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	switch state {
 	case sendDelivered:
-		f.status, f.body = http.StatusOK, []byte("{}\n")
+		f.status, f.body = http.StatusOK, withLauncherNote(http.StatusOK, []byte("{}\n"), note)
 	case sendSending, sendUnknown: // an earlier hub or connection was sending it and never learned the outcome
 		f.status, f.body = callErrBytes(l, unknownDelivery(l, "hub-send.lost_before"))
 	default:

@@ -70,14 +70,15 @@ func TestMainChatFallbackKeepsTheAgentKind(t *testing.T) {
 	}
 }
 
-// A managed Claude provider is a substitute of the same kind; one without the model in its list runs its own default,
-// and the note says the model was dropped.
+// A managed Claude provider is a substitute of the same kind; one whose list is known and lacks the model runs its own
+// default, and the note says the model was dropped (a list that can't be read counts as having it, launcherHasModel).
 func TestMainChatFallbackToAManagedLauncherDropsAModelItLacks(t *testing.T) {
 	ctx := context.Background()
 	s, f := kindFixture(t)
 	f.devices[0].ClaudeVersion = ""
 	f.launcherList = []proto.Launcher{{Name: "cx", Agent: "codex"}}
 	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", BaseURL: "https://gw.example", Model: "m1"}})
+	f.agentModels["gw"] = []proto.AgentModel{{ID: "m1"}} // its list is known, without the model
 	params := map[string]any{"launcher": "wrap", "model": "claude-opus-5-5"}
 	note, err := s.finishMainChatModel(ctx, "server", "assistant", params, false)
 	if err != nil || params["launcher"] != "gw" || params["model"] == "claude-opus-5-5" ||

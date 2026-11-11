@@ -91,7 +91,7 @@ func (s *Service) finishMainChatModel(ctx context.Context, machine, purpose stri
 		return "", i18n.Err("assistant-start.launcher_no_substitute", i18n.Args{"launcher": name, "machine": where})
 	}
 	model, _ := params["model"].(string)
-	kept := model != "" && s.launcherModelSet(ctx, machine, to)[model]
+	kept := model != "" && s.launcherHasModel(ctx, machine, to, model) // a list it can't read counts as having it
 	s.logf("[%s] resolved assistant launcher %s can't run it, using %s (model kept: %v)", machine, name, to, kept)
 	params["launcher"] = to
 	if !kept {
@@ -138,7 +138,7 @@ func (s *Service) mainChatInstead(ctx context.Context, d Device, name, kind stri
 		names = append(names, "claude")
 	}
 	for _, l := range launchers {
-		if agentKind(cmp.Or(l.Agent, l.AgentType)) == kind && !slices.Contains(names, l.Name) {
+		if agentKind(cmp.Or(l.AgentType, l.Agent)) == kind && !slices.Contains(names, l.Name) {
 			names = append(names, l.Name)
 		}
 	}
