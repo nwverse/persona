@@ -600,8 +600,16 @@ final class ChatStore {
 
     func merge(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
         if backlog || !new.isEmpty { error = nil } // data arrived: a stale "machine is offline" no longer applies
-        // Promotion is monotone, including when overlapping real work takes a promoted fold's place. Retain it on
-        // the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
+        // A replayed disk cache can hold an id twice. Keep the newest copy before indexing, but only after collecting
+        // promotion evidence; ids is already a Set, so a count mismatch finds this without scanning every ordinary merge.
+        func newestCopies(_ list: [Item]) -> [Item] {
+            guard list.count > 1 else { return list }
+            var seen = Set<String>()
+            return Array(list.reversed().filter { seen.insert($0.id).inserted }.reversed())
+        }
+        let deduplicated = items.count != ids.count
+        // Promotion is monotone, including when deduplication or overlapping real work takes a promoted fold's place.
+        // Retain it on the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
         // folded page can bring authoritative promotion while the UI keeps that work expanded.
         let evidence = (items + Array(opened.values) + new).filter { $0.supervisionUser == true || $0.fold?.supervisionUser == true }
         let promotedIDs = Set(evidence.filter { $0.supervisionUser == true }.map(\.id))
@@ -619,10 +627,14 @@ final class ChatStore {
                 return it
             }
         }
+        if deduplicated {
+            items = newestCopies(items)
+            ids = Set(items.map(\.id))
+        }
         let retained = retainingPromotion(items)
-        var changed = retained != items
+        var changed = deduplicated || retained != items
         if changed { items = retained; settled = nil }
-        let promoted = retainingPromotion(new)
+        let promoted = newestCopies(retainingPromotion(new))
         let batchWork = promoted.filter { $0.isWork && $0.kind != .fold }
         let fresh = promoted.filter { it in
             !stillOpen(it) && !(it.kind == .fold && batchWork.contains { it.folds($0) })
@@ -632,7 +644,7 @@ final class ChatStore {
         // Pages can repeat an id with new metadata or a completed receipt. The new copy wins, but never erases the
         // evidence above. Append-only pushes keep the fast path without building an index.
         let indices = fresh.contains { ids.contains($0.id) } ? Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) }) : [:]
-        var inOrder = true
+        var inOrder = !deduplicated // Keeping the last cached copies can move an older line behind a newer one.
         var added: [Item] = []
         for it in Self.withImageRefs(fresh, key) {
             if let i = indices[it.id] {
