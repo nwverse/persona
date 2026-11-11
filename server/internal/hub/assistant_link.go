@@ -326,11 +326,8 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 	}
 	a.mu.Unlock()
 	// The hub keeps one profile as its own (assistant_profile.go): the assistant it starts.
-	if s.Profile != nil && !jsonSame(oldProfile, s.Profile) {
-		if from == assistantwire.AssistantID {
-			h.keepAssistantProfile(context.Background(), s.Profile)
-		}
-		h.refreshWorkListMain(from)
+	if s.Profile != nil && !jsonSame(oldProfile, s.Profile) && from == assistantwire.AssistantID {
+		h.keepAssistantProfile(context.Background(), s.Profile)
 	}
 	// What the nodes keep listing (s.Profile.Keep) the manager tells them itself (internal/devices SetKeep).
 	// The session lists' decoration (its titles, todos, work, channels, inbox agents) and its own cards on the phone
