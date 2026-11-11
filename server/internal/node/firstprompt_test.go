@@ -135,15 +135,18 @@ func TestStartEntersAFirstMessageLeftInTheBox(t *testing.T) {
 func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 	long := "First prompt submit regression.\n" + strings.Repeat("Test-only multiline context.\n", 26)
 	for _, c := range []struct {
-		name, prompt, draft, why string
-		showAfter, takeEnter     int
-		clearOnEnter             bool
+		name, prompt, draft, why           string
+		showAfter, takeEnter, replaceAfter int
+		clearOnEnter                       bool
 	}{
 		{name: "delayed image and long text", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines]", showAfter: 5, takeEnter: 1},
 		{name: "swallowed recovery Enter", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines]", takeEnter: 2},
 		{name: "short text with image path lines", prompt: "Check this test image", draft: "[Image #1][Pasted text #2 +3 lines]", takeEnter: 1},
 		{name: "owned paste never submits", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines]", why: lostDraft},
 		{name: "another visible draft", prompt: long, draft: "unrelated user draft", why: lostOther},
+		{name: "another paste before first read", prompt: long, draft: "[Pasted text #3 +26 lines]", why: lostOther},
+		{name: "placeholder with unrelated suffix", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines] unrelated user draft", why: lostOther},
+		{name: "user replaces long paste during grace", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines]", replaceAfter: 1, why: lostOther},
 		{name: "Enter clears box but receipt is late", prompt: long, draft: "[Image #1][Pasted text #2 +26 lines]", clearOnEnter: true, why: lostTimeout},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -170,6 +173,9 @@ func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 				case call.Method == "pane.read" && pasted:
 					if reads++; c.showAfter > 0 && reads == c.showAfter {
 						f.setScreens("w1:p2", draft, draftANSI)
+					}
+					if c.replaceAfter > 0 && reads == c.replaceAfter {
+						f.setScreens("w1:p2", strings.Replace(draft, "#2", "#3", 1), strings.Replace(draftANSI, "#2", "#3", 1))
 					}
 				case isKeys("enter")(call):
 					enters++
@@ -231,6 +237,23 @@ func TestStartSubmitsImageAndLongPaste(t *testing.T) {
 				t.Fatal("did not retry Enter while the owned draft remained")
 			}
 		})
+	}
+}
+
+func TestFirstDraftPinsResumedPasteIDs(t *testing.T) {
+	prompt := "A resumed first prompt\nwith multiple\nlines"
+	draft := &firstDraft{} // a resumed session already used earlier chip IDs
+	if !draft.matches("[Image #5][Pasted text #6 +26 lines]", prompt) {
+		t.Fatal("did not recognize the resumed paste")
+	}
+	for _, other := range []string{
+		"[Image #5][Pasted text #7 +26 lines]",
+		"[Image #5][Pasted text #6 +26 lines] unrelated words",
+		"A resumed first prompt with unrelated changes",
+	} {
+		if draft.matches(other, prompt) {
+			t.Fatalf("matched changed resumed draft %q", other)
+		}
 	}
 }
 

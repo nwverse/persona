@@ -379,7 +379,8 @@ func longPaste(text string) bool {
 // Callers must hold the input turn and stop checking once delivery is confirmed; a placeholder alone is not
 // ownership of an arbitrary draft. A short prompt cannot own a long-paste placeholder.
 func pendingPrompt(box, prompted string) bool {
-	return stillPrompted(box, prompted) || longPaste(prompted) && pastePlaceholder.MatchString(box)
+	return stillPrompted(box, prompted) || longPaste(prompted) && pastePlaceholder.MatchString(box) &&
+		strings.TrimSpace(boxChips.ReplaceAllString(box, "")) == ""
 }
 
 // stillPrompted: the input box shows the start of what was prompted. Claude turns an image path into an `[Image #n]`

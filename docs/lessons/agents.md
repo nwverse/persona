@@ -158,8 +158,10 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Startup submission needs the same placeholder recognition as ordinary sends (#4794, Claude Code 2.1.322):
   `stillPrompted` removes `[Image #n]` and `[Pasted text #n +k lines]`; a chip-only draft has no visible words left,
   so using it alone both skips recovery Enter and reports the owned draft as someone else's. Use `pendingPrompt`
-  under the startup typing lock, keep checking during the confirmation window, and retry only Enter with a grace
-  between attempts. Once recovery Enter was attempted, an empty box without a transcript receipt is ambiguous,
+  under the startup typing lock, pin the placeholder IDs before recovery (the lock cannot stop a person editing
+  the terminal), and retry only Enter with a grace between attempts. Fresh sessions expect the text chip after
+  their image chips; changed IDs or appended words are not the owned paste. Once recovery Enter was attempted,
+  an empty box without a transcript receipt is ambiguous,
   not permission to paste again. A later follow-up's timestamp can show it was queued after work began; do not
   attribute the original submission to that follow-up without a terminal-key receipt.
 - An image message once remained unsent in Claude's input box (2026-10-31, Claude Code 2.1.206: `[Image #1]` and text in the box, Agent `done`, Enter on the computer sent it).

@@ -945,7 +945,8 @@ PERSONA_LIVE_FIRST_PROMPT=1 PERSONA_LIVE_LAUNCHER=<launcher> \
 ```
 
 It starts disposable Claude Agents in temporary directories/profiles, with no Persona hooks or hub/node service
-changes, and sends a synthetic 768×768 PNG plus multiline text through `firstPrompt`. The normal case uses real
+changes, and sends a synthetic 768×768 PNG plus multiline text through `firstPrompt`. A launcher's first Bypass
+Permissions confirmation is accepted only in its disposable test profile. The normal case uses real
 `agent.prompt`; the fault-injected case pastes into the real terminal but omits initial Enter and swallows one
 recovery Enter. Both require exactly one user prompt and image in the transcript, a model reply, and an empty
 input box. `PERSONA_LIVE_ARTIFACTS=<existing directory outside the repo>` keeps redacted ANSI captures and JSON

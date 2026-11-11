@@ -47,6 +47,7 @@ func TestLiveFirstPrompt(t *testing.T) {
 			n, home := testNode(t)
 			n.dir = filepath.Join(home, ".persona")
 			n.metas = map[string]quickMeta{}
+			n.bgScans = map[string]*bgScan{}
 			n.logger = log.New(os.Stdout, "", 0)
 			cwd := mkdir(t, filepath.Join(home, "project"))
 			config := mkdir(t, filepath.Join(home, "claude-test"))
@@ -72,6 +73,13 @@ func TestLiveFirstPrompt(t *testing.T) {
 				t.Fatal(err)
 			}
 			a, err := n.waitReady(ctx, pane, nil)
+			if err != nil && strings.Contains(err.Error(), "Bypass Permissions confirmation") {
+				// Some launchers request bypass. Accept its first-run confirmation only in this disposable profile,
+				// never in the user's configuration; the synthetic task explicitly forbids tools and file changes.
+				if err = n.sendKeys(ctx, pane, "down", "enter"); err == nil {
+					a, err = n.waitReady(ctx, pane, nil)
+				}
+			}
 			if err != nil {
 				dctx, done := context.WithTimeout(context.Background(), 5*time.Second)
 				defer done()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,8 +70,9 @@ func (n *Node) firstPrompt(ctx context.Context, pane, id, prompt string, a *host
 // dropped. It returns "" once the transcript has it, else why it did not go in, for the user.
 func (n *Node) confirmFirst(ctx context.Context, pane, id, prompt string, since time.Time) string {
 	typedAt := since
+	draft := n.firstDraftFor(id, prompt)
 	for try := 1; ; try++ {
-		taken, entered := n.firstPromptTaken(ctx, pane, id, prompt, since, typedAt)
+		taken, entered := n.firstPromptTaken(ctx, pane, id, prompt, since, typedAt, draft)
 		if taken {
 			return ""
 		}
@@ -80,7 +82,7 @@ func (n *Node) confirmFirst(ctx context.Context, pane, id, prompt string, since 
 		if entered {
 			// Enter may have submitted it even if the transcript is late. Never paste it again after that;
 			// the owned draft was retried in firstPromptTaken, and an empty box is not proof of a dropped prompt.
-			if why := n.readyForFirstPrompt(ctx, pane, prompt); why != "" {
+			if why := n.readyForFirstPrompt(ctx, pane, prompt, draft); why != "" {
 				return why
 			}
 			return lostTimeout
@@ -89,10 +91,11 @@ func (n *Node) confirmFirst(ctx context.Context, pane, id, prompt string, since 
 			return fmt.Sprintf("首条消息送了 %d 次都没进去，Agent 还没开始：看看电脑上的终端，或者在这里把任务重发一遍。", firstPromptTries)
 		}
 		log.Printf("start %s: the first message did not reach the transcript (try %d), typing it again", id, try)
-		if why := n.readyForFirstPrompt(ctx, pane, prompt); why != "" {
+		if why := n.readyForFirstPrompt(ctx, pane, prompt, draft); why != "" {
 			return why
 		}
 		typedAt = time.Now()
+		draft = &firstDraft{} // a dropped paste may still have consumed its chip IDs
 		err := n.hostPrompt(ctx, pane, prompt)
 		if errors.Is(err, host.ErrAgentBlocked) {
 			return lostDialog
@@ -121,7 +124,7 @@ const (
 // between attempts: image decoding can swallow an early Enter. Never press keys on a dialog or another draft.
 // entered records any attempted Enter, even a failed RPC: its delivery is ambiguous, so the caller must not re-paste.
 // At the deadline, working also counts as taken: typing it again would run it twice.
-func (n *Node) firstPromptTaken(ctx context.Context, pane, id, prompt string, since, typedAt time.Time) (taken, entered bool) {
+func (n *Node) firstPromptTaken(ctx context.Context, pane, id, prompt string, since, typedAt time.Time, draft *firstDraft) (taken, entered bool) {
 	deadline := typedAt.Add(firstPromptWait)
 	nextEnter := typedAt.Add(submitGrace)
 	for {
@@ -136,18 +139,16 @@ func (n *Node) firstPromptTaken(ctx context.Context, pane, id, prompt string, si
 		if time.Now().After(deadline) {
 			break
 		}
-		if !time.Now().Before(nextEnter) {
-			if s, err := n.readPaneANSI(ctx, pane, "visible", 60); err == nil {
-				if code, in := screen.CheckClaude(s); code == screen.InputDraft && pendingPrompt(in.Text, prompt) {
-					// The transcript may have appeared during the screen read. Do not send another Enter then.
-					if n.promptedSince(id, since) {
-						return true, entered
-					}
-					entered = true
-					n.logf("start %s: first prompt still in the input box, pressing enter", id)
-					_ = n.sendKeys(ctx, pane, "enter")
-					nextEnter = time.Now().Add(submitGrace)
+		if s, err := n.readPaneANSI(ctx, pane, "visible", 60); err == nil {
+			if code, in := screen.CheckClaude(s); code == screen.InputDraft && draft.matches(in.Text, prompt) && !time.Now().Before(nextEnter) {
+				// The transcript may have appeared during the screen read. Do not send another Enter then.
+				if n.promptedSince(id, since) {
+					return true, entered
 				}
+				entered = true
+				n.logf("start %s: first prompt still in the input box, pressing enter", id)
+				_ = n.sendKeys(ctx, pane, "enter")
+				nextEnter = time.Now().Add(submitGrace)
 			}
 		}
 	}
@@ -155,12 +156,52 @@ func (n *Node) firstPromptTaken(ctx context.Context, pane, id, prompt string, si
 	return err == nil && a.AgentStatus == proto.StatusWorking, entered
 }
 
+// firstDraft pins the first observed paste placeholder before any recovery key. Claude increments its chip IDs
+// for later pastes: the input lock serializes Persona sends, but cannot prevent a person replacing the terminal draft.
+// A changed placeholder or appended text must not receive our next Enter, even when the original prompt was long.
+type firstDraft struct {
+	placeholder   string
+	expectedPaste int // a fresh session assigns image chips first, then the text chip
+}
+
+func (n *Node) firstDraftFor(id, prompt string) *firstDraft {
+	d := &firstDraft{}
+	if p := n.transcriptPath(id); p != "" {
+		if st, err := os.Stat(p); err == nil && !n.meta(p, st).lastPromptAt.IsZero() {
+			return d // resumed sessions may already have paste IDs; pin their first observed draft instead
+		}
+	}
+	d.expectedPaste = 1 + strings.Count(attachedNote.FindString(prompt), "\n"+imagePathLine)
+	return d
+}
+
+func (d *firstDraft) matches(box, prompt string) bool {
+	if !pendingPrompt(box, prompt) {
+		return false
+	}
+	if pastePlaceholder.MatchString(box) {
+		if d.expectedPaste > 0 {
+			_, number, _ := strings.Cut(box, "[Pasted text #")
+			expected := fmt.Sprint(d.expectedPaste)
+			if !strings.HasPrefix(number, expected+" ") && !strings.HasPrefix(number, expected+"]") {
+				return false // another paste arrived before our first screen read
+			}
+		}
+		key := strings.Join(strings.Fields(box), "") // ignore wrapping, not chip IDs or added text
+		if d.placeholder == "" {
+			d.placeholder = key
+		}
+		return d.placeholder == key
+	}
+	return d.placeholder == ""
+}
+
 // firstPromptPoll is how often firstPromptTaken looks at the transcript.
 var firstPromptPoll = 500 * time.Millisecond
 
 // readyForFirstPrompt waits for Claude's input box to show again (accepting a trust dialog on the way) and checks the
 // box is empty: "" when the message can be typed again, else why not.
-func (n *Node) readyForFirstPrompt(ctx context.Context, pane, prompt string) string {
+func (n *Node) readyForFirstPrompt(ctx context.Context, pane, prompt string, draft *firstDraft) string {
 	rctx, cancel := context.WithTimeout(ctx, firstPromptRecover)
 	defer cancel()
 	a, err := n.waitReady(rctx, pane, nil)
@@ -179,7 +220,7 @@ func (n *Node) readyForFirstPrompt(ctx context.Context, pane, prompt string) str
 	switch code, in := screen.CheckClaude(s); {
 	case code == screen.DialogOpen:
 		return lostDialog
-	case code == screen.InputDraft && pendingPrompt(in.Text, prompt):
+	case code == screen.InputDraft && draft.matches(in.Text, prompt):
 		return lostDraft
 	case code == screen.InputDraft:
 		return lostOther
