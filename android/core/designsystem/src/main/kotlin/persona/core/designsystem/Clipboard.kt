@@ -84,9 +84,13 @@ fun rememberCopy(): (text: String, notice: String?) -> Boolean {
     return remember(context, feedback, haptics) {
         { text, notice ->
             val plain = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) context.getString(R.string.designsystem_copied) else null
-            val copied = copyTextSafely(context, text, feedback = feedback,
+            var said: String? = null
+            val copied = copyTextSafely(context, text, onNotice = { said = it },
                 successNotice = notice?.takeIf { it.isNotEmpty() } ?: if (notice == null) plain else null)
-            haptics(if (copied) Haptic.Success else Haptic.Error)
+            val style = if (copied) FeedbackStyle.Success else FeedbackStyle.Error
+            // A shown toast plays its style's haptic; without one, the haptic plays here.
+            val shown = said?.let { feedback?.notice(it, style) } == true
+            if (!shown) haptics(style.haptic ?: Haptic.Tap)
             copied
         }
     }
