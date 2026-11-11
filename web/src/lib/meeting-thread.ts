@@ -19,18 +19,21 @@ export interface MeetingLine {
 export type ThreadEntry =
   /** The room's first message (the meeting header): Persona joined. */
   | { kind: "joined"; id: string; ts?: string }
-  /** A batch of live lines; none in an end batch with nothing new. */
+  /** A batch of live lines. */
   | { kind: "lines"; id: string; ts?: string; lines: MeetingLine[] }
-  /** A question heard in the room: the lines before the tap. */
-  | { kind: "heard"; id: string; ts?: string; clock: string; lines: MeetingLine[] }
-  /** The owner's own message: an ask typed or spoken on the phone, or written in the follow-up. */
-  | { kind: "question"; id: string; ts?: string; text: string; via: "typed" | "spoken" | "owner" }
+  /** The end batch: the meeting ended (after the batch's last lines, when it had any). */
+  | { kind: "ended"; id: string; ts?: string }
+  /** A question heard in the room: the lines before the tap; `ask` the ask it is an attempt of, lowercase. */
+  | { kind: "heard"; id: string; ts?: string; clock: string; lines: MeetingLine[]; ask?: string }
+  /** The owner's own message: an ask typed or spoken on the phone (`ask`, lowercase), or written in the follow-up. */
+  | { kind: "question"; id: string; ts?: string; text: string; via: "typed" | "spoken" | "owner"; ask?: string }
   | { kind: "answer"; id: string; ts?: string; text: string }
   | { kind: "image"; id: string; ts?: string }
   /** A context block of the owner's message; the follow-up's first (`seed`) is the meeting's material. */
   | { kind: "material"; id: string; ts?: string; title: string; text: string; seed: boolean };
 
 const LEADING_SOURCE = /^\s*<persona-context\b([^>]*)>([\s\S]*?)<\/persona-context>/;
+const BLOCK_END = "</persona-context>";
 const LINE = /^\[(\d{1,2}(?::\d{2}){1,2})\]\s?(.*)$/;
 const ASK_MSG = /^ask-([0-9a-f-]{36})-\d+$/;
 
@@ -89,13 +92,18 @@ export function roomThread(items: Item[], recordingId: string, asks: RecordingAs
       } else if (sourced && (ask || /^What was just said\b/.test(block?.title ?? ""))) {
         const at = byId.get(ask ?? "")?.at;
         const clock = /\(([\d:]+)\)\s*$/.exec(block?.title ?? "")?.[1] ?? (typeof at === "number" ? meetingClock(at) : "");
-        out.push({ kind: "heard", id: it.id, ts: it.ts, clock, lines: meetingLines(block?.text ?? "") });
+        out.push({ kind: "heard", id: it.id, ts: it.ts, clock, lines: meetingLines(block?.text ?? ""), ...(ask ? { ask } : {}) });
       } else if (sourced) {
-        out.push({ kind: "lines", id: it.id, ts: it.ts, lines: meetingLines(block?.text ?? "") });
+        // A batch (prompts/meeting/feed.md): its lines in the block. One that holds no line (only questions answered
+        // from the meeting's material, which show among the asks) is left out; the end batch says the meeting ended
+        // after its block, or alone when nothing was new.
+        const lines = meetingLines(block?.text ?? "");
+        if (lines.length) out.push({ kind: "lines", id: it.id, ts: it.ts, lines });
+        if (endBatch(it.text ?? "")) out.push({ kind: "ended", id: `${it.id}#end`, ts: it.ts });
       } else if (!it.source?.kind && !it.injected && text) {
         // The owner's own: an ask (typed, or spoken from a Talk span), or a message an app sent into the room.
         const via = ask ? (byId.get(ask)?.question_source === "spoken" ? "spoken" : "typed") : "owner";
-        out.push({ kind: "question", id: it.id, ts: it.ts, text, via });
+        out.push({ kind: "question", id: it.id, ts: it.ts, text, via, ...(ask ? { ask } : {}) });
       }
     } else {
       pushReply(out, it);
@@ -135,6 +143,13 @@ function pushReply(out: ThreadEntry[], it: Item) {
   } else if (it.role === "user" && it.kind === "image" && !it.tool_use_id) {
     out.push({ kind: "image", id: it.id, ts: it.ts });
   }
+}
+
+/** Whether a batch is the end batch: words after its last block (every other batch ends with its lines' block), or no
+ *  block of its own (the end with nothing new: only its message-source block, or none). */
+function endBatch(raw: string): boolean {
+  const end = raw.lastIndexOf(BLOCK_END);
+  return end < 0 || raw.slice(end + BLOCK_END.length).trim() !== "";
 }
 
 /** The meeting header's block (prompts/meeting/room_header.md): it says when it started and the role. */

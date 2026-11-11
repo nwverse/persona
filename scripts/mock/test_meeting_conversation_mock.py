@@ -199,6 +199,43 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         # meeting.answer says the question it understood, as for #2981 meetings; the room's would keep "".
         self.assertEqual((heard["via"], heard["question"], heard["heard"]), ("material", LINES[1]["text"], [LINES[1]]))
 
+    def test_earlier_meetings_are_material_only_when_marked_not_private(self):
+        self.call("POST", "/mock/recording_minutes", {"mode": "pending"})  # a fresh start: no earlier meeting of another test
+        unmarked, private, shared, rid = (str(uuid.uuid4()) for _ in range(4))
+        self.upload(unmarked, complete=True, segments=LINES[:1])
+        self.upload(private, complete=True, segments=LINES[:1], private=True)
+        self.ready_room(rid)
+
+        def earlier():
+            ask = self.call("POST", f"/api/v1/recordings/{rid}/ask", {"id": str(uuid.uuid4()), "question": "What did we decide last time?"})[1]["ask"]
+            return [x["id"] for x in ask["sources"] if x["kind"] == "recordings"]
+        self.assertEqual(earlier(), [])  # no mark counts as private
+        self.upload(shared, complete=True, segments=LINES[:1], private=False)
+        self.assertEqual(earlier(), [shared])
+        self.call("PUT", f"/api/v1/recordings/{shared}/private", {"private": True})
+        self.assertEqual(earlier(), [])
+
+    def test_a_room_is_told_what_the_material_answered(self):
+        self.call("POST", "/mock/meeting_conversation", {"room": "unavailable", "problem": "machine_offline"})
+        rid = str(uuid.uuid4())
+        self.upload(rid, room={"attendance": "listener"}, segments=LINES[:1])
+        self.wait(lambda: (self.live(rid).get("room") or {}).get("state") == "unavailable", "an unavailable room")
+        self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 0, "segments": LINES[:1]})
+        ask = self.call("POST", f"/api/v1/recordings/{rid}/ask", {"id": str(uuid.uuid4()), "question": "Who owns the test?"})[1]["ask"]
+        self.assertEqual((ask["state"], ask["via"]), ("answered", "material"))
+        # The computer is back: the room comes up and first gets the meeting so far, the material's answer with it.
+        self.call("POST", "/mock/meeting_conversation", {"room": "ok"})
+        self.upload(rid, room={"attendance": "listener"}, segments=LINES[:1])
+        room = self.wait(lambda: (r := self.live(rid).get("room")) and r["state"] == "ready" and r, "the room")
+        so_far = self.items(room["session_id"])[-1]["text"]
+        self.assertIn("[0:05] Ada: Today we look at the export flow.", so_far)
+        self.assertIn("Q: Who owns the test?", so_far)
+        # Told once: the next batch has only its new lines.
+        self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 1, "segments": LINES[1:]})
+        latest = self.items(room["session_id"])[-1]["text"]
+        self.assertIn("Bo: Who owns the regression test?", latest)
+        self.assertNotIn("Q: Who owns the test?", latest)
+
     def test_the_meetings_end(self):
         rid = str(uuid.uuid4())
         room = self.ready_room(rid, segments=LINES, complete=False)

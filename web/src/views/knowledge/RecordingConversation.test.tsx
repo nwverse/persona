@@ -120,6 +120,16 @@ describe("a recorded meeting's conversation", () => {
     expect(requests.some((r) => r.url.includes("/private") || r.url.includes("/sessions/"))).toBe(false);
   });
 
+  it("reads nothing of a room or a follow-up detail.meta names on a hub without meeting_conversation", async () => {
+    Object.assign(getState(), { features: ["meeting_attendance"] });
+    await load(fixture({ followup: { machine_id: "server", session_id: follow }, private: false }));
+    expect(section()).toBeNull();
+    expect(privacy()).toBeNull();
+    await reply(pending(livePath)[0], live({ room: undefined, revs: undefined }));
+    expect(host.querySelector("[data-recording-asks]")).not.toBeNull();
+    expect(requests.some((r) => r.url.includes("/sessions/") || r.url.startsWith(`${livePath}?`))).toBe(false);
+  });
+
   it("shows a running room meeting's thread, read-only, with its state and no attending session", async () => {
     await load();
     expect(host.querySelector("[data-recording-asks]")).toBeNull();
@@ -163,6 +173,49 @@ describe("a recorded meeting's conversation", () => {
     fire({ type: "meeting_live", recording_id: id, changed: ["room"], revs: { room: 3 } });
     await reply(pending(`${livePath}?parts=room`)[0], { room: ended, revs: { room: 3 } });
     expect(section()!.querySelector("[role=status]")!.textContent).toBe("The meeting is over.");
+  });
+
+  it("shows where each question asked in the room stands, and those its thread does not hold", async () => {
+    const lost = "33333333-3333-4333-8333-333333333333";
+    const waiting = "44444444-4444-4444-8444-444444444444";
+    const spokenID = "55555555-5555-4555-8555-555555555555";
+    await load();
+    await reply(pending(livePath)[0], live({ asks: [
+      ask({ state: "failed", answer: "", error: "no_answer" }),
+      ask({ id: lost, question: "", question_source: "heard", at: 30, state: "failed", answer: "", error: "nothing_heard" }),
+      ask({ id: waiting, question: "And the deadline?", state: "pending", answer: "" }),
+      ask({ id: spokenID, question: "Who presents next?", question_source: "spoken", via: "material", state: "failed", answer: "", error: "room_unavailable" }),
+    ] }));
+    // Until the room's items are in, only the asks answered from the material show beside it.
+    expect(section()!.querySelectorAll("li[data-ask]")).toHaveLength(1);
+    await reply(pending(itemsPath(room))[0], { items: roomItems().slice(0, 3) });
+    const s = section()!;
+    // The question in the thread says why it has no answer.
+    const asked = s.querySelector('li[data-thread="question"]')!;
+    expect(asked.textContent).toContain("Persona didn’t answer this one.");
+    // Those that never went into the room, failed or still waiting, show among the asks; the spoken one says so.
+    expect([...s.querySelectorAll("li[data-ask]")].map((li) => li.getAttribute("data-ask"))).toEqual([lost, waiting, spokenID]);
+    const spokenRow = s.querySelector(`li[data-ask="${spokenID}"]`)!;
+    expect(spokenRow.querySelector('[title="Said to Persona on the phone"]')).not.toBeNull();
+    expect(spokenRow.textContent).toContain("Persona couldn’t reach the meeting’s conversation.");
+    expect(s.querySelector(`li[data-ask="${waiting}"]`)!.textContent).toContain("Answering…");
+    // Once its message is in the room, the waiting one is there, being answered.
+    fire({ type: "meeting_live", recording_id: id, changed: ["asks"], revs: { asks: 2 } });
+    await reply(pending(`${livePath}?parts=asks`)[0], { asks: [ask(), ask({ id: waiting, question: "And the deadline?", state: "pending", answer: "" })], revs: { asks: 2 } });
+    await reply(pending(itemsPath(room))[1], { items: [...roomItems(), item({ client_msg_id: `ask-${waiting}-1`, text: "And the deadline?" })] });
+    expect(section()!.querySelectorAll("li[data-ask]")).toHaveLength(0);
+    expect(section()!.querySelector('li[data-thread="question"]:last-of-type')!.textContent).toContain("Answering…");
+  });
+
+  it("leaves a #2981 meeting's polling to its questions", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    await load(fixture({ room: undefined, attending_session: { machine_id: "server", session_id: "conv-2" } }));
+    // Both read once: the questions (whole) and the meeting's private mark and follow-up.
+    expect(pending(livePath)).toHaveLength(2);
+    for (const r of pending(livePath)) await reply(r, live({ room: undefined }));
+    act(() => vi.advanceTimersByTime(5000));
+    expect(pending(livePath)).toHaveLength(3);
   });
 
   it("polls while the meeting runs and not once the recording is complete", async () => {
@@ -225,7 +278,13 @@ describe("a recorded meeting's conversation", () => {
     await submit();
     const third = JSON.parse(String(pending(path)[2].init.body));
     expect(third.id).not.toBe(first.id);
-    await reply(pending(path)[2], { followup: { machine_id: "server", session_id: follow }, created: true, client_msg_id: `followup-${third.id}` });
+    // The hub's receipt still waiting for the first call: not definite, so the next try is the same call.
+    await reply(pending(path)[2], { state: "pending" }, 202);
+    expect(section()!.querySelector("[role=alert]")!.textContent).toBe("Not sure this was sent yet. Send again to check: it won’t be sent twice.");
+    expect(location.pathname).toBe(`/kb/recordings/${id}`);
+    await submit();
+    expect(JSON.parse(String(pending(path)[3].init.body)).id).toBe(third.id);
+    await reply(pending(path)[3], { followup: { machine_id: "server", session_id: follow }, created: true, client_msg_id: `followup-${third.id}` });
     expect(location.pathname).toBe(`/persona/${follow}`);
   });
 

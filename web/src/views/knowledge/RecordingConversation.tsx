@@ -31,7 +31,7 @@ import { Button, Collapse, cx, Spinner, Switch } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { Card, SectionTitle } from "./KBParts";
-import { AskRow } from "./RecordingAsks";
+import { askFailure, AskRow } from "./RecordingAsks";
 
 type Auth = { token: string; tokenOwner: string; headers: Record<string, string> };
 /** The parts this page reads again when they change (an event may name more from later phases). */
@@ -88,12 +88,14 @@ export function useRecordingMeeting(detail: KBDetail | null | undefined, rec: Re
   const request = useRef(auth);
   request.current = auth;
 
-  const merged: Read = {
+  // Nothing of it on a hub without the flag: detail.meta may still name a room or a follow-up (a manager that has
+  // meeting.json while the hub does not list the feature), and the page stays as it was then, its threads unread.
+  const merged: Read = on ? {
     room: read.got.room ? read.v.room : fromMeta.room,
     followup: read.got.followup ? read.v.followup : fromMeta.followup,
     private: read.got.private ? read.v.private : fromMeta.private,
     asks: read.v.asks,
-  };
+  } : {};
 
   // One read at a time; parts asked for meanwhile go in the next (all of them when any asked for everything).
   const queue = useRef<{ busy: boolean; next: Set<Part> | "all" | null }>({ busy: false, next: null });
@@ -150,7 +152,9 @@ export function useRecordingMeeting(detail: KBDetail | null | undefined, rec: Re
   const latest = useRef(readLive);
   latest.current = readLive;
 
-  const running = !!rec && (rec.partial || ["starting", "ready", "unavailable"].includes(roomState(merged.room) ?? ""));
+  // The fallback read is a room meeting's: a #2981 meeting's asks are read by "Questions in the meeting" already, and
+  // its private mark and follow-up come with the event.
+  const running = !!rec && !!merged.room && (rec.partial || ["starting", "ready", "unavailable"].includes(roomState(merged.room) ?? ""));
   const live = wanted && !read.gone;
   useEffect(() => {
     if (!live) return;
@@ -166,9 +170,10 @@ export function useRecordingMeeting(detail: KBDetail | null | undefined, rec: Re
   }, [live, id, manager, readLive]);
   useEffect(() => {
     if (!live || !running) return;
-    let first = true;
-    // visiblePoll reads at once too; the mount's read above already did.
-    return visiblePoll(() => { if (first) { first = false; return; } readLive("all"); }, POLL_MS, documentPage);
+    // visiblePoll reads at once when the page is shown; the mount's read above already did. A page mounted hidden reads
+    // when it is shown.
+    let skip = documentPage.visible();
+    return visiblePoll(() => { if (skip) { skip = false; return; } readLive("all"); }, POLL_MS, documentPage);
   }, [live, running, readLive]);
 
   const setPrivate = useCallback(async (value: boolean) => {
@@ -297,8 +302,12 @@ export function RecordingConversation({ detail, rec, meeting, auth, current, man
   const roomEntries = roomIds && roomPart.items ? roomThread(roomPart.items, detail.id, asks) : [];
   const followEntries = followup && followPart.items ? followupThread(followPart.items) : [];
   // A room that never came up shows the questions asked of the meeting's material instead, as #3746 does; one that went
-  // unavailable after it started shows those it answered from the material after its thread.
-  const shownAsks = roomIds ? asks.filter((a) => a.via === "material") : asks;
+  // unavailable after it started shows those it answered from the material after its thread, and those its thread does
+  // not hold that are not answered (one that failed before its message went out, or still waits to go).
+  const inThread = new Set(roomEntries.flatMap((e) => ((e.kind === "question" || e.kind === "heard") && e.ask ? [e.ask] : [])));
+  const shownAsks = !roomIds ? asks
+    : asks.filter((a) => a.via === "material" || (!!roomPart.items && a.state !== "answered" && !inThread.has(a.id.toLowerCase())));
+  const askById = new Map(asks.map((a) => [a.id.toLowerCase(), a]));
   const showAsks = shownAsks.length > 0;
   const before = roomEntries.length > 0 || showAsks;
   const running = meetingRunning(detail.meta, room);
@@ -324,7 +333,7 @@ export function RecordingConversation({ detail, rec, meeting, auth, current, man
             {roomPart.more && <p className="px-4 pt-2 text-[11.5px] text-ink-3">{t("knowledge-kbdetail.conversation_earlier")}</p>}
             {roomPart.error && <p role="alert" className="px-4 py-2 text-[12.5px] break-words text-red">{t("knowledge-kbdetail.conversation_load_failed", { error: roomPart.error })}</p>}
             {loadingRoom && <div className="flex justify-center py-3"><Spinner /></div>}
-            {roomEntries.length > 0 && <Thread entries={roomEntries} conv={roomIds!} room />}
+            {roomEntries.length > 0 && <Thread entries={roomEntries} conv={roomIds!} asks={askById} room />}
             {showAsks && (
               <ol className="divide-y divide-line">
                 {shownAsks.map((ask) => <AskRow key={ask.id} ask={ask} startedAt={rec.startedAt} />)}
@@ -397,12 +406,26 @@ function at(ts?: string): string {
 
 const VIA_ICON: Record<string, IconName> = { typed: "keyboard", spoken: "voice", owner: "person" };
 
-function Thread({ entries, conv, room = false }: { entries: ThreadEntry[]; conv: MeetingConversation; room?: boolean }) {
+function Thread({ entries, conv, asks, room = false }: { entries: ThreadEntry[]; conv: MeetingConversation; asks?: ReadonlyMap<string, RecordingAsk>; room?: boolean }) {
+  // An ask asked again has a message per attempt: its state shows under the last one.
+  const last = new Map<string, string>();
+  for (const e of entries) if ((e.kind === "question" || e.kind === "heard") && e.ask) last.set(e.ask, e.id);
   return (
     <ol className="flex flex-col py-1">
-      {entries.map((e) => <li key={e.id} data-thread={e.kind}><Entry entry={e} conv={conv} room={room} /></li>)}
+      {entries.map((e) => {
+        const ask = (e.kind === "question" || e.kind === "heard") && e.ask && last.get(e.ask) === e.id ? asks?.get(e.ask) : undefined;
+        return <li key={e.id} data-thread={e.kind}><Entry entry={e} conv={conv} room={room} />{ask && <AskState ask={ask} />}</li>;
+      })}
     </ol>
   );
+}
+
+/** Under a question asked in the room: that it is being answered, or why it was not; nothing once answered (the
+ *  room's reply follows it). */
+function AskState({ ask }: { ask: RecordingAsk }) {
+  if (ask.state === "pending") return <p className="px-4 pb-1 pl-[39px] text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.ask_pending")}</p>;
+  if (ask.state === "failed") return <p className="px-4 pb-1 pl-[39px] text-[12.5px] leading-relaxed text-red">{askFailure(ask)}</p>;
+  return null;
 }
 
 function Entry({ entry: e, conv, room }: { entry: ThreadEntry; conv: MeetingConversation; room: boolean }) {
@@ -410,9 +433,9 @@ function Entry({ entry: e, conv, room }: { entry: ThreadEntry; conv: MeetingConv
     case "joined":
       return <Muted icon="spark" text={t("knowledge-kbdetail.thread_joined")} time={at(e.ts)} />;
     case "lines":
-      return e.lines.length
-        ? <Lines label={t("knowledge-kbdetail.thread_lines", { count: e.lines.length })} lines={e.lines} time={at(e.ts)} />
-        : <Muted icon="check" text={t("knowledge-kbdetail.thread_ended")} time={at(e.ts)} />;
+      return <Lines label={t("knowledge-kbdetail.thread_lines", { count: e.lines.length })} lines={e.lines} time={at(e.ts)} />;
+    case "ended":
+      return <Muted icon="check" text={t("knowledge-kbdetail.thread_ended")} time={at(e.ts)} />;
     case "heard":
       return <Lines label={e.clock ? t("knowledge-kbdetail.thread_heard", { clock: e.clock }) : t("knowledge-kbdetail.ask_heard_empty")} lines={e.lines} time={at(e.ts)} heard />;
     case "material":
@@ -527,9 +550,15 @@ function FollowupComposer({ id, auth, current, manager, onMade }: { id: string; 
     setBusy(true); setError("");
     try {
       const r = await api<{ followup?: unknown }>(`/recordings/${enc(id)}/followup`, { method: "POST", json: { id: op.current, text: words }, ...auth });
-      op.current = "";
       const made = meetingConversation(r.followup);
-      if (!current() || !made) return;
+      if (!made) {
+        // A 2xx without the follow-up (the hub's receipt: the first call is still running, or its answer is unknown):
+        // not definite, so the next try sends the same id, which the receipt answers without sending twice.
+        if (current()) setError(t("knowledge-kbdetail.followup_unknown"));
+        return;
+      }
+      op.current = "";
+      if (!current()) return;
       setText("");
       onMade(made);
       navigate(conversationPage(made.session_id, made.machine_id, manager));

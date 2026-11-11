@@ -37,14 +37,32 @@ describe("the room's thread", () => {
       heard,
       item({ role: "assistant", text: "Bo owns it; it is still open." }),
       item({ role: "assistant", kind: "tool_use", tool_name: "meeting_lines" }),
-      batch([]),
     ], rid.toUpperCase(), [ask(askID, { question_source: "spoken" }), ask(heardID, { question_source: "heard", at: 1810 })]);
-    expect(entries.map((e) => e.kind)).toEqual(["joined", "lines", "question", "answer", "heard", "answer", "lines"]);
+    expect(entries.map((e) => e.kind)).toEqual(["joined", "lines", "question", "answer", "heard", "answer"]);
     expect(entries[1]).toMatchObject({ lines: [{ clock: "0:05", text: "Ada: Today we look at the export flow." }, { clock: "0:12", text: "Bo: The cap is still 4 MB." }] });
     expect(entries[2]).toMatchObject({ text: "What did we decide about the export cap last time?", via: "spoken" });
     expect(entries[3]).toMatchObject({ text: "You kept the 4 MB cap.\n\nBo owns the regression test." });
     expect(entries[4]).toMatchObject({ clock: "30:10", lines: [{ clock: "29:40", text: "Bo: Who owns the regression test?" }] });
-    expect(entries[6]).toMatchObject({ lines: [] });
+    // Each attempt names its ask, lowercase.
+    expect([entries[2], entries[4]].map((e) => ("ask" in e ? e.ask : undefined))).toEqual([askID, heardID]);
+  });
+
+  it("tells the end batch from a batch that holds no line", () => {
+    const answered = item({
+      source: { kind: "meeting", title: "Design review" },
+      text: `${source()}New lines from "Design review". Write nothing in reply.\n\n<persona-context kind="context" title="Design review · live" url="">\nAsked and answered on the phone:\nQ: Who owns it?\nA: Bo.\n</persona-context>`,
+    });
+    const endWithLines = item({
+      source: { kind: "meeting", title: "Design review" },
+      text: `${batch(["[14:30] Ada: Thanks, all."]).text}\n\nThe meeting has ended. Write nothing in reply.`,
+    });
+    const endAlone = item({ text: `${source()}"Design review", the meeting you attend as a listener, has ended. Write nothing in reply.` });
+    const endAloneJa = item({ source: { kind: "meeting" }, text: "あなたが聞き手として出席している会議「Design review」は終わりました。返信は書かないでください。" });
+    // Only questions answered from the material (they show among the asks): nothing in the thread, never "ended".
+    expect(roomThread([answered], rid)).toEqual([]);
+    expect(roomThread([endWithLines], rid).map((e) => e.kind)).toEqual(["lines", "ended"]);
+    expect(roomThread([endAlone], rid).map((e) => e.kind)).toEqual(["ended"]);
+    expect(roomThread([endAloneJa], rid).map((e) => e.kind)).toEqual(["ended"]);
   });
 
   it("tells a typed ask, a message from elsewhere and the header without its client_msg_id", () => {

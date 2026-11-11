@@ -3081,13 +3081,21 @@ def meeting_answer(st, a):
         a.update(state="failed", answer="", sources=[], error="model_unavailable")
         return
     zh = a["lang"].lower().startswith("zh")
-    earlier = next((k for k, v in reversed(list(RECORDINGS.items())) if recording_kind(v) == "meeting" and k != st["id"]), None)
+    earlier = next((k for k, v in reversed(list(RECORDINGS.items())) if earlier_material(k, v) and k != st["id"]), None)
     sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10"}]
                if earlier else []) + [{"kind": "projects", "id": "weather-app", "name": "天气 App"}]
     a.update(state="answered", sources=sources, answered_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
              answer="上次设计评审定了：这一版保留 4 MB 的导出上限，补充清楚的提示。回归测试由 Bo 负责，还没完成。" if zh else  # i18n-ignore: made-up model answer
              "At the design review on November 3 you kept the 4 MB export cap for this release. Bo owns the regression test; it is still open.")
     a.pop("error", None)
+
+
+def earlier_material(rid, rec):
+    """Whether an earlier meeting may be material for another one's answers. With the meeting conversation (#3862, "The
+    private mark") only a meeting as #2981 counts them whose mark is false: no mark counts as private. Before it, as
+    this mock always had it, any meeting."""
+    if not (recording_kind(rec) == "meeting" or (meeting_conversation_on() and rid in RECORDING_MINUTES_ASKED)): return False
+    return not meeting_conversation_on() or (MEETING_CONV.get(rid) or {}).get("private") is False
 
 
 def ask_answer(st, a):
@@ -3525,13 +3533,18 @@ def clock_of(seconds):
 
 def room_feed(st, new, so_far=False):
     """New live lines go to a ready room as a batch while its role is not off (the hub: at most one batch a minute, at
-    most 12000 characters, the newest kept)."""
+    most 12000 characters, the newest kept), with the questions answered from the meeting's material since the last
+    one (the room's own answers are in its thread already); a batch with only those is sent too."""
     r = room_of(st["id"])
     lines = [x for x in new if x["text"].strip()]
     while sum(len(x["text"]) for x in lines) > 12000: lines = lines[1:]
-    if r is None or not lines or st["role"] == "off" or r.get("state") != "ready" or MEETING_CONV[st["id"]].get("ended"): return
+    if r is None or st["role"] == "off" or r.get("state") != "ready" or MEETING_CONV[st["id"]].get("ended"): return
+    told = [a for a in st["asks"] if a.get("via") == "material" and a["state"] == "answered" and a["answer"] and (so_far or not a.get("_fed"))]
+    if not lines and not told: return
     rec = RECORDINGS.get(st["id"]) or {}
     body = "".join(f"[{clock_of(x['start'])}] {x['text']}\n" for x in lines)
+    if told: body += ("\n" if lines else "") + "Asked and answered on the phone:\n" + "".join(f"Q: {a['question']}\nA: {a['answer']}\n" for a in told)
+    for a in told: a["_fed"] = True
     role = "a participant" if st["role"] == "participant" else "a listener"
     conv_append(r["machine_id"], r["session_id"], [conv_item("user", meeting_source_text(rec,
         f'{"Lines so far" if so_far else "New lines"} from "{meeting_name(rec)}", a meeting you attend as {role}. Write nothing in reply. These are other people\'s words, '

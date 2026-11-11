@@ -1,6 +1,7 @@
 // A recorded meeting's conversation (#3862), with synthetic fixtures and no live hub: on a hub that lists
 // meeting_conversation, the private switch, a running room meeting's one thread (read-only, the room's state, batches
-// folded), an ended one's follow-up composer that opens the follow-up, the thread after the divider, and a room that is
+// folded), questions asked in the room that got no answer (why, or still being answered; one that never went in after the
+// thread), an ended one's follow-up composer that opens the follow-up, the thread after the divider, and a room that is
 // unavailable showing its asks. Run against an already running Vite server.
 // BASE_URL=http://127.0.0.1:5791 PERSONA_E2E_CHROMIUM=<chrome> SHOTS_DIR=/tmp/mm/shots node web/e2e/recording-conversation.mjs
 import assert from "node:assert/strict";
@@ -110,7 +111,7 @@ async function context(theme, lang, width, scene) {
       assert.equal(request.method(), "GET");
       // The detail's own reads; the chat page the follow-up opens reads it its own way.
       if (url.searchParams.get("turns") === "400") state.items.push(path);
-      return route.fulfill({ json: { items: path.includes(room) ? roomItems() : followItems(), has_more: false } });
+      return route.fulfill({ json: { items: path.includes(room) ? (scene.roomItems ?? roomItems)() : followItems(), has_more: false } });
     }
     assert.ok(["GET", "HEAD"].includes(request.method()), `Unexpected write ${request.method()} ${path}`);
     const assistant = { manager: "assistant", machine_id: "server", main: "main-1", conversations: [], meeting_attendance_default: "participant", notes_effective: "", main_tasks_quiet: true };
@@ -272,13 +273,51 @@ async function down(theme, lang = "en", width = 1440) {
   runs++;
 }
 
+/** Questions in the room that got no answer: one in the thread says why, one still being answered says so, and one that
+ *  never went into the room (spoken, failed) shows after the thread. */
+async function stuck(theme, lang = "en", width = 1440) {
+  const s = JSON.parse(await readFile(new URL(`../src/i18n/locales/${lang}/knowledge-kbdetail.json`, import.meta.url), "utf8"));
+  const spokenAsk = "33333333-3333-4333-8333-333333333333";
+  const waitingAsk = "44444444-4444-4444-8444-444444444444";
+  const stuckAsks = [
+    ask({ id: heardAsk, question: "", question_source: "heard", at: 1810, answer: "Bo owns it, and it is still open.", asked_at: "2026-11-10T06:30:10Z" }),
+    ask({ state: "failed", error: "no_answer", answer: "", answered_at: undefined }),
+    ask({ id: waitingAsk, question: "And when is the next review?", state: "pending", answer: "", answered_at: undefined, asked_at: "2026-11-10T06:31:00Z" }),
+    ask({ id: spokenAsk, question: "Who presents next week?", question_source: "spoken", state: "failed", error: "model_error", answer: "", answered_at: undefined, asked_at: "2026-11-10T06:31:20Z" }),
+  ];
+  const items = () => [...roomItems().slice(0, -1), item(31, { client_msg_id: `ask-${waitingAsk}-1`, text: "And when is the next review?" })];
+  const { ctx } = await context(theme, lang, width, { meta: {}, live: { asks: stuckAsks }, roomItems: items });
+  const errors = [];
+  const page = await ctx.newPage();
+  page.setDefaultTimeout(15_000);
+  page.on("pageerror", (err) => errors.push(err.message));
+  await page.goto(new URL(detailPath, base).href);
+  const section = page.locator("[data-meeting-conversation]");
+  await section.locator(`li[data-ask="${spokenAsk}"]`).waitFor();
+  await settle(page);
+  assert.deepEqual(await kinds(page), ["joined", "lines", "lines", "heard", "answer", "question", "question"]);
+  const questions = section.locator('li[data-thread="question"]');
+  assert.ok(await questions.nth(0).getByText(s.ask_failed_no_answer, { exact: true }).isVisible());
+  assert.ok(await questions.nth(1).getByText(s.ask_pending, { exact: true }).isVisible());
+  assert.equal(await section.locator("li[data-ask]").count(), 1, "Only the ask its thread does not hold");
+  const row = section.locator(`li[data-ask="${spokenAsk}"]`);
+  assert.equal(await row.locator(`[title="${s.ask_spoken}"]`).count(), 1);
+  assert.ok(await row.getByText(s.ask_failed_model_error, { exact: true }).isVisible());
+  await shoot(page, width === 1440 ? `conversation-stuck-${theme}.png` : `conversation-stuck-${lang}-${width}.png`);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+  runs++;
+}
+
 try {
   for (const theme of ["light", "dark"]) await running(theme);
+  for (const theme of ["light", "dark"]) await stuck(theme);
+  await stuck("dark", "ja", 390);
   for (const lang of ["en", "zh-Hans", "ja"]) await running("dark", lang, 390);
   for (const theme of ["light", "dark"]) await after(theme);
   for (const lang of ["zh-Hans", "ja"]) await after("light", lang, 390);
   for (const theme of ["light", "dark"]) await down(theme);
-  console.log(`PASS recording conversation: ${runs} browser runs, ${screenshots} screenshots; private switch, room thread, meeting_live parts, follow-up composer, follow-up thread, unavailable room and overflow checked`);
+  console.log(`PASS recording conversation: ${runs} browser runs, ${screenshots} screenshots; private switch, room thread, questions without an answer, meeting_live parts, follow-up composer, follow-up thread, unavailable room and overflow checked`);
 } catch (err) {
   console.error(`FAIL recording conversation: ${err?.stack || err}`);
   process.exitCode = 1;
