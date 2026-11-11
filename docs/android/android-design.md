@@ -88,7 +88,7 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 | `JRow` / `JSwitchRow` | Settings-style rows: icon, title, subtitle, value, switch, chevron. For multi-line content in the middle (wrapping addresses, tags, test results, a leading status dot) use the slot form `JRow(onClick = …, trailing = …) { … }`: horizontal padding, minimum height, tap and long press, selection, dimming when disabled, trailing controls and chevron are the same as a normal row and align automatically in every style. `rowPadding` is the row's horizontal padding (Glass 16, Brief 0, Board 14); use it for content hung under a row that must align with the row's text (long values, explanations) |
 | `JCard` | Card; `status` gives the glass stroke the state color, or adds a thin state edge in Board |
 | `JNotice` | In-page notice (connection lost, permission needed), with one action |
-| `JEmptyState` / `JLoading` | Empty state, loading |
+| `JEmptyState` / `JLoading` | Empty state (an icon, or a `leading` slot in its place), loading |
 | `JButton` (Primary / Secondary / Quiet / Destructive, Large / Medium / Small), `JTextButton`, `JIconButton` | Buttons. Text is always one line |
 | `Modifier.stableAlpha` | Changing opacity (dimming when disabled). Do not use `Modifier.alpha`: switching between 1 and another value adds or removes a layer, and placed after `clip` + `background` the background color gets lost (`docs/android/android.md` lessons) |
 | `JTextField` / `JSearchField` | Input fields |
@@ -99,6 +99,8 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 | `JStatusDot` / `JStatusMark` / `StatusLabel` / `StatusLine` / `PendingBadge` | State: small dot, the mark before a session row (glowing in Glass, spinner and check mark in Brief, square in Board), status text, the status line in a chat |
 | `JAvatar` | People, groups, sources; a corner badge marks Lark / mail |
 | `JManagerAvatar`, `JAssistantSwitcherHeader`, `JAssistantSwitcherRow` | The sidebar's assistant switcher: an assistant's monogram on its colour (`managerHue`) with its presence dot (`managerPresenceColor`), the head with the current one, a roster row (faded as a whole when offline) |
+| `JAssistantOffline` | A list's empty state while the current assistant is offline (`CurrentAssistant.offline`, several assistants): its faded monogram with the offline mark, "<name> is offline", when it last synced |
+| `JAssistantSettingsHeader`, `LocalAssistantWaiting` | The head of Settings' first group: the current assistant's monogram with its presence dot, "<name>'s settings" and a **Switch** text button that opens the same roster as the sidebar; the badges the roster shows, provided by the shell |
 | `JSwipeActions` | Left/right swipe actions on rows (Inbox: swipe right for done, left to hand to Persona) |
 | `JCodeBlock` | Commands and code |
 | `JSheet` / `JActionSheet` / `JMenu` / `JDialog` | Bottom sheet, long-press action sheet (instead of long dropdowns), small anchored menu (its `content` slot goes above the actions: the assistant switcher's roster), confirmation dialog |

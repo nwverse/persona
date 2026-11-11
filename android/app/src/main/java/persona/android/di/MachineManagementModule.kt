@@ -136,9 +136,13 @@ object MachineManagementModule {
             .flatMapLatest { stack -> stack?.connection?.serverFeatures ?: flowOf(emptySet()) }
             .map { MachinesAddFeature in it }.distinctUntilChanged()
         private fun merged(code: ComputerCode, namespace: String?) = code.copy(machine = GroupKeys.machine(code.machine, namespace))
-        override suspend fun add(name: String, os: ComputerOs): ComputerCode {
+        override suspend fun add(name: String, os: ComputerOs): ComputerCode = add(name, os, null)
+        // The manager is named only on the hub the current assistant is of (the roster's, the selected group's): its id
+        // means nothing to another hub.
+        override suspend fun add(name: String, os: ComputerOs, manager: String?): ComputerCode {
             val stack = stacks.selected.value ?: throw HubFailure(HubError.NoNetwork, AppText.get(R.string.app_error_pair_first), retryable = false)
-            return stacks.use(stack.namespace) { merged(HttpComputerPairing(it.connection).add(name, os), it.namespace) }
+            val named = managerNamedFor(manager, persona.core.contracts.api.AssistantManagerChoice.current.value.hubId, stack.connection.http.hubId)
+            return stacks.use(stack.namespace) { merged(HttpComputerPairing(it.connection).add(name, os, named), it.namespace) }
         }
         override suspend fun again(machineId: String) = stacks.use(GroupKeys.namespaceOf(machineId)) {
             merged(HttpComputerPairing(it.connection).again(GroupKeys.raw(machineId)), it.namespace)
@@ -323,3 +327,7 @@ internal fun extensionOperationUpdates(events: Flow<ServerEvent>): Flow<Extensio
     if (event is Hello || event is ManagersEvent) emit(null)
     else if (event is ExtensionOperationEvent) emit(event.operation.copy(manager = pushManager(event.manager)))
 }
+
+/** The manager an add names: only on the hub the current assistant's pick is of ([pickHub]); another hub's roster doesn't know its id. */
+internal fun managerNamedFor(manager: String?, pickHub: String?, requestHub: String?): String? =
+    manager?.takeIf { pickHub == requestHub }

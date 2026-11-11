@@ -141,6 +141,12 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- **A big page must not read a state that changes on every scroll frame** (#4039). `ChatListState.position` holds the
+  reading anchor's pixel offset, written each frame; `ChatPage` read `position.expanded`, so a scroll re-ran the whole
+  page (about 1,000 lines, chat-length lists rebuilt) once per frame. Read such parts through `derivedStateOf`
+  (`ChatListState.expanded`, `followsEnd`) and count recompositions in a real composition (Robolectric, `Recomposer` +
+  `BroadcastFrameClock`, `ChatListStateTest`): `SnapshotStateObserver` handles derived states differently from
+  composition, and a plain JVM test cannot compose (Compose calls `android.os.Trace`).
 - **A control meant to "look like the chips" must be the chip** (#2956). #2920 rebuilt the Assistant entries as a new row
   (44 dp, control radius, its own padding) next to `JChip` (36 dp, chip radius), and they visibly grew. Draw such controls
   with `JChip` / `JChipTokens`, add an optional parameter for what is missing (`dot`), and assert the rendered height
@@ -299,6 +305,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Contracts and wiring
 
+- A `@WireEnum` value missing from its list decodes as `"unknown"`, silently (#4035). Android handled the hub's `notify` kind `reply` (Awaiting reply) in every policy and test, but the tests built `NotifyEvent("reply", …)` by constructor, so none went through the decoder, and the reminder never posted. When a new kind or state reaches the wire, add it to the `@WireEnum` and test it from the raw JSON (`ServerEvent.decode`), not from a constructed event.
 - When adding interface methods with default implementations (`ChatActions.editQueue` / `info`, `AgentOperations.attachSession`), `by delegate` wrappers forward automatically, but handwritten forwarding objects do not. `trackActions` in `core:data` and the anonymous `AgentOperations` in App `AgentsWiringModule` forward method by method; missing a new method silently uses its default ("Not integrated yet") without compilation errors. When adding methods, use `git grep ': ChatActions\b\|object : AgentOperations'` to update all handwritten forwarding.
 - Claude Code transcripts do not retain `client_msg_id` (2026-11-03, #895). A user item's ID is Claude's own UUID; neither hub nor node rewrites it. With hub `client_ops`, Android previously matched "already in the transcript" only by ID, leaving every Claude Code message at "Delivered, waiting for transcript." Match pending messages to transcript entries by text (`MessageEcho`, same rules as iOS `PendingMessage.arrived`: normalization, computer clock up to 2 minutes behind, prefix match for truncation), only for sent / uncertain messages, and one pending message per transcript entry. Every new item (events, paging, gap repair) is reconciled with the outbox (`HubChatRepository` `transcript`).
 - Delivery does not guarantee an identical user message in the transcript (2026-11-03, #950). Phone `/compact` appears only as a compaction notice; Codex writes queued messages only at turn end. Waiting only for an echo leaves bubbles forever. iOS (`settleSend`) and web dismiss 60 seconds after delivery once the session is not working (wait at most another 15 minutes); Android does the same (`OutboxMessageSender.sentGraceMillis`, `connectActivity`). Do not add constructor parameters after `now`: callers pass the clock as a trailing lambda.

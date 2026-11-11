@@ -125,6 +125,8 @@ internal fun ChannelPage(channels: ChannelManagement?, channelId: String, onBack
         return
     }
     val res = LocalResources.current
+    // The page is the current assistant's (its Settings' first group): what it links to is that one's too.
+    val owner = currentAssistant().takeIf { it.roster != null }?.id
     val model = remember(channels, channelId) { ChannelModel(channels, channelId) }
     val state by model.state.collectAsState()
     val assistant by remember(channels) { channels.conversations }.collectAsState(emptyList())
@@ -169,7 +171,7 @@ internal fun ChannelPage(channels: ChannelManagement?, channelId: String, onBack
                     ChannelNote(stringResource(R.string.settings_src_channel_test_note))
                 }
             }
-            val more = ChannelText.settingsDestination(detail.settingsUrl)
+            val more = ChannelText.settingsDestination(detail.settingsUrl, owner)
             if (more != null && onOpen != null) item("more") {
                 Column {
                     JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.l)) {

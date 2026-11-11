@@ -75,7 +75,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if t.ReuseTodo != "" {
 			// The todo is already there with its own title, notes and task card in the conversation's feed (a Lark topic
 			// opened it): the task runs on it, and nothing is made or shown twice.
-			todo, err = s.takeTodoForTask(p.Conversation, t.ReuseTodo)
+			todo, err = s.takeTodoForTask(ctx, p.ID, p.Conversation, t.ReuseTodo)
 			if err != nil {
 				t.Error = err.Error()
 				continue
@@ -177,7 +177,7 @@ func (s *Service) reusableTodo(conversation, id string, taking bool) error {
 
 // takeTodoForTask is the todo a started plan's task runs on (PlanTask.ReuseTodo), checked again now (it may have been
 // closed or taken since the plan was made) and held until the task's agent is linked (releaseTakenTodo).
-func (s *Service) takeTodoForTask(conversation, id string) (Todo, error) {
+func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation, id string) (Todo, error) {
 	s.tasks.mu.Lock()
 	if s.tasks.reusing[id] {
 		s.tasks.mu.Unlock()
@@ -188,6 +188,27 @@ func (s *Service) takeTodoForTask(conversation, id string) (Todo, error) {
 	if err := s.reusableTodo(conversation, id, true); err != nil {
 		s.releaseTakenTodo(id)
 		return Todo{}, err
+	}
+	// TodoID is the execution binding; ReuseTodo preserves each historical plan's intended target.
+	// Retire old bindings while this takeover holds the to-do, before the new agent can ask for approval.
+	// Creation order is not start order, and a later retry can change an old plan's UpdatedAt.
+	plans, err := s.conversationPlans(ctx, conversation)
+	if err != nil {
+		s.releaseTakenTodo(id)
+		return Todo{}, err
+	}
+	for _, p := range plans {
+		if p.ID == planID {
+			continue
+		}
+		for i, task := range p.Tasks {
+			if task.TodoID == id {
+				if err := s.patchPlanTask(ctx, p.ID, i, func(t *PlanTask) { t.TodoID = "" }); err != nil {
+					s.releaseTakenTodo(id)
+					return Todo{}, err
+				}
+			}
+		}
 	}
 	t, _ := s.todoNow(id)
 	return formatTodo(t), nil

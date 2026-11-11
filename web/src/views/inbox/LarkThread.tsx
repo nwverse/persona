@@ -30,6 +30,7 @@ import { initialCursor, LarkReadTracker } from "../../lib/lark-read";
 import { clickLink, linkHref, prefetchLink } from "../../lib/links";
 import { isResumed } from "../../lib/reconnect";
 import { adoptConversation } from "../../lib/outbox";
+import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
 import { getState, onHubEvent, useStore } from "../../lib/store";
 import { isForeignCached, translatesChat, useTranslatePrefs, useTranslation } from "../../lib/translate";
@@ -500,7 +501,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
       const r = await startConversation({ prompt }, ownerHeaders(manager));
       // its requests (feed, stop…) go to that manager whatever the page shows later; the current assistant stays
       adoptConversation(manager, r.session.session_id, r.session.machine_id);
-      navigate({ name: "persona", sid: r.session.session_id });
+      navigate(conversationPage(r.session.session_id, r.session.machine_id, manager));
     } catch (e) {
       toast(t("inbox-larkthread.summary_failed", { error: errorText(e) }), "error");
     } finally {
