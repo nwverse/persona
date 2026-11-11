@@ -283,6 +283,12 @@ struct AgentRepoTreeTests {
         #expect(tree.name == "fix/login" && tree.branch == "fix/login")
     }
 
+    /// White space around a title is not part of it (the web's `trim()`): the same title, and shown without it.
+    @Test func whiteSpaceAroundATitleIsNotPartOfIt() throws {
+        let tree = try linked([paseo("a", fox, ["slot_name": " Fix the login flow"]), paseo("b", fox, ["slot_name": "Fix the login flow\n"])])
+        #expect(tree.name == "Fix the login flow")
+    }
+
     /// A `slot_name` beside a `slot_id` is a tab's label (herdr), not a place.
     @Test func aTabsLabelKeepsTheBranch() throws {
         let tree = try linked([paseo("tab", fox, ["host": "herdr", "space_kind": "herdr", "slot_id": "w1:t2"])])

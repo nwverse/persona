@@ -333,14 +333,23 @@ nonisolated struct RepoTree {
     /// different names name nothing, and a session without one neither votes nor blocks. A `slot_name` beside a
     /// `slot_id` is a tab's label (herdr), which names no working tree.
     static func hostPlaceName(_ sessions: [Session]) -> String? {
-        var name: String?
-        for s in sessions {
-            guard (s.slotID ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  let own = s.slotName?.trimmingCharacters(in: .whitespacesAndNewlines), !own.isEmpty else { continue }
+        var name: Substring?
+        for i in sessions.indices {
+            guard let own = trimmedOrNil(sessions[i].slotName), trimmedOrNil(sessions[i].slotID) == nil else { continue }
             if let name, name != own { return nil }
             name = own
         }
-        return name
+        return name.map(String.init)
+    }
+
+    /// The text without the white space around it (as the web's `trim()`), nil when nothing is left. Cheap for the usual
+    /// text with none around it: the list builds the tree for every change.
+    private static func trimmedOrNil(_ text: String?) -> Substring? {
+        guard let text else { return nil }
+        var t = Substring(text)
+        while t.first?.isWhitespace == true { t.removeFirst() }
+        while t.last?.isWhitespace == true { t.removeLast() }
+        return t.isEmpty ? nil : t
     }
 
     /// `refs` in `machines`' order (the hub's); one it does not list goes last, by its path.
