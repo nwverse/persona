@@ -141,6 +141,8 @@ struct ChatView: View {
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
+    /// A phone's tabs (iPhone Duo open, #2623): on its side the system's Show Sidebar brings a folded list back (#3680).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     /// The Persona conversation in the shell (docs/apple/ios.md「New shell」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
@@ -3195,11 +3197,20 @@ struct ChatView: View {
         }
     }
 
-    /// The first page of a split's detail column, on the chat: nothing to go back to (the list is beside it).
-    private var hidesBack: Bool { host == nil && split?.isFirstPage == true && split?.listHidden != true && pane == .chat }
+    /// The first page of a split's detail column, on the chat: nothing to go back to (the list is beside it). On iPhone
+    /// Duo open on its side also with the list folded (#3680): the chat's actions are in the system's side bars, whose
+    /// Show Sidebar at the top left brings the list back, and a ‹ that did the same read as a Back that opened the
+    /// sidebar instead of going back.
+    private var hidesBack: Bool {
+        host == nil && split?.isFirstPage == true && (split?.listHidden != true || systemShowsList) && pane == .chat
+    }
     /// The split's first page with its list column closed: ‹ brings the list back. There is nothing to go back to, and
-    /// with this page's own header no system button to open the list (iPhone Duo open, iPad).
-    private var backShowsList: Bool { host == nil && split?.isFirstPage == true && split?.listHidden == true && pane == .chat }
+    /// with this page's own header no system button to open the list (the iPad; the open Duo upright).
+    private var backShowsList: Bool {
+        host == nil && split?.isFirstPage == true && split?.listHidden == true && !systemShowsList && pane == .chat
+    }
+    /// The system's Show Sidebar is on screen beside a folded list: the side bars' column on a phone's tabs.
+    private var systemShowsList: Bool { pageTabSwitch && sideBars }
 
     /// The header's leading button: back to the chat from files / Git; on the chat ‹, or a hosting page's ✕ / ‹.
     private var backSymbol: String { pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back }
@@ -3984,6 +3995,8 @@ struct Composer: View, Equatable {
     @Environment(AppModel.self) private var model
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
+    /// A phone's tabs (iPhone Duo open): + opens the iPad's menu, not the phone's photo panel (#3680).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091). Other platforms retain `ComposerRow` / `PromptComposer` and their mode chips. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -4640,7 +4653,9 @@ struct Composer: View, Equatable {
     /// follows a moment later, the two moving together (Telegram's).
     private var attachOpener: ((CGRect) -> Void)? {
         #if os(iOS)
-        guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
+        // Not on a phone's tabs (iPhone Duo open, #3680): the panel's three photo columns came out about 296 pt square
+        // across the open display, one row of them over the composer; the iPad's menu has the same items.
+        guard UIDevice.current.userInterfaceIdiom == .phone, !pageTabSwitch else { return nil }
         return { frame in
             guard focused else { attachPanel.open(from: frame); return }
             focused = false

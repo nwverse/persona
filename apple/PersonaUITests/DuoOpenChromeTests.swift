@@ -4,7 +4,8 @@ import XCTest
 /// - the Assistant | Agents switch at the top of the page, with no tab bar down the side;
 /// - the button that folds the sidebar at the sidebar's top;
 /// - Search at its foot, beside Persona's name and where it runs;
-/// - the face's menu (Knowledge, Details, the copies; whose Persona, with several hubs) on the main conversation's long press.
+/// - the face's menu (Knowledge, Details, the copies; whose Persona, with several hubs) on the main conversation's long press;
+/// - the switch over an agent opened on Agents too, and the iPhone's new conversation with Needs You (#3680).
 ///
 /// A phone at regular width only: the Duo simulator opened in Xcode's Device Hub, on its side
 /// (TEST_RUNNER_PERSONA_ORIENTATION=landscape) or upright. The iPad keeps its tab bar (IPadSidebarTests).
@@ -72,7 +73,11 @@ final class DuoOpenChromeTests: XCTestCase {
         let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "搜索对话")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "Search opened no field:\n\(app.debugDescription)")
         XCTAssertLessThan(field.frame.maxY, window.minY + 140, "the search field is not at the sidebar's top")
+        // The foot's two rows step aside while searching, leaving the results the room above the keyboard (#3680).
+        XCTAssertFalse(app.drawerNewChatButton.exists, "the foot's rows ride above the keyboard while searching")
         shot("search")
+        app.buttons["取消"].firstMatch.tap()
+        XCTAssertTrue(app.drawerNewChatButton.waitForExistence(timeout: 5), "Cancel did not bring the foot back")
     }
 
     /// The main conversation's long press holds the face's menu: Knowledge, Details and the copies.
@@ -87,6 +92,32 @@ final class DuoOpenChromeTests: XCTestCase {
         shot("main-menu")
     }
 
+    /// A new conversation is the iPhone's (#3680): what needs the user over the composer (Agents waiting, the Inbox's
+    /// Needs You), as `ShellHome` shows it on every iPhone.
+    @MainActor func testTheNewConversationShowsWhatNeedsYou() {
+        let new = app.drawerNewChatButton
+        XCTAssertTrue(new.waitForExistence(timeout: 20), "no New Chat in the sidebar:\n\(app.debugDescription)")
+        new.tap()
+        XCTAssertTrue(element("shell-needs-you").waitForExistence(timeout: 10), "no Needs You over the composer:\n\(app.debugDescription)")
+        XCTAssertTrue(element("assistant-welcome").exists, "no welcome on the new conversation")
+        shot("new-conversation")
+    }
+
+    /// A conversation's + opens the iPad's menu, not the phone's photo panel (#3680: its three columns came out about
+    /// 296 pt square across the open display, one row of them over the composer).
+    @MainActor func testPlusOpensTheMenu() {
+        let main = element("sidebar-main")
+        XCTAssertTrue(main.waitForExistence(timeout: 20), "no main row:\n\(app.debugDescription)")
+        main.tap()
+        let add = element("shell-composer-add")
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no + in the composer")
+        add.tap()
+        // The panel's Files tab has the menu item's name: the panel must not be there at all.
+        XCTAssertFalse(element("attach-sheet").waitForExistence(timeout: 2), "+ opened the phone's photo panel")
+        XCTAssertTrue(app.buttons["文件"].firstMatch.waitForExistence(timeout: 5), "+ opened no menu:\n\(app.debugDescription)")
+        shot("plus")
+    }
+
     /// The switch takes the page to Agents, whose page column has it too, and back.
     @MainActor func testTheSwitchGoesToAgentsAndBack() {
         let agents = element("shell-agents")
@@ -98,6 +129,25 @@ final class DuoOpenChromeTests: XCTestCase {
         shot("agents")
         let assistant = row.descendants(matching: .any)["shell-assistant"].firstMatch
         XCTAssertTrue(assistant.exists, "no Assistant in Agents' switch")
+        assistant.tap()
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the switch did not go back to Assistant")
+    }
+
+    /// An agent opened on Agents keeps the switch over it, and the switch goes back to Assistant (#3680: the row was an
+    /// inset of the column's stack, which reached only the empty page; an opened chat had no way back to Assistant).
+    @MainActor func testTheSwitchStaysOverAnOpenedAgent() {
+        app.terminate()
+        app.launchArguments += ["-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000002"]
+        app.launchPinned()
+        let title = element("chat.title")
+        XCTAssertTrue(title.waitForExistence(timeout: 20), "the agent did not open:\n\(app.debugDescription)")
+        let row = element("page-tab-switch")
+        XCTAssertTrue(row.waitForExistence(timeout: 5) && row.isHittable, "no switch over the opened agent:\n\(app.debugDescription)")
+        XCTAssertLessThan(row.frame.minY, title.frame.minY, "the switch is not over the chat")
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "page-tab-switch").count, 1, "the switch twice over the chat")
+        shot("agent-open")
+        let assistant = row.descendants(matching: .any)["shell-assistant"].firstMatch
+        XCTAssertTrue(assistant.exists, "no Assistant in the switch over the agent")
         assistant.tap()
         XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the switch did not go back to Assistant")
     }

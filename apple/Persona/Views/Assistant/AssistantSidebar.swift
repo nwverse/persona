@@ -808,7 +808,9 @@ struct AssistantSidebar: View {
             .environment(\.defaultMinListRowHeight, 0)
             .contentMargins(.bottom, Theme.Space.l, for: .scrollContent)
             .scrollDismissesKeyboard(.interactively)
-            footer
+            // While searching from the foot (iPhone Duo open, `collapse`), the foot's two rows rode above the keyboard and
+            // left the results only about 200 pt: they step aside until Cancel (#3680).
+            if !(collapse != nil && searchOpen) { footer }
         }
         #if os(macOS)
         // Conversation rows cover the system selection with this color (`macListRow`).
