@@ -1550,15 +1550,30 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
-# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
-# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
+# sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+MOCK_DIRECTION_NAMES = {}
 if os.environ.get("MOCK_LEADERS") == "1":
-    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+    for i, (title, name, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles and names
+        ("1110 | 探索 | 你是「Persona 产品」方向的主管", "Persona 产品", 60 * 30, "本周两个实验都在跑。"),
+        ("1110 | 探索 | 你是「基础设施」方向的主管", "基础设施", 60 * 45, "部署脚本的改动已派出。"),
+        ("1109 | 探索 | 你是「增长」方向的主管", "增长", 60 * 50, "注册转化的对比看完了。"),
+        ("1108 | 探索 | 你是「支付对账」方向的主管", "支付对账", 60 * 55, "对账任务已派出。"),
+    ]):
         c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
         c["origin"] = "user"
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
+        MOCK_DIRECTION_NAMES[c["session_id"]] = name
+
+
+def mock_leaders_list():
+    """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
+    titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
+    return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
+                         "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -3706,6 +3721,74 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
+# MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
+# step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
+# `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once
+# ("Reading 3 files"), `parallel` a search with two reads beside it ("+2"), `thinking` a thought after the calls came back.
+# The thought is pushed MOCK_LIVE_STEP_PUSH seconds (default 3) after the chat's latest page went out: a page folds the
+# finished calls and any thought with them (fold_work, as the hub does), a push never is. `thinking-folded`: the thought
+# is in the page from the start, so the newest step reaches the app inside a fold (its `latest_thinking`).
+LIVE_STEP = os.environ.get("MOCK_LIVE_STEP", "")
+LIVE_STEP_LATER = {"items": [], "due": None}
+if LIVE_STEP:
+    def _live_call(name, inp, ts_min):
+        """A call still running: its tool_use, no result yet."""
+        return it("assistant", "tool_use", ts_min, tool_use_id="toolu_live_%04d" % (_seq[0] + 1), tool_name=name, tool_input=inp)
+
+    _src = "/Users/me/code/weather/WeatherWidget/"
+    _turn = [it("user", "text", 1.1, text="把中号布局的降雨条做完，再跑一遍小组件的快照测试。"),
+             it("assistant", "thinking", 1.05, text="先看中号布局现在怎么画降雨条，再改颜色和间距。")]
+    _turn += tool("Read", {"file_path": _src + "MediumWidgetView.swift"}, "1\timport SwiftUI\n…", 1)
+    _turn += tool("Edit", {"file_path": _src + "MediumWidgetView.swift", "old_string": "RainBar(hours)", "new_string": "RainBar(hours, dry: 0.2)"},
+                  "The file " + _src + "MediumWidgetView.swift has been updated.", 0.95)
+    if LIVE_STEP == "bash":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests",
+                                         "description": "Run the widget snapshot tests"}, 0.9))
+    elif LIVE_STEP == "command":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests/testMediumRainBarDryThreshold"}, 0.9))
+    elif LIVE_STEP in ("reads", "parallel"):  # calls made together: every tool_use before any result
+        for _f in ("RainBar.swift", "Provider.swift", "SmallWidgetView.swift")[: 3 if LIVE_STEP == "reads" else 2]:
+            _turn.append(_live_call("Read", {"file_path": _src + _f}, 0.9))
+        if LIVE_STEP == "parallel":
+            _turn.append(_live_call("Grep", {"pattern": "precipitationChance", "path": "Sources"}, 0.9))
+    elif LIVE_STEP in ("thinking", "thinking-folded"):
+        _turn += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -only-testing:WeatherWidgetTests/SnapshotTests",
+                               "description": "Run the widget snapshot tests"}, "Test Suite 'SnapshotTests' passed.\n    Executed 6 tests, with 0 failures", 0.6)
+        _thought = [it("assistant", "thinking", 0.5, text="The snapshots match on both sizes, so only the dark rain bar is left.\n"
+                                                         "Its colors come from the app's palette; check how the app picks them first.")]
+        if LIVE_STEP == "thinking":
+            LIVE_STEP_LATER["items"] = _thought
+        else:
+            _turn += _thought
+    ITEMS[WIDGET] = ITEMS[WIDGET] + _turn
+
+
+def live_step_page_sent(sid):
+    """MOCK_LIVE_STEP=thinking: a page of the widget chat went out; the held thought follows it after a while."""
+    if sid != WIDGET or not LIVE_STEP_LATER["items"]:
+        return
+    first = LIVE_STEP_LATER["due"] is None
+    LIVE_STEP_LATER["due"] = time.time() + float(os.environ.get("MOCK_LIVE_STEP_PUSH", "3"))
+    if not first:
+        return
+
+    def push():
+        while time.time() < LIVE_STEP_LATER["due"]:
+            time.sleep(0.2)
+        before, new = ITEMS[sid][-1]["seq"], LIVE_STEP_LATER["items"]
+        LIVE_STEP_LATER["items"] = []
+        ITEMS[sid] = ITEMS[sid] + new
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try:
+                    out({"type": "items", "machine_id": "macbook", "session_id": sid, "items": new, **span(new, before)})
+                except Exception:
+                    pass
+    threading.Thread(target=push, daemon=True).start()
+
+
 # MOCK_TASKS=1: the unified entry (docs/assistant/unified-entry.md, #930). The main conversation dispatches tasks: a started plan
 # of two (the widget fix working, the unit tests waiting for an answer — ix_tests), a read-only one that finished with a
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
@@ -3961,6 +4044,21 @@ if MOCK_TASKS:
                           "done_when": ["List this week's merged changes"], "reviews": [], "updated_at": ago(minutes=20)})
         next(i for i in TASK_FEED[ASK1] if i["kind"] == "today")["body"]["pending_review"] = [
             {"id": "todo_task_release", "title": "整理发布说明"}]
+    # MOCK_TASKS_PARKED=1: the blog migration is parked by its supervisor (#3804): open, in In progress with until when
+    # and why, never in Needs you.
+    if os.environ.get("MOCK_TASKS_PARKED") == "1":
+        _PARKED = {"reason": "The new theme has to be picked before the pages are moved", "until": ago(days=-3),
+                   "waiting_on": "owner_priority", "count": 1}
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_blog":
+                _t.update(done_at=None, supervision={
+                    "supervisor": ASK1, "state": "parked", "parked": _PARKED, "round": 0, "done_when": ["Every page renders in Astro"],
+                    "updated_at": ago(minutes=50),
+                    "reviews": [{"at": ago(minutes=50), "verdict": "parked", "reason": _PARKED["reason"], "until": _PARKED["until"],
+                                 "waiting_on": _PARKED["waiting_on"], "parks": 1}]})
+        TASK_FEED[ASK1] += [_feed("feed_parked", 50, "review", "todo_task_blog", {
+            "title": "博客迁移到 Astro", "verdict": "parked", "note": _PARKED["reason"], "until": _PARKED["until"],
+            "waiting_on": _PARKED["waiting_on"]})]
     # MOCK_TASKS_AUTO_REVIEW=1 (with MOCK_TASKS_PENDING_REVIEW=1): the independent reviewer looked at the release notes
     # task's change first (#2173): nothing blocking, one finding, its report under the criteria.
     if os.environ.get("MOCK_TASKS_AUTO_REVIEW") == "1":
@@ -15265,6 +15363,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
@@ -16054,6 +16153,7 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
@@ -16436,6 +16536,7 @@ class H(BaseHTTPRequestHandler):
             out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
+            live_step_page_sent(sid)
             return self.send_json(out)
         if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
             q = parse_qs(urlparse(self.path).query)
@@ -18445,6 +18546,7 @@ class H(BaseHTTPRequestHandler):
                                "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
+                        live_step_page_sent(sid)
                     # What is being generated, right after the backlog, as the hub's sendLiveText does (#1966).
                     if LIVE_TEXT.get(sid):
                         send({"type": "delta", "machine_id": mid, "session_id": sid, "text": LIVE_TEXT[sid]})
@@ -20111,6 +20213,8 @@ MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 age
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 MOCK_HELP.append("MOCK_CLOSEOUT=1  Four stopped agents on the server that ended their turn with a closeout (#3612): done with merged and deployed confirmed by the hub; "
                  "done saying merged where the hub found it is not; blocked on someone, nothing checked; not done, its reply only the block. Each last reply carries the raw block")
+MOCK_HELP.append("MOCK_TASKS_PARKED=1  With MOCK_TASKS=1: the blog migration task is parked by its supervisor (#3804): `supervision.state` "
+                 "`parked` with `supervision.parked` {reason, until, waiting_on, count}; it is In progress, not in Needs you")
 MOCK_HELP.append("MOCK_ORPHANED=1  Open to-dos nobody is working on (#3618): `orphaned` on the PR check (error), the blog (offline) and, "
                  "with MOCK_TASKS=1, the blog task (closed) and the release notes task (error)")
 

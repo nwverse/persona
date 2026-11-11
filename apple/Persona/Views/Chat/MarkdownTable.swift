@@ -71,22 +71,27 @@ nonisolated enum MarkdownTableText {
     private static let memo = TextMemo<Measure>(limit: 200)
 
     /// The rows of a GFM table (header first, the delimiter row left out), cells without their inline markers.
-    static func rows(_ markdown: String) -> [[String]] {
+    static func rows(_ markdown: String, preservingInline: Bool = false) -> [[String]] {
         var rows: [[String]] = []
-        for line in markdown.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) where line.hasPrefix("|") {
+        let lines = markdown.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }).filter { $0.hasPrefix("|") }
+        for (index, line) in lines.enumerated() {
             var cells: [String] = []
             var cur = ""
             var escaped = false
             for ch in line.dropFirst() {
-                if escaped { cur.append(ch); escaped = false; continue }
+                if escaped {
+                    // The pipe escape belongs to the table, not the inline text (inside code it would be literal).
+                    if preservingInline, ch != "|" { cur.append("\\") }
+                    cur.append(ch); escaped = false; continue
+                }
                 if ch == "\\" { escaped = true; continue }
                 if ch == "|" { cells.append(cur); cur = ""; continue }
                 cur.append(ch)
             }
             if !cur.trimmingCharacters(in: .whitespaces).isEmpty { cells.append(cur) }
             let trimmed = cells.map { $0.trimmingCharacters(in: .whitespaces) }
-            if trimmed.allSatisfy({ !$0.isEmpty && $0.allSatisfy { ":-".contains($0) } }) { continue } // | --- | :-: |
-            rows.append(trimmed.map(plain))
+            if index == 1, trimmed.allSatisfy({ !$0.isEmpty && $0.allSatisfy { ":-".contains($0) } }) { continue } // | --- | :-: |
+            rows.append(preservingInline ? trimmed : trimmed.map(plain))
         }
         return rows
     }
@@ -166,6 +171,7 @@ final class MarkdownTablePreparation {
     private var markdown = ""
     private var fontSize: CGFloat?
     private var measured: MarkdownTableText.Measure?
+    private var formattedRows: [[AttributedString]]?
     private let render: (MarkdownContent) -> String
     private let measureText: (String, CGFloat) -> MarkdownTableText.Measure
 
@@ -176,15 +182,33 @@ final class MarkdownTablePreparation {
     }
 
     func measure(_ content: MarkdownContent, fontSize: CGFloat) -> MarkdownTableText.Measure {
-        if self.content != content {
-            markdown = render(content)
-            self.content = content
-            measured = nil
-        }
+        _ = source(content)
         if self.fontSize == fontSize, let measured { return measured }
         let result = measureText(markdown, fontSize)
         self.fontSize = fontSize
         measured = result
+        return result
+    }
+
+    private func source(_ content: MarkdownContent) -> String {
+        if self.content != content {
+            markdown = render(content)
+            self.content = content
+            measured = nil
+            formattedRows = nil
+        }
+        return markdown
+    }
+
+    func inlineRows(_ content: MarkdownContent) -> [[AttributedString]] {
+        let markdown = source(content)
+        if let formattedRows { return formattedRows }
+        let result = MarkdownTableText.rows(markdown, preservingInline: true).map { row in
+            row.map { cell in
+                (try? AttributedString(markdown: cell, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cell)
+            }
+        }
+        formattedRows = result
         return result
     }
 }
@@ -220,6 +244,35 @@ struct FittedTable: View {
         let _ = PerfTrace.body("FittedTable")
         #endif
         let measure = preparation.measure(config.content, fontSize: fontSize)
+        #if os(macOS)
+        // TableBounds anchor preferences cycle in the Mac's flipped chat scroll view. Explicit cell widths and
+        // ordinary overlays keep table layout independent of scroll-position updates.
+        let widths = measure.natural.map { min($0, TablePlan.scrollCap) }
+        let rows = preparation.inlineRows(config.content)
+        ScrollView(.horizontal) {
+            Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+                ForEach(rows.indices, id: \.self) { row in
+                    GridRow {
+                        ForEach(widths.indices, id: \.self) { column in
+                            let alignment = column < measure.alignments.count ? measure.alignments[column] : .leading
+                            macCell(column < rows[row].count ? rows[row][column] : AttributedString())
+                                .font(.system(size: fontSize, weight: row == 0 ? .semibold : .regular))
+                                .monospacedDigit()
+                                .multilineTextAlignment(alignment)
+                                .frame(width: widths[column], alignment: alignment == .trailing ? .trailing : alignment == .center ? .center : .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, Self.cellPadding / 2)
+                                .padding(.vertical, Theme.Space.sm)
+                                .background(Color.primary.opacity(row == 0 ? 0.07 : row.isMultiple(of: 2) ? 0 : 0.035))
+                                .overlay { Rectangle().stroke(Color.primary.opacity(0.14), lineWidth: Self.border) }
+                        }
+                    }
+                }
+            }
+        }
+        .tint(Theme.accent)
+        .markdownMargin(top: 4, bottom: 12)
+        #else
         let n = CGFloat(measure.natural.count)
         let plan = available > 0
             ? TablePlan.fit(natural: measure.natural, minimum: measure.minimum,
@@ -256,7 +309,20 @@ struct FittedTable: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
         .markdownMargin(top: 4, bottom: 12)
+        #endif
     }
+
+    #if os(macOS)
+    private func macCell(_ content: AttributedString) -> Text {
+        var styled = content
+        // Text handles emphasis and links, but does not apply the reply theme to inline code.
+        for run in content.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            styled[run.range].font = .system(size: fontSize * ReplyMetrics.inlineCode, design: .monospaced)
+            styled[run.range].backgroundColor = Theme.codeBackground
+        }
+        return Text(styled)
+    }
+    #endif
 }
 
 /// A cell of `FittedTable`: as wide as its column's plan, wrapping inside it, its words aligned as the delimiter row
