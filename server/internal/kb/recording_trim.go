@@ -17,8 +17,9 @@ import (
 // its attendance is turned off with the live log gone, so nothing resumes feeding or answering for it. Past
 // a finite minutes_days it goes like any other recording; 0 keeps minutes forever by default (#3862).
 
-// trimKept are the files a trimmed recording keeps: meeting.json too (its private mark, and its room to delete).
-var trimKept = []string{"meta.json", "minutes.json", "minutes.md", meetingFile}
+// trimKept are the files a trimmed recording keeps: meeting.json too (its private mark, and its room to delete), and
+// a day recording's recap (day_recap.go), not its notes: they are made of the transcript.
+var trimKept = []string{"meta.json", "minutes.json", "minutes.md", meetingFile, recapFile, recapMarkdown}
 
 // ErrTranscriptExpired: the recording was trimmed; there is no transcript left to make minutes of.
 var ErrTranscriptExpired = errors.New("the transcript expired; only the minutes are kept")
@@ -85,6 +86,7 @@ func (s *Store) putTrimmedMeta(r *Recording, now time.Time) error {
 	r.TrimmedAt = &at
 	r.Attendance, r.AttendingSession = "", nil
 	r.planMinutes()
+	r.planRecap()
 	raw, err := json.MarshalIndent(protectedEntity(r, &r.Tagging, current, false), "", "  ")
 	if err != nil {
 		return err

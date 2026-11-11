@@ -261,6 +261,16 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		if raw, err := os.ReadFile(e.Store.path(kind, id, "minutes.json")); err == nil && json.Valid(raw) {
 			d.Minutes = raw
 		}
+		d.Meta, d.Recap = e.dayDetail(id, d.Meta)
+		if d.Summary == "" && d.Recap != nil {
+			// A trimmed day recording keeps its recap, not summary.md: its summary is the recap's.
+			var rc struct {
+				Summary string `json:"summary"`
+			}
+			if json.Unmarshal(d.Recap, &rc) == nil && rc.Summary != "" {
+				d.Summary = rc.Summary + "\n"
+			}
+		}
 		if recentChars > 0 {
 			raw := recording["transcript.md"]
 			d.Recent = clip(string(raw), recentChars)

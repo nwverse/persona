@@ -31,6 +31,10 @@ const (
 	// docs/assistant/meeting-minutes.md "Meeting conversation (#3862)"). The hub lists meeting_conversation only while
 	// the default manager names it. A manager that names it names CapabilityMeetingAttendance too.
 	CapabilityMeetingConversation = "meeting_conversation"
+	// CapabilityRecordingDay: the manager takes all-day recordings and writes their daily recap (the upload's kind
+	// day, POST …/segments, detail.recap, recap_state; #4741). The hub lists the recording_day feature only while the
+	// default manager names it.
+	CapabilityRecordingDay = "recording_day"
 )
 
 // The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
@@ -226,6 +230,8 @@ var Routes = []string{
 	"GET /api/v1/recordings",
 	"POST /api/v1/recordings/{id}/minutes",
 	"POST /api/v1/recordings/{id}/minutes/todos",
+	// All-day recordings' appends (kb_day.go there, #4741).
+	"POST /api/v1/recordings/{id}/segments",
 	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").
 	"POST /api/v1/recordings/{id}/live",
 	"GET /api/v1/recordings/{id}/live",

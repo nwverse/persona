@@ -6,6 +6,7 @@ import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCrede
 import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
 import { RecordingMinutes } from "./RecordingMinutes";
+import { RecordingDayRecap } from "./RecordingDayRecap";
 import { RecordingAsks } from "./RecordingAsks";
 import { MeetingPrivate, RecordingConversation, useRecordingMeeting } from "./RecordingConversation";
 import { scrollBehavior } from "../../ui/stream/motion";
@@ -183,8 +184,9 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   // The meeting conversation (#3862): its private mark, room and follow-up, on a hub that lists meeting_conversation.
   const meeting = useRecordingMeeting(d, rec, auth, current, manager);
   const log = timeline(d?.log);
-  // A topic's summary is its points as Markdown (for search and Persona): the page shows the points themselves.
-  const prof = d?.kind === "topics" ? "" : profile(d?.summary, e.one_line, e.name);
+  // A topic's summary is its points as Markdown (for search and Persona): the page shows the points themselves. An
+  // all-day recording's is its recap's summary, which the recap shows.
+  const prof = d?.kind === "topics" || (rec?.allDay && d?.recap) ? "" : profile(d?.summary, e.one_line, e.name);
   const dirs = dirsOf(d?.meta);
   const recent = d?.kind === "chats" ? parseRecent(d.recent) : [];
   const into = typeof d?.meta?.merged_into === "string" ? d.meta.merged_into : "";
@@ -275,7 +277,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
 
               {rec && <RecordingFacts rec={rec} roomMeeting={meeting.roomMeeting} />}
               {rec && <MeetingPrivate meeting={meeting} />}
-              {rec && <RecordingMinutes
+              {/* An all-day recording (#4741) has a recap instead of minutes. */}
+              {rec && (rec.allDay ? <RecordingDayRecap
                 detail={d}
                 rec={rec}
                 auth={auth}
@@ -283,7 +286,16 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 refresh={load}
                 onSaved={onSaved}
                 onJump={jumpToTranscript}
-              />}
+                onOpen={onOpen}
+              /> : <RecordingMinutes
+                detail={d}
+                rec={rec}
+                auth={auth}
+                current={current}
+                refresh={load}
+                onSaved={onSaved}
+                onJump={jumpToTranscript}
+              />)}
               {rec && <RecordingConversation detail={d} rec={rec} meeting={meeting} auth={auth} current={current} manager={manager} />}
               {/* A room meeting's questions are in its thread; a #2981 meeting's stay here. */}
               {rec && !meeting.roomMeeting && <RecordingAsks
@@ -571,7 +583,12 @@ function Agents({ agents }: { agents: Session[] }) {
  *  attended by its own room, which its Conversation section shows, not by a session named here. */
 function RecordingFacts({ rec, roomMeeting }: { rec: RecordingView; roomMeeting: boolean }) {
   const rows: [string, string][] = [];
-  if (rec.startedAt) rows.push([t("knowledge-kbdetail.recording_started"), formatAt(rec.startedAt)]);
+  // An all-day recording says so, with its day (and part, past the first), and its times on its own clock.
+  if (rec.allDay) {
+    const date = rec.allDay.day ? dayTitle(rec.allDay.day) : "";
+    rows.push([t("knowledge-kbdetail.recording_all_day"), rec.allDay.part > 1 ? t("knowledge-kbdetail.recording_day_part", { date, part: rec.allDay.part }) : date]);
+  }
+  if (rec.startedAt) rows.push([t("knowledge-kbdetail.recording_started"), formatAt(rec.startedAt, undefined, rec.tz)]);
   if (rec.duration) rows.push([t("knowledge-kbdetail.recording_duration"), rec.duration]);
   rows.push([t("knowledge-kbdetail.recording_device"), rec.device]);
   if (rec.language) rows.push([t("knowledge-kbdetail.recording_language"), rec.language]);

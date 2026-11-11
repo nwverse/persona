@@ -61,10 +61,12 @@ type RecordingCalendar struct {
 	Location  string   `json:"location,omitempty"`
 }
 
-// Recording kinds: a meeting gets minutes (minutes.go); a note (or none) only the summary.
+// Recording kinds: a meeting gets minutes (minutes.go); a note (or none) only the summary; an all-day recording
+// (recording_day.go) a recap of its day and never minutes nor a summary.
 const (
 	RecordingNote    = "note"
 	RecordingMeeting = "meeting"
+	RecordingDay     = "day"
 )
 
 // Limits of an upload's calendar hint.
@@ -94,6 +96,15 @@ type RecordingUpload struct {
 	AttendingSession *SessionRef `json:"attending_session,omitempty"`
 	// Private is the meeting's private mark as it starts (meeting.go): taken only while the recording has none.
 	Private *bool `json:"private,omitempty"`
+	// An all-day recording's (kind day, recording_day.go): its date and IANA zone, its part and the phone's coverage;
+	// ignored on other kinds.
+	Day      string             `json:"day,omitempty"`
+	TZ       string             `json:"tz,omitempty"`
+	Part     int                `json:"part,omitempty"`
+	Coverage *RecordingCoverage `json:"coverage,omitempty"`
+	// next is how many positions a day upload carried (empty segments included); dayFull: it is over the limits.
+	next    int
+	dayFull bool
 	// badRole, badSession: the JSON held a value of the wrong type for these two fields (UnmarshalJSON), which
 	// turns attending off rather than failing the upload.
 	badRole, badSession bool
@@ -164,6 +175,42 @@ type Recording struct {
 	// TrimmedAt is the hub's: when its transcript went with recording_days and only meta.json and the minutes stayed
 	// (recording_trim.go); nil while it is whole.
 	TrimmedAt *time.Time `json:"trimmed_at,omitempty"`
+	// An all-day recording (recording_day.go). Day, TZ, Part and Coverage are the phone's; Base is the revision of the
+	// last PUT, which appends must name, and Next how many positions the hub holds on it (empty segments included).
+	Day      string             `json:"day,omitempty"`
+	TZ       string             `json:"tz,omitempty"`
+	Part     int                `json:"part,omitempty"`
+	Coverage *RecordingCoverage `json:"coverage,omitempty"`
+	Next     int                `json:"next,omitempty"`
+	Base     int64              `json:"base,omitempty"`
+	// Its recap (day_recap.go), the hub's: the state, whether the newest recap is final and when the first final one
+	// was written; RecapRev the revision the newest recap was made from, RecapVersion how many were written; RecapDue
+	// the due recap not written yet or failed (nil without one), RecapTargets how many became due so far (each one's
+	// number), RecapAsks the user's requests.
+	RecapState   string       `json:"recap_state,omitempty"`
+	RecapFinal   bool         `json:"recap_final,omitempty"`
+	RecapFinalAt *time.Time   `json:"recap_final_at,omitempty"`
+	RecapRev     int64        `json:"recap_rev,omitempty"`
+	RecapVersion int          `json:"recap_version,omitempty"`
+	RecapDue     *RecapTarget `json:"recap_due,omitempty"`
+	RecapTargets int          `json:"recap_targets,omitempty"`
+	RecapAsks    int          `json:"recap_asks,omitempty"`
+	// Which targets were set already: RecapEvening the owner's day whose recap time set one, RecapComplete once
+	// complete (a PUT that is not complete clears it), RecapCutoff after the cutoff.
+	RecapEvening  string `json:"recap_evening,omitempty"`
+	RecapComplete bool   `json:"recap_complete,omitempty"`
+	RecapCutoff   bool   `json:"recap_cutoff,omitempty"`
+	// RecapNotedRev: every finished hour of that revision has its notes (or gave up on them).
+	RecapNotedRev int64 `json:"recap_noted_rev,omitempty"`
+	// The day's one push (day_recap_write.go "The push"), across its parts: RecapWait, its recap time came with no
+	// recap ready, so the day's first recap pushes; RecapPush, the push is due from this recording's recap (set in the
+	// same write as that recap, or as its recap time) and DayRecapWritten has not returned for it yet; RecapPushed, it
+	// has.
+	RecapWait   bool `json:"recap_wait,omitempty"`
+	RecapPush   bool `json:"recap_push,omitempty"`
+	RecapPushed bool `json:"recap_pushed,omitempty"`
+	// RecapTodos are the to-dos made of its recaps' actions, whatever the version (keepRecapTodos).
+	RecapTodos []RecapTodo `json:"recap_todos,omitempty"`
 	Tagging
 
 	// Conv is the recording's meeting.json (meeting.go: its room, private mark and follow-up), read with it; nil
@@ -184,6 +231,16 @@ type RecordingState struct {
 	// TrimmedAt: only its minutes are kept (Recording.TrimmedAt). Listed all the same, at the revision it had, so a phone
 	// that still holds it sees the hub has it and sends nothing (an upload of it would be expired).
 	TrimmedAt *time.Time `json:"trimmed_at,omitempty"`
+	// An all-day recording's only (recording_day.go): Next and Base always, 0 when lost (an older manager rewrote its
+	// meta.json; the phone sends a PUT), so an entry of kind day without base is an older manager's.
+	Kind         string     `json:"kind,omitempty"`
+	Day          string     `json:"day,omitempty"`
+	Part         int        `json:"part,omitempty"`
+	Next         *int       `json:"next,omitempty"`
+	Base         *int64     `json:"base,omitempty"`
+	RecapState   string     `json:"recap_state,omitempty"`
+	RecapFinal   bool       `json:"recap_final,omitempty"`
+	RecapFinalAt *time.Time `json:"recap_final_at,omitempty"`
 }
 
 // What PutRecording did.
@@ -201,6 +258,11 @@ type RecordingPut struct {
 	Status            string
 	Attendance        string
 	AttendanceProblem string
+	// Revision is the stored revision after it (this upload's when there is none); for an all-day recording Base and
+	// Next are its base and the hub's count after it (recording_day.go).
+	Revision int64
+	Base     int64
+	Next     int
 	// Room: the recording is a room meeting (meeting.go), or this upload asked for one; Meeting is its meeting.json
 	// after it (nil without one).
 	Room    bool
@@ -289,6 +351,8 @@ func (s *Store) recordingName(r *Recording) string {
 	switch {
 	case r.Title != "":
 		return r.Title
+	case r.Kind == RecordingDay:
+		return "全天录音 " + r.Day // Engine.recordingName has it in the owner's language
 	case r.Calendar != nil && r.Calendar.Title != "":
 		return r.Calendar.Title
 	case r.Meeting != nil && r.Meeting.Name != "":
@@ -310,13 +374,22 @@ func (u *RecordingUpload) clean() error {
 	if u.Device != "phone" && u.Device != "watch" {
 		return badRecording("device must be phone or watch")
 	}
+	// A day upload over the limits is day_full, not refused here: the hub's count goes with it (recording_day.go).
+	day := strings.EqualFold(strings.TrimSpace(u.Kind), RecordingDay)
 	if len(u.Segments) > maxRecordingSegments {
-		return badRecording("at most %d segments", maxRecordingSegments)
+		if !day {
+			return badRecording("at most %d segments", maxRecordingSegments)
+		}
+		u.dayFull = true
 	}
+	u.next = len(u.Segments)
 	segs := u.Segments[:0]
 	total := 0
-	for _, sg := range u.Segments {
-		sg.Text = strings.TrimSpace(sg.Text)
+	for i, sg := range u.Segments {
+		sg.Text, sg.N = strings.TrimSpace(sg.Text), 0
+		if day {
+			sg.N = i + 1 // its position, empty ones counted
+		}
 		if sg.Text == "" {
 			continue
 		}
@@ -324,7 +397,10 @@ func (u *RecordingUpload) clean() error {
 		segs = append(segs, sg)
 	}
 	if total > maxRecordingText {
-		return badRecording("the transcript is over %d bytes", maxRecordingText)
+		if !day {
+			return badRecording("the transcript is over %d bytes", maxRecordingText)
+		}
+		u.dayFull = true
 	}
 	sort.SliceStable(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
 	u.Segments = segs
@@ -335,9 +411,12 @@ func (u *RecordingUpload) clean() error {
 	case "", RecordingNote:
 		u.Kind = RecordingNote
 	case RecordingMeeting:
+	case RecordingDay:
+		return u.cleanDay()
 	default:
-		return badRecording("kind must be meeting or note")
+		return badRecording("kind must be meeting, note or day")
 	}
+	u.Day, u.TZ, u.Part, u.Coverage = "", "", 0, nil // a day recording's only
 	return u.cleanCalendar()
 }
 
@@ -404,17 +483,25 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 		return put, false, err
 	}
 	put.AttendanceProblem = u.normalizeAttendance()
+	day := u.Kind == RecordingDay
+	if day {
+		put.AttendanceProblem, put.Room = u.dropRoom(put.AttendanceProblem), false
+	}
+	put.Revision = u.Revision
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	if _, gone := st.tombstones()[id]; gone {
 		return put, false, ErrRecordingDeleted
 	}
+	r, exists := st.Recording(id)
+	if exists {
+		put.Revision, put.Base, put.Next = r.Revision, r.Base, r.Next
+	}
 	if u.StartedAt.Before(now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))) {
 		put.Status = RecordingExpired
 		return put, false, nil
 	}
-	r, exists := st.Recording(id)
 	if exists {
 		put.Room, put.Meeting = put.Room || r.RoomMeeting(), r.Conv
 	}
@@ -424,9 +511,23 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 		put.Status = RecordingExpired
 		return put, false, nil
 	}
+	if exists && (r.Kind == RecordingDay) != day {
+		return put, false, ErrKindChanged
+	}
 	if exists && r.Revision > u.Revision {
 		put.Status, put.Attendance = RecordingStale, r.AttendanceRole()
 		return put, false, nil
+	}
+	if u.dayFull {
+		return put, false, DayFullError{Next: put.Next}
+	}
+	rebase, recapped := false, false
+	if day && exists && r.Base != u.Revision {
+		// A new base: a recap made from the old one loses at once what the new transcript no longer says.
+		rebase = true
+		if recapped, err = e.repairDayRecap(r, &u); err != nil {
+			return put, false, err
+		}
 	}
 	wasAttending := exists && r.Attending()
 	meeting, parts, err := e.putMeetingFields(id, &u)
@@ -454,13 +555,21 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	for _, sg := range u.Segments {
 		r.Chars += len([]rune(sg.Text))
 	}
+	if day {
+		r.putDay(&u)
+		if rebase {
+			r.rebaseRecap(recapped, now)
+		}
+	}
 	r.planMinutes() // after Chars: a meeting that completed with no text gets none
-	r.Name = st.recordingName(r)
+	r.planRecap()
+	r.Name = e.recordingName(r)
 	r.Updated = now.UTC()
 	if err := st.commitRecording(r, u.Segments); err != nil {
 		return put, false, err
 	}
 	put.Status, put.Attendance = RecordingStored, r.AttendanceRole()
+	put.Revision, put.Base, put.Next = r.Revision, r.Base, r.Next
 	st.notify(KindRecording, id, "metadata")
 	st.notify(KindRecording, id, "messages")
 	e.index(KindRecording, id, r.Name, r.Tagging, r.OneLine, r.StartedAt)
@@ -483,7 +592,7 @@ func nonNilSegments(s []RecordingSegment) []RecordingSegment {
 
 // renderTranscript is transcript.md: a line per segment (and bookmark) at its clock time in the user's zone.
 func (s *Store) renderTranscript(r *Recording, segs []RecordingSegment) string {
-	zone := s.Zone()
+	zone := s.RecordingZone(r)
 	at := func(sec float64) string {
 		return r.StartedAt.Add(time.Duration(sec * float64(time.Second))).In(zone).Format("15:04:05")
 	}
@@ -561,8 +670,14 @@ func (e *Engine) unlinkRecording(id string, projects []string) {
 func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	kept, deleted = []RecordingState{}, []string{}
 	for _, r := range e.Store.Recordings() {
-		kept = append(kept, RecordingState{ID: r.ID, Revision: r.Revision, Complete: r.Complete, StartedAt: r.StartedAt,
-			MinutesState: r.MinutesState, TrimmedAt: r.TrimmedAt})
+		s := RecordingState{ID: r.ID, Revision: r.Revision, Complete: r.Complete, StartedAt: r.StartedAt,
+			MinutesState: r.MinutesState, TrimmedAt: r.TrimmedAt}
+		if r.Kind == RecordingDay {
+			next, base := r.Next, r.Base
+			s.Kind, s.Day, s.Part, s.Next, s.Base = r.Kind, r.Day, r.Part, &next, &base
+			s.RecapState, s.RecapFinal, s.RecapFinalAt = r.RecapState, r.RecapFinal, r.RecapFinalAt
+		}
+		kept = append(kept, s)
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].StartedAt.After(kept[j].StartedAt) })
 	for id := range e.Store.tombstones() {
@@ -596,7 +711,7 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 			}
 			continue
 		}
-		if (minutesDays == 0 || !r.StartedAt.Before(minutesCut)) && (r.Trimmed() || st.hasMinutes(r.ID)) {
+		if (minutesDays == 0 || !r.StartedAt.Before(minutesCut)) && (r.Trimmed() || st.hasMinutes(r.ID) || st.hasRecap(r.ID)) {
 			e.trimPruned(r, now)
 			continue
 		}
@@ -707,7 +822,7 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	var todo []*Recording
 	due := map[string]bool{}
 	for _, r := range e.Store.Recordings() {
-		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() {
+		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() && r.Kind != RecordingDay {
 			due[r.ID] = true
 			if e.retries().recordings.waits(r.ID, recordingAbout(r), now) {
 				continue
@@ -760,8 +875,8 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 		return false, err
 	}
 	r = &snapshot
-	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision || r.Trimmed() {
-		return false, nil
+	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision || r.Trimmed() || r.Kind == RecordingDay {
+		return false, nil // a day recording's summary is its recap's (day_recap.go): it would read the whole day
 	}
 	var segs []RecordingSegment
 	if err := json.Unmarshal(files["segments.json"], &segs); err != nil {

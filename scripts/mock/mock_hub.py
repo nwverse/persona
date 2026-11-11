@@ -8,8 +8,9 @@ It serves machines, agents, conversations, interactions and the inbox, enough fo
 does not know are logged to stderr as MISSING. Timestamps are relative to when it starts. See docs/operations/testing.md.
 """
 import base64, unicodedata
-import argparse, copy, hashlib, json, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import argparse, copy, hashlib, json, math, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -2677,6 +2678,292 @@ RECORDINGS_TRIMMED = {}
 # POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked").
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
 RECORDING_MINUTES_ASKED = []
+# All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
+# waiting, retry and the time before a recap is due. All recording routes share the lock, including delete and trim.
+RECORDINGS_LOCK = threading.RLock()
+RECORDING_DAY = {"on": os.environ.get("MOCK_NO_RECORDING_DAY") != "1", "recap": os.environ.get("MOCK_DAY_RECAP", "ready")}
+RECORDING_DAY_TODOS = {}  # confirmations survive recap versions that omit an action
+DAY_MAX_SEGMENTS = 20000
+DAY_MAX_TEXT = 4 << 20
+
+
+def day_number(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def day_time(value):
+    if not isinstance(value, str): raise ValueError("time must be RFC 3339")
+    out = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if out.tzinfo is None: raise ValueError("time needs a zone")
+    return out
+
+
+def day_coverage(raw):
+    if not isinstance(raw, dict) or not day_number(raw.get("to", 0)): raise ValueError("invalid coverage")
+    gaps = raw.get("gaps", [])
+    if not isinstance(gaps, list): raise ValueError("invalid coverage gaps")
+    clean = []
+    for gap in gaps:
+        if not isinstance(gap, dict) or not all(day_number(gap.get(k, 0)) for k in ("from", "to")) \
+                or not isinstance(gap.get("reason", ""), str): raise ValueError("invalid coverage gap")
+        start = max(0, gap.get("from", 0))
+        clean.append({"from": start, "to": max(start, gap.get("to", 0)),
+                      "reason": gap.get("reason", "").strip().encode()[:32].decode("utf-8", "ignore")})
+    clean.sort(key=lambda g: (g["from"], g["to"]))
+
+    def join(left, right):
+        # Keep erasure visible even when the phone sends overlapping reasons.
+        return {"from": left["from"], "to": max(left["to"], right["to"]),
+                "reason": "erased" if "erased" in (left["reason"], right["reason"]) else left["reason"]}
+
+    merged = []
+    for gap in clean:
+        if merged and gap["from"] <= merged[-1]["to"]: merged[-1] = join(merged[-1], gap)
+        else: merged.append(gap)
+    while len(merged) > 500:
+        at = min(range(len(merged) - 1), key=lambda i: merged[i + 1]["from"] - merged[i]["to"])
+        merged[at:at + 2] = [join(merged[at], merged[at + 1])]
+    return {"to": max(0, raw.get("to", 0)), "gaps": merged}
+
+
+def day_fields(body):
+    """Validate before making any state changes, even for stale appends and expired recordings."""
+    out = dict(body)
+    segs = body.get("segments", [])
+    if not isinstance(segs, list): raise ValueError("invalid segments")
+    out["segments"] = []
+    for seg in segs:
+        if not isinstance(seg, dict) or not all(day_number(seg.get(k, 0)) for k in ("start", "end")) \
+                or not isinstance(seg.get("text", ""), str): raise ValueError("invalid segment")
+        out["segments"].append({"start": seg.get("start", 0), "end": seg.get("end", 0), "text": seg.get("text", "").strip()})
+    if "duration" in body and not day_number(body["duration"]): raise ValueError("invalid duration")
+    if "complete" in body and type(body["complete"]) is not bool: raise ValueError("invalid complete")
+    if "ended_at" in body and body["ended_at"] not in (None, ""): day_time(body["ended_at"])
+    if "title" in body:
+        if not isinstance(body["title"], str): raise ValueError("invalid title")
+        out["title"] = " ".join(body["title"].split())
+    if "coverage" in body: out["coverage"] = day_coverage(body["coverage"])
+    if "bookmarks" in body:
+        if not isinstance(body["bookmarks"], list): raise ValueError("invalid bookmarks")
+        for mark in body["bookmarks"]:
+            if not isinstance(mark, dict) or not day_number(mark.get("at", 0)) or not isinstance(mark.get("label", ""), str):
+                raise ValueError("invalid bookmark")
+        out["bookmarks"] = sorted(body["bookmarks"], key=lambda b: b.get("at", 0))
+    return out
+
+
+def day_expired(rid, body):
+    days = ASSISTANT_CONFIG["recording_days"]
+    return rid in RECORDINGS_TRIMMED or bool(days and day_time(body["started_at"]) < datetime.now(timezone.utc) - timedelta(days=days))
+
+
+def day_result(rid, status, put=False, fallback=None):
+    rec = RECORDINGS.get(rid) or fallback
+    out = {"id": rid, "revision": rec["revision"], "next": rec.get("next", 0), "status": status}
+    if put:
+        out["base"] = rec.get("base", rec["revision"])
+        if MEETING_ATTENDANCE: out["attendance"] = "off"
+        if fallback and fallback.get("attendance") not in (None, "", "off"):
+            out["attendance_problem"] = "not_meeting"
+    return out
+
+
+def day_clock(rec, seconds):
+    return (day_time(rec["started_at"]) + timedelta(seconds=seconds)).astimezone(ZoneInfo(rec["tz"])).strftime("%H:%M")
+
+
+def day_action_key(action):
+    return ((action.get("who") or "").strip().casefold(), action["what"].strip().casefold())
+
+
+def day_markdown(rec, recap):
+    lines = ["# " + rec["day"], "", recap["summary"]]
+    for kind, heading in (("meeting", "Meetings"), ("outside", "Outside meetings")):
+        entries = [e for e in recap.get("timeline", []) if e["kind"] == kind]
+        if not entries: continue
+        lines += ["", "## " + heading]
+        for entry in entries:
+            lines += ["", "### %s–%s %s" % (day_clock(rec, entry["from"]), day_clock(rec, entry["to"]), entry["title"])]
+            lines += ["- %s %s" % (day_clock(rec, p["at"]), p["text"]) for p in entry["points"]]
+    if recap.get("actions"):
+        lines += ["", "## Suggested to-dos"]
+        lines += ["- %s %s" % (day_clock(rec, a["at"]), a["what"]) for a in recap["actions"]]
+    return "\n".join(lines).strip() + "\n"
+
+
+def day_recap(rid, rec, version):
+    segs = sorted((s for s in rec["segments"] if s["text"] and s["start"] <= rec["coverage"]["to"]), key=lambda s: s["start"])
+    groups, actions = {}, []
+    for seg in segs:
+        hour = (day_time(rec["started_at"]) + timedelta(seconds=seg["start"])).astimezone(ZoneInfo(rec["tz"])).isoformat()[:13]
+        kind = "meeting" if "会议" in seg["text"] or "meeting" in seg["text"].lower() else "outside"  # i18n-ignore: fixture keywords
+        entry = groups.setdefault((hour, kind), {"from": seg["start"], "to": seg["end"], "kind": kind,
+                                                "title": seg["text"], "points": []})
+        entry["to"] = max(entry["to"], seg["end"])
+        entry["points"].append({"text": seg["text"], "at": seg["start"]})
+        if "负责" in seg["text"] or "will" in seg["text"].lower():  # i18n-ignore: fixture keywords
+            action = {"id": "a%d" % (len(actions) + 1), "what": seg["text"], "at": seg["start"], "todo_id": ""}
+            action["todo_id"] = RECORDING_DAY_TODOS.get(rid, {}).get(day_action_key(action), "")
+            actions.append(action)
+    cutoff = datetime.strptime(rec["day"], "%Y-%m-%d").replace(tzinfo=ZoneInfo(rec["tz"])) + timedelta(days=1, hours=6)
+    reason = "complete" if rec.get("complete") else "cutoff" if datetime.now(timezone.utc) >= cutoff else ""
+    covers = rec["coverage"]["to"]
+    gaps = [{**g, "to": min(g["to"], covers)} for g in rec["coverage"]["gaps"] if g["from"] < covers]
+    out = {"version": version, "revision": rec["revision"], "generated_at": datetime.now(timezone.utc).isoformat(),
+           "day": rec["day"], "covers": {"from": 0, "to": covers}, "final": bool(reason),
+           "summary": " ".join(s["text"] for s in segs[:2]), "timeline": sorted(groups.values(), key=lambda e: e["from"]),
+           "actions": actions, "gaps": gaps, "partial": False}
+    if reason: out["final_reason"] = reason
+    out["markdown"] = day_markdown(rec, out)
+    return out
+
+
+def day_publish(rid, repair=False, regenerate=True):
+    rec = RECORDINGS[rid]
+    prior = KB_DETAIL.get(("recordings", rid), {})
+    recap = copy.deepcopy(prior.get("recap"))
+    if repair and recap:
+        erased = [g for g in rec["coverage"]["gaps"] if g["reason"] == "erased"]
+        starts = {s["start"] for s in rec["segments"] if s["text"]}  # a point must still start a non-empty line
+        keep = lambda item: item["at"] in starts and not any(g["from"] <= item["at"] < g["to"] for g in erased)
+        # An entry overlapping an erased gap goes whole: its title can quote the erased words.
+        recap["timeline"] = [e for e in recap.get("timeline", []) if not any(g["from"] < e["to"] and e["from"] < g["to"] for g in erased)]
+        for entry in recap["timeline"]: entry["points"] = [p for p in entry["points"] if keep(p)]
+        recap["timeline"] = [e for e in recap["timeline"] if e["points"]]
+        recap["actions"] = [a for a in recap.get("actions", []) if keep(a)]
+        recap["summary"] = ""
+        recap["markdown"] = day_markdown(rec, recap)
+    mode = RECORDING_DAY["recap"]
+    has_text = any(s["text"] for s in rec["segments"])
+    state = None if not has_text or mode == "none" else mode
+    if mode == "none": recap = None
+    if state == "ready" and regenerate:
+        recap = day_recap(rid, rec, (recap or {}).get("version", 0) + 1)
+    rec.pop("recap_state", None); rec.pop("recap_final", None)
+    if state: rec["recap_state"] = state
+    if recap and recap["final"]:
+        rec["recap_final"] = True
+        rec.setdefault("recap_final_at", recap["generated_at"])  # the first final recap's time: the phone's audio clock
+    rec["matched_rev"] = rec["summarized_rev"] = rec["revision"]
+    name = rec.get("title") or "Day · " + rec["day"]
+    summary = recap["summary"] if recap else ""
+    entry = {"kind": "recordings", "id": rid, "name": name, "relevance": 0, "tags": [], "one_line": summary,
+             "updated": rec["started_at"]}
+    KB["recordings"] = [e for e in KB.get("recordings", []) if e["id"] != rid] + [entry]
+    meta = {k: v for k, v in rec.items() if k != "segments"}
+    meta.update(name=name, chars=sum(len(s["text"]) for s in rec["segments"]))
+    detail = {"meta": meta, "summary": summary, "segments": sorted((s for s in rec["segments"] if s["text"]), key=lambda s: s["start"])}
+    if recap: detail["recap"] = recap
+    KB_DETAIL[("recordings", rid)] = detail
+
+
+def day_put(h, rid, raw):
+    try:
+        body = day_fields(raw)
+        day = body.get("day")
+        if not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day): raise ValueError("day is required")
+        datetime.strptime(day, "%Y-%m-%d")
+        zone = body.get("tz", ASSISTANT_CONFIG["timezone"])
+        if not isinstance(zone, str): raise ValueError("invalid tz")
+        ZoneInfo(zone)
+        part = body.get("part", 1)
+        if type(part) is not int or not 1 <= part <= 99: raise ValueError("invalid part")
+        day_time(body["started_at"])
+    except (ValueError, TypeError, OverflowError, ZoneInfoNotFoundError):
+        return h.send_json({"error": "invalid day recording"}, 400) or True
+    if len(body["segments"]) > DAY_MAX_SEGMENTS or sum(len(s["text"].encode()) for s in body["segments"]) > DAY_MAX_TEXT:
+        return h.send_json({"error": "day recording is full", "code": "day_full", "next": RECORDINGS.get(rid, {}).get("next", 0)}, 413) or True
+    body.update(kind="day", tz=zone, part=part, base=body["revision"], next=len(body["segments"]))
+    body.setdefault("coverage", {"to": 0, "gaps": []})
+    have = RECORDINGS.get(rid)
+    if day_expired(rid, body): return h.send_json(day_result(rid, "expired", put=True, fallback=body)) or True
+    if have and have["revision"] > body["revision"]:
+        return h.send_json(day_result(rid, "stale", put=True, fallback=body)) or True
+    for key in ("calendar", "attendance", "attending_session", "room", "private", "transcription"):
+        body.pop(key, None)
+    for i, seg in enumerate(body["segments"]): seg["n"] = i + 1
+    RECORDINGS[rid] = body
+    day_publish(rid, repair=bool(have))
+    return h.send_json(day_result(rid, "stored", put=True, fallback=raw)) or True
+
+
+def day_append(h, rid):
+    if is_read_only(h): return h.send_json({"error": "full credentials required", "code": "forbidden"}, 403) or True
+    raw = h.last_body or b""
+    if len(raw) > 1 << 20: return h.send_json({"error": "body over 1 MiB", "code": "too_large"}, 413) or True
+    if rid in RECORDINGS_DELETED: return h.send_json({"error": "recording deleted", "code": "recording_deleted"}, 410) or True
+    if rid not in RECORDINGS: return h.send_json({"error": "upload the recording first", "code": "recording_not_found"}, 404) or True
+    if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "knowledge base is read only", "code": "kb_read_only"}, 403) or True
+    try:
+        body = json.loads(raw or b"{}")
+        if not isinstance(body, dict): raise ValueError("invalid body")
+        if type(body.get("base")) is not int or body["base"] <= 0 or type(body.get("revision")) is not int \
+                or body["revision"] <= body["base"] or type(body.get("from")) is not int or body["from"] < 0:
+            raise ValueError("invalid base, revision or from")
+        body = day_fields(body)
+        if len(body["segments"]) > 500: raise ValueError("too many segments")
+    except (ValueError, TypeError, OverflowError):
+        return h.send_json({"error": "invalid append"}, 400) or True
+    rec = RECORDINGS[rid]
+    if day_expired(rid, rec): return h.send_json(day_result(rid, "expired")) or True
+    if rec.get("kind") != "day": return h.send_json({"error": "not a day recording", "code": "not_day"}, 409) or True
+    held = rec["next"]
+    if body["base"] != rec.get("base", 0):
+        return h.send_json({"error": "base changed", "code": "base_changed", "base": rec.get("base", 0), "next": held}, 409) or True
+    if body["from"] > held: return h.send_json({"error": "missing earlier segments", "code": "segments_gap", "next": held}, 409) or True
+    new = body["segments"][held - body["from"]:]
+    if held + len(new) > DAY_MAX_SEGMENTS or sum(len(s["text"].encode()) for s in rec["segments"] + new) > DAY_MAX_TEXT:
+        return h.send_json({"error": "day recording is full", "code": "day_full", "next": held}, 413) or True
+    before = copy.deepcopy(rec)
+    if body["revision"] >= rec["revision"]:
+        for key in ("duration", "ended_at", "title", "bookmarks", "coverage", "complete"):
+            if key not in body: continue
+            if key == "ended_at" and not body[key]: continue
+            if key == "complete" and rec.get("complete"): continue
+            rec[key] = body[key]
+    for i, seg in enumerate(new): seg["n"] = held + i + 1
+    rec["segments"] += new
+    rec["next"] += len(new)
+    rec["revision"] = max(rec["revision"], body["revision"])
+    if rec != before: day_publish(rid)
+    return h.send_json(day_result(rid, "stored")) or True
+
+
+def day_minutes(h, rid, todos=False):
+    if is_read_only(h): return h.send_json({"error": "full credentials required", "code": "forbidden"}, 403) or True
+    if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "knowledge base is read only", "code": "kb_read_only"}, 403) or True
+    rec = RECORDINGS[rid]
+    if not todos:
+        if rid in RECORDINGS_TRIMMED:
+            return h.send_json({"error": "the transcript expired", "code": "transcript_expired"}, 409) or True
+        if not any(s["text"] for s in rec["segments"]): return h.send_json({"error": "no transcript", "code": "incomplete"}, 409) or True
+        day_publish(rid)
+        return h.send_json({"state": "pending"}, 202) or True
+    try: body = json.loads(h.last_body or b"{}")
+    except ValueError: body = None
+    if not isinstance(body, dict) or type(body.get("version")) is not int or not isinstance(body.get("actions"), list) \
+            or not body["actions"] or not all(isinstance(a, str) for a in body["actions"]):
+        return h.send_json({"error": "version and actions are required"}, 400) or True
+    recap = KB_DETAIL[("recordings", rid)].get("recap")
+    if not recap: return h.send_json({"error": "no recap"}, 404) or True
+    if body["version"] != recap["version"]: return h.send_json({"error": "recap changed", "code": "minutes_stale"}, 409) or True
+    actions = {a["id"]: a for a in recap.get("actions", [])}
+    if any(a not in actions for a in body["actions"]): return h.send_json({"error": "unknown action"}, 400) or True
+    todos = []
+    for aid in dict.fromkeys(body["actions"]):
+        action = actions[aid]
+        key = day_action_key(action)
+        confirmed = RECORDING_DAY_TODOS.setdefault(rid, {})
+        tid = confirmed.get(key) or "todo_day_" + hashlib.sha256((rid + "\0" + str(recap["version"]) + "\0" + aid).encode()).hexdigest()[:24]
+        todo = next((t for t in TODOS if t["id"] == tid), None)
+        if todo is None:
+            now = datetime.now(timezone.utc).isoformat()
+            todo = {"id": tid, "title": action["what"], "notes": "Day · %s · %s" % (rec["day"], day_clock(rec, action["at"])),
+                    "created_at": now, "updated_at": now, "done_at": None, "agents": []}
+            TODOS.insert(0, todo)
+        confirmed[key] = action["todo_id"] = tid
+        todos.append(format_todo(todo))
+    return h.send_json({"todos": todos, "recap": recap}) or True
 
 
 def recording_minutes(body):
@@ -3054,7 +3341,7 @@ _features_without_meeting_attendance = features
 
 def features():
     return _features_without_meeting_attendance() + (["meeting_attendance"] if MEETING_ATTENDANCE else []) + \
-        (["meeting_conversation"] if meeting_conversation_on() else [])
+        (["meeting_conversation"] if meeting_conversation_on() else []) + (["recording_day"] if RECORDING_DAY["on"] else [])
 
 
 def meeting_live(rid):
@@ -3069,7 +3356,7 @@ def recording_kind(body):
     if kind is None: return "note"
     if not isinstance(kind, str): return None
     kind = kind.strip().lower() or "note"
-    return kind if kind in ("note", "meeting") else None
+    return kind if kind in ("note", "meeting") or (kind == "day" and RECORDING_DAY["on"]) else None
 
 
 def meeting_attendance(body):
@@ -3896,7 +4183,42 @@ def meeting_conversation_reset():
 
 
 def recordings_route(h, method, p):
+    with RECORDINGS_LOCK:
+        return recordings_route_locked(h, method, p)
+
+
+def recordings_route_locked(h, method, p):
     """The hub's recording sync, and its copy in the knowledge base (KB["recordings"])."""
+    if p == "/mock/recording_day":
+        if method == "POST":
+            try: body = json.loads(h.last_body or b"{}")
+            except ValueError: body = None
+            if not isinstance(body, dict) or ("on" in body and type(body["on"]) is not bool) \
+                    or ("recap" in body and body["recap"] not in ("ready", "pending", "failed", "none")):
+                return h.send_json({"error": "invalid day mock mode"}, 400) or True
+            RECORDING_DAY.update({k: v for k, v in body.items() if k in RECORDING_DAY})
+            if "recap" in body:
+                for rid, rec in RECORDINGS.items():
+                    if rec.get("kind") == "day" and rid not in RECORDINGS_TRIMMED: day_publish(rid)
+        return h.send_json(RECORDING_DAY) or True
+    if method == "GET" and p == "/api/v1/kb/recordings":
+        tag = parse_qs(urlparse(h.path).query).get("tag", [""])[0]
+        return h.send_json({"items": [e for e in KB.get("recordings", []) if not tag or tag in e.get("tags", [])],
+                            "tags": kb_tags("recordings")}) or True
+    if method == "GET" and re.fullmatch(r"/api/v1/kb/recordings/[^/]+", p):
+        rid = p.rsplit("/", 1)[-1].lower()
+        if RECORDINGS.get(rid, {}).get("kind") == "day":
+            detail = dict(KB_DETAIL[("recordings", rid)], kind="recordings", id=rid,
+                          path="/home/me/.persona/data/recordings/" + rid)
+            out = {"detail": detail}
+            word = parse_qs(urlparse(h.path).query).get("q", [""])[0]
+            if word:
+                out["matches"] = [{"path": "recordings/%s/recap.md" % rid, "n": i + 1, "line": line}
+                                  for i, line in enumerate(detail.get("recap", {}).get("markdown", "").splitlines())
+                                  if line.strip() and kb_match(line, word)]
+            return h.send_json(out) or True
+    if re.fullmatch(r"/api/v1/recordings/[^/]+/segments", p) and not RECORDING_DAY["on"]:
+        return h.send_json({"error": "404 page not found"}, 404, add_error_code=False) or True
     if meeting_conversation_route(h, method, p): return True
     if p == "/mock/meeting_attendance":
         global MEETING_ATTENDANCE
@@ -3916,7 +4238,7 @@ def recordings_route(h, method, p):
         # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
         RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
         meeting_conversation_reset()
-        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear()
+        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear(); RECORDING_DAY_TODOS.clear()
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
         return h.send_json({"mode": RECORDING_MINUTES[0]}) or True
@@ -3926,12 +4248,17 @@ def recordings_route(h, method, p):
     if p == "/mock/recording_trim" and method == "POST":
         rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
         detail = KB_DETAIL.get(("recordings", rid))
-        if rid not in RECORDINGS or not detail or not detail.get("minutes"):
-            return h.send_json({"error": "no stored recording with minutes"}, 404) or True
+        if rid not in RECORDINGS or not detail or not (detail.get("minutes") or detail.get("recap")):
+            return h.send_json({"error": "no stored recording with minutes or recap"}, 404) or True
         at = RECORDINGS_TRIMMED.setdefault(rid, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        detail["meta"].update(trimmed_at=at, minutes_state="ready")
+        is_day = RECORDINGS[rid].get("kind") == "day"
+        detail["meta"].update(trimmed_at=at, **({"recap_state": "ready"} if is_day else {"minutes_state": "ready"}))
         detail["meta"].pop("attendance", None); detail["meta"].pop("attending_session", None)
-        detail.pop("segments", None); detail["summary"] = ""  # "" over the entry's one line, as the hub's has no summary.md
+        detail.pop("segments", None)
+        detail["summary"] = detail["recap"]["summary"] if is_day else ""
+        if is_day:
+            RECORDINGS[rid]["segments"] = []
+            RECORDINGS[rid]["recap_state"] = "ready"
         room_delete(rid)  # the room goes at the transcript cut; the private mark and the follow-up stay
         return h.send_json({"id": rid, "trimmed_at": at}) or True
     if not (p == "/api/v1/recordings" or p.startswith("/api/v1/recordings/")): return False
@@ -3941,12 +4268,19 @@ def recordings_route(h, method, p):
         return h.send_json({"days": ASSISTANT_CONFIG["recording_days"], "deleted": sorted(RECORDINGS_DELETED),
                             "recordings": [{"id": k, "revision": v["revision"], "complete": v.get("complete", False),
                                             "started_at": v["started_at"],
+                                            **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
+                                               if v.get("kind") == "day" else {}),
                                             **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {})}
                                            for k, v in RECORDINGS.items()]}) or True
     rid = p.split("/")[4].lower()
+    if p.endswith("/segments"):
+        if method != "POST": return h.send_json({"error": "method"}, 405) or True
+        return day_append(h, rid)
     if not re.fullmatch(UUID_RE, rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
     if p.endswith("/live") or p.endswith("/ask"): return meeting_route(h, method, p, rid)
+    if method == "POST" and (p.endswith("/minutes") or p.endswith("/minutes/todos")) and RECORDINGS.get(rid, {}).get("kind") == "day":
+        return day_minutes(h, rid, todos=p.endswith("/todos"))
     if p.endswith("/minutes") and method == "POST":
         if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音"}, 404) or True
         if rid in RECORDINGS_TRIMMED:
@@ -3959,7 +4293,7 @@ def recordings_route(h, method, p):
     kb = KB.setdefault("recordings", [])
     if method == "DELETE":
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         room_delete(rid); MEETING_CONV.pop(rid, None)  # and meeting.json; the follow-up stays a conversation of its own
@@ -3967,12 +4301,17 @@ def recordings_route(h, method, p):
     if method != "PUT": return h.send_json({"error": "method"}, 405) or True
     RECORDING_PUTS[0] += 1
     if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
-    body = json.loads(h.last_body or b"{}")
+    try: body = json.loads(h.last_body or b"{}")
+    except ValueError: body = None
+    if not isinstance(body, dict): return h.send_json({"error": "invalid recording"}, 400) or True
     kind = recording_kind(body)  # unknown is a 400, as the hub's clean()
-    if not isinstance(body.get("revision"), int) or body["revision"] <= 0 or not body.get("started_at") \
+    if type(body.get("revision")) is not int or body["revision"] <= 0 or not body.get("started_at") \
             or body.get("device") not in ("phone", "watch") or kind is None:
         return h.send_json({"error": "参数不对"}, 400) or True
     have = RECORDINGS.get(rid)
+    if have and (have.get("kind") == "day") != (kind == "day"):
+        return h.send_json({"error": "recording kind cannot change to or from day", "code": "kind_changed"}, 409) or True
+    if kind == "day": return day_put(h, rid, body)
     if rid in RECORDINGS_TRIMMED:  # the hub takes no transcript back (kb/recordings.go putRecording)
         out = {"id": rid, "revision": body["revision"], "status": "expired"}
         if MEETING_ATTENDANCE: out["attendance"] = "off"
@@ -16728,7 +17067,7 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *a):
         LOG.write("%s %s\n" % (self.command, self.path)); LOG.flush()
 
-    def send_json(self, obj, status=200, headers=None):
+    def send_json(self, obj, status=200, headers=None, add_error_code=True):
         global LOST_RECEIPT
         if self.command == "GET" and 200 <= status < 300:
             obj = stamp_managers(urlparse(self.path).path, obj)
@@ -16738,7 +17077,7 @@ class H(BaseHTTPRequestHandler):
                     LOST_RECEIPT = False
                     status, obj = 502, {"error": "操作回执丢失，请核对执行结果", "code": "lost_receipt",
                                         "delivered": "unknown", "retryable": False}
-        if status >= 400 and isinstance(obj, dict):
+        if status >= 400 and isinstance(obj, dict) and add_error_code:
             obj = dict(obj)
             obj.setdefault("code", {400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found",
                                     405: "method_not_allowed", 409: "conflict", 502: "upstream_error",
