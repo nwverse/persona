@@ -237,6 +237,23 @@ func TestSessionWireMatchesReflect(t *testing.T) {
 	}
 }
 
+func TestSessionInventoryWireRoundTrip(t *testing.T) {
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	s := Session{MachineID: "machine", SessionID: "session", Inventory: &SessionInventory{
+		ProjectKind: "remote", ProjectRepo: strings.Repeat("a", 64), CreatedAt: &created,
+	}}
+	checkWire(t, "session inventory", s)
+	raw, ok := appendSession([]byte(`{"sessions":[`), &s)
+	if !ok {
+		t.Fatal("inventory must use the fast encoder")
+	}
+	var decoder SessionListDecoder
+	event, fast, err := decodeEvent(&decoder, append(raw, ']', '}'))
+	if err != nil || !fast || len(event.Sessions) != 1 || !reflect.DeepEqual(event.Sessions[0].Inventory, s.Inventory) {
+		t.Fatalf("inventory round trip: %+v, fast=%v, err=%v", event.Sessions, fast, err)
+	}
+}
+
 // appendWireString quotes every rune, and every byte that is not UTF-8, as encoding/json does.
 func TestWireStringMatchesEncodingJSON(t *testing.T) {
 	check := func(s string) {

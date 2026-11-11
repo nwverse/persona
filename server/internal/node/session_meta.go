@@ -35,10 +35,11 @@ type quickMeta struct {
 	cwd string
 	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
 	// a first prompt bigger than the head read).
-	start    string
-	model    string
-	surface  string // the client it runs in (transcript.Meta.Surface)
-	lastText string
+	start     string
+	inventory *proto.SessionInventory // start from the opening record, if the head establishes it
+	model     string
+	surface   string // the client it runs in (transcript.Meta.Surface)
+	lastText  string
 	// answer is the latest turn's answer from its first words on (transcript.Meta.TurnAnswer); "" when the tail read
 	// held none of its words.
 	answer string
@@ -200,6 +201,9 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	nr, _ := f.Read(head)
 	for {
 		for _, line := range bytes.Split(head[:nr], []byte("\n")) {
+			if m.inventory == nil {
+				m.inventory = recordedSessionStart(line)
+			}
 			if bytes.Contains(line, []byte(`"cwd"`)) || bytes.Contains(line, []byte(`"type":"user"`)) ||
 				bytes.Contains(line, []byte(`"type":"UserMessage"`)) { // Codex rollouts: session_meta, then the first prompt
 				transcript.ParseLine(0, line, &tm)
@@ -378,6 +382,24 @@ func (n *Node) codexTurnOver(id string, now time.Time) bool {
 		return false
 	}
 	return n.meta(p, st).turnClosed && now.Sub(st.ModTime()) > codexStaleWorking
+}
+
+// recordedSessionStart recognizes the opening session record rather than
+// inferring creation from file metadata, the most recent event, or a resume.
+func recordedSessionStart(line []byte) *proto.SessionInventory {
+	codex := bytes.Contains(line, []byte(`"type":"session_meta"`))
+	claude := bytes.Contains(line, []byte(`"parentUuid":null`)) &&
+		bytes.Contains(line, []byte(`"sessionId":`)) &&
+		(bytes.Contains(line, []byte(`"type":"user"`)) || bytes.Contains(line, []byte(`"type":"assistant"`))) &&
+		!bytes.Contains(line, []byte(`"isSidechain":true`)) && !notAPrompt(line)
+	if !codex && !claude {
+		return nil
+	}
+	t := lineTime(line).UTC()
+	if t.IsZero() {
+		return nil
+	}
+	return &proto.SessionInventory{CreatedAt: &t}
 }
 
 // lineTime reads a transcript line's own "timestamp" without decoding it (Claude Code writes it after the message, so

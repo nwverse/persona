@@ -528,9 +528,21 @@ Every gesture-only action needs a plain alternative for VoiceOver and Switch Con
 
 ### 4.3 Feedback and haptics
 
-`Haptics` (`apple/Persona/App/AppModel.swift:3228-3241`): `tap` (light impact), `success`, `error`, `attention` (warning). About 393 call sites; no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift:174`).
+`Haptics` (`apple/Persona/App/AppModel.swift`): `tap` (light impact), `success`, `error`, `attention` (warning). 443 call sites on 11-11 (tap 243, success 129, error 57, attention 14); no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift`). Android has the same four kinds (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Haptics.kt`: tap is a context click, success confirm, attention a gesture threshold, error reject; the system's touch-feedback setting decides whether they play).
 
-Suggested mapping, which the code mostly follows: tap for selection and toggles, success for copy, save and completed send, error for a failure paired with an error toast, attention for a refused or newly arrived request. Gaps: copy sometimes gives tap or nothing; plain approval buttons have no haptic; archive has no haptic; there is no documented policy (DS-23). Watch maps success, failure, notification, stop and retry consistently. Android has the same four kinds with far fewer call sites. Web has none.
+Which action gives which haptic, on both (#4209; the rule iOS follows):
+
+| Action | Haptic |
+| --- | --- |
+| Copy | success, with a "Copied" notice (Android: every copy goes through `rememberCopy()`) |
+| Send, Stop, switching pages, opening the avatar menu | tap |
+| Pressing Approve, Deny or a choice | tap on the press; success when the answer went through |
+| Archive, mark a to-do done | tap, with its notice and Undo |
+| Save, an answer or approval that went through | success |
+| A request newly arrives, or what the user acted on changed and must wait | attention |
+| An operation failed | error, paired with its error notice |
+
+Watch maps success, failure, notification, stop and retry the same way. Web has none. Android follows the copy row everywhere since 11-11; the other rows are adopted screen by screen (DS-23).
 
 ### 4.4 Confirmation and undo
 
@@ -759,7 +771,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Motion | token set | 150/220/300 ms | Glass: the iOS state and layout springs | web differs |
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
 | Toast | capsule, top | dark capsule, bottom | Snackbar, 3 mechanisms | different |
-| Haptics | 4 kinds, 393 sites | none | 4 kinds, 35 sites | thin on Android |
+| Haptics | 4 kinds, 443 sites | none | 4 kinds, every copy plus some actions | thin on Android beyond copy |
 | Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
@@ -790,7 +802,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | DS-20 | Bubble variants: padding 16 x 12 in chat vs 12 x 8 in Messages; gutters 48, 40, 32; strokes 0.08, 0.1, 0.22 | `apple/Persona/DesignSystem/QuoteViews.swift:305`; `apple/Persona/Views/Messages/MessagesViews.swift:420`; `apple/Persona/Views/Chat/MessageViews.swift:178,324` | Visual drift | One bubble component with tokens |
 | DS-21 | Chip, filter-chip and button lookalikes hand-built in feature code (about 109 capsule backgrounds, 50+ view types); a second pale user-blue (`ChatBox.user` vs blue bubble) on both Apple and Android | `apple/Persona/Views/Inbox/InboxView.swift:770,1004`; `apple/Persona/Views/Inbox/InboxActions.swift:64`; `apple/Shared/Design/ChatLayoutTokens.swift:18` | Tint, padding and states diverge | Add an accent `Chip` look and a fill-width themed button; pick one user blue |
 | DS-22 | Sheet presentation: detents `[.medium, .large]`, `[.fraction(0.6), .large]`, none; drag indicator on 18 of 43 detent sites; toolbar placement mixed | `apple/Persona/Views/Link/LinkSheet.swift:142`; `apple/Persona/Views/Chats/ChatsView.swift:348` | Unpredictable dismissal | A small `themedSheet` helper with a rule per sheet kind |
-| DS-23 | Haptics: no policy; copy gives success, tap or none; approval buttons silent; one direct UIKit use; `Haptics` lives in `AppModel.swift`, not the design system | `apple/Persona/App/AppModel.swift:3228`; `apple/Persona/Views/Chat/ChatEdgeScrub.swift:174` | Inconsistent feel; watch cannot reuse | Move to the design system, write the mapping in section 4.3 |
+| DS-23 | Haptics: the mapping is written in section 4.3 (11-11, #4209), and Android's copy actions all follow it (`rememberCopy()`). Open: Android's send, stop, approval presses, archive and arriving requests; iOS's `Haptics` still lives in `AppModel.swift`, with one direct UIKit use | `apple/Persona/App/AppModel.swift`; `apple/Persona/Views/Chat/ChatEdgeScrub.swift`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Clipboard.kt` | Android feels thinner than iOS outside copy | Adopt the 4.3 rows on Android screen by screen; move iOS `Haptics` to the design system |
 | DS-24 | Seven confirmation mechanisms; destructive role used for non-delete actions; swipe-delete without confirm or Undo | `apple/Persona/Views/Todos/TodosView.swift:125`; `apple/Persona/Views/Mail/MailViews.swift:470`; `apple/Persona/App/AppModel.swift:3063` | Data loss risk; unclear meaning of red | Adopt the ladder in section 4.4; add Undo to archive |
 | DS-25 | Feedback channels: Apple one toast model; Android Snackbar plus feature hosts plus system Toast | `apple/Persona/DesignSystem/Toasts.swift:7`; `android/app/src/main/java/persona/android/ui/Root.kt:120` | Different placement and timing | One feedback layer on Android |
 | DS-26 | Optional Messages page is a third primary destination against super rule 3 | `apple/Persona/Views/RootView.swift:182`; `apple/Persona/Views/Shell/ShellState.swift:23` | Rule ambiguity | Rule owner decides: opt-in extension page or amend the rule |

@@ -19,6 +19,7 @@ import (
 
 const (
 	featureSessionsList       = "sessions_list"
+	featureSessionsDimensions = "sessions_dimensions"
 	featureSessionsLookup     = "sessions_lookup"
 	featureSessionsPaneSource = "sessions_pane_source"
 	// featureSessionsManager: GET /api/v1/sessions takes ?manager=<id> (sessionsManager). An older hub ignores the
@@ -32,17 +33,21 @@ const (
 type runtimeList struct {
 	once     sync.Once
 	index    sessionlist.Index
-	machines map[string]bool // guarded by sessionsMu
+	machines map[string]runtimeListMachine // guarded by sessionsMu
 	// unaligned: machines whose last pass had a row not encoded under an id of its own (indexSessionsLocked); guarded
 	// by sessionsMu.
 	unaligned map[string]bool
+}
+
+type runtimeListMachine struct {
+	name, main string
 }
 
 func (h *Hub) sessionListIndex() *sessionlist.Index {
 	h.listCache.once.Do(func() {
 		h.sessionsMu.Lock()
 		defer h.sessionsMu.Unlock()
-		h.listCache.machines = map[string]bool{}
+		h.listCache.machines = map[string]runtimeListMachine{}
 		for _, m := range h.machinesNow() {
 			h.indexKeptLocked(m)
 		}
@@ -110,24 +115,66 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 	} else {
 		items = make([]sessionlist.Item, len(ids))
 	}
-	for k, i := range rows {
-		items[k] = indexedRow(mid, ids[k], &list[i], stamp, manager, full[list[i].SessionID], items[k])
-	}
 	// The machine's manager goes with its batch (?manager=<id>, sessionsManager): the one a kept list is stamped with,
 	// else the one its rows came stamped with (stamped: every row of a machine carries its manager).
 	// Premise: all rows of one machine's list share one manager (a machine has one owner), so the first row names it.
 	if !stamp && len(list) > 0 {
 		manager = list[0].Manager
 	}
+	deviceName := h.machineName(mid)
+	main := h.workListMain(mid, manager)
+	for k, i := range rows {
+		row := &list[i]
+		items[k] = indexedRow(mid, deviceName, ids[k], row, stamp, manager, full[row.SessionID], items[k])
+		items[k].WorkExcluded = row.SessionID == main || row.Assistant && row.Space == "health"
+	}
 	h.listCache.index.ReplaceOwned(mid, manager, items)
-	h.listCache.machines[mid] = true
+	h.listCache.machines[mid] = runtimeListMachine{name: deviceName, main: main}
+}
+
+// workListMain uses only the profile of the machine's current owner. A
+// manager cannot hide a session on another manager's machine.
+func (h *Hub) workListMain(mid, owner string) string {
+	if owner == "" || !h.mayClaim(owner, mid) {
+		return ""
+	}
+	a := h.assistantOf(owner)
+	a.mu.RLock()
+	p := a.profile
+	a.mu.RUnlock()
+	if p != nil && p.Main != "" && h.isMainOn(mid, p.Main) {
+		return p.Main
+	}
+	return ""
+}
+
+// refreshWorkListMain updates only the machines whose resolved main binding
+// changed. Use the same identity helper as row indexing, never a default route.
+func (h *Hub) refreshWorkListMain(owner string) {
+	h.sessionsMu.Lock()
+	if h.listCache.machines == nil {
+		h.sessionsMu.Unlock()
+		return
+	}
+	before := h.listCache.index.Revision()
+	for _, m := range h.machinesNow() {
+		mid := m.cfg.ID
+		if indexed, ok := h.listCache.machines[mid]; ok && h.mayClaim(owner, mid) && indexed.main != h.workListMain(mid, owner) {
+			h.indexKeptLocked(m)
+		}
+	}
+	changed := before != h.listCache.index.Revision()
+	h.sessionsMu.Unlock()
+	if changed {
+		h.broadcastSessionListNotice()
+	}
 }
 
 // indexedRow is row's item in the paged index (row stamped with manager when stamp), raw its encoding and indexed what
 // the index holds under id (the zero Item for none). When indexed's Full is raw with the same pane_source, its Summary
 // is what row's is too: the summary is cut from the fields raw encodes. Both are then kept, and the item is unchanged
 // for Replace, rather than marshalled again. The scalars are always read from row.
-func indexedRow(mid, id string, row *proto.Session, stamp bool, manager string, raw json.RawMessage, indexed sessionlist.Item) sessionlist.Item {
+func indexedRow(mid, deviceName, id string, row *proto.Session, stamp bool, manager string, raw json.RawMessage, indexed sessionlist.Item) sessionlist.Item {
 	project := row.RepoRoot
 	if project == "" {
 		project = row.WorkspaceCwd
@@ -142,17 +189,27 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager string, 
 	pane := sessionorigin.Of(*row)
 	item := sessionlist.Item{
 		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane,
+		Title: row.Title, Assistant: row.Assistant,
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
+	}
+	if row.Inventory != nil && row.Inventory.CreatedAt != nil {
+		item.CreatedAt = *row.Inventory.CreatedAt
 	}
 	text := [...]string{row.Title, row.Cwd, row.RepoRoot, row.SpaceName, row.SlotName, row.AgentName, row.LastText}
 	if was, ok := indexed.Full.(json.RawMessage); ok && sameIndexedFull(was, raw, pane) {
 		item.Summary, item.Full = indexed.Summary, indexed.Full
+		item.Dimensions = indexed.Dimensions
+		item.Dimensions.DeviceName = deviceName
 		if item.SearchText = indexed.SearchText; !joinedBy(item.SearchText, text[:], '\n') {
 			item.SearchText = strings.Join(text[:], "\n")
 		}
 		return item
 	}
+	dims := runtimeDimensions(mid, row)
+	item.Dimensions = sessionlist.Dimensions{DeviceName: deviceName, ProjectID: dims.ProjectID,
+		ProjectName: dims.ProjectName, HarnessID: dims.HarnessID, HarnessName: dims.HarnessName}
 	cut := runtimeSummary(*row)
+	cut.runtimeDimensionsFields = dims
 	if stamp {
 		cut.Manager = manager // what runtimeSummary copies from a stamped row; nothing else of it reads the manager
 	}
@@ -161,7 +218,8 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager string, 
 	// Reuse the exact legacy encoding, including compatibility keys.
 	item.Full = runtimeListFields(raw, struct {
 		PaneSource string `json:"pane_source"`
-	}{pane})
+		runtimeDimensionsFields
+	}{pane, dims})
 	item.SearchText = strings.Join(text[:], "\n")
 	return item
 }
@@ -169,16 +227,14 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager string, 
 // paneSourceKey is what runtimeListFields puts between a row's fields and its pane_source value.
 const paneSourceKey = `,"pane_source":"`
 
-// sameIndexedFull reports whether indexed is runtimeListFields(raw, pane_source) byte for byte, without building it.
-// A pane source JSON would escape is never taken as the same.
+// sameIndexedFull checks the legacy bytes and pane_source prefix. The
+// dimensions appended after it are derived only from the same row and machine id.
 func sameIndexedFull(indexed, raw []byte, pane string) bool {
 	head := raw[:len(raw)-1]
-	if len(indexed) != len(head)+len(paneSourceKey)+len(pane)+2 || !plainJSONString(pane) {
-		return false
-	}
-	tail := indexed[len(head):]
-	return string(tail[len(paneSourceKey):len(tail)-2]) == pane && string(tail[len(tail)-2:]) == `"}` &&
-		string(tail[:len(paneSourceKey)]) == paneSourceKey && bytes.Equal(indexed[:len(head)], head)
+	end := len(head) + len(paneSourceKey) + len(pane)
+	return len(indexed) > end+1 && plainJSONString(pane) && indexed[end] == '"' &&
+		string(indexed[len(head):len(head)+len(paneSourceKey)]) == paneSourceKey &&
+		string(indexed[len(head)+len(paneSourceKey):end]) == pane && bytes.Equal(indexed[:len(head)], head)
 }
 
 // plainJSONString: json.Marshal writes s between quotes as it is (printable ASCII that is not escaped).
@@ -239,6 +295,7 @@ func rowText(s string, max int) string {
 // configuration. The normal info/items routes remain the source for chat detail.
 type runtimeRowSummary struct {
 	proto.Session
+	runtimeDimensionsFields
 	PaneSource       string `json:"pane_source"`
 	Waiting          bool   `json:"waiting"`
 	BackgroundCount  int    `json:"background_count,omitempty"`
@@ -274,7 +331,8 @@ func (s runtimeRowSummary) MarshalJSON() ([]byte, error) {
 		RunningWorkflows     int             `json:"running_workflows,omitempty"`
 		BackgroundTasksCount int             `json:"background_tasks_count"`
 		WorkflowProgress     *proto.Workflow `json:"workflow_progress,omitempty"`
-	}{s.PaneSource, s.Waiting, s.BackgroundCount, s.RunningSubagents, s.RunningWorkflows, s.BackgroundTasksCount, s.WorkflowProgress}), nil
+		runtimeDimensionsFields
+	}{s.PaneSource, s.Waiting, s.BackgroundCount, s.RunningSubagents, s.RunningWorkflows, s.BackgroundTasksCount, s.WorkflowProgress, s.runtimeDimensionsFields}), nil
 }
 
 // MarshalJSONTo shadows the promoted (*proto.Session).MarshalJSONTo, which encoding/json prefers for an addressable
@@ -418,14 +476,19 @@ func (h *Hub) sessionsManager(w http.ResponseWriter, r *http.Request) (string, b
 }
 
 func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager string) {
-	opts, err := sessionlist.Parse(r.URL.Query())
+	query := r.URL.Query()
+	opts, err := sessionlist.ParseRuntime(query)
 	if err != nil {
 		sessionListErr(w, err)
 		return
 	}
 	opts.Manager = manager
-	if values, lookup := r.URL.Query()["session_id"]; lookup {
-		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
+	if values, lookup := query["session_id"]; lookup {
+		machines := query["machine_id"]
+		if len(machines) == 1 {
+			opts.Machine = machines[0]
+		}
+		if len(values) != 1 || values[0] == "" || len(machines) != 1 || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))
 			return
 		}
@@ -442,6 +505,19 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 	h.pruneSessionListMachines()
 	// An extension's token: its manager's machines only (ownership.go), as if it had asked for those.
 	own, limited := h.extensionMachines(r)
+	if em := extensionManager(r); em != "" && opts.UsesDimensions() {
+		for _, mid := range query["machine_id"] {
+			if !slices.Contains(own, mid) {
+				writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
+				return
+			}
+		}
+		// Bind the frozen view to current authorization, including when all
+		// machines were owned at snapshot creation. Filter before pagination.
+		opts.Manager = em
+		opts.RestrictMachines(own)
+		limited = false
+	}
 	if limited {
 		if opts.Machine != "" && !slices.Contains(own, opts.Machine) {
 			writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
@@ -458,7 +534,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		sessionListErr(w, errors.New("pane_source requires machine_id for a manager-scoped aggregate"))
 		return
 	}
-	if counts := r.URL.Query().Get("counts"); counts == "1" || counts == "true" {
+	if counts := query.Get("counts"); counts == "1" || counts == "true" {
 		var counts sessionlist.Counts
 		var err error
 		if limited {
@@ -548,8 +624,8 @@ func ownPage(index *sessionlist.Index, opts sessionlist.Options, own []string, p
 	return page, nil
 }
 
-// pruneSessionListMachines scans only machine ids, never session rows. Called
-// before machine broadcasts as well as requests, so removals wake list clients.
+// pruneSessionListMachines reconciles machine removal and renames. Unchanged
+// machines do not touch rows; machine broadcasts wake indexed list clients.
 func (h *Hub) pruneSessionListMachines() bool {
 	h.sessionsMu.Lock()
 	defer h.sessionsMu.Unlock()
@@ -557,10 +633,14 @@ func (h *Hub) pruneSessionListMachines() bool {
 		return false
 	}
 	present := map[string]bool{}
+	changed := false
 	for _, m := range h.machinesNow() {
 		present[m.cfg.ID] = true
+		if cached, indexed := h.listCache.machines[m.cfg.ID]; indexed && cached.name != m.name() {
+			h.indexKeptLocked(m)
+			changed = true
+		}
 	}
-	changed := false
 	for mid := range h.listCache.machines {
 		if !present[mid] {
 			h.listCache.index.RemoveSource(mid)
@@ -578,7 +658,7 @@ func (h *Hub) pruneSessionListMachines() bool {
 func (h *Hub) reindexSessions(m *Machine) {
 	h.sessionsMu.Lock()
 	defer h.sessionsMu.Unlock()
-	if !h.listCache.machines[m.cfg.ID] {
+	if _, indexed := h.listCache.machines[m.cfg.ID]; !indexed {
 		return // no paginated reader yet, or the machine was pruned
 	}
 	before := h.listCache.index.Revision()

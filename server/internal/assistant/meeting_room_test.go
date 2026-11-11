@@ -459,6 +459,24 @@ func TestMeetingRoomAsk(t *testing.T) {
 	wantCode(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusConflict), codeOpIDReused)
 }
 
+// A main chat on the Agent SDK does not keep its room from starting: the room takes the main chat's launcher and model
+// on the CLI, the only runtime a guest conversation runs on.
+func TestMeetingRoomRunsOnTheCLI(t *testing.T) {
+	r := newRoomFixture(t)
+	if err := r.s.saveModelRecord(context.Background(), "assistant", 0, ModelBinding{Runtime: proto.AssistantRuntimeAgentSDK}); err != nil {
+		t.Fatal(err)
+	}
+	main := map[string]any{}
+	if err := r.s.applyModel(context.Background(), "assistant", main); err != nil || main["runtime"] != proto.AssistantRuntimeAgentSDK {
+		t.Fatalf("the main chat's runtime %v %v", main, err)
+	}
+	r.roomUp(meetingRec, "participant")
+	sends := r.sends()
+	if len(sends) != 1 || sends[0]["runtime"] != nil || sends[0]["launcher"] != main["launcher"] || sends[0]["model_fingerprint"] == main["model_fingerprint"] {
+		t.Fatalf("room start %v, main chat %v", sends, main)
+	}
+}
+
 // A room whose turn ended in Claude Code's own words for a failed request (signed out) gives no answer: the ask fails
 // with model_error, never "Not logged in · Please run /login" as the room's reply, and the room turns unavailable so
 // the next ask is answered from meeting material.
