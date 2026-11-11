@@ -65,6 +65,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 			}
 		}
 	}
+	s.setPlanThen(ctx, p.MachineID, params)
 	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
 		if name := s.tabName(ctx, p.NameFrom); name != "" {
 			params["tab_name"] = name

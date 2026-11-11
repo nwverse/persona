@@ -21,11 +21,11 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         FleetWorking("%1\$d working"),
         FleetDone("%1\$d done"),
         FleetAllDone("All caught up"),
-        FleetPermissionWaiting("Waiting for your approval"),
+        FleetPermissionWaiting("Needs your permission"),
         FleetPermissionDetail("Approve: %1\$s"),
-        FleetPlanWaiting("Plan waiting for approval"),
+        FleetPlanWaiting("Plan awaiting approval"),
         FleetPlanDetail("Plan: %1\$s"),
-        FleetQuestionWaiting("Asking you"),
+        FleetQuestionWaiting("Has a question"),
         FleetItemWorking("Working"),
         FleetItemDone("Done"),
         FleetScreenWaiting("Terminal needs you"),
@@ -161,6 +161,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         EngineHerdr("herdr in a terminal"),
         EngineHerdrApp("Terminals opened in the desktop app"),
         EngineOrca("Terminals in Orca"),
+        EngineTern("Terminals in Tern"),
         EnginePaseo("Agents in Paseo"),
         EngineCindy("Agents in Cindy"),
         EngineOffline("Offline, no detection info yet"),
@@ -257,19 +258,19 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         MailOutlook("Outlook · Microsoft account"),
         MailGmail("Gmail · Google account"),
         MailLark("Lark Mail"),
-        HeadlineQuestion("%1\$s has a question for you"),
+        HeadlineQuestion("%1\$s has a question"),
         HeadlineElicitation("An MCP form is waiting for you"),
         HeadlinePermission("Wants to use %1\$s"),
         HeadlinePermissionDetail("Wants to use %1\$s: %2\$s"),
         HeadlineAgentPermission("%1\$s wants to use %2\$s"),
         HeadlineAgentPermissionDetail("%1\$s wants to use %2\$s: %3\$s"),
         HeadlineSecretRun("Run on %1\$s with your password"),
-        HeadlineScreen("A dialog in the terminal needs you"),
+        HeadlineScreen("Terminal needs you"),
         HeadlineNeedsYou("Needs you"),
-        AskQuestion("Asking you"),
-        AskPermission("Needs permission"),
-        AskPlan("Plan to approve"),
-        AskScreen("Terminal dialog"),
+        AskQuestion("Has a question"),
+        AskPermission("Needs your permission"),
+        AskPlan("Plan awaiting approval"),
+        AskScreen("Terminal needs you"),
         AskElicitation("MCP request"),
         AskLine("%1\$s: %2\$s"),
         TodoDone("Completed"),
@@ -388,13 +389,16 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         WorkflowFailed("Failed"),
         WorkflowKilled("Stopped"),
         WorkflowStalled("Gone quiet"),
-        WorkflowAgentsDone("%1\$d/%2\$d agents done"),
+        WorkflowAgentsDone("%2\$d/%1\$d agents done"),
     }
 
     /** The English words with [args] filled in, for logs and messages; the screen uses the app's resources. */
     fun english(): String = when (key) {
         Key.Verbatim -> args.first().toString()
         Key.Joined -> args.drop(1).map { (it as CoreText).english() }.filter(String::isNotEmpty).joinToString(args.first().let { if (it is CoreText) it.english() else it.toString() })
+        // The count is the raw number: in thousands, stepping up to millions, as the English strings read it (#4182).
+        Key.CompactCount -> compactCount((args.first() as Number).toLong(), Key.CompactUnit.english.toLong(),
+            { String.format(java.util.Locale.ROOT, key.english, it) }, { "${it}M" })
         else -> if (args.isEmpty()) key.english else String.format(java.util.Locale.ROOT, key.english, *args.map { if (it is CoreText) it.english() else it }.toTypedArray())
     }
 

@@ -94,6 +94,7 @@
         <item quantity="other">ほかに%1$d件が対応待ち · 次：%2$s · %3$s</item>
     </plurals>
     <string name="chat_next_waiting_open">次を開く</string>
+    <string name="chat_next_waiting_agent">エージェント</string>
     <string name="chat_answered_by_assistant">アシスタントが代わりに回答しました</string>
     <string name="chat_answered_unanswered">（未回答）</string>
     <string name="chat_answered_approved">承認</string>
@@ -239,7 +240,9 @@
     <plurals name="chat_content_show_all_lines">
         <item quantity="other">すべて表示（%1$d行）</item>
     </plurals>
-    <string name="chat_todos_progress">ToDo %1$d/%2$d件完了</string>
+    <plurals name="chat_todos_progress">
+        <item quantity="other">ToDo %1$d/%2$d件完了</item>
+    </plurals>
     <string name="chat_todos_progress_failed">%1$s、更新に失敗</string>
     <string name="chat_todos_done">完了</string>
     <string name="chat_todos_in_progress">進行中</string>
@@ -311,6 +314,22 @@
     <string name="chat_tasks_finished_line">「%1$s」は完了しました</string>
     <string name="chat_tasks_resumed_line">「%1$s」は中断後に再開しました</string>
     <string name="chat_tasks_interrupted_title">%1$sが中断しました</string>
+    <string name="chat_tasks_interrupt_pending">未対応</string>
+    <string name="chat_tasks_interrupt_cancelled">キャンセル済み</string>
+    <string name="chat_tasks_interrupt_rerouted">再依頼済み</string>
+    <string name="chat_tasks_interrupt_resumed">再開済み</string>
+    <string name="chat_tasks_interrupt_accepted">承認済み</string>
+    <string name="chat_tasks_interrupt_done">完了</string>
+    <string name="chat_tasks_interrupt_handled">「%1$s」は中断されました · %2$s</string>
+    <string name="chat_tasks_interrupt_cause_model_error">モデルサービスのエラー</string>
+    <string name="chat_tasks_interrupt_cause_rate_limited">モデルサービスのレート制限</string>
+    <string name="chat_tasks_interrupt_cause_auth">ログインまたはキーの拒否</string>
+    <string name="chat_tasks_interrupt_cause_model_route">不明なモデル</string>
+    <string name="chat_tasks_interrupt_cause_no_output">出力のないターン</string>
+    <string name="chat_tasks_interrupt_batch">%1$s：%2$d 件のタスクが中断</string>
+    <string name="chat_tasks_interrupt_batch_on">%2$s で%1$s：%3$d 件のタスクが中断</string>
+    <string name="chat_tasks_interrupt_counts">→ 対応済み %1$d / 未対応 %2$d</string>
+    <string name="chat_tasks_interrupt_all_handled">→ すべて対応済み</string>
     <string name="chat_tasks_quick_reminder">リマインダーを追加しました</string>
     <string name="chat_tasks_quick_calendar">カレンダーに追加しました</string>
     <string name="chat_tasks_quick_on_iphone">iPhone上</string>
@@ -415,6 +434,9 @@
     <string name="chat_work_thought">思考</string>
     <string name="chat_content_copy">コピー</string>
     <string name="chat_content_show_all">すべて表示</string>
+    <string name="chat_content_copied">コピーしました</string>
+    <string name="chat_content_quote_more">すべて表示</string>
+    <string name="chat_content_quote_less">折りたたむ</string>
     <string name="chat_content_full_text">全文</string>
     <string name="chat_content_image">チャットの画像</string>
     <plurals name="chat_content_collapse_steps">

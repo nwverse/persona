@@ -2,14 +2,15 @@
 // list grouping and ranking, search results merged by entry with the words marked, which tags a row has room for,
 // the timeline, the profile without what the header shows, and the message "Ask Persona" sends. The iOS app is the
 // reference (apple/Persona/Views/Knowledge/KnowledgeView.swift, apple/Shared/Knowledge.swift).
+import type { TopicPoint } from "./kb-points";
 import { formatDate, t } from "../i18n";
 import { contextBody } from "./context-body";
 import type { Session } from "./types";
 
-export const KB_KINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
+export const KB_KINDS = ["projects", "topics", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
 export type KBKind = (typeof KB_KINDS)[number];
 
-export const KIND_TITLE: Record<KBKind, string> = { projects: t("lib-kb.kind_projects"), chats: t("lib-kb.kind_chats"), people: t("lib-kb.kind_people"), docs: t("lib-kb.kind_docs"), meetings: t("lib-kb.kind_meetings"), events: t("lib-kb.kind_events"), recordings: t("lib-kb.kind_recordings") };
+export const KIND_TITLE: Record<KBKind, string> = { projects: t("lib-kb.kind_projects"), topics: t("lib-kb.kind_topics"), chats: t("lib-kb.kind_chats"), people: t("lib-kb.kind_people"), docs: t("lib-kb.kind_docs"), meetings: t("lib-kb.kind_meetings"), events: t("lib-kb.kind_events"), recordings: t("lib-kb.kind_recordings") };
 
 export function isKind(k: unknown): k is KBKind {
   return typeof k === "string" && (KB_KINDS as readonly string[]).includes(k);
@@ -35,7 +36,7 @@ export interface KBEntry {
   relevance: number;
   tags?: string[] | null;
   updated?: string;
-  /** projects: "short · active" (kind · status); chats: dm / group… */
+  /** projects: "short · active" (kind · status); chats: dm / group…; topics: how many knowledge points, in decimal */
   extra?: string;
 }
 
@@ -74,6 +75,16 @@ export interface KBDetail {
   segments?: KBSegment[] | null;
   /** Recordings may retain older minutes while a newer revision is pending or failed. */
   minutes?: RecordingMinutes | null;
+  /** topics: the knowledge points (docs/assistant/knowledge.md "Knowledge points"). */
+  points?: TopicPoint[] | null;
+}
+
+/** A topic's point count from its list entry (extra) or its metadata (points). */
+export function topicPointCount(e: Pick<KBEntry, "kind" | "extra">, meta?: Record<string, unknown> | null): number | null {
+  if (e.kind !== "topics") return null;
+  if (typeof meta?.points === "number") return meta.points;
+  const n = Number.parseInt(e.extra ?? "", 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 export interface MinutesPoint {
@@ -112,6 +123,34 @@ export interface KBSegment {
   start: number;
   end: number;
   text: string;
+}
+
+/** One question asked in an attended meeting (docs/assistant/meeting-minutes.md "Attending a meeting", `Ask`). `state`,
+ *  `question_source` and `error` are open sets: an unknown value is shown generically. */
+export interface RecordingAsk {
+  id: string;
+  question: string;
+  question_source: string;
+  at?: number;
+  state: string;
+  answer: string;
+  lang?: string;
+  speak?: boolean;
+  sources?: { kind: string; id: string; name: string; when?: string }[] | null;
+  error?: string;
+  asked_at: string;
+  answered_at?: string;
+}
+
+/** `GET /api/v1/recordings/{id}/live`: how far the attending session has been fed, and the meeting's questions. */
+export interface RecordingLive {
+  next: number;
+  fed: number;
+  attendance: string;
+  attending_session?: { machine_id: string; session_id: string; main?: boolean };
+  /** Open set: attendee_unavailable, attendee_not_allowed, live_full today. */
+  problem?: string;
+  asks?: RecordingAsk[] | null;
 }
 
 /** A line a search found: `path` relative to the data dir, `n` its line number in that file. */
@@ -260,6 +299,11 @@ export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): Entr
         footer: t("lib-kb.ignored_footer"),
       },
     ];
+  } else if (kind === "topics") {
+    // Topics are curated as a whole: one list, the ones with the most knowledge first after any importance set by hand.
+    const n = (e: KBEntry) => topicPointCount(e) ?? 0;
+    const sorted = [...items].sort((a, b) => importanceRank(a.importance) - importanceRank(b.importance) || n(b) - n(a) || a.name.localeCompare(b.name));
+    out = [{ key: "all", title: tag ? `#${tag}` : t("lib-kb.section_all"), items: sorted }];
   } else if (tag) {
     out = [{ key: "tag", title: `#${tag}`, items: list }];
   } else {
@@ -498,6 +542,7 @@ export function entryFromDetail(base: KBEntry | undefined, d: KBDetail): KBEntry
   const line = str(m.one_line) || str(m.note);
   if (line) e.one_line = line;
   if (e.kind === "projects" && str(m.kind)) e.extra = `${str(m.kind)} · ${str(m.status) || "active"}`;
+  if (e.kind === "topics" && typeof m.points === "number") e.extra = String(m.points);
   return e;
 }
 
@@ -555,6 +600,13 @@ export interface RecordingView {
   partial: boolean;
   /** A line per segment and bookmark, at its clock time, in order. */
   lines: { seconds: number; clock: string; text: string; bookmark?: boolean }[];
+  /** Persona attends the meeting in this role (#2981); absent when off. */
+  attendance?: "listener" | "participant";
+  /** The session that attends; absent: the main chat. */
+  attendingSession?: { machineId: string; sessionId: string };
+  /** When its transcript expired with `recording_days` and only the minutes were kept (`meta.trimmed_at`, #3780); absent
+   *  while it is whole. */
+  trimmedAt?: string;
 }
 
 /** Local wall-clock time shared by minutes and transcript; offsets when the start is unknown. */
@@ -596,6 +648,10 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   const lines = at.map((x) => x.line);
   const secs = Number(meta?.duration);
   const device = str(meta?.device) === "watch" ? t("lib-kb.device_watch") : t("lib-kb.device_phone");
+  const role = str(meta?.attendance);
+  const attending = meta?.attending_session as { machine_id?: unknown; session_id?: unknown } | null | undefined;
+  const machineId = str(attending?.machine_id), sessionId = str(attending?.session_id);
+  const trimmed = str(meta?.trimmed_at);
   return {
     startedAt: Number.isFinite(t0) ? started : undefined,
     duration: Number.isFinite(secs) && secs > 0 ? durationLabel(secs) : undefined,
@@ -603,7 +659,19 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
     language: str(meta?.language) || undefined,
     partial: meta?.complete !== true,
     lines,
+    ...(role === "listener" || role === "participant" ? { attendance: role } : {}),
+    // Both ids or none: anything else names no session, and the main chat attends.
+    ...(machineId && sessionId ? { attendingSession: { machineId, sessionId } } : {}),
+    ...(trimmed && Number.isFinite(Date.parse(trimmed)) ? { trimmedAt: trimmed } : {}),
   };
+}
+
+/** The day a trimmed recording's minutes go (#3780): `days` (the assistant's `minutes_days` in effect) after it
+ *  started, as a date; undefined when either is unknown or days is 0 (forever). */
+export function minutesKeptUntil(startedAt: string | undefined, days: unknown): string | undefined {
+  const start = Date.parse(startedAt ?? "");
+  if (!Number.isFinite(start) || typeof days !== "number" || !Number.isInteger(days) || days <= 0) return undefined;
+  return yearMonthDay(new Date(start + days * 86_400_000));
 }
 
 /** 3733 → "1 h 2 min"; 200 → "3 min 20 s"; 42 → "42 s" (in Chinese). */

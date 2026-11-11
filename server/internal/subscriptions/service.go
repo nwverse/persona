@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -64,6 +65,24 @@ type Options struct {
 	Clock   Clock
 	// Features are the later stages that are in.
 	Features Features
+	// Model drafts recipes (Generate); nil answers no_model.
+	Model Model
+	// Language is the name of the language the model writes its note in: the request's, else the user's.
+	Language func(ctx context.Context) string
+	// Models says what a model purpose runs on now (ModelOf); nil: nothing can be called.
+	Models func(ctx context.Context, purpose string) ModelInfo
+
+	// The destinations (#2039, deliver.go).
+	// Lang is the user's language, for the texts the manager writes into the Inbox (a catch-up digest, a failure notice).
+	Lang func() i18n.Lang
+	// ExtensionRules are an extension's own triage rules (its triage_rules setting), "" when it has none.
+	ExtensionRules func(extension string) string
+	// Delivered tells the destinations a subscription has something new for them: a run kept items, or the Inbox's
+	// catch-up is ready.
+	Delivered func(s Subscription)
+	// Forget removes what the destinations took from a subscription (its Inbox items, its knowledge-base chats), for a
+	// delete with its data. nil: nothing to remove.
+	Forget func(ctx context.Context, s Subscription) error
 }
 
 // Clock is time for the runner: tests drive it.
@@ -123,6 +142,18 @@ func New(o Options) *Service {
 	}
 	if o.Clock == nil {
 		o.Clock = realClock{}
+	}
+	if o.Language == nil {
+		o.Language = func(context.Context) string { return "English" }
+	}
+	if o.Lang == nil {
+		o.Lang = func() i18n.Lang { return i18n.Default }
+	}
+	if o.ExtensionRules == nil {
+		o.ExtensionRules = func(string) string { return "" }
+	}
+	if o.Delivered == nil {
+		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
 		busy: map[string]bool{}, asked: map[string]bool{}, wake: make(chan struct{}, 1)}
@@ -596,15 +627,7 @@ func preview(m mapped, fresh bool) Preview {
 
 // refused is the API error for a recipe that did not pass check.
 func refused(dr DryRun) *Error {
-	p := dr.Error
-	for _, ch := range dr.Checks {
-		if p == nil && ch.Error != nil {
-			p = ch.Error
-		}
-	}
-	if p == nil {
-		p = &Problem{CodeDryRunFailed, "The dry run did not pass."}
-	}
+	p := problemOf(dr)
 	e := errorf(statusOf(p.Code), p.Code, p.Message)
 	e.DryRun = &dr
 	return e
@@ -614,6 +637,9 @@ func refused(dr DryRun) *Error {
 func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subscription, error) {
 	if in.Connector == "" || in.Source == "" {
 		return Subscription{}, errorf(http.StatusBadRequest, CodeBadRequest, "connector and source are required")
+	}
+	if !slices.Contains([]string{"", OriginUser, OriginModel}, in.RecipeOrigin) || in.RecipeOrigin != "" && in.Recipe == nil {
+		return Subscription{}, errorf(http.StatusBadRequest, CodeBadRequest, "recipe_origin is user or model, with a recipe")
 	}
 	c, ok := s.o.Connectors.Find(ctx, in.Connector)
 	if !ok {
@@ -627,6 +653,9 @@ func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subsc
 	origin := OriginExtension
 	if in.Recipe != nil {
 		origin = OriginUser
+		if in.RecipeOrigin == OriginModel {
+			origin = OriginModel
+		}
 	}
 	srcMin := intOr(t.source.MinIntervalSeconds)
 	sub := Subscription{ID: newID(), Connector: c.ID, Extension: c.Extension, Source: t.source.ID, SourceName: t.source.Name,
@@ -648,6 +677,37 @@ func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subsc
 
 var dailyRE = lazyre.New(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
+// scheduleFor is the interval and daily time a recipe in mode would run at on sub, for check: its own while the mode
+// stays, else the mode's default (-1) and, for a snapshot, the default daily time.
+func scheduleFor(sub Subscription, mode string) (int, string) {
+	if mode == sub.Recipe.Mode {
+		return sub.IntervalSeconds, sub.DailyAt
+	}
+	if mode == wire.ConnectorSubscriptionModeSnapshot {
+		return -1, defaultDailyAt
+	}
+	return -1, ""
+}
+
+// withRecipe is sub with a recipe that passed check (t, dr) from origin: its run state starts over, and a new mode
+// takes that mode's default schedule. The switches, label and rules stay.
+func withRecipe(sub Subscription, t target, dr DryRun, origin string, now time.Time) Subscription {
+	next := sub
+	next.Recipe, next.Tool, next.RecipeOrigin, next.RecipeAt = t.recipe, t.recipe.Tool, origin, now
+	next.ToolFingerprint, next.WeakDedup, next.Shape = fingerprint(t.tool), dr.WeakDedup, dr.Shape
+	next.SourceMin, next.MaxCallsPerHour = intOr(t.source.MinIntervalSeconds), intOr(t.source.MaxCallsPerHour)
+	next.RunState, next.Error, next.FailCount, next.FailingSince, next.ShapeMisses = StateOK, nil, 0, nil, 0
+	if t.recipe.Mode != sub.Recipe.Mode {
+		next.SnapshotHash = ""
+		next.IntervalSeconds = defaultIntervalOf(t.recipe.Mode, next.SourceMin)
+		next.DailyAt = ""
+		if t.recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
+			next.DailyAt = defaultDailyAt
+		}
+	}
+	return next
+}
+
 // Update changes a subscription made at p.Revision.
 func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Subscription, error) {
 	cur, err := s.o.Store.GetSubscription(ctx, id)
@@ -657,14 +717,8 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	if cur == nil {
 		return Subscription{}, notFound("subscription")
 	}
-	conflict := func(c *Subscription) *Error {
-		e := errorf(http.StatusConflict, CodeConflict, "the subscription was changed meanwhile")
-		v := shown(*c)
-		e.Current = &v
-		return e
-	}
 	if p.Revision != cur.Revision {
-		return Subscription{}, conflict(cur)
+		return Subscription{}, conflictWith(cur)
 	}
 	next, prev := *cur, cur.Revision
 	now := s.now()
@@ -674,13 +728,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		if !ok {
 			return Subscription{}, errorf(http.StatusServiceUnavailable, CodeNotConnected, "the connector is not registered")
 		}
-		interval, daily := cur.IntervalSeconds, cur.DailyAt
-		if p.Recipe.Mode != cur.Recipe.Mode {
-			interval, daily = -1, ""
-			if p.Recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
-				daily = defaultDailyAt
-			}
-		}
+		interval, daily := scheduleFor(*cur, p.Recipe.Mode)
 		if p.IntervalSeconds != nil {
 			interval = *p.IntervalSeconds
 		}
@@ -691,18 +739,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		if !dr.OK {
 			return Subscription{}, refused(dr)
 		}
-		next.Recipe, next.Tool, next.RecipeOrigin, next.RecipeAt = t.recipe, t.recipe.Tool, OriginUser, now
-		next.ToolFingerprint, next.WeakDedup, next.Shape = fingerprint(t.tool), dr.WeakDedup, dr.Shape
-		next.SourceMin, next.MaxCallsPerHour = intOr(t.source.MinIntervalSeconds), intOr(t.source.MaxCallsPerHour)
-		next.RunState, next.Error, next.FailCount, next.FailingSince, next.ShapeMisses = StateOK, nil, 0, nil, 0
-		if t.recipe.Mode != cur.Recipe.Mode {
-			next.SnapshotHash = ""
-			next.IntervalSeconds = defaultIntervalOf(t.recipe.Mode, next.SourceMin)
-			next.DailyAt = ""
-			if t.recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
-				next.DailyAt = defaultDailyAt
-			}
-		}
+		next = withRecipe(next, t, dr, OriginUser, now)
 		changed = append(changed, "recipe")
 	}
 	if p.Label != nil {
@@ -736,19 +773,32 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		return Subscription{}, &Error{Status: http.StatusUnprocessableEntity, Code: CodeIntervalTooShort,
 			Message: fmt.Sprintf("the interval must be at least %d seconds", fl)}
 	}
-	wasOn := on(*cur)
+	wasOn, turnedOn := on(*cur), false
 	if p.ToInbox != nil {
 		next.ToInbox = *p.ToInbox
 		changed = append(changed, "to_inbox")
+		// The Inbox catches up from a day before it was turned on, once the first run since has read the source.
+		switch {
+		case next.ToInbox && !cur.ToInbox:
+			next.InboxFrom, next.InboxCatchup, turnedOn = &now, nil, true
+		case !next.ToInbox:
+			next.InboxFrom, next.InboxCatchup = nil, nil
+		}
 	}
 	if p.ToKB != nil {
 		next.ToKB = *p.ToKB
 		changed = append(changed, "to_kb")
+		switch {
+		case next.ToKB && !cur.ToKB:
+			next.KBFrom, turnedOn = &now, true
+		case !next.ToKB:
+			next.KBFrom = nil
+		}
 	}
 	switch {
 	case !on(next):
 		next.NextRunAt = nil
-	case !wasOn || p.Recipe != nil: // a new recipe runs soon, also after needs_recipe stopped it
+	case !wasOn || p.Recipe != nil || turnedOn: // a new recipe or destination runs soon, also after needs_recipe stopped it
 		next.NextRunAt = &now
 	case schedule:
 		n := s.nextRun(next, now, false)
@@ -772,11 +822,11 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		if err != nil || c == nil {
 			return Subscription{}, notFound("subscription")
 		}
-		return Subscription{}, conflict(c)
+		return Subscription{}, conflictWith(c)
 	}
 	s.o.Audit(ctx, next.Connector, "subscription_updated", by, map[string]any{"subscription": id, "fields": changed})
 	s.o.Changed(shown(next), false)
-	if on(next) && (!wasOn || p.Recipe != nil) {
+	if on(next) && (!wasOn || p.Recipe != nil || turnedOn) {
 		s.poke()
 	}
 	return shown(next), nil
@@ -802,8 +852,9 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 	return out, nil
 }
 
-// Delete removes a subscription with its dedup keys and pending items. withData asks the destinations to remove what
-// they already took from it (#2039); it is recorded either way.
+// Delete removes a subscription with its dedup keys and pending items. withData also has the destinations remove what
+// they took from it (#2039): its destinations are switched off first, so they take nothing more meanwhile; when the
+// removal fails the subscription stays (off), and deleting again finishes it. It is recorded either way.
 func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor) error {
 	sub, err := s.o.Store.GetSubscription(ctx, id)
 	if err != nil {
@@ -811,6 +862,15 @@ func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor
 	}
 	if sub == nil {
 		return notFound("subscription")
+	}
+	if withData && s.o.Forget != nil {
+		if sub, err = s.switchOff(ctx, *sub); err != nil {
+			return err
+		}
+		if err := s.o.Forget(ctx, *sub); err != nil {
+			s.o.Logf("subscription %s: delete its data: %v", id, err)
+			return err
+		}
 	}
 	if err := s.o.Store.DeleteSubscription(ctx, id); err != nil {
 		return err
@@ -822,6 +882,36 @@ func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor
 	s.o.Logf("subscription %s: deleted (data %v)", id, withData)
 	s.o.Changed(shown(*sub), true)
 	return nil
+}
+
+// switchOff turns both destinations of sub off (a delete with its data, before the destinations remove theirs),
+// at whatever revision it is now.
+func (s *Service) switchOff(ctx context.Context, sub Subscription) (*Subscription, error) {
+	for range 3 {
+		if !on(sub) {
+			return &sub, nil
+		}
+		next, prev := sub, sub.Revision
+		next.ToInbox, next.ToKB, next.InboxFrom, next.InboxCatchup, next.KBFrom, next.NextRunAt = false, false, nil, nil, nil, nil
+		next.Revision, next.UpdatedAt = prev+1, s.now()
+		ok, err := s.o.Store.UpdateSubscription(ctx, next, prev)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			s.o.Changed(shown(next), false)
+			return &next, nil
+		}
+		cur, err := s.o.Store.GetSubscription(ctx, sub.ID)
+		if err != nil {
+			return nil, err
+		}
+		if cur == nil {
+			return nil, notFound("subscription")
+		}
+		sub = *cur
+	}
+	return nil, errorf(http.StatusConflict, CodeConflict, "the subscription was changed meanwhile")
 }
 
 func newID() string {

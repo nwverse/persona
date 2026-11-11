@@ -139,6 +139,10 @@ final class AppModel {
     /// Interactions ended locally (answered, cancelled or gone), by `uid`: neither the full list nor a card frame brings
     /// them back (#1688, #1521). By `uid`, not the hub's id: another group's card with the same id is another card.
     @ObservationIgnored var endedInteractionIDs: Set<String> = []
+    /// The terminal dialogs of several questions this device answers in, by session (#2970, ScreenStepsLogic).
+    var screenTrails: [SessionKey: ScreenTrail] = [:]
+    /// A screen card answered in such a dialog, shown greyed until the next card of the dialog comes.
+    var screenMoves: [SessionKey: ScreenMove] = [:]
     /// What the app's timed waits sleep on (`settleSend`'s wait for a transcript copy): the wall clock. The shared sync
     /// replay's own (`SyncClock`), so that a case's minutes take none.
     @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
@@ -231,7 +235,11 @@ final class AppModel {
     static var rememberedChat: String? = UserDefaults.standard.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
-        didSet { if heldInList != visibleSession { heldInList = nil } }
+        didSet {
+            if heldInList != visibleSession { heldInList = nil }
+            // the recently opened conversations: the home screen menu's (#2191)
+            if visibleSession != oldValue { RecentChatsStore.shared.shown(visibleSession) }
+        }
     }
     /// The open agent that was Unread and was marked seen by being open: the Agents list keeps it where it was until
     /// its chat is left (`AgentListOrder.held`, #2213; user, 2026-11-05: it moves to Idle only after you leave).
@@ -698,6 +706,7 @@ final class AppModel {
         drafts = drafts.filter { !demo.contains($0.key) }
         heldAttachments = heldAttachments.filter { !demo.contains($0.key) }
         starterDrafts = [:] // the demo's group is the empty one, as a hub's may be
+        healthReports = [:]
         if let k = assistantCurrent, demo.contains(k) { assistantCurrent = nil }
         if let k = openChat, demo.contains(k) { openChat = nil }
         for key in demo { ChatCache.remove(key, in: stateFolder) }
@@ -734,9 +743,10 @@ final class AppModel {
         chats = [:]
         subscribers = [:]
         shown = []
-        // What was picked for a next message goes with the hubs it was for (#2626).
+        // What was picked for a next message goes with the hubs it was for (#2626), Health's reports too (#2836).
         heldAttachments = [:]
         starterDrafts = [:]
+        healthReports = [:]
         saveOutbox()
     }
 
@@ -1064,6 +1074,23 @@ final class AppModel {
             assistantConfig = st
         } catch {
             if showsPage(of: api) { assistantConfig?.mainTasksQuiet = was }
+            show(error)
+        }
+    }
+
+    /// Settings › Meetings (#2981): the role every meeting recording starts with. Shown at once, put back if the hub says no.
+    func setMeetingAttendanceDefault(_ role: MeetingAttendance) async {
+        guard let api else { return }
+        // Before the assistant settings are in, the hub's answer brings them.
+        let was = assistantConfig?.meetingAttendanceDefault
+        assistantConfig?.meetingAttendanceDefault = role.rawValue
+        MeetingAttendanceDefaults.remember(offered: true, role: role)
+        do {
+            let st = try await api.setAssistant(meetingAttendanceDefault: role.rawValue)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.meetingAttendanceDefault = was }
             show(error)
         }
     }
@@ -1501,7 +1528,9 @@ final class AppModel {
         for ix in list where all[ix.uid] == nil && !endedInteractionIDs.contains(ix.uid) {
             all[ix.uid] = ix
         }
+        let new = all.values.filter { interactions[$0.uid] == nil }
         if all != interactions { interactions = all }
+        for ix in new { noteScreenCard(ix, live: false) }
         if let askedAt {
             interactionsListedAt[group] = askedAt
             withdrawStaleNotifications()
@@ -1867,6 +1896,7 @@ final class AppModel {
             guard !endedInteractionIDs.contains(ix.uid) else { break }
             let announces = Delegated.announces(ix, replacing: interactions[ix.uid])
             interactions[ix.uid] = ix
+            noteScreenCard(ix, live: true)
             if announces { Haptics.attention() }
             WatchSync.shared.push(summary: watchSummary())
         case .interactionResolved(let id, let assistant):
@@ -2100,6 +2130,17 @@ final class AppModel {
         let draft = StarterDraft()
         starterDrafts[key] = draft
         return draft
+    }
+
+    /// Health's checkup reports on their way up, per hub group (#2836): the page is built again with the whole tree when
+    /// iPhone Duo folds or opens, and the uploads under way lost their place in it.
+    @ObservationIgnored private var healthReports: [String: FileUploads] = [:]
+
+    func healthReportUploads() -> FileUploads {
+        if let held = healthReports[hubGroup] { return held }
+        let held = FileUploads()
+        healthReports[hubGroup] = held
+        return held
     }
     @ObservationIgnored let draftWriter = Debouncer()
     /// A send the computer refused because its input box holds a draft (SendSafety.swift).
@@ -2828,6 +2869,7 @@ final class AppModel {
         for key in chats.keys where gone.contains(key.group) { dropChat(key) }
         drafts = drafts.filter { !gone.contains($0.key.group) }
         heldAttachments = heldAttachments.filter { !gone.contains($0.key.group) }
+        healthReports = healthReports.filter { !gone.contains($0.key) }
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
@@ -2925,15 +2967,19 @@ final class AppModel {
 
     private func countBadges() {
         var b = TabBadges()
+        func place(_ key: SessionKey) -> TabBadges.Place {
+            TabBadges.place(key, session: sessionIndex[key], quiet: isQuiet(key), mutes: pinsStore(key.group)?.mutes)
+        }
         for ix in interactions.values {
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
-            switch TabBadges.place(ix.sessionKey, session: sessionIndex[ix.sessionKey], quiet: isQuiet(ix.sessionKey),
-                                   mutes: pinsStore(ix.sessionKey.group)?.mutes) {
+            switch place(ix.sessionKey) {
             case .assistant, .quiet: b.assistant += 1
-            case .agents: b.agents += 1
-            case .muted: break
+            case .agents, .muted: break
             }
         }
+        // Agents counts what its Needs You section lists: one per session that waits for the user, not one per card.
+        b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: pendingInteractions, waiting: AgentsNeedsYou.waiting(allSessions)),
+                                        place: place)
         if b != badges { badges = b }
         if !watchingMutes { watchingMutes = true; watchMutes() }
     }
@@ -3229,12 +3275,15 @@ struct Toast: Identifiable, Equatable {
     let action: Action?
     /// A second button before `action` (Undo beside View).
     let secondary: Action?
+    /// An explicit display window for flows whose Undo timing is shared across clients.
+    let duration: Duration?
 
-    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil) {
+    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil, duration: Duration? = nil) {
         self.message = message
         self.style = style
         self.action = action
         self.secondary = secondary
+        self.duration = duration
     }
 
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }

@@ -11,6 +11,7 @@ not.
 | Once the task is done or its link is released, a still-active Agent can be an independent row again. Historical links do not hide it. | `assistantEntries` | `done_manual_task_releases_running_agent`, `released_manual_link_does_not_hide_agent` |
 | A task is in Needs you while one of its current agents asks something (a pending card), while it waits for a decision or review (an open `ask`, a decided one only while the task is open; `pending_review` / `needs_user` on an open task), while its turn broke off on a model error (`interrupted`), or while its failed start is still the user's to retry (the To-dos bucket says open). | `taskAwaitsDecision`, `entryStatus` | `task_waiting_for_review_only_in_needs_you`, `task_waiting_for_decision_only_in_needs_you`, `interrupted_and_failed_tasks_need_you` |
 | Once answered it goes back to In progress. | | `answered_task_back_in_progress` |
+| A failed start whose work finished in a related to-do is closed, as the To-dos page has it (rule 1a, #3713): in neither entry; another failed start still needs the user. | `supersededFailedStarts` | `superseded_failed_start_in_neither` |
 | Otherwise a task is in In progress when the To-dos page counts it open (`todoBucket` open, #3331), folded under it and not counted when shelved, and in neither when closed (done, cancelled, accepted). | `web/src/lib/todo-triage.ts` `todoBucket` | `finished_tasks_in_neither`, `stale_task_folded_not_counted` |
 | The main conversation has every task; another conversation only the tasks it dispatched (`origin`). | `taskCardSlots` (`everyTodo`) | `main_conversation_watches_every_task`, `manual_agents_only_in_the_main_conversation` |
 | In the main conversation an Agent that belongs to no task (`dockAgents`) is a row: Needs you while it asks, In progress while it works; idle, unread and the assistant's own sessions are in neither. Other conversations have no such rows. | `dockAgents` | `manual_agent_question_only_in_needs_you`, `manual_agent_working_only_in_progress`, `manual_agents_only_in_the_main_conversation` |
@@ -25,6 +26,10 @@ not.
   rank, newest first), then Agents. `shelved`: folded, not counted.
 - Not covered here: cards of the conversation's own session (they are always Needs you rows and are added by the
   screen), message cards the user put off (`later`), and Android's inbox drafts.
+- Background activity cases (#3588) additionally carry `expected.activity` keyed by running row: `tasks`, `subagents`,
+  `workflows`, and optional `phase` / `progress`; null means no background work. They cover command/Monitor counts,
+  workflow summary phase and progress, subagents, mixed counts, a real external wait, user-question precedence,
+  hand-opened Agents, and duplicate/non-lead task bindings. Both entry functions derive this from the same wire input.
 - All data is made up.
 - Run: `cd web && npx vitest run src/lib/assistant-entries.test.ts` and
-  `cd android && ./gradlew :core:domain:testDebugUnitTest --tests '*AssistantEntriesFixtureTest*'`.
+  `cd android && ./gradlew :core:domain:test --tests '*AssistantEntriesFixtureTest*'`.
