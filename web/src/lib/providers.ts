@@ -260,8 +260,11 @@ export function headersProblem(raw: string): string {
   return "";
 }
 
+/** The hub keeps at most this many variables in a provider's environment (checkEnv); an import leaves the rest out as `limit`. */
+const ENV_LIMIT = 50;
+
 /** The hub's checkEnv (and the node's reading of it): NAME=value a line, "export " before it is fine, a line starting
- *  with # is a comment, at most 50. */
+ *  with # is a comment, at most ENV_LIMIT. */
 export function envProblem(raw: string): string {
   const lines = raw.split("\n");
   let count = 0;
@@ -272,7 +275,7 @@ export function envProblem(raw: string): string {
     const at = rest.indexOf("=");
     const name = at < 0 ? "" : rest.slice(0, at).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return t("lib-providers.env_line", { line: i + 1 });
-    if (++count > 50) return t("lib-providers.env_limit");
+    if (++count > ENV_LIMIT) return t("lib-providers.env_limit");
   }
   return "";
 }
@@ -502,7 +505,7 @@ export interface ImportResult {
   created?: string[];
   updated?: string[];
   hidden?: string[];
-  kept?: { alias: string; hide: HideCheck; uses?: string[]; elsewhere?: string[] }[];
+  kept?: Omit<ImportSource, "file">[];
 }
 
 export interface ImportRow {
@@ -515,9 +518,6 @@ export interface ImportRow {
   action: string;
   merge: boolean;
 }
-
-/** The hub keeps at most this many variables in a provider's environment (checkEnv); the rest are left out as `limit`. */
-export const IMPORT_ENV_LIMIT = 50;
 
 export const hostOf = (u?: string) => (u ? urlHost(u) : "");
 const names = (xs: string[]) => xs.join(t("lib-providers.alias_separator"));
@@ -564,7 +564,7 @@ export function importLeftOut(p: ImportedProvider): string[] {
     const reason = SKIP_ORDER.includes(s.reason) ? s.reason : "other";
     by.set(reason, [...(by.get(reason) ?? []), s.name]);
   }
-  return [...SKIP_ORDER, "other"].filter((r) => by.has(r)).map((r) => t(`lib-providers.left_out_${r}`, { names: names(by.get(r)!), max: IMPORT_ENV_LIMIT }));
+  return [...SKIP_ORDER, "other"].filter((r) => by.has(r)).map((r) => t(`lib-providers.left_out_${r}`, { names: names(by.get(r)!), max: ENV_LIMIT }));
 }
 
 const DIFFERS = ["tiers", "effort", "args", "limits", "proxy", "headers", "env", "auth", "custom_model"];
@@ -576,17 +576,19 @@ export function importDiffers(p: ImportedProvider): string {
   return t("lib-providers.differs", { what: formatList(what) });
 }
 
+/** The providers the picked groups become (importOutcome). */
+const pickedOutcomes = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) =>
+  list.filter((p) => picked.has(p.name)).flatMap((p) => importOutcome(p, split.has(p.name)));
+
 /** The sources the hide row speaks for: the picked groups', each as the provider it lands in (a split group's variants). */
-export function importSources(list: ImportedProvider[], picked: Set<string>, split: Set<string>): ImportSource[] {
-  return list.filter((p) => picked.has(p.name)).flatMap((p) => importOutcome(p, split.has(p.name)).flatMap((x) => x.sources ?? []));
-}
+export const importSources = (list: ImportedProvider[], picked: Set<string>, split: Set<string>): ImportSource[] =>
+  pickedOutcomes(list, picked, split).flatMap((x) => x.sources ?? []);
 
 /** How many providers the import makes or merges into: a split group counts each alias. */
-export const importCount = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) =>
-  list.filter((p) => picked.has(p.name)).reduce((n, p) => n + importOutcome(p, split.has(p.name)).length, 0);
+export const importCount = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) => pickedOutcomes(list, picked, split).length;
 
 /** Why an alias stays when the imported ones are hidden. */
-export function importStays(s: { alias: string; hide: HideCheck | string; uses?: string[]; elsewhere?: string[] }): string {
+export function importStays(s: Omit<ImportSource, "file">): string {
   if (s.hide === "in_use" && s.uses?.length) return t("lib-providers.stays_in_use", { alias: s.alias, uses: formatList(s.uses) });
   if (s.hide === "elsewhere" && s.elsewhere?.length) return t("lib-providers.stays_elsewhere", { alias: s.alias, computers: formatList(s.elsewhere) });
   return t("lib-providers.stays", { alias: s.alias });

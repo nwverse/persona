@@ -77,9 +77,6 @@ func (g importGroup) preview() importedProvider {
 // knownProvider is a stored provider as the merge sees it: name, base URL, opened key and where it came from.
 type knownProvider struct{ name, baseURL, key, source string }
 
-// defaultAliasFile is the file of an alias from a node that does not say (it read only ~/.zshrc).
-const defaultAliasFile = "~/.zshrc"
-
 const contextWindow1M = 1000000
 
 // strip1M drops a model's "[1m]" suffix: the 1M context it asks for becomes the model's context window.
@@ -122,12 +119,11 @@ func mergeZshrcAliases(machine string, aliases []zshrcAlias, known []knownProvid
 			continue
 		}
 		v := newImportGroup(machine, a, base)
-		v.Existing = existingFor(known, base, v.key, a.Alias)
 		i := slices.IndexFunc(out, func(g importGroup) bool { return g.BaseURL == base && g.key == v.key })
 		if i < 0 {
 			g := v
 			g.Models, g.Aliases, g.Sources = slices.Clone(v.Models), slices.Clone(v.Aliases), slices.Clone(v.Sources)
-			g.Existing, g.variants = existingFor(known, base, v.key, ""), []importGroup{v}
+			g.variants = []importGroup{v}
 			out = append(out, g)
 			continue
 		}
@@ -145,6 +141,7 @@ func mergeZshrcAliases(machine string, aliases []zshrcAlias, known []knownProvid
 		}
 		out[i].Differs = importDiffers(out[i].variants)
 	}
+	landExisting(out, known)
 	return out
 }
 
@@ -182,7 +179,7 @@ func newImportGroup(machine string, a zshrcAlias, base string) importGroup {
 		g.Models = []proto.ProviderModel{{ID: model, ContextWindow: window}}
 	}
 	g.HasKey, g.HasEnv, g.Aliases = key != "", g.env != "", []string{a.Alias}
-	g.Sources = []importSource{{Alias: a.Alias, File: cmp.Or(a.File, defaultAliasFile)}}
+	g.Sources = []importSource{{Alias: a.Alias, File: cmp.Or(a.File, defaultRCFile)}}
 	return g
 }
 
@@ -193,11 +190,23 @@ func existingFor(known []knownProvider, base, key, alias string) string {
 		if k.baseURL != base || k.key != key {
 			continue
 		}
-		if _, ok := strings.CutPrefix(k.source, "zshrc:"+alias+"@"); alias == "" || ok {
+		if alias == "" || strings.HasPrefix(k.source, "zshrc:"+alias+"@") {
 			return k.name
 		}
 	}
 	return ""
+}
+
+// landExisting sets where groups and their variants land (existingFor): a variant by its alias too.
+func landExisting(groups []importGroup, known []knownProvider) {
+	for i := range groups {
+		g := &groups[i]
+		g.Existing = existingFor(known, g.BaseURL, g.key, "")
+		for j := range g.variants {
+			v := &g.variants[j]
+			v.Existing = existingFor(known, v.BaseURL, v.key, v.Aliases[0])
+		}
+	}
 }
 
 // importSettings are the settings the aliases of a group may set differently, the model aside, in the preview's
@@ -476,14 +485,9 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 	}
 	// The preview may precede another mutation: where each lands and the names it takes are worked out again against
 	// today's checked snapshot, by the preview's rules.
-	for i := range groups {
-		groups[i].Existing = existingFor(known, groups[i].BaseURL, groups[i].key, "")
-		for j := range groups[i].variants {
-			v := &groups[i].variants[j]
-			v.Existing = existingFor(known, v.BaseURL, v.key, v.Aliases[0])
-		}
-	}
-	importNames(groups, s.importTaken(ctx, s.zshrcLaunchers(ctx, false), list))
+	landExisting(groups, known)
+	rc := s.zshrcLaunchers(ctx, false)
+	importNames(groups, s.importTaken(ctx, rc, list))
 	now := time.Now().UTC()
 	var landed [][2]string // alias, the provider it landed in
 	for k, name := range in.Providers {
@@ -525,8 +529,10 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 	}
 	var hidden []string
 	if in.HideAliases {
-		// Checked against the list as it is saved, before it is: a failed check leaves everything as it was.
-		f, err := s.importHideFacts(ctx, in.Machine, list)
+		// Checked against the list as it is saved, before it is: a failed check leaves everything as it was. Nothing is
+		// written until the checks are done, so they share one read of each setting.
+		hctx := withSettingsMemo(ctx)
+		f, err := s.importHideFacts(hctx, in.Machine, rc, list)
 		if err != nil {
 			return res, err
 		}
@@ -535,7 +541,7 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 			if j < 0 {
 				continue
 			}
-			src, err := s.aliasHide(ctx, f, a[0], list[j])
+			src, err := s.aliasHide(hctx, f, a[0], list[j])
 			if err != nil {
 				return res, err
 			}
@@ -575,12 +581,13 @@ func (s *Service) launcherImportRoutes() {
 			return
 		}
 		ctx = withSettingsMemo(ctx) // read-only from here: every alias's check resolves the same purposes
-		f, err := s.importHideFacts(ctx, machine, stored)
+		rc := s.zshrcLaunchers(ctx, false)
+		f, err := s.importHideFacts(ctx, machine, rc, stored)
 		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
-		importNames(groups, s.importTaken(ctx, f.rc, stored))
+		importNames(groups, s.importTaken(ctx, rc, stored))
 		providers := make([]importedProvider, 0, len(groups))
 		for _, g := range groups {
 			if err := s.withImportSources(ctx, f, &g); err != nil {

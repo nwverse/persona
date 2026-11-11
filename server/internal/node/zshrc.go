@@ -73,9 +73,8 @@ func (n *Node) shellAliases(shell string) ([]zshrcAlias, error) {
 			}
 			continue
 		}
-		seen := len(out)
-		for _, a := range parseZshrcAliases(string(b)) {
-			if slices.ContainsFunc(out[:seen], func(o zshrcAlias) bool { return o.Alias == a.Alias }) {
+		for _, a := range parseZshrcAliases(string(b)) { // a name once a file (parseZshrcAliases)
+			if slices.ContainsFunc(out, func(o zshrcAlias) bool { return o.Alias == a.Alias }) {
 				continue // an earlier file defines it
 			}
 			a.File = f.label

@@ -17,11 +17,8 @@ const (
 	envSkipCredential = "credential" // a key, token, password, cookie, or a URL with a user in it
 	envSkipShell      = "shell"      // the shell would expand it, or it does not fit on one env line
 	envSkipComputer   = "computer"   // it names something of one computer; the provider runs on every one in scope
-	envSkipLimit      = "limit"      // beyond the env's 50 lines (checkEnv)
+	envSkipLimit      = "limit"      // beyond the env's envLimit lines (checkEnv)
 )
-
-// importEnvLimit is how many lines an env takes (checkEnv).
-const importEnvLimit = 50
 
 // skippedEnv is one variable of an alias that is not imported, and why.
 type skippedEnv struct {
@@ -39,9 +36,12 @@ var importMappedEnv = []string{
 	"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
 }
 
-// importProxyEnv are the proxy variables, in the order the provider's proxy is taken from (importProxy), then the
-// bypass list's.
-var importProxyEnv = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
+// importProxyEnv and importNoProxyEnv are the proxy variables, in the order the provider's proxy and bypass list are
+// taken from (importProxy).
+var (
+	importProxyEnv   = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"}
+	importNoProxyEnv = []string{"NO_PROXY", "no_proxy"}
+)
 
 // importComputerEnv are the variables that belong to one computer.
 var importComputerEnv = []string{"PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TMPDIR", "CLAUDE_CONFIG_DIR"}
@@ -60,19 +60,20 @@ func urlWithUser(v string) bool {
 // importProxy is the provider's proxy (the first proxy variable set; none when it carries a user, as the proxy is
 // stored and shown in the clear) and bypass list.
 func importProxy(env map[string]string) (proxy, noProxy string) {
-	for _, k := range importProxyEnv[:4] {
-		if proxy = strings.TrimSpace(env[k]); proxy != "" {
-			break
-		}
-	}
-	if urlWithUser(proxy) {
+	if proxy = firstEnv(env, importProxyEnv); urlWithUser(proxy) {
 		proxy = ""
 	}
-	noProxy = strings.TrimSpace(env["NO_PROXY"])
-	if noProxy == "" {
-		noProxy = strings.TrimSpace(env["no_proxy"])
+	return proxy, firstEnv(env, importNoProxyEnv)
+}
+
+// firstEnv is the first of names set in env, trimmed.
+func firstEnv(env map[string]string, names []string) string {
+	for _, k := range names {
+		if v := strings.TrimSpace(env[k]); v != "" {
+			return v
+		}
 	}
-	return proxy, noProxy
+	return ""
 }
 
 // importEnvSkip is why variable k=v of an alias stays out of the provider's env ("" when it goes in). Mapped ones
@@ -130,7 +131,7 @@ func importEnv(env map[string]string) (lines string, names []string, skipped []s
 	var kept []string
 	for _, k := range keys {
 		v := env[k]
-		if slices.Contains(importProxyEnv, k) {
+		if slices.Contains(importProxyEnv, k) || slices.Contains(importNoProxyEnv, k) {
 			if urlWithUser(v) {
 				skipped = append(skipped, skippedEnv{Name: k, Reason: envSkipCredential})
 			}
@@ -143,7 +144,7 @@ func importEnv(env map[string]string) (lines string, names []string, skipped []s
 			skipped = append(skipped, skippedEnv{Name: k, Reason: why})
 			continue
 		}
-		if len(names) == importEnvLimit {
+		if len(names) == envLimit {
 			skipped = append(skipped, skippedEnv{Name: k, Reason: envSkipLimit})
 			continue
 		}

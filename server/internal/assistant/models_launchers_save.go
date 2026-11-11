@@ -105,6 +105,9 @@ func checkHeaders(raw string) error {
 	return nil
 }
 
+// envLimit is how many NAME=value lines a provider's env takes (checkEnv).
+const envLimit = 50
+
 // checkEnv: one NAME=value a line ("export " before it is fine), NAME a shell variable's name; a line starting with #
 // is a comment. The rules of the node's envLine (node/launcherenv.go) and the web's envProblem. The error never quotes
 // a line: a value may be a secret.
@@ -120,7 +123,7 @@ func checkEnv(raw string) error {
 		if !ok || !envName.MatchString(strings.TrimSpace(name)) || strings.ContainsRune(line, 0) {
 			return i18n.Err("assistant-models_launchers.err_env_line", i18n.Args{"line": i + 1})
 		}
-		if lines > 50 {
+		if lines > envLimit {
 			return i18n.Err("assistant-models_launchers.err_env_limit")
 		}
 	}

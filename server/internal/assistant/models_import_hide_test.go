@@ -271,7 +271,7 @@ func TestImportNeverHidesClaude(t *testing.T) {
 	s, _ := hideTestHub(t, nil, map[string][]proto.Launcher{"m1": {{Name: "claude", BaseURL: "https://a.example.com"},
 		{Name: "presets", BaseURL: "https://a.example.com", Source: "zshrc"}}})
 	ctx := context.Background()
-	f, err := s.importHideFacts(ctx, "m1", nil)
+	f, err := s.importHideFacts(ctx, "m1", s.zshrcLaunchers(ctx, false), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

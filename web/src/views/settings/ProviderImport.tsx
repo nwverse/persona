@@ -8,7 +8,6 @@ import {
   importBrings,
   importCanSplit,
   importCount,
-  importCreates,
   importDiffers,
   importErrorText,
   importFrom,
@@ -228,16 +227,19 @@ function ImportItem({ p, on, split, onToggle, onSplit }: { p: ImportedProvider; 
           {choice && <SplitChoice name={p.name} first={p.aliases[0] ?? p.name} split={split} onSplit={onSplit} />}
           {parts ? (
             <ul aria-label={t("settings-providerimport.variants_label", { name: p.name })} className="flex flex-col gap-1.5">
-              {importOutcome(p, true).map((v) => (
-                <li key={v.name} className="min-w-0">
-                  <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                    <span className="max-w-full truncate font-mono text-ink-2">{importCreates(v)}</span>
-                    <Pill tone={v.existing ? undefined : "accent"}>{v.existing ? t("lib-providers.merge_into", { name: v.existing }) : t("lib-providers.create")}</Pill>
-                    {v.model && <span className="max-w-full truncate font-mono">{v.model}</span>}
-                  </span>
-                  <EnvLines p={v} />
-                </li>
-              ))}
+              {importOutcome(p, true).map((v) => {
+                const vr = importRow(v);
+                return (
+                  <li key={v.name} className="min-w-0">
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="max-w-full truncate font-mono text-ink-2">{vr.name}</span>
+                      <Pill tone={vr.merge ? undefined : "accent"}>{vr.action}</Pill>
+                      {v.model && <span className="max-w-full truncate font-mono">{v.model}</span>}
+                    </span>
+                    <EnvLines p={v} />
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <EnvLines p={p} />
@@ -269,9 +271,7 @@ function SplitChoice({ name, first, split, onSplit }: { name: string; first: str
         return (
           <button key={String(o.on)} type="button" role="radio" aria-checked={checked} tabIndex={checked ? 0 : -1} data-split={String(o.on)}
             onClick={() => onSplit(o.on)} className="touch-hit flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover">
-            <span aria-hidden className={cx("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full transition-colors duration-150", checked ? "bg-accent text-white" : "shadow-[inset_0_0_0_1.5px_var(--line-strong)]")}>
-              {checked && <Icon name="check" size={10} stroke={3} />}
-            </span>
+            <CheckMark on={checked} round className="mt-0.5" />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[12.5px] font-medium text-ink">{o.label}</span>
               <span className="block text-[11.5px] text-ink-3">{o.hint}</span>

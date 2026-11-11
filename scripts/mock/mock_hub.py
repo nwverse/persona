@@ -10704,7 +10704,7 @@ def import_route(h, method, q, body):
     created, updated, landed = [], [], []
     taken = {l["name"] for l in LAUNCHERS}
     for g in (groups[n] for n in names):
-        for x in (g["variants"] if g["name"] in split and g.get("differs") and g.get("variants") else [g]):
+        for x in (g["variants"] if g["name"] in split and g.get("variants") else [g]):
             landed += x.get("sources", [])
             if x.get("existing"):
                 l = next(l for l in LAUNCHERS if l["name"] == x["existing"])

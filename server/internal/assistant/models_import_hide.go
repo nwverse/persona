@@ -43,15 +43,16 @@ type importHideFacts struct {
 	devices  []Device
 	profiles []ModelProfile
 	tasks    []taskLauncher
+	uses     map[string][]string // aliasUses by alias: a group's aliases are asked again for its variants
 }
 
 // taskLauncher is a scheduled task whose own record names a provider.
 type taskLauncher struct{ label, provider string }
 
-// importHideFacts reads what aliasHide needs. stored is the provider list it judges against.
-func (s *Service) importHideFacts(ctx context.Context, machine string, stored []storedLauncher) (importHideFacts, error) {
-	f := importHideFacts{machine: machine, rc: s.zshrcLaunchers(ctx, false), hidden: s.hiddenLaunchers(ctx), stored: stored,
-		devices: s.devices(ctx)}
+// importHideFacts reads what aliasHide needs. rc is s.zshrcLaunchers, stored the provider list it judges against.
+func (s *Service) importHideFacts(ctx context.Context, machine string, rc []zshrcLaunchers, stored []storedLauncher) (importHideFacts, error) {
+	f := importHideFacts{machine: machine, rc: rc, hidden: s.hiddenLaunchers(ctx), stored: stored, devices: s.devices(ctx),
+		uses: map[string][]string{}}
 	ps, _, err := s.readModelProfiles(ctx) // the templates made when none is stored copy the purposes, checked anyway
 	if err != nil {
 		return f, err
@@ -79,9 +80,7 @@ func (f importHideFacts) listsAlias(m zshrcLaunchers, alias string) (proto.Launc
 	if slices.ContainsFunc(f.stored, func(l storedLauncher) bool { return l.Name == alias }) {
 		return proto.Launcher{}, false
 	}
-	i := slices.IndexFunc(m.Launchers, func(l proto.Launcher) bool {
-		return l.Name == alias && (l.Source == "" || machineSource(l.Source) || l.Agent == "agy" || l.Agent == "omp")
-	})
+	i := slices.IndexFunc(m.Launchers, func(l proto.Launcher) bool { return l.Name == alias && listedRCLauncher(l) })
 	if i < 0 {
 		return proto.Launcher{}, false
 	}
@@ -92,7 +91,7 @@ func (f importHideFacts) listsAlias(m zshrcLaunchers, alias string) (proto.Launc
 // order). It changes nothing.
 func (s *Service) aliasHide(ctx context.Context, f importHideFacts, alias string, l storedLauncher) (importSource, error) {
 	src := importSource{Alias: alias, Hide: hideNone}
-	if alias == "claude" || slices.Contains(reservedLauncherNames, alias) || slices.Contains(f.hidden, alias) ||
+	if slices.Contains(reservedLauncherNames, alias) || slices.Contains(f.hidden, alias) ||
 		!slices.ContainsFunc(f.rc, func(m zshrcLaunchers) bool { _, ok := f.listsAlias(m, alias); return ok }) {
 		return src, nil
 	}
@@ -115,6 +114,9 @@ func (s *Service) aliasHide(ctx context.Context, f importHideFacts, alias string
 // aliasUses are what names alias as its launcher, in words: Model configuration's purposes (extensions' too), a
 // scheduled task's own launcher, a model profile's purposes (in use or not), and a profile's Agent presets.
 func (s *Service) aliasUses(ctx context.Context, f importHideFacts, alias string) ([]string, error) {
+	if uses, ok := f.uses[alias]; ok {
+		return uses, nil
+	}
 	provider := launcherProvider(alias)
 	uses, err := s.providerModelUses(withManagedSnapshot(ctx, f.stored), provider)
 	if err != nil {
@@ -133,8 +135,8 @@ func (s *Service) aliasUses(ctx context.Context, f importHideFacts, alias string
 	}
 	for _, p := range f.profiles {
 		name := cmp.Or(p.Name, p.ID)
-		for _, id := range slices.Sorted(maps.Keys(p.Purposes)) {
-			if p.Purposes[id].Provider == provider {
+		for _, b := range p.Purposes {
+			if b.Provider == provider {
 				add(i18n.T(lang, "assistant-models_import.use_profile", i18n.Args{"name": name}))
 				break
 			}
@@ -145,6 +147,7 @@ func (s *Service) aliasUses(ctx context.Context, f importHideFacts, alias string
 			}
 		}
 	}
+	f.uses[alias] = uses
 	return uses, nil
 }
 
