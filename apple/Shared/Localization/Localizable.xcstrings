@@ -157609,7 +157609,7 @@
       "zh-Hans": {
         "stringUnit": {
           "state": "translated",
-          "value": "等待中枢"
+          "value": "等待 hub"
         }
       }
     }
@@ -157725,6 +157725,121 @@
         "stringUnit": {
           "state": "translated",
           "value": "录音已保存"
+        }
+      }
+    }
+  },
+  "Recording started": {
+    "extractionState": "manual",
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Recording started"
+        }
+      },
+      "ja": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "録音を開始しました"
+        }
+      },
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "录音已开始"
+        }
+      }
+    }
+  },
+  "Minutes written": {
+    "extractionState": "manual",
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Minutes written"
+        }
+      },
+      "ja": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "議事録を作成しました"
+        }
+      },
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "纪要已整理"
+        }
+      }
+    }
+  },
+  "Turn on Persona": {
+    "extractionState": "manual",
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Turn on Persona"
+        }
+      },
+      "ja": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Persona をオンにする"
+        }
+      },
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "开启 Persona"
+        }
+      }
+    }
+  },
+  "Transcribing the last %lld min": {
+    "extractionState": "manual",
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Transcribing the last %lld min"
+        }
+      },
+      "ja": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "直近 %lld 分を文字起こし中"
+        }
+      },
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "正在转写最近 %lld 分钟"
+        }
+      }
+    }
+  },
+  "Audio stays on this device. Its text syncs to Knowledge and is kept for %lld days.": {
+    "extractionState": "manual",
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Audio stays on this device. Its text syncs to Knowledge and is kept for %lld days."
+        }
+      },
+      "ja": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "音声はこのデバイスに残り、テキストはナレッジに同期されて %lld 日間保存されます。"
+        }
+      },
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "音频保留在本机，文字会同步到知识库，并保留 %lld 天。"
         }
       }
     }

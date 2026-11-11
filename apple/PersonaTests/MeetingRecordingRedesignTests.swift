@@ -317,13 +317,113 @@ struct RecordingFollowTests {
     @Test func theMiddleStandsTallestAtAnyTime() {
         for t in [0.0, 1.1, 4.4] {
             let bars = RecordingLevelPose.bars(level: 1, at: t, paused: false)
-            // The profile is a bell: the ends never exceed the middle's own ceiling.
-            #expect(RecordingLevelPose.profile(0, of: count) < RecordingLevelPose.profile(count / 2, of: count))
-            #expect(bars.max() ?? 0 <= 1)
+            #expect(bars.count == count)
+            // The ripple only takes away from the bell, so no bar is taller than the bell's own height at its place.
+            for (index, bar) in bars.enumerated() {
+                #expect(bar <= RecordingLevelPose.profile(index, of: count) + 1e-9)
+            }
         }
+        #expect(RecordingLevelPose.profile(0, of: count) < RecordingLevelPose.profile(count / 2, of: count))
+        #expect(RecordingLevelPose.profile(count - 1, of: count) < RecordingLevelPose.profile(count / 2, of: count))
     }
 
     @Test func theMeterIsOneFrameAThirtiethOfASecond() {
         #expect(abs(Theme.Motion.recordingLevelFrame - 1.0 / 30) < 1e-12)
+    }
+}
+
+struct RecordingStopAndSheetTests {
+    private let id = UUID()
+
+    @Test func aResumableErrorBeforeTheStopIsNotASaveFailure() {
+        // The microphone changed and recording paused; the user then tapped Stop: the error is the same as when it ran.
+        #expect(RecordingSheetMove.stopError(now: "The microphone changed", whileLive: "The microphone changed") == nil)
+        let phase = RecordingPhase.derive(.init(captureError: RecordingSheetMove.stopError(now: "The microphone changed", whileLive: "The microphone changed"),
+                                                held: .init(isMeeting: true, active: false, receivedAll: true, noAudio: false, transcribedAll: false,
+                                                            transcribing: true, transcriptionError: nil, sync: .waiting, hubAvailable: true)))
+        #expect(phase == .transcribing)
+    }
+
+    @Test func anErrorTheStopCausedIsOne() {
+        #expect(RecordingSheetMove.stopError(now: "Storage is full", whileLive: nil) == "Storage is full")
+        #expect(RecordingSheetMove.stopError(now: "Storage is full", whileLive: "The microphone changed") == "Storage is full")
+        #expect(RecordingSheetMove.stopError(now: nil, whileLive: "The microphone changed") == nil)
+        #expect(RecordingSheetMove.stopError(now: "", whileLive: nil) == nil)
+    }
+
+    @Test func aRecordingBeginsAndTheSheetHoldsIt() {
+        #expect(RecordingSheetMove.move(from: .starting, to: .recording, recordingID: id, held: nil) == .hold(id, announce: true))
+        #expect(RecordingSheetMove.move(from: .paused, to: .recording, recordingID: id, held: id) == .none)
+        #expect(RecordingSheetMove.move(from: .recording, to: .paused, recordingID: id, held: id) == .none)
+        #expect(RecordingSheetMove.move(from: .idle, to: .paused, recordingID: id, held: nil) == .hold(id, announce: false))
+    }
+
+    @Test func aStopShowsTheWrapUpFromRecordingOrPaused() {
+        #expect(RecordingSheetMove.move(from: .recording, to: .idle, recordingID: nil, held: id) == .wrapUp)
+        #expect(RecordingSheetMove.move(from: .paused, to: .idle, recordingID: nil, held: id) == .wrapUp)
+    }
+
+    @Test func aCancelledStartClosesTheSheetAndNothingElseDoes() {
+        #expect(RecordingSheetMove.move(from: .starting, to: .idle, recordingID: nil, held: nil) == .dismiss)
+        // The wrap-up is held and capture goes idle again without having run: nothing changes.
+        #expect(RecordingSheetMove.move(from: .starting, to: .idle, recordingID: nil, held: id) == .none)
+        #expect(RecordingSheetMove.move(from: .idle, to: .starting, recordingID: nil, held: id) == .none)
+    }
+
+    @Test func aNewRecordingWhileTheWrapUpIsShownReplacesIt() {
+        let next = UUID()
+        #expect(RecordingSheetMove.move(from: .starting, to: .recording, recordingID: next, held: id) == .hold(next, announce: true))
+    }
+}
+
+struct RecordingWrapUpMappingTests {
+    @Test func syncStatusesMapOneToOne() {
+        #expect(RecordingWrapUp.sync(.waiting) == .waiting)
+        #expect(RecordingWrapUp.sync(.pending) == .pending)
+        #expect(RecordingWrapUp.sync(.uploading) == .uploading)
+        #expect(RecordingWrapUp.sync(.synced) == .synced)
+        #expect(RecordingWrapUp.sync(.rejected) == .rejected)
+        #expect(RecordingWrapUp.sync(.expired) == .expired)
+    }
+
+    @Test func minutesStatesMapOneToOne() {
+        #expect(RecordingWrapUp.minutes(.none) == .absent)
+        #expect(RecordingWrapUp.minutes(.waitingForText) == .waitingForText)
+        #expect(RecordingWrapUp.minutes(.waitingForSync) == .waitingForSync)
+        #expect(RecordingWrapUp.minutes(.writing) == .writing)
+        #expect(RecordingWrapUp.minutes(.ready(RecordingMinutes())) == .ready)
+        #expect(RecordingWrapUp.minutes(.failed) == .failed)
+        #expect(RecordingWrapUp.minutes(.unsupported) == .unsupported)
+    }
+
+    private func held(minutes: RecordingPhase.Minutes?, active: Bool = false, noAudio: Bool = false) -> RecordingPhase.Held {
+        .init(isMeeting: true, active: active, receivedAll: true, noAudio: noAudio, transcribedAll: true, transcribing: false,
+              transcriptionError: nil, sync: .synced, hubAvailable: true, minutes: minutes)
+    }
+
+    @Test func aSyncedMeetingNotYetAnsweredByTheHubIsWritingMinutes() {
+        #expect(RecordingPhase.derive(.init(held: held(minutes: nil))) == .writingMinutes)
+    }
+
+    @Test func aStillActiveEntryIsEndingEvenWithNoAudio() {
+        #expect(RecordingPhase.derive(.init(held: held(minutes: nil, active: true, noAudio: true))) == .ending)
+    }
+
+    @Test func stepsForIdleAndPreparingAreAllUnstarted() {
+        for phase in [RecordingPhase.idle, .preparing(cancellable: true), .recording, .paused(byCall: false)] {
+            let steps = RecordingPhase.steps(for: phase, isMeeting: true)
+            #expect(steps.first?.state == .current)
+            #expect(steps.dropFirst().allSatisfy { $0.state == .waiting })
+        }
+    }
+}
+
+struct RecordingTimelineIdTests {
+    @Test func twoSentencesAtTheSameStartKeepDistinctIds() {
+        let a = RecordingTimeline.Sentence(segment: 0, start: 4, text: "One")
+        let b = RecordingTimeline.Sentence(segment: 0, start: 4, text: "Two")
+        let items = RecordingTimeline.make(sentences: [a, b], marks: [], asks: [], transcribedUntil: 30, now: 31)
+        #expect(Set(items.map(\.id)).count == items.count)
+        #expect(items.map(\.id) == [.sentence(segment: 0, millis: 4000, occurrence: 0), .sentence(segment: 0, millis: 4000, occurrence: 1)])
     }
 }

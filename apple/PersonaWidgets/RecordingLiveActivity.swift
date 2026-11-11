@@ -35,7 +35,7 @@ struct RecordingLiveActivity: Widget {
                     VStack(alignment: .leading, spacing: IslandMetrics.rowGap) {
                         VStack(alignment: .leading, spacing: IslandMetrics.smallGap) {
                             Text(state.title).font(.headline).lineLimit(1)
-                            RecordingSubtitle(state: state).font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1).minimumScaleFactor(0.85)
+                            RecordingSubtitle(state: state).font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                         }
                         .padding(.horizontal, IslandMetrics.gap)
                         RecordingAnswer(state: state).foregroundStyle(.white.opacity(0.85)).padding(.horizontal, IslandMetrics.gap)

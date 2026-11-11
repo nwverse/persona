@@ -7,6 +7,8 @@ import SwiftUI
 /// id, owns its own minutes model and asks the hub for them every 15 seconds while they are on their way.
 struct RecordingWrapUp: View {
     var id: UUID
+    /// What ended the recording badly, when its stop caused it (`RecordingSheetMove.stopError`); nil: it was saved fine.
+    var captureError: String?
     var finish: () -> Void
 
     @Environment(AppModel.self) private var model
@@ -26,7 +28,7 @@ struct RecordingWrapUp: View {
             let phase = self.phase(entry)
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.l) {
-                    header(entry)
+                    header(entry, phase: phase)
                     if case .failed(let failure) = phase, failure.step == .saved {
                         NoticeBanner(text: failure.reason, tone: .danger)
                     }
@@ -34,9 +36,16 @@ struct RecordingWrapUp: View {
                     actions(phase, entry: entry)
                 }
                 .padding(.horizontal, Theme.Space.page)
-                .padding(.top, Theme.Space.xl)
+                .padding(.top, Theme.Space.s)
                 .padding(.bottom, Theme.Space.l)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .safeAreaInset(edge: .top, spacing: Theme.Space.flush) {
+                HStack {
+                    Spacer(minLength: Theme.Space.flush)
+                    RecordingSheetCloseButton(title: String(localized: "Done"), identifier: "recording-wrapup-done") { finish() }
+                }
+                .padding(.horizontal, Theme.Space.page)
             }
             .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) { buttons(phase, entry: entry) }
             .navigationDestination(isPresented: $opening) { RecordingDetailView(id: id) }
@@ -48,7 +57,7 @@ struct RecordingWrapUp: View {
     // MARK: The phase
 
     /// `RecordingPhase` from the recording's own state; `capture` is idle here (the wrap-up shows after capture ended), and
-    /// what ended it badly (`capture.error`) is the first thing the wrap-up says.
+    /// what ended it badly (`captureError`) is the first thing the wrap-up says.
     private func phase(_ entry: RecordingEntry) -> RecordingPhase {
         let held = RecordingPhase.Held(
             isMeeting: entry.isMeeting, active: entry.active, receivedAll: entry.receivedAll,
@@ -58,10 +67,10 @@ struct RecordingWrapUp: View {
             minutes: minutesAsked ? Self.minutes(minutes.state) : nil,
             syncRejectedReason: String(localized: "Not accepted by Knowledge"),
             minutesFailedReason: String(localized: "The minutes couldn't be written."))
-        return RecordingPhase.derive(.init(capture: capture.state == .idle ? .idle : .recording, captureError: capture.error, held: held))
+        return RecordingPhase.derive(.init(capture: capture.state == .idle ? .idle : .recording, captureError: captureError, held: held))
     }
 
-    private static func sync(_ status: RecordingSync.Status) -> RecordingPhase.Sync {
+    static func sync(_ status: RecordingSync.Status) -> RecordingPhase.Sync {
         switch status {
         case .waiting: .waiting
         case .pending: .pending
@@ -72,7 +81,7 @@ struct RecordingWrapUp: View {
         }
     }
 
-    private static func minutes(_ state: RecordingMinutesModel.State) -> RecordingPhase.Minutes {
+    static func minutes(_ state: RecordingMinutesModel.State) -> RecordingPhase.Minutes {
         switch state {
         case .none: .absent
         case .waitingForText: .waitingForText
@@ -108,11 +117,29 @@ struct RecordingWrapUp: View {
 
     // MARK: Views
 
-    private func header(_ entry: RecordingEntry) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Text(entry.displayTitle).font(Theme.Font.title).accessibilityAddTraits(.isHeader)
+    /// The headline first: a large mark that is a spinner while the recording is on its way and a check once it is saved,
+    /// the title, and how long it ran. The steps under it say where it is.
+    private func header(_ entry: RecordingEntry, phase: RecordingPhase) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            headline(phase)
+                .scaledFrame(width: Theme.Size.avatar, height: Theme.Size.avatar)
+            Text(entry.displayTitle).font(Theme.Font.display).accessibilityAddTraits(.isHeader)
+                .lineLimit(3).minimumScaleFactor(0.7)
                 .accessibilityIdentifier("recording-wrapup-title")
             Text("Recorded \(RecordingFormat.clock(entry.duration))").font(Theme.Font.secondary).foregroundStyle(.secondary)
+        }
+        .padding(.top, Theme.Space.l)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private func headline(_ phase: RecordingPhase) -> some View {
+        switch phase {
+        case .done:
+            ThemedIcon(Theme.Icon.successFilled).font(Theme.Font.display).foregroundStyle(Theme.positive)
+        case .failed:
+            ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.display).foregroundStyle(Theme.danger)
+        default:
+            ProgressView().controlSize(.large)
         }
     }
 
@@ -131,7 +158,7 @@ struct RecordingWrapUp: View {
             mark(step.state)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(Self.title(step.kind)).font(Theme.Font.body)
+                Text(Self.title(step.kind, state: step.state)).font(Theme.Font.body)
                     .foregroundStyle(step.state == .waiting ? Color.secondary : Color.primary)
                 switch step.state {
                 case .waitingForHub:
@@ -166,13 +193,15 @@ struct RecordingWrapUp: View {
         }
     }
 
-    private static func title(_ kind: RecordingPhase.Step.Kind) -> String {
+    /// A step reads as an action while it runs and as a result once it is done.
+    private static func title(_ kind: RecordingPhase.Step.Kind, state: RecordingPhase.Step.State) -> String {
+        let done = state == .done
         switch kind {
-        case .saved: String(localized: "Saved")
-        case .transcribed: String(localized: "Transcribed")
-        case .synced: String(localized: "Syncing to Knowledge")
-        case .writing: String(localized: "Writing minutes")
-        case .minutes: String(localized: "Minutes ready")
+        case .saved: return String(localized: "Saved")
+        case .transcribed: return String(localized: "Transcribed")
+        case .synced: return done ? String(localized: "Synced to Knowledge") : String(localized: "Syncing to Knowledge")
+        case .writing: return done ? String(localized: "Minutes written") : String(localized: "Writing minutes")
+        case .minutes: return String(localized: "Minutes ready")
         }
     }
 
@@ -180,7 +209,7 @@ struct RecordingWrapUp: View {
         switch state {
         case .done: String(localized: "Done")
         case .current: String(localized: "In progress")
-        case .waiting: ""
+        case .waiting: String(localized: "Not started")
         case .waitingForHub: String(localized: "Waiting for the hub")
         case .failed(let reason): reason
         }
@@ -197,7 +226,7 @@ struct RecordingWrapUp: View {
                 .themedButton()
                 .accessibilityIdentifier("recording-wrapup-resume")
             case .tryAgainMinutes:
-                Button { Task { await minutes.regenerate(id) } } label: { Label("Try Again", systemImage: Theme.Icon.retry).lineLimit(1) }
+                Button { Task { await minutes.regenerate(id) } } label: { Label("Retry", systemImage: Theme.Icon.retry).lineLimit(1) }
                     .themedButton()
                     .disabled(minutes.asking)
                     .accessibilityIdentifier("recording-wrapup-retry")
@@ -205,30 +234,17 @@ struct RecordingWrapUp: View {
         }
     }
 
-    /// Open Minutes (prominent once they are ready), or Open Recording (prominent once there is nothing more to wait for),
-    /// and Done. Pinned under the steps, stacked at accessibility sizes.
+    /// Open Minutes, or Open Recording: the one solid control, pinned under the steps. Done is at the top, where Hide is.
     private func buttons(_ phase: RecordingPhase, entry: RecordingEntry) -> some View {
         let hasMinutes: Bool = { if case .done(true) = phase { true } else { false } }()
-        let settled: Bool = { if case .done = phase { true } else { false } }()
-        let open = Button { opening = true } label: {
+        return Button { opening = true } label: {
             Text(hasMinutes ? String(localized: "Open Minutes") : String(localized: "Open Recording"))
-                .font(Theme.Font.bodyStrong).lineLimit(1)
+                .font(Theme.Font.bodyStrong).lineLimit(1).minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity)
                 .scaledFrame(minHeight: Theme.Size.tapTarget)
         }
-        .themedButton(prominent: settled)
+        .themedButton(prominent: true)
         .accessibilityIdentifier("recording-wrapup-open")
-        let done = Button { finish() } label: {
-            Text("Done").font(Theme.Font.bodyStrong).lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-        }
-        .themedButton()
-        .accessibilityIdentifier("recording-wrapup-done")
-        return VStack(spacing: Theme.Space.s) {
-            open
-            done
-        }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
         .frame(maxWidth: .infinity)

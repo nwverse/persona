@@ -150,6 +150,42 @@ nonisolated enum RecordingPhase: Equatable, Sendable {
     }
 }
 
+// MARK: What the live sheet does when capture changes
+
+/// The live sheet's reaction to `RecordingCapture.state` changing, and the error that belongs to a stop. Pure, so the
+/// transitions (a stop while starting, paused straight to idle, a new recording while the wrap-up is shown) are tested.
+nonisolated enum RecordingSheetMove: Equatable, Sendable {
+    case none
+    /// A recording is on: the sheet holds its id and shows the live view. `announce`: it just began.
+    case hold(UUID, announce: Bool)
+    /// Capture ended while the sheet held a recording: the wrap-up replaces the live view.
+    case wrapUp
+    /// Capture ended and the sheet holds nothing (a start that was cancelled or refused): it closes.
+    case dismiss
+
+    static func move(from old: RecordingPhase.Capture, to new: RecordingPhase.Capture, recordingID: UUID?, held: UUID?) -> RecordingSheetMove {
+        switch new {
+        case .recording, .paused:
+            guard let recordingID, held != recordingID else { return .none }
+            return .hold(recordingID, announce: new == .recording)
+        case .idle:
+            if held != nil { return old == .recording || old == .paused ? .wrapUp : .none }
+            return .dismiss
+        case .starting:
+            return .none
+        }
+    }
+
+    /// The reason a recording ended badly, when the stop itself caused it (a failed write, low storage, an audio reset).
+    /// `RecordingCapture.error` also holds what happened while it ran and could be undone (the microphone changed, so it
+    /// paused): that one is `whileLive`, the value last seen while capture ran, and a recording saved fine after it is
+    /// not a failure.
+    static func stopError(now: String?, whileLive: String?) -> String? {
+        guard let now, !now.isEmpty, now != whileLive else { return nil }
+        return now
+    }
+}
+
 // MARK: The wrap-up's steps
 
 nonisolated extension RecordingPhase {

@@ -46,11 +46,21 @@ struct RecordingLiveView: View {
 
     @ViewBuilder private func layout(_ entry: RecordingEntry) -> some View {
         if size.isAccessibilitySize {
-            scroller {
-                VStack(alignment: .leading, spacing: Theme.Space.m) {
-                    head(entry)
-                    strip(entry)
-                    rows(entry)
+            // A fixed one-line header (the mark, the time and Hide) stays above whatever scrolls, so the state and the
+            // time are on screen at any text size.
+            VStack(spacing: Theme.Space.s) {
+                compactHeader
+                scroller {
+                    VStack(alignment: .leading, spacing: Theme.Space.m) {
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            titleRow(entry)
+                            stateLine(entry)
+                            interruptedNote
+                        }
+                        .padding(.horizontal, Theme.Space.page)
+                        strip(entry)
+                        rows(entry)
+                    }
                 }
             }
         } else {
@@ -62,40 +72,60 @@ struct RecordingLiveView: View {
         }
     }
 
+    /// The accessibility-size header: the mark, the time and Hide, on one line.
+    private var compactHeader: some View {
+        HStack(spacing: Theme.Space.m) {
+            RecordingStateDot(paused: paused)
+            RecordingClock(running: capture.state == .recording, font: Theme.Font.title)
+                .foregroundStyle(paused ? Color.secondary : Color.primary)
+                .dynamicTypeSize(...Theme.Recording.timerLargestSize)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Recording time"))
+                .accessibilityValue(RecordingClock.spoken(capture.timeline))
+                .accessibilityIdentifier("recording-live-timer")
+            Spacer(minLength: Theme.Space.s)
+            RecordingSheetCloseButton(title: String(localized: "Hide"), identifier: "recording-live-hide") { hide() }
+        }
+        .padding(.horizontal, Theme.Space.page)
+        .padding(.top, Theme.Space.s)
+    }
+
+    @ViewBuilder private var interruptedNote: some View {
+        if capture.interrupted {
+            Text("It carries on by itself when the call ends, or when you come back to Persona.")
+                .font(Theme.Font.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private func head(_ entry: RecordingEntry) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             titleRow(entry)
             stateLine(entry)
-            if capture.interrupted {
-                Text("It carries on by itself when the call ends, or when you come back to Persona.")
-                    .font(Theme.Font.caption).foregroundStyle(.secondary)
-            }
             timer
-            RecordingLevelMeter(level: { capture.inputLevel }, paused: paused)
-                .frame(maxWidth: .infinity)
+            // A call's note takes the flat meter's place, so entering and leaving the pause does not move the page.
+            ZStack {
+                RecordingLevelMeter(level: { capture.inputLevel }, paused: paused)
+                    .opacity(capture.interrupted ? 0 : 1)
+                interruptedNote.multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .recordingMotion(reduced: reduceMotion, value: capture.interrupted)
             if RecordingInput(rawValue: inputRaw) == .bluetooth, RecordingInput.bluetoothConnected, let name = capture.inputName {
                 Text("Microphone: \(name)").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .padding(.horizontal, Theme.Space.page)
-        .padding(.top, Theme.Space.l)
+        .padding(.top, Theme.Space.s)
     }
 
     private func titleRow(_ entry: RecordingEntry) -> some View {
         let title = Text(entry.displayTitle).font(Theme.Font.title).lineLimit(2)
             .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("recording-now-title")
-        let hideButton = Button { hide() } label: { Text("Hide").lineLimit(1) }
-            .themedButton().controlSize(.large)
-            .accessibilityIdentifier("recording-live-hide")
-        return Group {
-            if size.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.s) { title; hideButton }
-            } else {
-                HStack(alignment: .top, spacing: Theme.Space.m) {
-                    title.frame(maxWidth: .infinity, alignment: .leading)
-                    hideButton
-                }
+        return HStack(alignment: .center, spacing: Theme.Space.m) {
+            title.frame(maxWidth: .infinity, alignment: .leading)
+            if !size.isAccessibilitySize {
+                RecordingSheetCloseButton(title: String(localized: "Hide"), identifier: "recording-live-hide") { hide() }
             }
         }
     }
@@ -194,13 +224,9 @@ struct RecordingPersonaStrip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(spacing: Theme.Space.m) {
-                Label {
-                    Text(word).font(Theme.Font.bodyStrong).lineLimit(size.isAccessibilitySize ? 3 : 2)
-                } icon: {
-                    ThemedIcon(attendance.role.attends ? Theme.Icon.voiceListening : Theme.Icon.attendanceOff).foregroundStyle(Theme.ai)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("meeting-attending")
+                label
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("meeting-attending")
                 Spacer(minLength: Theme.Space.s)
                 menu
             }
@@ -214,9 +240,26 @@ struct RecordingPersonaStrip: View {
         }
     }
 
+    /// Off is an invitation, not a status: tapping it turns Persona on as a listener.
+    @ViewBuilder private var label: some View {
+        let content = Label {
+            Text(word).font(Theme.Font.bodyStrong).lineLimit(size.isAccessibilitySize ? 3 : 2)
+        } icon: {
+            ThemedIcon(attendance.role.attends ? Theme.Icon.voiceListening : Theme.Icon.attendanceOff).foregroundStyle(Theme.ai)
+        }
+        if attendance.role == .off {
+            Button { MeetingRecorder.shared.setRole(.listener, recordingID: entry.id.uuidString) } label: {
+                content.foregroundStyle(Theme.accent).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        } else {
+            content
+        }
+    }
+
     private var word: String {
         switch attendance.role {
-        case .off: String(localized: "Persona is off")
+        case .off: String(localized: "Turn on Persona")
         case .listener: String(localized: "Persona is listening")
         case .participant: String(localized: "Persona is taking part")
         }

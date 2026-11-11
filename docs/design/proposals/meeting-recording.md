@@ -206,15 +206,16 @@ The same `RecordingsSection` rows, hosted by Knowledge > Recordings and `Recordi
 │ └───────────────────────────┘ │
 │  Weekly sync · 10:00-11:00    │  calendar line (or the hint)
 │                               │
+│     Start Recording           │  quiet borderless secondary right under it, id recording-start
+│                               │
 │ ┌───────────────────────────┐ │
 │ │ Persona          Listen v │ │  menu, same control while recording
-│ │ Persona listens, answers  │ │  one-line explanation
+│ │ Persona listens, answers  │ │  explanation, only when Persona attends
 │ │ Who Attends    Main chat >│ │  only when attending
 │ │ Recording Language  EN  v │ │
 │ │ Microphone     Bluetooth v│ │  only with Bluetooth
 │ └───────────────────────────┘ │
-│  [ Start Recording ]          │  secondary themedButton, id recording-start
-│  Audio stays on this device…  │  section footer, idle only
+│  Audio stays on this device…  │  one-line footer, idle only
 │                               │
 │ Recent Recordings        2    │
 │  ...                          │
@@ -345,25 +346,25 @@ The sheet stays open and its content cross-fades to a wrap-up for the remembered
 
 ```
 ┌───────────────────────────────┐
-│            ───                │
-│  Weekly sync                  │
+│            ───        [Done]  │  Done closes; the work goes on in the background
+│  (✓)                          │  spinner until it is saved, a check once it is
+│  Weekly sync                  │  large title
 │  Recorded 42:10               │
 │                               │
 │  ✓ Saved                      │
 │  ✓ Transcribed                │
-│  ◌ Syncing to Knowledge       │  current step: spinner
+│  ◌ Syncing to Knowledge       │  current step: spinner (done: "Synced to Knowledge")
 │  · Writing minutes            │  meetings only
 │  · Minutes ready              │
 │                               │
-│ [      Open Minutes       ]   │  prominent when ready; "Open Recording" without minutes
-│ [          Done           ]   │  closes; the work goes on in the background
+│ [      Open Minutes       ]   │  the one solid button; "Open Recording" without minutes
 └───────────────────────────────┘
 ```
 
 Steps are derived from existing state (section 5). On the phone, `stop()` saves finished segments synchronously, so "Saved" is
 already done when the wrap-up appears; it is a checked row, not a step the user waits for. A done step has a check; the current step
 has a spinner; a failed step shows its reason. Retry exists only where an action exists today: "Resume Transcribing" (transcription)
-and "Try Again" (minutes). A rejected sync shows its reason and no button (no such action exists, and new sync logic is out of
+and "Retry" (minutes). A rejected sync shows its reason and no button (no such action exists, and new sync logic is out of
 scope; a follow-up, section 14). If the hub is unavailable (not paired, demo mode, offline), the "Syncing to Knowledge" row reads
 "Waiting for the hub" with no spinner and the steps after it stay unstarted, so the wrap-up never spins forever.
 
@@ -389,30 +390,27 @@ the default size. Section 10 has the rest.
 ### The large-type layout
 
 The bottom bar stays pinned at every size and holds only the primary actions, so Stop is reachable without scrolling. At
-accessibility sizes (`dynamicTypeSize.isAccessibilitySize`) the bar is Ask Persona (when attending) and Stop, stacked, plus a "More"
-menu that holds Pause / Continue, Bookmark and Type a Question (CLAUDE.md: what doesn't fit in a row goes into a menu). Above the
-bar the header, timer, meter, Persona strip and timeline scroll as one scroll view, so there is a single scroll region and nothing
-is clipped or truncated.
+accessibility sizes (`dynamicTypeSize.isAccessibilitySize`) the bar is Ask Persona (when attending) full width, and under it
+Pause / Continue, Stop and a "More" menu (Bookmark, Type a Question) side by side as icons whose names are their accessibility
+labels, so the bar is two rows tall at any size and Pause stays one tap away. The header is one fixed line (the mark, the time
+and Hide) above the scroll view, so the state and the time are on screen at any size; under it the title, state, Persona strip
+and timeline scroll as one view.
 
 ```
 ┌───────────────────────────────┐
-│  Weekly sync          [Hide]  │  title wraps
+│  (●) 12:34            [Hide]  │  fixed header, one line
+│  Weekly sync                  │  title wraps (this and below scroll)
 │  [Meeting]                    │  chip on its own line
-│  (●)                          │
 │  Recording                    │  state word on its own line
-│  12:34                        │  timer, scales, one line
-│  ▂▃▅▇▅▃▂                      │  meter, fixed height
-│  0:31 Let's start with the    │  timeline wraps freely (all of this scrolls)
+│  0:31 Let's start with the    │  timeline wraps freely
 │  release plan…                │
 ├───────────────────────────────┤  pinned bar
 │ │       Ask Persona         │ │
-│ │       Stop                │ │
-│ │       More               v│ │  Pause, Bookmark, Type a Question
+│ │  [ || ]   [ Stop ]  [ … ] │ │  icons; … holds Bookmark, Type a Question
 └───────────────────────────────┘
 ```
 
-The bar is at most three buttons with one-line labels; if it still exceeds a third of the height in the large-type screenshots
-(section 15), "Ask Persona" and "Stop" stay and the rest is already in the menu, so nothing else can be cut.
+The bar is Ask Persona and one row of three icon buttons; none has a label that could wrap.
 
 ## 5. State machine
 
@@ -431,7 +429,7 @@ error state: it names the reason and the one next step.
 | syncing | sync status `pending` or `uploading`, or minutes `.waitingForSync` (the text is not on the hub yet) | step "Syncing to Knowledge" in progress; sub-state "Waiting for the hub" (no spinner) when not paired, in demo mode or offline | Done | writingMinutes, done |
 | writingMinutes | minutes model `.writing` only (meetings) | step "Writing minutes" in progress | Done | done |
 | done (hasMinutes: Bool) | minutes `.ready`, or a non-meeting synced, or minutes `.unsupported` / `.none` | all steps checked; "Open Minutes" or "Open Recording" | Open, Done | idle (after Done) |
-| failed (reason) | `capture.error` or a start failure, a transcription error, sync rejected, minutes `.failed` | the step that failed and its reason | "Resume Transcribing" (transcription) and "Try Again" (minutes) only; a rejected sync or a capture error shows the reason with no action; Done | the step retried, idle |
+| failed (reason) | `capture.error` or a start failure, a transcription error, sync rejected, minutes `.failed` | the step that failed and its reason | "Resume Transcribing" (transcription) and "Retry" (minutes) only; a rejected sync or a capture error shows the reason with no action; Done | the step retried, idle |
 
 `ending` is not observable for any real time on the phone: `stop()` saves all finished segments and sets `active = false`, the
 expected segment count and `endedAt` before it returns, so on the phone the wrap-up starts at `transcribing`. `ending` is reachable
@@ -459,13 +457,13 @@ stateDiagram-v2
     syncing --> failed: rejected
     writingMinutes --> failed: minutes failed
     failed --> transcribing: Resume Transcribing
-    failed --> writingMinutes: Try Again
+    failed --> writingMinutes: Retry
     done --> idle: Done
     failed --> idle: Done
 ```
 
 Rules: the phases after `ending` can be skipped when they are already satisfied (a short note that is transcribed at once goes
-straight on). A step never goes backwards on screen except through Resume Transcribing or Try Again. A recording that fails
+straight on). A step never goes backwards on screen except through Resume Transcribing or Retry. A recording that fails
 while recording (storage, writer) shows the failure in the sheet and goes to the wrap-up, because the audio so far is saved. A start
 failure never opens the sheet: the idle page shows a banner.
 
@@ -620,7 +618,7 @@ is sensitive. The page's transcript never goes into `ContentState`. The existing
   The visible time is system-driven (`Text(timerInterval:)`) and does not re-render, so the spoken value is refreshed by a
   once-a-minute `TimelineView(.periodic)` that sets `accessibilityValue` from the elapsed time; it is not marked
   `.updatesFrequently`, and the value is at most a minute old (the state announcements and a fresh read when focused cover it).
-- State changes (started, paused, continued, ended, bookmark added) and arriving Persona answers are announced with
+- State changes (started, paused, continued, ended, bookmark added; "Recording started" when the sheet first sees the recording) and arriving Persona answers are announced with
   `AccessibilityNotification.Announcement`. Transcript lines are not.
 - The level meter is hidden from VoiceOver.
 - State is never color alone: dot shape and word; Pause and Continue differ by glyph.

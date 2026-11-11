@@ -25,7 +25,7 @@ struct RecordingsSection: View {
         } footer: {
             // Read once, before a recording: not under the controls of one that runs.
             if capture.state == .idle {
-                Text("Audio stays on this device; watch recordings come back here. After on-device transcription the text syncs to Knowledge automatically and is kept for the last \(sync.store.days) days, so the Assistant and agents can find it with a Knowledge search.")
+                Text("Audio stays on this device. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
             }
         }
         Section {
@@ -187,6 +187,16 @@ struct RecordingCaptureControls: View {
         let busy = preparing != .idle
         hero(busy: busy)
         if capture.state == .starting { startingRow }
+        // The plain recording is a quiet second way to start, right under the first, before any option.
+        Button { startNote() } label: {
+            Label("Start Recording", systemImage: Theme.Icon.recording).font(Theme.Font.body)
+                .lineLimit(size.isAccessibilitySize ? 3 : 1).minimumScaleFactor(0.6)
+                .frame(maxWidth: .infinity)
+                .scaledFrame(minHeight: Theme.Size.tapTarget)
+        }
+        .buttonStyle(.borderless)
+        .disabled(busy)
+        .accessibilityIdentifier("recording-start")
         if MeetingAttendees.offered(model) {
             personaRow.disabled(busy)
             if role.attends {
@@ -207,13 +217,6 @@ struct RecordingCaptureControls: View {
                 ForEach(RecordingInput.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
             }.font(Theme.Font.body).disabled(busy)
         }
-        Button { startNote() } label: {
-            Label("Start Recording", systemImage: Theme.Icon.recording).font(Theme.Font.bodyStrong).lineLimit(1).frame(maxWidth: .infinity)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-        }
-        .themedButton()
-        .disabled(busy)
-        .accessibilityIdentifier("recording-start")
     }
 
     /// Meeting Recording, and what it will be called: the calendar's meeting on now, or a way to let it read the calendar.
@@ -222,11 +225,13 @@ struct RecordingCaptureControls: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Button { startMeeting() } label: {
                 HStack(spacing: Theme.Space.s) {
-                    Label("Meeting Recording", systemImage: Theme.Icon.recording)
+                    // At accessibility sizes the icon goes: the words never truncate, they scale down a little instead.
+                    if size.isAccessibilitySize { Text("Meeting Recording") } else { Label("Meeting Recording", systemImage: Theme.Icon.recording) }
                     if busy { ProgressView() }
                 }
                 .font(Theme.Font.bodyStrong)
                 .lineLimit(1)
+                .minimumScaleFactor(0.6)
                 .frame(maxWidth: .infinity)
                 .scaledFrame(minHeight: Theme.Size.tapTarget)
             }
@@ -245,7 +250,8 @@ struct RecordingCaptureControls: View {
                         meetingNow = await MeetingCalendar.meetingOffMain()
                     }
                 } label: {
-                    Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption).lineLimit(1)
+                    Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
+                        .lineLimit(size.isAccessibilitySize ? 4 : 1).multilineTextAlignment(.leading)
                 }
                 .buttonStyle(.borderless)
             } else {
@@ -282,9 +288,11 @@ struct RecordingCaptureControls: View {
             .pickerStyle(.menu)
             .font(Theme.Font.body)
             .accessibilityIdentifier("meeting-attendance-role")
-            Text(role.detail).font(Theme.Font.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("meeting-attendance-detail")
+            if role.attends {
+                Text(role.detail).font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("meeting-attendance-detail")
+            }
         }
     }
 

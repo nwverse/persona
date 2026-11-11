@@ -64,30 +64,40 @@ struct RecordingLiveBar: View {
         }
     }
 
+    /// Accessibility sizes: Ask Persona full width, then Pause or Continue, Stop and More side by side as icons (their names
+    /// are their accessibility labels), so the bar is two rows tall whatever the text size and Pause stays one tap away.
     @ViewBuilder private var stacked: some View {
         if attends { askButton }
-        Button { confirmingStop = true } label: {
-            Label("Stop [Car Play Voice Screen c7b24e]", systemImage: Theme.Icon.interrupt)
-                .font(Theme.Font.bodyStrong).lineLimit(1).frame(maxWidth: .infinity)
+        HStack(spacing: Theme.Space.m) {
+            iconButton(paused ? String(localized: "Continue") : String(localized: "Pause"), paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
+                .accessibilityIdentifier("recording-pause")
+            iconButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
+                .accessibilityIdentifier("recording-stop")
+            Menu {
+                Button { addBookmark() } label: { Label("Bookmark", systemImage: Theme.Icon.pin) }
+                if attends {
+                    Button { typing = true } label: { Label("Type a Question", systemImage: Theme.Icon.keyboard) }
+                        .disabled(ask.busy)
+                }
+            } label: {
+                ThemedIcon(Theme.Icon.moreMenu).font(Theme.Font.heading)
+                    .frame(maxWidth: .infinity)
+                    .scaledFrame(minHeight: Theme.Size.tapTarget)
+            }
+            .themedButton()
+            .accessibilityLabel(Text("More"))
+            .accessibilityIdentifier("recording-more")
         }
-        .themedButton().controlSize(.large)
-        .accessibilityIdentifier("recording-stop")
-        Menu {
-            Button { togglePause() } label: {
-                Label(paused ? String(localized: "Continue") : String(localized: "Pause"), systemImage: paused ? Theme.Icon.run : Theme.Icon.pause)
-            }
-            Button { addBookmark() } label: { Label("Bookmark", systemImage: Theme.Icon.pin) }
-            if attends {
-                Button { typing = true } label: { Label("Type a Question", systemImage: Theme.Icon.keyboard) }
-                    .disabled(ask.busy)
-            }
-        } label: {
-            Label("More", systemImage: Theme.Icon.moreMenu)
-                .font(Theme.Font.bodyStrong).lineLimit(1).frame(maxWidth: .infinity)
+    }
+
+    private func iconButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ThemedIcon(symbol).font(Theme.Font.heading)
+                .frame(maxWidth: .infinity)
                 .scaledFrame(minHeight: Theme.Size.tapTarget)
         }
         .themedButton()
-        .accessibilityIdentifier("recording-more")
+        .accessibilityLabel(Text(title))
     }
 
     // MARK: Controls
@@ -140,7 +150,7 @@ struct RecordingLiveBar: View {
     private func barButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: Theme.Space.xxs) {
-                ThemedIcon(symbol).font(Theme.Font.heading)
+                ThemedIcon(symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.icon)
                 Text(title).font(Theme.Font.captionStrong).lineLimit(1).minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)

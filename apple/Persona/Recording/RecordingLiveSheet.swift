@@ -32,11 +32,11 @@ private struct RecordingLiveSheetPresenter: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $presented) { RecordingLiveSheet() }
-            .onAppear {
+            // A hidden shell page never gets onDisappear: the tab-aware pair keeps one host presenting at a time.
+            .onTabVisibility(appear: {
                 visible = true
                 if capturing { presented = true }
-            }
-            .onDisappear { visible = false }
+            }, disappear: { visible = false })
             // The observed change, not "tapped here": the drawer, Siri and the quick action open the page before the
             // calendar read and the microphone, so it is already on screen and idle when recording begins.
             .onChange(of: capture.state) { old, new in
@@ -61,16 +61,19 @@ struct RecordingLiveSheet: View {
     @State private var held: UUID?
     @State private var wrapUp = false
     @State private var exchanges: [MeetingAsk.Exchange] = []
+    /// `RecordingCapture.error` as last seen while capture ran, and the part of it a stop caused (see `RecordingSheetMove`).
+    @State private var liveError: String?
+    @State private var stopError: String?
 
     var body: some View {
         NavigationStack {
             ZStack {
                 if wrapUp, let held {
-                    RecordingWrapUp(id: held, finish: { dismiss() })
-                        .transition(.opacity)
+                    RecordingWrapUp(id: held, captureError: stopError, finish: { dismiss() })
+                        .transition(swap(arriving: true))
                 } else if let held {
                     RecordingLiveView(id: held, exchanges: exchanges, hide: { dismiss() })
-                        .transition(.opacity)
+                        .transition(swap(arriving: false))
                 }
             }
             .themedGroupedPage()
@@ -80,7 +83,13 @@ struct RecordingLiveSheet: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .onChange(of: capture.state, initial: true) { old, new in follow(from: old, to: new) }
+        .onChange(of: capture.error, initial: true) { if capture.state != .idle { liveError = capture.error } }
         .onChange(of: ask.exchanges) { mirror() }
+    }
+
+    /// The live view leaves with `conceal` and the wrap-up arrives with `reveal`: leaving is quicker than arriving.
+    private func swap(arriving: Bool) -> AnyTransition {
+        reduceMotion ? .identity : .opacity.animation(arriving ? Theme.Motion.reveal : Theme.Motion.conceal)
     }
 
     private func mirror() {
@@ -90,25 +99,52 @@ struct RecordingLiveSheet: View {
     }
 
     private func follow(from old: RecordingCapture.State, to new: RecordingCapture.State) {
-        switch new {
-        case .recording, .paused:
-            if let id = capture.recordingID, held != id {
-                held = id
-                wrapUp = false
-                exchanges = ask.exchanges(for: id)
-            }
-        case .idle:
-            if held != nil, old == .recording || old == .paused {
-                // Stop is confirmed (or the recording ended by itself): success once capture has ended, as the wrap-up appears.
-                Haptics.success()
-                AccessibilityNotification.Announcement(String(localized: "Recording stopped")).post()
-                withAnimation(reduceMotion ? nil : Theme.Motion.reveal) { wrapUp = true }
-            } else if held == nil {
-                dismiss()
-            }
-        case .starting:
+        switch RecordingSheetMove.move(from: old.phaseCapture, to: new.phaseCapture, recordingID: capture.recordingID, held: held) {
+        case .hold(let id, let announce):
+            held = id
+            wrapUp = false
+            stopError = nil
+            exchanges = ask.exchanges(for: id)
+            if announce { AccessibilityNotification.Announcement(String(localized: "Recording started")).post() }
+        case .wrapUp:
+            // Stop is confirmed (or the recording ended by itself): success once capture has ended, as the wrap-up appears.
+            stopError = RecordingSheetMove.stopError(now: capture.error, whileLive: liveError)
+            if stopError == nil { Haptics.success() }
+            AccessibilityNotification.Announcement(String(localized: "Recording stopped")).post()
+            withAnimation(reduceMotion ? nil : Theme.Motion.reveal) { wrapUp = true }
+        case .dismiss:
+            dismiss()
+        case .none:
             break
         }
+    }
+}
+
+extension RecordingCapture.State {
+    var phaseCapture: RecordingPhase.Capture {
+        switch self {
+        case .idle: .idle
+        case .starting: .starting
+        case .recording: .recording
+        case .paused: .paused
+        }
+    }
+}
+
+/// Hide and Done: a quiet text control at the sheet's top trailing corner, a finger tall without a pill around it.
+struct RecordingSheetCloseButton: View {
+    var title: String
+    var identifier: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title).font(Theme.Font.bodyStrong).foregroundStyle(Theme.accent).lineLimit(1)
+                .tapTargetFrame()
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -125,11 +161,14 @@ struct RecordingClock: View {
     @State private var frozenAt: Date?
 
     var body: some View {
-        Text(timerInterval: start...Date.distantFuture, pauseTime: running ? nil : frozenAt, countsDown: false, showsHours: false)
+        Text(timerInterval: start...Date.distantFuture, pauseTime: running ? nil : frozenAt, countsDown: false, showsHours: true)
             .font(font)
             .monospacedDigit()
             .lineLimit(1)
             .onChange(of: running, initial: true) {
+                // After the stop `timeline` is back at zero: the time the recording ended at stays on screen while the
+                // view fades out, held where it was.
+                if capture.state == .idle { frozenAt = frozenAt ?? Date.now; return }
                 start = Date.now.addingTimeInterval(-capture.timeline)
                 frozenAt = running ? nil : Date.now
             }

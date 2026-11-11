@@ -72,8 +72,6 @@ struct RecordingLevelMeter: View {
 /// Motion; a pause glyph when the recording is paused, so the state is never the color alone.
 struct RecordingStateDot: View {
     var paused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dim = false
 
     var body: some View {
         Group {
@@ -82,17 +80,28 @@ struct RecordingStateDot: View {
                     .font(Theme.Font.labelStrong)
                     .foregroundStyle(Color.secondary)
             } else {
-                Circle()
-                    .fill(Palette.recordingRed)
-                    .scaledFrame(width: Theme.Size.dotXL, height: Theme.Size.dotXL)
-                    .opacity(dim ? Theme.Recording.dimmed : 1)
-                    .task(id: reduceMotion) {
-                        guard !reduceMotion else { dim = false; return }
-                        withAnimation(Theme.Motion.holdBlink.repeatForever(autoreverses: true)) { dim = true }
-                    }
+                RecordingBlinkingDot()
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// The blinking dot owns its own dim state, so every time it is put on screen (Continue after a pause) it starts lit and
+/// blinks again, instead of inheriting a state from the one that left.
+private struct RecordingBlinkingDot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .fill(Palette.recordingRed)
+            .scaledFrame(width: Theme.Size.dotXL, height: Theme.Size.dotXL)
+            .opacity(dim ? Theme.Recording.dimmed : 1)
+            .task(id: reduceMotion) {
+                guard !reduceMotion else { dim = false; return }
+                withAnimation(Theme.Motion.holdBlink.repeatForever(autoreverses: true)) { dim = true }
+            }
     }
 }
 #endif

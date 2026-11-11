@@ -27,7 +27,8 @@ nonisolated enum RecordingTimeline {
         /// Stable across appends: a sentence by its segment and start (a segment transcribed again may change it, which is
         /// accepted), a bookmark by its place in the recording's marks (they only grow), an exchange by its own id.
         nonisolated enum ID: Hashable, Sendable {
-            case sentence(segment: Int, millis: Int)
+            /// `occurrence`: the nth sentence with the same segment and start (0 for the first), so two never share an id.
+            case sentence(segment: Int, millis: Int, occurrence: Int = 0)
             case bookmark(Int)
             case exchange(UUID)
             case gap
@@ -52,8 +53,12 @@ nonisolated enum RecordingTimeline {
     static func make(sentences: [Sentence], marks: [Double], asks: [Ask], transcribedUntil: Double, now: Double) -> [Item] {
         var items: [Item] = []
         items.reserveCapacity(sentences.count + marks.count + asks.count + 1)
+        var seen: [SentenceKey: Int] = [:]
         for s in sentences {
-            items.append(Item(id: .sentence(segment: s.segment, millis: millis(s.start)), at: s.start, kind: .sentence(s.text)))
+            let key = SentenceKey(segment: s.segment, millis: millis(s.start))
+            let occurrence = seen[key, default: 0]
+            seen[key] = occurrence + 1
+            items.append(Item(id: .sentence(segment: key.segment, millis: key.millis, occurrence: occurrence), at: s.start, kind: .sentence(s.text)))
         }
         for (index, mark) in marks.enumerated() {
             items.append(Item(id: .bookmark(index), at: mark, kind: .bookmark(index + 1)))
@@ -74,6 +79,8 @@ nonisolated enum RecordingTimeline {
         sorted.insert(marker, at: place)
         return sorted
     }
+
+    private struct SentenceKey: Hashable { var segment: Int; var millis: Int }
 
     /// The sentences of `segments` in order, each with the segment it came from; a line Persona's own voice put on the
     /// recording (`RecordingAttendance.spokenBy`) is left out, as everywhere else.

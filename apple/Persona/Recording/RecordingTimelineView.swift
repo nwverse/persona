@@ -52,10 +52,17 @@ struct RecordingTimelineRows: View {
                 .accessibilityIdentifier("recording-timeline-bookmark")
         case .exchange(let id):
             if let exchange = exchanges.first(where: { $0.id == id }) {
-                MeetingExchangeRow(exchange: exchange, entry: entry)
-                    .padding(Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                if exchange.id == exchanges.last?.id || exchange.answer == nil {
+                    MeetingExchangeRow(exchange: exchange, entry: entry)
+                        .padding(Theme.Space.m)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                } else {
+                    // Only the newest exchange is a card: an older, answered one is one line, so the text stays on screen.
+                    Label(exchange.question ?? String(localized: "What was just said"), systemImage: Theme.Icon.question)
+                        .font(Theme.Font.secondaryMedium).foregroundStyle(.secondary).lineLimit(1)
+                        .accessibilityIdentifier("recording-timeline-exchange-older")
+                }
             }
         case .gap:
             gap(since: item.at)
@@ -96,7 +103,8 @@ struct RecordingTimelineRows: View {
     /// Audio recorded since the last text came in: how much is waiting.
     private func gap(since transcribed: Double) -> some View {
         let seconds = RecordingTimeline.gapSeconds(now: capture.timeline, transcribedUntil: transcribed) ?? 0
-        return Label(String(localized: "Transcribing the last \(seconds) s"), systemImage: Theme.Icon.time)
+        let text = seconds >= 60 ? String(localized: "Transcribing the last \(seconds / 60) min") : String(localized: "Transcribing the last \(seconds) s")
+        return Label(text, systemImage: Theme.Icon.time)
             .font(Theme.Font.caption).foregroundStyle(.secondary)
             .accessibilityIdentifier("recording-timeline-gap")
     }
