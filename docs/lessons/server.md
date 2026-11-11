@@ -1,5 +1,19 @@
 # Lessons: hub / node and networking
 
+## Receipt integration fixtures need independent identities (#4433)
+
+A registered manager bus connection is not the same as its normal device-state
+readiness report. Run that report through the fixture's actual RPC path before
+starting a session; do not relax the production readiness check. A state.load RPC
+on the same stream fences the preceding durable state.put without a fixed sleep.
+
+Creation IDs are immutable once stored. Reusing one machine/session across wrong
+and matching receipt cases can make the matching load retain the earlier identity,
+creating a false production-defect report. Give every case its own credential,
+machine and persistent record; keep exact creation/incarnation equality assertions.
+A local authenticated HTTP/manager/node-state round trip proves those boundaries,
+not a real runtime reply or production ownership: retain the separate live evidence.
+
 ## Sharing peer budgets need an authenticated local ingress (#4391)
 
 Keeping X-Forwarded-For untrusted is necessary, but a loopback reverse proxy then
