@@ -2694,8 +2694,11 @@ Views, components, actions, responses, placements and context all use schema-gen
   retaining hub rejection reasons in the form (#1373: https, `github:owner/repo`, `git:<address>[#branch]`; git uses the hub machine's SSH credentials, no token).
   Logic in `ExtensionMarketModel.swift` (`ExtensionMarketModel`, `MarketExtensionModel`), pages in `ExtensionMarketViews.swift`.
 - Auto-upgrade (#1699, "Auto-upgrade"): details for marketplace-installed extensions (with `ExtensionView.auto_upgrade`) add an **Update** section below **Enabled**:
-  - **Auto-Update** switch (`PUT …/{id}/-/auto-upgrade`). With `auto_upgrade_paused` (the extension is turned off) it shows off and greyed out, and the footer says auto-update is paused until the extension is on again,
-    when the extension's own setting comes back (web, iOS / Mac / Vision and Android alike; mock hub `MOCK_PLUGIN_UPGRADE=disabled`).
+  - **Auto-Update** switch (`PUT …/{id}/-/auto-upgrade`) keeps the saved preference visible. With `auto_upgrade_paused: "disabled"`, the footer says auto-update is paused until the extension is on again;
+    Apple still allows editing that saved preference, while web and Android grey it out (mock hub `MOCK_PLUGIN_UPGRADE=disabled`).
+  - With `auto_upgrade_paused: "market_removed"` (#1895), **Auto-Update** and **Check for updates** are greyed out and the page says that adding the marketplace again with the same address restores the saved setting and update checks.
+    A marketplace's delete confirmation first counts the default manager's installed extensions with that `ExtensionView.market`; 0, 1 and several have their own wording, while a read failure or an old hub that omits `market` gets the generic stopped-upgrading note rather than a false 0.
+    Covered by `ExtensionSettingsLifecycleTests`, `ExtensionMarketModelTests`, `ExtensionMarketTests.testRemovedMarketKeepsPreferenceButPausesUpdates` and `testRemoveMarketConfirmationCountsAffectedExtensions`.
   - With a new version, "New version 1.1.0" plus small status text: auto-update when idle / auto-update off / needs one more permission: … (orange) / last version failed to start, no further auto-update (orange) / you rolled back from this version, no auto-update to it (orange, `skipped_by: "user"`) / failed to install / incompatible.
     Actionable rows end with **Review** or **Update**, opening the marketplace upgrade page with permissions and confirmation.
   - Without a new version, show the last result: "Auto-updated to 1.0.0 (was 0.9.0) · 3 hours ago", or "1.1.0 failed to start, reverted to 1.0.0".
