@@ -51,6 +51,46 @@ struct ChatStoreTests {
         #expect(s.backlogBuilt)
     }
 
+    @Test func duplicateCachedIDsDoNotCrashWhenBacklogRepeatsThem() throws {
+        let key = SessionKey(machineID: "test", sessionID: UUID().uuidString)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cached = item(1, .text, text: "cached")
+        ChatCache.save(key, items: [cached, cached], hasMore: false, in: folder)
+        let s = ChatStore(key: key, cacheFolder: folder)
+        var fresh = cached
+        fresh.text = "fresh"
+        s.merge([fresh], backlog: true, hasMore: false)
+        #expect(s.items.count == 1)
+        #expect(s.items.first?.text == "fresh")
+    }
+
+    @Test func duplicateIDsInOneBacklogKeepTheNewestCopy() {
+        let s = ChatStore(key: SessionKey(machineID: "test", sessionID: UUID().uuidString))
+        let old = item(1, .text, text: "old")
+        var newest = old
+        newest.text = "newest"
+        s.merge([old, newest], backlog: true, hasMore: false)
+        #expect(s.items.count == 1)
+        #expect(s.items.first?.text == "newest")
+    }
+
+    @Test func duplicateCachedIDsKeepTheNewestCopyBeforeAnEmptyMerge() throws {
+        let key = SessionKey(machineID: "test", sessionID: UUID().uuidString)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let old = item(1, .text, text: "old")
+        var newest = old
+        newest.text = "newest"
+        ChatCache.save(key, items: [old, newest], hasMore: false, in: folder)
+        let s = ChatStore(key: key, cacheFolder: folder)
+        s.merge([])
+        #expect(s.items.count == 1)
+        #expect(s.items.first?.text == "newest")
+    }
+
     @Test func parsesSpinnerAndOptions() {
         let screen = """
         ⏺ Working on it
