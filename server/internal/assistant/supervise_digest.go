@@ -167,9 +167,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 	}()
-	leader := to != here.Main
+	leader := to != here.Main && s.isLeader(ctx, to)
 	render := func(list []prompts.SuperviseEntry) string {
-		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Escalated: escalatedIn(list),
+		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 			LeaderStuck: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:     slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
 			ParkedDue:   slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),
@@ -203,8 +203,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 	}
 	msg.Text = render(entries)
-	if leader {
-		s.logf("supervise: %d signal(s) to leader conversation %s", len(entries), short(to))
+	if to != here.Main {
+		s.logf("supervise: %d signal(s) to conversation %s", len(entries), short(to))
 	} else {
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	}
@@ -317,7 +317,7 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	q := b.st.Queue[to]
 	for i := range q {
 		if q[i].Tool == superviseTool && (i > 0 || !b.draining[to]) {
-			q[i] = msg
+			q[i] = msg.queuedAs(q[i])
 			s.saveRelayLocked()
 			return true
 		}

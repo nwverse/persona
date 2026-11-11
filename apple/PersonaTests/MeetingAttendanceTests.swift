@@ -390,6 +390,21 @@ import Testing
         #expect(answer.speak && answer.lang == "zh-CN")
     }
 
+    /// A source meeting from a hub with `start` / `end` (#4713) says when in the recording page's date style; one without
+    /// them, or with one unreadable, keeps the hub's `when` (#4875).
+    @Test func sourceMeetingsInTheAppsDateStyle() throws {
+        let ask = try JSON.decoder.decode(MeetingAskWire.Ask.self, from: Data("""
+            {"id":"x","state":"answered","answer":"A","sources":[
+             {"kind":"recordings","id":"r","name":"Design review","when":"2026-11-03 14:00–15:10","start":"2026-11-03T14:00:00+08:00","end":"2026-11-03T15:10:00+08:00"},
+             {"kind":"recordings","id":"r2","name":"Weekly","when":"2026-11-04 10:00–10:30","start":"2026-11-04T10:00:00+08:00"},
+             {"kind":"recordings","id":"r3","name":"Retro","when":"","start":"soon","end":"later"}]}
+            """.utf8))
+        let start = try #require(JSON.parseDate("2026-11-03T06:00:00Z")), end = try #require(JSON.parseDate("2026-11-03T07:10:00Z"))
+        let span = RecordingFormat.span(start, end)
+        #expect(MeetingAskWire.answer(ask).sources == ["Design review · \(span)", "Weekly · 2026-11-04 10:00–10:30", "Retro"])
+        #expect(!span.contains("2026-11-03"))
+    }
+
     /// The recording ended: the voice stops and its questions go.
     @Test func endingClearsTheMeeting() async throws {
         let calls = Calls()

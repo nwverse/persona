@@ -192,7 +192,7 @@ func (s *Service) replaceQueuedNotice(to string, msg relayMsg) bool {
 	for i := range q {
 		// The first one may be going in right now (drainRelays takes it off once delivered): leave it.
 		if q[i].Tool == noticeTool && q[i].From == msg.From && (i > 0 || !b.draining[to]) {
-			q[i] = msg
+			q[i] = msg.queuedAs(q[i])
 			s.saveRelayLocked()
 			return true
 		}

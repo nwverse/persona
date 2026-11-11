@@ -190,6 +190,10 @@ type relayMsg struct {
 	At        time.Time `json:"at"`
 	// State is a task notice's state (quiet.go: done | needs | interrupted | failed); "" for other relays.
 	State string `json:"state,omitempty"`
+	// QueuedAt and Depth are when it was first queued and how long the queue was with it then (the queue wait,
+	// availability.go): kept by a message that takes its place (queuedAs).
+	QueuedAt time.Time `json:"queued_at,omitzero"`
+	Depth    int       `json:"depth,omitempty"`
 }
 
 type relayHop struct {
@@ -341,6 +345,7 @@ func (s *Service) queueRelay(to string, msg relayMsg) int {
 	if !s.relayLocked(context.Background()) {
 		return 0
 	}
+	msg.QueuedAt, msg.Depth = time.Now().UTC(), len(b.st.Queue[to])+1
 	b.st.Queue[to] = append(b.st.Queue[to], msg)
 	s.saveRelayLocked()
 	return len(b.st.Queue[to])
@@ -393,6 +398,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool {
 		text = msg.Text
 	}
+	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
 	if msg.Tool == superviseTool {
 		// Register before dispatch: a fast MCP call can arrive before assistant.send returns.
 		s.holdPushes(ctx, to)
@@ -488,6 +494,9 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				taken = true
 			}
 			b.mu.Unlock()
+			if taken && !stale && err == nil {
+				s.availQueueDelivered(machine, id, msg, time.Now())
+			}
 			if taken {
 				s.publish(context.Background()) // it no longer shows waiting
 			}
