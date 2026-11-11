@@ -166,10 +166,10 @@ type Node struct {
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
 	freshForks map[string]bool
-	starts    startLog        // sessions starting in the background (starting.go)
-	ups       uploads         // files arriving from the phone (upload.go)
-	sysOnce   sync.Once       // system: read once (metrics.go)
-	sys       proto.System
+	starts     startLog  // sessions starting in the background (starting.go)
+	ups        uploads   // files arriving from the phone (upload.go)
+	sysOnce    sync.Once // system: read once (metrics.go)
+	sys        proto.System
 
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
@@ -652,7 +652,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能恢复", nil)
 	}
-	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(p.ResumeSessionID) { // codex_resume.go
+	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(withStartHost(ctx, p.Host), p.ResumeSessionID) { // codex_resume.go
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
 	}
 	if n.externalCodex(p.SessionID) {
@@ -945,6 +945,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if p.ResumeSessionID != "" && p.Host == "" {
+			p.Host = n.startKind(n.withResumeHost(ctx, p.ResumeSessionID))
+		}
 		var work workStartOptions
 		if method == devicewire.MethodStartWorkSession {
 			if p.ResumeSessionID != "" {
@@ -1241,7 +1244,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.terminalWatch(ctx, p.SessionID, a.Control)
 	case "panes.list": // the terminal browser: every workspace, tab and pane, agent or shell (panes.go)
 		n.configured()
-		return n.listPanes(ctx)
+		res, err := n.listPanes(ctx)
+		if err == nil {
+			n.paneForegrounds(ctx, &res)
+		}
+		return res, err
 	case "panes.new": // an explicit "New terminal" from the browser: a shell tab in a workspace (panes.go)
 		var a struct {
 			Kind        string `json:"kind"`
@@ -1249,6 +1256,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		_ = json.Unmarshal(params, &a)
 		return n.newShell(ctx, a.Kind, a.WorkspaceID)
+	case "panes.close_finished": // the user's "Close finished terminals" (stopped.go, #4754)
+		var a struct {
+			Panes   string `json:"panes"`
+			Preview bool   `json:"preview"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.closeFinished(ctx, a.Panes, a.Preview)
 	case "panes.close":
 		return ok(n.closePane(ctx, p.Pane))
 	case "panes.split":
