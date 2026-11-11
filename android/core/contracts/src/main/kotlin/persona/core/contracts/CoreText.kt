@@ -389,7 +389,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         WorkflowFailed("Failed"),
         WorkflowKilled("Stopped"),
         WorkflowStalled("Gone quiet"),
-        WorkflowAgentsDone("%1\$d/%2\$d agents done"),
+        WorkflowAgentsDone("%2\$d/%1\$d agents done"),
     }
 
     /** The English words with [args] filled in, for logs and messages; the screen uses the app's resources. */
