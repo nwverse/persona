@@ -198,8 +198,22 @@ type Session struct {
 	// sleep, loop on a check or watch something, using next to no CPU; no subagent or workflow runs. Clients show
 	// "Waiting in the background" apart from Working (lighter, not in the Working count); State stays working, so an
 	// older app shows Working. The node says whether its background commands wait; the manager keeps it only so.
-	BackgroundWaiting bool      `json:"background_waiting,omitempty"`
-	SeenAt            time.Time `json:"seen_at,omitempty"`
+	BackgroundWaiting bool `json:"background_waiting,omitempty"`
+	// The flags from BackgroundWorking to Quiet sit together, not beside the fields they go with: with Go's 8-byte
+	// allocation header a Session must stay at most 1,528 bytes to keep its 1,536-byte size class, and every row the
+	// manager copies out of a node's list pays the next class's 256 bytes otherwise (internal/assistant's
+	// TestSessionReadersCopyNoList, #2528). Mind the padding when adding a field.
+	// WokeByTask: the latest turn was started by a background task reporting back, not by the user; finishing
+	// it sends no push (the user did not ask for anything).
+	WokeByTask bool `json:"woke_by_task,omitempty"`
+	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
+	// ready.
+	Starting bool `json:"starting,omitempty"`
+	// Quiet: the agent works (or worked) for a quiet task, one the main conversation opened while the user wanted
+	// those told only there (#1731): set by the hub, also once the task is done. Clients leave it out of task
+	// notifications and global badges; the Agents page shows it as always.
+	Quiet  bool      `json:"quiet,omitempty"`
+	SeenAt time.Time `json:"seen_at,omitempty"`
 	// StateSince is when the agent entered its current state, as the hub saw it (the hub restarting resets it):
 	// lists sort "Working" by it, since updated_at moves on every step.
 	StateSince time.Time `json:"state_since,omitempty"`
@@ -278,18 +292,8 @@ type Session struct {
 	ActivityAt *time.Time `json:"activity_at,omitempty"`
 	// Rev changes whenever the transcript does (its size): the app pulls new items for every session whose rev
 	// differs from what it has, without opening it. Changes travel as the light `revs` event.
-	Rev int64 `json:"rev,omitempty"`
-	// WokeByTask: the latest turn was started by a background task reporting back, not by the user; finishing
-	// it sends no push (the user did not ask for anything).
-	WokeByTask bool `json:"woke_by_task,omitempty"`
-	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
-	// ready.
-	Starting bool `json:"starting,omitempty"`
-	// Quiet: the agent works (or worked) for a quiet task, one the main conversation opened while the user wanted
-	// those told only there (#1731): set by the hub, also once the task is done. Clients leave it out of task
-	// notifications and global badges; the Agents page shows it as always.
-	Quiet               bool `json:"quiet,omitempty"`
-	PendingInteractions int  `json:"pending_interactions"`
+	Rev                 int64 `json:"rev,omitempty"`
+	PendingInteractions int   `json:"pending_interactions"`
 	// Suggestion is the next message Claude Code proposes after a turn (grey in its empty input box), read off the
 	// screen; gone once the agent works again or a message is sent.
 	Suggestion string `json:"suggestion,omitempty"`

@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0xfb8975c35078aedc
+const sessionWireLayout = 0xd400464c63d4421c
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout
 
@@ -150,6 +150,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"state":`, s.State, false)
 	w.boolean(`"background_working":`, s.BackgroundWorking, true)
 	w.boolean(`"background_waiting":`, s.BackgroundWaiting, true)
+	w.boolean(`"woke_by_task":`, s.WokeByTask, true)
+	w.boolean(`"starting":`, s.Starting, true)
+	w.boolean(`"quiet":`, s.Quiet, true)
 	w.time(`"seen_at":`, s.SeenAt) // time.Time is a struct, never empty, so omitempty keeps it
 	w.time(`"state_since":`, s.StateSince)
 	w.strs(`"queued":`, s.Queued)
@@ -211,9 +214,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		w.time(`"activity_at":`, *s.ActivityAt)
 	}
 	w.integer(`"rev":`, s.Rev, true)
-	w.boolean(`"woke_by_task":`, s.WokeByTask, true)
-	w.boolean(`"starting":`, s.Starting, true)
-	w.boolean(`"quiet":`, s.Quiet, true)
 	w.integer(`"pending_interactions":`, int64(s.PendingInteractions), false)
 	w.str(`"suggestion":`, s.Suggestion, true)
 	w.str(`"start_error":`, s.StartError, true)
