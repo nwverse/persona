@@ -16,7 +16,7 @@
 | `color.status.json` | `status.<mode>.<state>` | `ios/Shared/StatusPalette.swift`；待唤醒和已屏蔽的映射取 `ios/Persona/Views/Chats/ChatsView.swift` 的分组表 |
 | `dimension.json` | `radius`、`space`、`watch` | `Theme.Radius`、`Theme.Space`、`Theme.Watch`；触控区取 `docs/archive/redesign/README.md` D7，胶囊按短边的一半 |
 | `type.json` | `type.<level>` | `Theme.Font` 的九个层级（display、title、heading、body、secondary、caption、sectionHeader、label、code）：文本样式、字重，以及 `Theme.Level` 的 iPhone 字号和行高倍数 |
-| `motion.json` | `motion` | `Theme.Motion.state/layout` 的配置时长；减少动态效果时用零时长。它们不是运行耗时的实测数据 |
+| `motion.json` | `motion` | `Theme.Motion` 的共享动效：state、layout、expand、drawer、springBack 是弹簧（时长和弹性，Compose 取阻尼比 `1 - bounce`、刚度 `(2π / 时长)²`），reveal、conceal 是时长和曲线，keyboard 是系统键盘的刚度和阻尼，needsYouBreath 是“需要你”呼吸环；减少动态效果时所有时长为零。它们是配置值，不是运行耗时的实测数据 |
 | `surface.json` | `surface.<style>` | `ios/Persona/Views/Styling.swift` 的 `Surface`：材质、阴影颜色与偏移、描边；原生回退使用无阴影实心表面 |
 | `rules.json` | `$extensions.persona` | `docs/apple/ios.md` 可读性底线、`docs/archive/redesign/ux.md` 第 7、8 节，以及 WCAG AA |
 
@@ -115,7 +115,7 @@ val body = TextStyle(
     fontWeight = Tokens.Type.Body.weight,
     lineHeight = Tokens.Type.Body.size * Tokens.Type.Body.lineHeight,
 )
-val duration = if (reduceMotion) Tokens.Motion.reduced else Tokens.Motion.state
+val duration = if (reduceMotion) Tokens.Motion.reduced else Tokens.Motion.State.duration
 ```
 
 颜色输出浮点 RGBA，保留 `0.14` 等 alpha，避免先压成 8 位后与 CSS 不同。JSON 的双精度数到 Compose 浮点数存在常规数值精度差异。
@@ -128,7 +128,7 @@ CSS 在 `:root` 暴露全路径变量，例如 `--semantic-native-light-accent`�
 </div>
 ```
 
-原型原有的 `--primary / --needs-dot` 等名称不会被自动改写，接入方需要映射或替换。CSS 的 `prefers-reduced-motion` 会把 `--motion-state/layout` 改为零；循环动效仍须由组件停止。触控区、读屏完整计数、装饰图标隐藏、字号放大后的布局调整，以及按钮不得换行，都需要组件层实现，token 检查不代替 UI 验收。
+原型原有的 `--primary / --needs-dot` 等名称不会被自动改写，接入方需要映射或替换。CSS 的 `prefers-reduced-motion` 会把每个 `--motion-*-duration` 改为零；循环动效仍须由组件停止。触控区、读屏完整计数、装饰图标隐藏、字号放大后的布局调整，以及按钮不得换行，都需要组件层实现，token 检查不代替 UI 验收。
 
 ## 对比度规则与现有冲突
 
