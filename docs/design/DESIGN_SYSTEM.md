@@ -334,6 +334,10 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - User bubble: trailing, radius 20, padding 16 x 12, `ChatBox.user` fill in the unified layout, otherwise the theme's bubble gradient (`apple/Persona/DesignSystem/QuoteViews.swift:295-345`, `apple/Persona/Views/Chat/MessageViews.swift:151`).
 - Assistant text: unboxed in Agents chats; boxed in `ChatBox.persona` in Assistant chats. Streaming text re-parses only the tail.
 - Quotes sit above the words and jump to the original on tap.
+- Forwards (#3807) use the quote card with the forward arrow before the heading ("Forwarded from Claude · chat"), a line
+  for the computer and time, and four lines of the original; a tap opens the original chat at that message. Over the
+  composer the same row adds a line saying where it comes from and goes. Forward takes Share's place in the message bar
+  (the bar keeps its width); Share as Image is the first row of the Forward To sheet.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 
