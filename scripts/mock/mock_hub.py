@@ -1336,6 +1336,18 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
         SESSIONS.append(sess("macbook", sid, title, f"/Users/me/code/{project}", status, state, "", 0, "", 0, mins,
                              "好的，我先看一下。", agent=agent, **kw))
+    # The CSV chat's subagents (thread_spawn): the node lists each with its chat (codex_registry.go); the Agents list puts
+    # them under that chat's Subtasks, as the Codex App does.
+    CSV_CHAT = "d3a0e7a0-0000-4000-8000-000000000005"
+    for n, (title, status, state, mins) in enumerate([("检查 BOM 和换行符", "working", "working", 1),
+                                                      ("找出所有导出入口", "offline", "offline", 3),
+                                                      ("补编码的回归测试", "offline", "offline", 3)], start=1):
+        sid = f"d3a0e7a0-0000-4000-8000-00000000010{n}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/billing", status, state, "", 0, "", 0, mins, "看完了。",
+                             agent="codex", **dict(NO_SPACE, agent_surface="desktop", started_by_persona=False, space_kind="codex_app",
+                             space_id="codex-project:/Users/me/code/billing", space_name="billing", agent_name="Codex App",
+                             source_kind="codex_history", source_thread_id=sid, capabilities={"read": True},
+                             is_subagent=True, parent_session_id=CSV_CHAT, root_session_id=CSV_CHAT, parent_thread_id=CSV_CHAT)))
 
 # MOCK_SPLIT_TABS=1: herdr's layout for the sidebar's "By machine" tree and the chat's pane tabs (#1963): two machines (the
 # NAS offline, its agent only under "Recent"), workspaces whose tabs hold one pane or two (claude and codex in one slot),

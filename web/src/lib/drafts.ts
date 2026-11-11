@@ -53,7 +53,8 @@ export function parseQuote(text: string): DraftQuote {
 
 export type DraftEvent =
   | ({ type: "quote" } & DraftQuote)
-  | { type: "replace"; text: string }
+  /** `edit`: it starts editing the last message (#4503); any other replace ends an edit. */
+  | { type: "replace"; text: string; edit?: boolean }
   | { type: "append"; text: string }
   /** The words of a send that failed after its box moved on (another conversation, or closed): back in front. */
   | { type: "unsent"; text: string }

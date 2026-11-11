@@ -125,7 +125,7 @@ Call sites of the names that change meaning:
 
 Android's springs use damping 0.82 or 0.9 at stiffness 400; Brief (140/240 ms) and Board (100/160 ms) use tweens. In `Tokens.Motion` only `reduced` is read.
 
-**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS.
+**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS. Done in two PRs: the tokens, the drift test and Glass's state and layout springs first (`IosSpring`), then the breathing ring, which changes how the mark looks.
 
 Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; Android's count and breathe timings have no iOS counterpart and stay Android-only until iOS has one.
 
@@ -133,7 +133,7 @@ Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; A
 
 **Today.** iOS `Theme.Font`: display 28 bold, title 22 semibold, heading 17 semibold, body 17, secondary 15, caption 13, section header 13 semibold, label 12, code 13 monospaced, with line heights per level. Android's `Tokens.Type` still carries retired iOS names (panel title, card body, greeting, micro 11); `Typography.kt` reads only their sizes, the 28 and 22 are literals, and line heights, weights and families are never read.
 
-**Change.** Rewrite `type.json` as the nine iOS levels with size, weight and line height. Glass's typography reads them, and `GlassTokenContractTest` checks against the tokens instead of its own numbers. `RepositoryTests` compares the levels with `Theme.Font`.
+**Change.** Rewrite `type.json` as the nine iOS levels with size, weight and line height. Glass's typography reads them, and `GlassTokenContractTest` checks against the tokens instead of its own numbers. `RepositoryTests` compares the levels with `Theme.Font`. Done: the line heights are `Theme.Level`'s multipliers, which Glass doesn't read; Android's smaller code (12) takes the label level's size, since iOS has one code level.
 
 Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`), there is a 12 sp floor, and Brief and Board are pinned by hash in the contract test.
 
