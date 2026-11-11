@@ -298,6 +298,8 @@ nonisolated struct AgentListProjection: Sendable {
     var quietRepositories: [String: [SpaceGroup]] = [:]
     var rows: [String: Rows] = [:]
     var quietWorktrees: [String: Bool] = [:]
+    /// By App's sections, their projects in them (`AppGroups`); empty under any other grouping.
+    var apps: [AppGroup] = []
     var menuSections: [String] = []
     var searchPlan = AgentSearchPlan(code: "session.where(s => true)", parsed: .init())
     /// Searching can match an Agent-free worktree even when no session matches the query.
@@ -434,7 +436,8 @@ nonisolated struct AgentListProjection: Sendable {
             }
             result.menuSections = result.tree.flatMap(\.repos).filter { result.repositories[$0.id]?.quiet != true }.map(\.id)
         } else if settings.grouping == "app" {
-            result.menuSections = AppGroups.build(result.unpinned).map(\.id)
+            result.apps = AppGroups.build(result.unpinned) // the list's sections, built once (`AppGroups`)
+            result.menuSections = result.apps.map(\.id)
         } else if settings.grouping != "recent" && settings.grouping != "todo" {
             result.menuSections = order.sectionIDs(result.unpinned, byMachine: settings.grouping == "machine")
         }
