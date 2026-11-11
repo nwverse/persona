@@ -831,3 +831,18 @@ current value, including Unknown before native settings arrive. Its Fast choice 
 Selection waits for native acknowledgment and the session push. Standard is the reversible choice. This requested
 control reuses Menu typography, spacing, focus behavior and light/dark tokens. Settings > Agents > Codex uses the
 existing agent-settings row for the native default. No account or session is automatically switched to Fast.
+
+## Hub connection password (#4474)
+
+The administrator's Devices page owns the connection-password switch and registration form. It is off until an
+administrator sets a password and enables it. The form uses the existing admin Card, Button, ErrorBox and toast
+patterns, and explicitly offers revocation of existing device credentials. Disabling password sign-in or replacing
+the password is visible here; neither action silently removes devices unless the administrator selects revocation.
+
+The web sign-in page shows the password form only when the hub enables it, alongside the existing pairing entry.
+Native pairing offers password sign-in with a hub address and keeps scan/link pairing reachable. The system browser
+owns password entry so all clients use the same OPAQUE implementation; the callback carries a single-use code bound
+to the initiating app rather than a reusable device token. Password sign-in requires trusted HTTPS, with QR pairing
+remaining available for self-signed deployments. This changes connection features only, without selecting a model,
+speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTextField, JButton and SettingsCaption;
+Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
