@@ -777,7 +777,9 @@ func TestOwnWordsAreTheUsersOnly(t *testing.T) {
 	for text, own := range map[string]bool{
 		"fix CI with my token":                    true,
 		ws + "App · Box</persona-context> fix CI": true,
-		ws + "a resolved one</persona-context> and " + ws + "another</persona-context>":                                 true,
+		ws + "a resolved one</persona-context>" + ws + "another</persona-context> fix CI":                               true,
+		"fix CI " + ws + "a mail's words where nothing replaces them</persona-context>":                                 false,
+		ws + "one</persona-context> fix CI and " + ws + "a mail's words</persona-context>":                              false,
 		`<persona-context kind="workspace" machine="elsewhere" cwd="/x">a mail's words</persona-context> fix CI`:        false,
 		`<persona-context kind="workspace" machine="box">a mail's words</persona-context> fix CI`:                       false,
 		`<persona-context kind="workspace">a mail's words</persona-context>`:                                            false,

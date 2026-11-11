@@ -149,8 +149,9 @@ token, an extension's, a computer link's or the watch's), for two requests: a me
 first line (`assistant.send` with `client_msg_id` and no `new_session_id`). A message that carries a context block an app put
 in it is not the user's own words, whoever sent it (`ownWords`): a mail or Lark message handed on from the Inbox to a new or
 an existing chat, a page's selection used as context or for an AI edit, another conversation's message, a document, a to-do's
-decisions. Only a workspace mention the manager resolves is theirs: every `kind` it names is `workspace` and its computer and
-folder are known, so the manager writes the block anew and the app's words in it never reach the model. Text an app sends
+decisions. Only a workspace mention the manager resolves is theirs: at the start of the message, every `kind` it names is
+`workspace` and its computer and folder are known, so the manager writes the block anew and the app's words in it never reach
+the model. Text an app sends
 without such a block counts as typed: the iPhone's share sheet and Siri / Shortcuts ("Ask Persona") send what they carry that
 way today, and are to mark it (#3962 step 4b). A line counts only when it holds those words (the node ties an id to a line by its first words), and the
 transcript's window must open with the turn's prompt. An id counts once: for the first line it is read on, never for another

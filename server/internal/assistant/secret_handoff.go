@@ -333,25 +333,38 @@ var kindAttrRe = lazyre.New(`(?:^|\s)kind="([^"]*)"`)
 // carries someone else's (a mail or a Lark message handed on from the Inbox, a page's selection used as context or for
 // an AI edit, another conversation's message, a document, what the old main conversation left): such a message is not
 // the user's asking, whoever sent it (the decision on #3962: what the inbox, mail or channels bring gets the card). Only
-// a workspace mention the manager resolves is theirs: every kind it names is "workspace", and its computer and folder
-// are known, so the manager puts its own words in its place (workspace_mention.go), the app's body never reaching the
-// model.
+// workspace mentions the manager writes anew are theirs, so it checks just what withWorkspaces replaces: the blocks at
+// the text's start, each naming only the kind "workspace" and a computer and folder the manager knows; no other block
+// anywhere.
 func (s *Service) ownWords(ctx context.Context, text string) bool {
-	for _, m := range contextTagRe.FindAllStringSubmatch(text, -1) {
-		kinds := kindAttrRe.FindAllStringSubmatch(m[1], -1)
-		if len(kinds) == 0 {
+	rest := text
+	for {
+		m := leadingContextRe.FindStringSubmatchIndex(rest)
+		if m == nil {
+			break
+		}
+		if !s.resolvedWorkspace(ctx, rest[m[2]:m[3]]) {
 			return false
 		}
-		for _, k := range kinds {
-			if k[1] != "workspace" {
-				return false
-			}
-		}
-		if _, _, ok := s.workspaceDevice(ctx, contextAttrs(m[1])); !ok {
+		rest = rest[m[1]:]
+	}
+	return !contextTagRe.MatchString(rest)
+}
+
+// resolvedWorkspace: tag (a context tag's attributes) is a workspace mention withWorkspaces fills in: every kind it
+// names is "workspace" (as its own attribute, not data-kind), and its computer and folder are known.
+func (s *Service) resolvedWorkspace(ctx context.Context, tag string) bool {
+	kinds := kindAttrRe.FindAllStringSubmatch(tag, -1)
+	if len(kinds) == 0 {
+		return false
+	}
+	for _, k := range kinds {
+		if k[1] != "workspace" {
 			return false
 		}
 	}
-	return true
+	_, _, ok := s.workspaceDevice(ctx, contextAttrs(tag))
+	return ok
 }
 
 // handoffLine is the transcript line an item belongs to: its id before the last "#", as the node ties a send to a line
