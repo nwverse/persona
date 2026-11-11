@@ -1,5 +1,5 @@
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
@@ -58,6 +58,7 @@ import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeSt
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
+import { resultExtras } from "../lib/brief";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
@@ -1287,6 +1288,11 @@ function askText(ix: Interaction | undefined): string {
 
 // ── Todo Detail ──────────────────────────────────────────────
 
+// A task's brief (#3822) comes with the first to-do that has one, not with the page.
+const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
+const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
+
 // The existing review UI lives with this lazy page, not the first screen's card badges.
 const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
   met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
@@ -1303,6 +1309,8 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
   const list = checklist(sup);
   const review = latestReview(sup);
   const parked = parkedLine(todo);
+  // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
+  const extras = todo.done_at ? resultExtras(todo) : undefined;
   return (
     <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
       <div className="flex items-center gap-2">
@@ -1336,6 +1344,11 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
             );
           })}
         </ul>
+      )}
+      {extras && (
+        <Suspense fallback={null}>
+          <BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />
+        </Suspense>
       )}
       {parked && <p data-testid="review-parked" className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{parked}</p>}
       {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
@@ -1531,7 +1544,19 @@ function TodoDetail({
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
+      {/* The brief its work is held to (#3822): who asked and in what words above the criteria; the scope changes
+          and who worked on it under them. */}
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefPanel todo={todo} />
+        </Suspense>
+      )}
       <ReviewChecklist todo={todo} />
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefHistory todo={todo} />
+        </Suspense>
+      )}
       <LatestReport todo={todo} />
 
       {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}

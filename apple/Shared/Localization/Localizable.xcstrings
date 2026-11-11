@@ -40104,6 +40104,29 @@
         }
       }
     },
+    "Couldn't search for places. Check the connection and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't search for places. Check the connection and try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "場所を検索できませんでした。接続を確認して、もう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能搜索地点，检查连接后再试。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't send back the plan": {
       "localizations": {
         "en": {
@@ -45203,6 +45226,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "私聊、@我、群消息和云文档里提到你的地方，AI 先分拣、起草回复"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Directions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "方向性"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "方向"
           }
         }
       },
@@ -90822,6 +90868,29 @@
       },
       "extractionState": "manual"
     },
+    "Other Chats": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other Chats"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その他のチャット"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他对话"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Other Checks": {
       "localizations": {
         "en": {
@@ -108519,6 +108588,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "搜索地址或地点"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Search, use your current location, or tap the map where the place is.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search, use your current location, or tap the map where the place is."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "検索するか、現在地を使うか、地図上でその場所をタップしてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可以搜索、使用当前位置，或在地图上点一下地点所在的位置。"
           }
         }
       },
