@@ -11,7 +11,7 @@ import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow }
 import { openLink } from "../../lib/links";
 import { openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { machineWithHub } from "../../lib/mesh";
-import { hasEffortOnly, hasModes, isMuted, toggleMute } from "../../lib/session-actions";
+import { hasModes, isMuted, toggleMute } from "../../lib/session-actions";
 import { attachLive, flipPin } from "../../lib/agent-actions";
 import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch } from "../../lib/new-agent";
@@ -55,6 +55,7 @@ import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { ContextMeter } from "./ContextMeter";
+import { AgentModelPill } from "./ModelPill";
 import { NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
 import { scrollsAFold } from "./fold-scroll";
@@ -1388,6 +1389,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
   const commands = useMemo(() => (assistant ? [] : agentCommands(AGENT_COMMANDS, session)), [assistant, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
+  // an Agent's model pill (#5032); a Persona conversation keeps its launcher chip in the footer for now (#5033)
+  const trailing = useMemo(() => (session && !assistant ? <AgentModelPill session={session} /> : null), [session, assistant]);
 
   const pendingCards = (
     <PendingCards
@@ -1641,6 +1644,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           onFocusChange={setTyping}
           blocked={gate.blocked ?? noRowBlock}
           footer={footer}
+          trailing={trailing}
           voice={voiceEntry.offer}
         />
         )}
@@ -1755,16 +1759,17 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
   );
 }
 
-function ComposerFooter({ session, assistant }: { session: Session; assistant?: boolean }) {
-  // a Persona conversation's launcher and model are its chip (they switch there)
-  const parts = [sourceSubtitle(session), ...(assistant ? [] : [session.launcher, session.model?.split("/").pop(), shortPath(session.cwd)])].filter(Boolean);
+export function ComposerFooter({ session, assistant }: { session: Session; assistant?: boolean }) {
+  // the launcher and model are the composer's model pill (an Agent's, #5032) or the launcher chip (a Persona
+  // conversation's): they switch there, so the line keeps only where the chat comes from and runs
+  const parts = [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter(Boolean);
   const info = useMenu();
-  // a Persona conversation (the main one too) switches its modes whatever its state: the hub applies them (#2416)
+  // a Persona conversation (the main one too) switches its modes whatever its state: the hub applies them (#2416). An
+  // Agent's effort (a Codex thread's too) is on its model pill
   const modes = assistant || (hasModes(session) && stateOf(session) !== "offline");
-  const effortOnly = !assistant && hasEffortOnly(session) && stateOf(session) !== "offline"; // a Codex thread on its app-server
   return (
     <span className="flex min-w-0 items-center gap-2">
-      {(modes || effortOnly) && <ModeChips session={session} effortOnly={effortOnly} assistant={assistant} withInfo={parts.length > 0} />}
+      {modes && <ModeChips session={session} assistant={assistant} withInfo={parts.length > 0} />}
       {assistant && <AssistantLauncherChip session={session} />}
       {parts.length > 0 && <span className="min-w-0 truncate max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>{parts.join(" · ")}</span>}
       {/* phone width (#3533): the line would show a letter or two, so it is a button that lists the parts in full */}
@@ -1775,15 +1780,12 @@ function ComposerFooter({ session, assistant }: { session: Session; assistant?: 
 }
 
 /** The composer footer's parts as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
- *  copies it, except the source, which is a sentence to read rather than a value to paste. */
+ *  copies it, except the source, which is a sentence to read rather than a value to paste. The launcher and model are
+ *  the model pill's (#5032). */
 export function footerRows(session: Session, assistant?: boolean): MenuItem[] {
   const rows: [string, string, string | undefined][] = [
     ["source", t("chat-chatview.composer_source"), sourceSubtitle(session)],
-    ...(assistant ? [] : ([
-      ["launcher", t("chat-sessiondialogs.launcher"), session.launcher],
-      ["model", t("chat-sessiondialogs.model"), session.model?.split("/").pop()],
-      ["folder", t("chat-sessiondialogs.folder"), shortPath(session.cwd)],
-    ] as [string, string, string | undefined][])),
+    ...(assistant ? [] : ([["folder", t("chat-sessiondialogs.folder"), shortPath(session.cwd)]] as [string, string, string | undefined][])),
   ];
   return rows.filter(([, , v]) => v).map(([key, what, v]) => ({ key, label: v!, hint: what, wrap: true, onSelect: key === "source" ? () => {} : () => void copyText(key === "folder" ? session.cwd! : v!) }));
 }

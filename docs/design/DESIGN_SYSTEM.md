@@ -328,6 +328,10 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
+- Web bottom row (#5032): `[+][@][/] [permission chip · source · folder] … [model pill][voice][stop/send]`. The model pill
+  sits in the composer's `trailing` slot, right before voice / Stop / Send, in an Agent chat (a Persona chat keeps its
+  effort and launcher chips until #5033). The card is the `composer` container whose width sets the pill's modes ("Model
+  pill and unified model panel" in 3.8).
 - Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
 - Duplicates: four composer implementations exist (DS-19).
 
@@ -440,6 +444,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - Busy sheets disable interactive dismissal. Detents and drag indicators are inconsistent (DS-22).
 - Confirmation sheets for Close and Delete agent exist because a system dialog was too wordy (`apple/Persona/DesignSystem/Components.swift:444`).
 - Web: dialog is a centered card, becomes a bottom sheet on phones. Android: `JSheet`.
+- **Image editor** (#4963, `ImageEditor`, tokens `Theme.ImageEdit`): a full-screen cover, dark in both appearances like the image viewer, Cancel and Done (or Select / Add to Message) in the top bar with Undo and Redo between them. Under the picture, a row of the shown tool's options (six ink swatches and a Line Width menu for Box and Pen; Rotate, an Aspect Ratio menu and Reset for Crop) over the tools row (Box, Pen, Crop as `.themedButton`, the one shown prominent, then Clear). Opened from the + panel, the panel's caption field and Send (`ComposerSurface`, `ComposerRoundButton`) sit under the tools. At large text sizes the tools show only their icons and the options row scrolls; no label wraps. One editor for the + panel, the composer's strip and the image viewer. Reason it is not a system sheet: the picture needs the whole screen and the drags in it must not pull a sheet down.
 
 ### 3.7 Buttons
 
@@ -508,6 +513,32 @@ It uses the same neutral text in both places and reveals the full line on hover,
 The summary describes the observed harness and execution environment. The new conversation's launcher remains a
 separate composer setting. A missing execution report, a proxy node and the last known location each have distinct
 copy; none is presented as the current location.
+
+**Model pill and unified model panel** (web, #5032; `docs/web/web.md` "Model pill and model panel"). This part follows
+Cindy's model selector at the user's request (2026-11-12): where an earlier rule here differs, this entry wins for the
+pill and panel, built from Persona's tokens. Who it serves: people working with coding Agents; a Persona chat moves to it
+in #5033.
+
+- Pill (`web/src/views/chat/ModelPill.tsx`): 30 px tall capsule, 10 px side padding, 4 px gaps, 13 px text
+  (`ink`), no frame at rest; hover and open draw a 1 px `--line-strong` border on `--hover`. Contents in order: the
+  provider's letter tile (15 px, 4 px radius, 1 px border in the text colour, 10 px semibold, `ink-2`, 6 px before the
+  name), the model name (truncates), the engine's `AgentMark` at 12 px (the separator: no "·"), the effort label without a
+  tier colour (English "Extra" for "Very high"; the full name on hover), a filled bolt for Fast and the workflow
+  `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
+  < 600 px 148 px (name ≤ 108 px and truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
+  tile and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
+  pending (a 12 px clock first, the target engine's name in `ink-3`, a two-line tooltip), disabled (50% opacity, no
+  pointer), and a label (not a button) where nothing can be switched. The click keeps the caret in the message box.
+- Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
+  300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
+  search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
+  runs has a static selected fill, no check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast,
+  the engine, and a footer that says whether the setup is the recommended one, customized or saved.
+- Tokens: the effort levels have one colour each in both themes (`--effort-low` / `--effort-minimal` #2AAE5B,
+  `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
+  max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
+- Deviations from Cindy: letter tiles instead of vendor logos; no price or quota data; ↑↓ also move between rows; providers
+  and engines that can't be switched to yet are listed with their rows off and the reason.
 
 ### 3.9 Empty states
 
@@ -578,6 +609,8 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Long press on a message | lifted menu with an action bar, over the whole page dimmed (a page's floating top bar included); a message taller than the room shows the part pressed and scrolls inside, the bar fixed; a selection handle held within `Theme.Lift.edgeScroll` of its top or bottom edge scrolls it on, up to `Theme.Lift.edgeScrollSpeed`; a message only on this device ends the bar in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
+| Tap a photo in the + panel's grid | its ring (and a 45 pt corner round it) picks it, as before; the rest of the photo opens it in the image editor. VoiceOver's activation picks, Edit is an action (#4963) |
+| Drag in the image editor | Box and Pen draw (Box is the default tool); in Crop, a corner or edge within 22 pt resizes the crop, inside moves it. Crop's shapes, Rotate and Reset are the controls that need no drag (#4963) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
 | Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328) |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
@@ -695,6 +728,11 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   diff until Show All and four at the accessibility sizes, so the card's choices stay in view. A card that carries only the
   path (a Codex edit read off its terminal) shows the path as before.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
+- **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
+  approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the
+  item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
+  password card it is answered on the card only: no quick answer on a row, a notification, the Live Activity, the watch or
+  Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
 - **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
@@ -980,8 +1018,9 @@ style or motion.
 
 ## Codex speed controls (#3865)
 
-The web composer reuses its effort chip and radio menu. A Speed submenu reveals native model speed choices and their
-current value, including Unknown before native settings arrive. Its Fast choice explains increased usage or cost.
+An Agent's Codex thread sets its speed with Fast in the model panel's flyout of the model it runs (#5032, the model pill
+and unified model panel in 3.8); a Persona chat running Codex keeps its effort chip and radio menu. A Speed submenu there
+reveals native model speed choices and their current value, including Unknown before native settings arrive. Its Fast choice explains increased usage or cost.
 Selection waits for native acknowledgment and the session push. Standard is the reversible choice. This requested
 control reuses Menu typography, spacing, focus behavior and light/dark tokens. Settings > Agents > Codex uses the
 existing agent-settings row for the native default. No account or session is automatically switched to Fast.

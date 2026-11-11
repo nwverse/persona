@@ -93,6 +93,75 @@
       },
       "extractionState": "manual"
     },
+    "Aspect Ratio": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aspect Ratio"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "縦横比"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "比例"
+          }
+        }
+      }
+    },
+    "Black": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Black"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "黒"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "黑色"
+          }
+        }
+      }
+    },
+    "Blue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blue"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "青"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "蓝色"
+          }
+        }
+      }
+    },
     "Clear the %@ filter": {
       "extractionState": "manual",
       "localizations": {
@@ -112,6 +181,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "清除「%@」筛选"
+          }
+        }
+      }
+    },
+    "Couldn't open this photo. It may still be downloading from iCloud.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't open this photo. It may still be downloading from iCloud."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この写真を開けません。iCloud からダウンロード中の可能性があります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法打开这张照片，它可能还在从 iCloud 下载。"
+          }
+        }
+      }
+    },
+    "Edit [Attach Sheet 7d3c90]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編集"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "编辑"
           }
         }
       }
@@ -231,6 +346,29 @@
       },
       "extractionState": "manual"
     },
+    "Freeform": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Freeform"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自由形式"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自由"
+          }
+        }
+      }
+    },
     "From %@ · to %@ on %@": {
       "localizations": {
         "en": {
@@ -276,6 +414,75 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Green": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Green"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "緑"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "绿色"
+          }
+        }
+      }
+    },
+    "Line Width": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line Width"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "線の太さ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "粗细"
+          }
+        }
+      }
+    },
+    "Medium [Image Editor 2c8d51]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medium"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中"
+          }
+        }
+      }
     },
     "New Agent…": {
       "localizations": {
@@ -438,6 +645,52 @@
       },
       "extractionState": "manual"
     },
+    "Original [Image Editor 9a4f22]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Original"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オリジナル"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原始比例"
+          }
+        }
+      }
+    },
+    "Photo, edited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Photo, edited"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "写真（編集済み）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "照片，已编辑"
+          }
+        }
+      }
+    },
     "Pick a computer, folder and model": {
       "localizations": {
         "en": {
@@ -507,6 +760,52 @@
         }
       }
     },
+    "Red": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Red"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "赤"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "红色"
+          }
+        }
+      }
+    },
+    "Redo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "やり直す"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重做"
+          }
+        }
+      }
+    },
     "Remove Forward": {
       "localizations": {
         "en": {
@@ -529,6 +828,52 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Reset [Image Editor 4b1e7c]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リセット"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还原"
+          }
+        }
+      }
+    },
+    "Rotate": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rotate"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回転"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旋转"
+          }
+        }
+      }
     },
     "Search chats, computers or projects": {
       "localizations": {
@@ -595,6 +940,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "显示"
+          }
+        }
+      }
+    },
+    "Square": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Square"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正方形"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正方形"
+          }
+        }
+      }
+    },
+    "Thick": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thick"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "太い"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "粗"
+          }
+        }
+      }
+    },
+    "Thin": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thin"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "細い"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "细"
           }
         }
       }
@@ -824,6 +1238,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "パックの一部だけアンインストールされました"
+          }
+        }
+      }
+    },
+    "White": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "White"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "白"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "白色"
+          }
+        }
+      }
+    },
+    "Yellow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yellow"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "黄"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "黄色"
           }
         }
       }
@@ -9825,7 +10285,7 @@
         }
       }
     },
-    "%lld queued · Claude will handle them in order": {
+    "%lld queued · %@ will handle them in order [Queue Strip]": {
       "localizations": {
         "en": {
           "variations": {
@@ -9833,13 +10293,13 @@
               "one": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%1$lld queued · Claude will handle it when free"
+                  "value": "%1$lld queued · %2$@ will handle it when free"
                 }
               },
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%1$lld queued · Claude will handle them in order"
+                  "value": "%1$lld queued · %2$@ will handle them in order"
                 }
               }
             }
@@ -9848,13 +10308,13 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "キュー%1$lld件・Claudeが手すき次第順に処理します"
+            "value": "キュー%1$lld件・%2$@が手すき次第順に処理します"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "排队中 %1$lld 条 · Claude 忙完会依次处理"
+            "value": "排队中 %1$lld 条 · %2$@ 忙完会依次处理"
           }
         }
       },
@@ -22634,25 +23094,25 @@
         }
       }
     },
-    "Automatic upgrades are paused globally for this assistant.": {
+    "Auto-upgrade is paused because automatic extension updates are off for this assistant. Your setting is kept and applies again once they're turned back on.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Automatic upgrades are paused globally for this assistant."
+            "value": "Auto-upgrade is paused because automatic extension updates are off for this assistant. Your setting is kept and applies again once they're turned back on."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このアシスタントでは自動アップグレードが全体で一時停止しています。"
+            "value": "このアシスタントで拡張機能の自動アップデートがオフのため、自動アップグレードは一時停止しています。設定は保持され、自動アップデートをオンに戻すと再び適用されます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "此助手的全局自动升级已暂停。"
+            "value": "这个助手已关闭自动升级扩展，此扩展的自动升级暂停。你的设置会保留，重新打开后恢复。"
           }
         }
       }
@@ -64128,6 +64588,29 @@
       },
       "extractionState": "manual"
     },
+    "Item %lld: %@, arrives when this turn ends [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Item %1$lld: %2$@, arrives when this turn ends"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld件目：%2$@（このターンが終わってから届きます）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "第 %1$lld 条：%2$@，本轮结束后送达"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Its CLI is too old": {
       "extractionState": "manual",
       "localizations": {
@@ -75379,6 +75862,41 @@
           "stringUnit": {
             "state": "translated",
             "value": "已撤回到输入框，改好再发送"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Moved back to the input box. %lld photos could not be previewed; their original data is kept.": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved back to the input box. %1$lld photo could not be previewed; its original data is kept."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved back to the input box. %1$lld photos could not be previewed; their original data is kept."
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "入力欄に戻しました。写真%1$lld枚はプレビューできませんが、元のデータは保持されています。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已撤回到输入框，%1$lld 张照片无法预览，原始数据仍保留"
           }
         }
       },
@@ -113355,6 +113873,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "把一件事发给某个个人 Agent 会话（飞书网关的 agent-bridge），由它去做。不选会话时发给最近活跃、能发送的那个。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Arrives when this turn ends [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arrives when this turn ends"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このターンが終わってから届きます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本轮结束后送达"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%@ gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ は次のステップを待たずにすぐ受け取ります。今の作業は止まるか、できるものはバックグラウンドで続き、あなたのメッセージを含めてやり直します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 会马上收到，不用等到下一步。它手头的这一步会停下，能转到后台的会在后台继续，然后带上你的消息重新开始。"
           }
         }
       },
