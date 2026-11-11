@@ -76,6 +76,7 @@ Relationship to other docs:
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
 | `scripts/app/android_token_baseline.py` | Hard-coded counts in `android/feature` only. It does not scan the design system module. |
+| `scripts/app/android_slot_order.py` | An Android design-system component with a composable slot ends with a function-typed parameter (trailing lambdas keep working); the existing exceptions in `android/core/designsystem/tools/slot-order-baseline.json` may only shrink (#4146). |
 
 Not enforced anywhere: hit-area size, accessibility labels, shadows (inline literals), `.font(.system(size:))` in some Lark and Feishu views, numeric `listRowInsets`, `Spacer(minLength:)` and `lineWidth`.
 
@@ -105,6 +106,7 @@ Colors are written light/dark. iOS sizes are at the default text size.
 | `brand` | coral `#D4683F`/`#E8835C`; persona marks only, never tappable things | `apple/Shared/Design/Theme.swift:110` | none | `brand` is the accent (differs) |
 | `countBadge` | `#636366` both modes, white text at 4.5:1 | `apple/Shared/Design/Theme.swift:153` | accent fill (differs) | same as Apple |
 | `onSolid` | white | `apple/Shared/Design/Theme.swift:154` | `text-white` | n/a |
+| `Reply.secondaryInk` | `#636366`/`#AEAEB2`; Markdown H4–H6 in replies (#3863), ≥ 4.5:1 on every page, card and the reply box (`StyleSpecTests`), where `.secondary` is about 3.4:1 | `apple/Shared/Design/ReplyTokens.swift` | `--ink-2` `#62656b`/`#a5a8ad` (h4) | none: h4 is `bodyStrong` in the text color (differs) |
 
 `persona` is the persona's own primary (falls back to the accent). `pageBackground`, `card` and `cardStroke` come from the active `StyleSpec`.
 
@@ -282,6 +284,9 @@ Reduce Motion:
 the phone-control sections and the `iphone_*` tools. Why a separate symbol: `Theme.Icon.phone` (`iphone`) already means a
 device, and the phone's own data tools (`phone_*`) keep their icon.
 
+`Theme.Icon.monitor` (`waveform.path.ecg`) is a command watched in the background, each line it prints an event (Claude
+Code's `Monitor`). A command run once keeps `Theme.Icon.terminal`.
+
 ### 2.9 Styles and theme colors
 
 | Style | Surface | Buttons | Canvas | Icons |
@@ -421,6 +426,12 @@ Assistant avatar: a disc with the first character of the assistant's name. The d
 
 The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
 
+Model configuration reuses settings `Group` / `Row` and neutral `Pill` components for execution-form groups and chips
+(`docs/assistant/model-config.md`, "Execution form"). Long explanatory pills opt into `wrap` on narrow rows; other
+pills keep their existing single-line layout. A separate, labelled 44 px **?** control expands help inline on
+hover, focus or click, with Escape/outside-click dismissal. Why inline: explanations include environment and configuration
+details that must remain readable on phones and at larger text sizes; a short tooltip or a nested button would not fit.
+
 Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
 Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
 The subtitle, not another icon vocabulary, explains what is running and its counts/phase; only a real wait with no
@@ -538,6 +549,11 @@ parent-chat message bubbles (#3378). Reuse the existing work summary and manuall
 keep each delivery separately inspectable, including its full text. Nonterminal `running` / `waiting` reports retain
 the existing progress presentation. Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
+
+A tool row names its tool in words on iOS and the web (#2986): Claude Code's tools have verbs of their own, another
+server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
+no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
+shared with computer tools). Details in `docs/lessons/ios.md`.
 
 ### 4.8 Pending requests
 
@@ -772,6 +788,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.
 - [ ] Structure: in every grouping a session that needs the user is visible without opening anything; rows follow the work-item row; primary screens show no raw model IDs, session IDs, paths or engine names (sections 3.4, 5.6).
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
+- [ ] Performance (Apple clients): the review checklist in `docs/apple/performance.md` is pasted and marked; no new main-thread IO, expensive `@State` initial value or work in `body`, and a change to a hot path (chat list, composer, Agents list, pushes, launch, images) attaches before and after numbers.
 
 ## Codex speed controls (#3865)
 
