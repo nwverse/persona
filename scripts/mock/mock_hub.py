@@ -716,6 +716,9 @@ _CONTEXT = {
 # MOCK_SPLIT_TABS=1 see below.
 if os.environ.get("MOCK_CONTEXT_DANGER"):
     _CONTEXT[TESTS] = ("claude-sonnet-5-5", 184_000, 200_000)
+# MOCK_MODEL_CHANGE=1 (#5034): the recipes agent's latest reply came from Sonnet (its first from Opus, ITEMS below).
+if os.environ.get("MOCK_MODEL_CHANGE") == "1":
+    _CONTEXT[RECIPE] = ("claude-sonnet-5-5", 42_000, 200_000)
 for _s in SESSIONS:
     if _s["session_id"] in _CONTEXT:
         _model, _tokens, _window = _CONTEXT[_s["session_id"]]
@@ -5063,6 +5066,21 @@ if os.environ.get("MOCK_OPENCODE"):
     ITEMS[OC_IDLE] = [it("user", "text", 60 * 4, text="CI 里的依赖缓存为什么一直没命中？")] + [
         it("assistant", "text", 60 * 3, text="缓存键里带了时间戳，每次都是新的；改成 lockfile 的哈希就好了。")]
 ITEMS[RECIPE] = [it("user", "text", 60 * 27, text="菜谱网站加个搜索")] + [it("assistant", "text", 60 * 26, text="搜索做好了，支持按食材和用时筛选。")]
+# MOCK_MODEL_CHANGE=1 (#5034): the recipes agent's two exchanges were answered by two models, as the transcript records
+# them (Item.model), so its chat draws the model change divider between them (web lib/model-change.ts).
+if os.environ.get("MOCK_MODEL_CHANGE") == "1":
+    def _by(model, part):  # a tool call is the model's; its result is the tool's
+        return [dict(x, model=model) if x["role"] == "assistant" else x for x in part]
+    ITEMS[RECIPE] = (
+        [it("user", "text", 60 * 28, text="菜谱网站加个搜索")]
+        + [it("assistant", "thinking", 60 * 28, text="先看看现在的路由里有没有搜索的入口。", model="claude-opus-5-5")]
+        + _by("claude-opus-5-5", tool("Grep", {"pattern": "search", "path": "src"}, "src/routes/index.tsx:12:  // TODO search", 60 * 28))
+        + [it("assistant", "text", 60 * 27, text="搜索做好了，支持按食材和用时筛选。", model="claude-opus-5-5")]
+        + [it("user", "text", 60 * 26, text="结果再按用时从短到长排一下")]
+        + _by("claude-sonnet-5-5", tool("Edit", {"file_path": "/Users/me/code/recipes/src/search.ts", "old_string": "return hits",
+                                               "new_string": "return hits.sort(byTime)"}, "ok", 60 * 26))
+        + [it("assistant", "text", 60 * 26, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数。", model="claude-sonnet-5-5")]
+    )
 if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
     for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
                              (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "npm test"),
