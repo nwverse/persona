@@ -9,7 +9,8 @@ vi.mock("../../lib/store", () => ({ onHubEvent: (type: string, listener: () => v
   return () => { hub.events.delete(listener); };
 } }));
 vi.mock("../../lib/edge-auth", async (original) => ({ ...await original<typeof import("../../lib/edge-auth")>(), reloadForSignIn: hub.reload }));
-import { handleUnauthorized, setToken } from "../../lib/api";
+import { handleUnauthorized, setPairedToken, setToken } from "../../lib/api";
+import { CREDENTIAL_EPOCH_KEY } from "../../lib/credential-epoch";
 import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
 import { initI18n, t } from "../../i18n";
 import { ModelProfiles } from "./ModelProfiles";
@@ -195,6 +196,24 @@ describe("profile ownership and authentication", () => {
     await answer(current, data("economy")); await answer(old, { error: "retired" }, 401);
     await answerRaw(middle, new Response("<html>synthetic login</html>", { status: 200, headers: { "Content-Type": "text/html" } }));
     expect(active("economy")).toBe(true); expect(unauthorized).not.toHaveBeenCalled(); expect(hub.reload).not.toHaveBeenCalled();
+  });
+
+  it("retires a read after pairing again with the same credential", async () => {
+    const old = reads()[0]; await act(async () => setPairedToken("synthetic-A")); await flush(); const current = lastRead();
+    expect(current).not.toBe(old); expect(current.headers.get("Authorization")).toBe("Bearer synthetic-A");
+    await answer(current, data("economy")); await answer(old, { error: "retired" }, 401);
+    expect(active("economy")).toBe(true); expect(unauthorized).not.toHaveBeenCalled();
+  });
+
+  it("retires a read when another tab replaces the credential epoch", async () => {
+    const old = reads()[0];
+    await act(async () => {
+      localStorage.setItem(CREDENTIAL_EPOCH_KEY, "synthetic-epoch");
+      window.dispatchEvent(new StorageEvent("storage", { key: CREDENTIAL_EPOCH_KEY }));
+    });
+    await flush(); const current = lastRead(); expect(current).not.toBe(old);
+    await answer(current, data("economy")); await answer(old, { error: "retired" }, 401);
+    expect(active("economy")).toBe(true); expect(unauthorized).not.toHaveBeenCalled();
   });
 
   it("does not let a superseded same-owner read sign out or reload the current view", async () => {
