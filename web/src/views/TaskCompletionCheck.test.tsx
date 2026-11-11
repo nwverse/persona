@@ -137,6 +137,8 @@ describe("task detail completion check with the real REST client", () => {
   });
 
   it("keeps supervised review, stage and ordinary controls separate from a done assessment", async () => {
+    // Compare settled review content, not the evidence chunk's transient loading state.
+    await (await import("../lib/lazy-page")).loadPages();
     await render(todo({ supervision: { supervisor: "conversation-example", state: "pending_review", done_when: ["Synthetic criterion"] } }));
     const before = host.querySelector('[data-testid="review-checklist"]')?.textContent;
     const stage = [...host.querySelectorAll('[data-stage]')].map(x => [x.getAttribute('data-stage'), x.getAttribute('data-state')]);

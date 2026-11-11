@@ -107,7 +107,11 @@ dispatch, runs tests, or substitutes for the supervisor's own review.
 
 To-do API responses include `supervision.criteria` for all clients. The web task
 cards and to-do list show the live N/M count and an expandable criterion list;
-details show the same status, evidence, timestamp and reporter. Mobile UI changes,
+details show the same status, evidence, timestamp and reporter. The count and
+disclosure are available immediately; the shared evidence renderer loads only
+when a disclosure or task detail opens, using the existing lazy-page loader.
+It shows the localized loading state while fetching and keeps the original
+first-screen byte budget unchanged. Mobile UI changes,
 automatic CI observation, and criterion dependency gates are outside this change.
 
 ## Boundary with hub (2026-11-04, #1446)

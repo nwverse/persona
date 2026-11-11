@@ -1,9 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { FeedItem } from "../../lib/feed";
+import { loadPages } from "../../lib/lazy-page";
 import type { Todo } from "../../lib/todos";
 import { FeedLineView } from "./Tasks";
 import { LatestReport, ReviewBadge, ReviewChecklist } from "./Supervision";
+
+beforeAll(() => loadPages());
 
 const todo: Todo = {
   id: "todo_1",

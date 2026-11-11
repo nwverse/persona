@@ -174,14 +174,6 @@ export function checklist(sup: Supervision | undefined): ChecklistEntry[] {
   return out;
 }
 
-/** Who supplied the latest evidence, not an independent task acceptance. */
-export function criterionReporter(by: string): string {
-  if (by.startsWith("agent:")) return t("assistant-tasks.criterion_agent", { id: by.slice(6) });
-  if (by.startsWith("supervisor:")) return t("assistant-tasks.criterion_supervisor", { id: by.slice(11) });
-  if (by === "judge") return t("assistant-tasks.criterion_judge");
-  return by;
-}
-
 /** The latest review, if any. */
 export function latestReview(sup: Supervision | undefined): TaskReview | undefined {
   const list = sup?.reviews ?? [];

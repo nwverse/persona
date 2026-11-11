@@ -97,7 +97,11 @@ describe("todo rows on a sessions push", () => {
     api.mockImplementation(async (path) => path === "/todos" ? { todos: updated } : {});
     await act(async () => { await refreshTodos(); });
     expect(row().querySelector('[data-testid="review-badge"]')?.textContent).toContain("1/2");
-    await act(async () => { row().querySelector("summary")!.click(); });
+    await act(async () => {
+      row().querySelector("summary")!.click();
+      row().querySelector("details")!.dispatchEvent(new Event("toggle"));
+      await (await import("../lib/lazy-page")).loadPages();
+    });
     expect(row().querySelector("details")?.open).toBe(true);
     expect(row().textContent).toContain("go test: PASS");
     expect(row().textContent).toContain("Agent · m1/s2");

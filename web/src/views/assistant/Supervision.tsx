@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { t } from "../../i18n";
 import type { FeedItem } from "../../lib/feed";
 import { ago } from "../../lib/format";
-import { autoReviewLine, checkCount, checklist, criterionReporter, latestReview, reportLine, reportText, reviewBadge, reviewVerdictLabel, type CheckMark, type ChecklistEntry, type ReviewTone, type Supervision } from "../../lib/supervision";
+import { autoReviewLine, checkCount, checklist, latestReview, reportLine, reportText, reviewBadge, reviewVerdictLabel, type ChecklistEntry, type ReviewTone, type Supervision } from "../../lib/supervision";
+import { lazyPage } from "../../lib/lazy-page";
 import type { Todo } from "../../lib/todos";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -34,50 +35,27 @@ export function ReviewBadge({ todo, className }: { todo: Todo; className?: strin
   );
 }
 
-const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
-  met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
-  missing: { icon: "x", className: "text-red", label: () => t("assistant-tasks.review_missing") },
-  open: { icon: "clock", className: "text-ink-3", label: () => t("assistant-tasks.review_open") },
-  // added after the acceptance, which still stands (#3156): nothing waits on it
-  unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
-};
+// Counts are part of the first screen; evidence is not needed until a disclosure or task detail opens.
+const LazyCriteriaList = lazyPage(() => import("./CriteriaList").then((m) => m.CriteriaList));
 
 /** A compact expandable checklist on task cards and to-do rows. */
 export function CriteriaSummary({ todo }: { todo: Todo }) {
+  const [open, setOpen] = useState(false);
   const list = checklist(todo.supervision);
   if (list.length === 0) return null;
   return (
-    <details data-testid="criteria-summary" className="mt-1 min-w-0 text-[12px] text-ink-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+    <details data-testid="criteria-summary" className="mt-1 min-w-0 text-[12px] text-ink-3" onToggle={(e) => setOpen(e.currentTarget.open)} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
       <summary className="touch-hit w-fit cursor-pointer rounded-sm hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("assistant-tasks.review_title")}</summary>
-      <CriteriaList list={list} />
+      {open && <CriteriaList list={list} />}
     </details>
   );
 }
 
 function CriteriaList({ list }: { list: ChecklistEntry[] }) {
   return (
-    <ul className="mt-2 flex min-w-0 flex-col gap-1.5">
-      {list.map((c) => {
-        const m = MARK[c.mark];
-        return (
-          <li key={c.criterion} className="flex min-w-0 items-start gap-2 text-[13px]">
-            <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
-              <Icon name={m.icon} size={13} stroke={2.4} />
-            </span>
-            <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
-              <span className="text-ink">{c.criterion}</span>
-              {c.evidence && <span className="whitespace-pre-wrap text-[12px] text-ink-3 select-text">{c.evidence}</span>}
-              {(c.at || c.by) && (
-                <span className="flex flex-wrap gap-x-1.5 text-[11px] text-ink-3">
-                  {c.by && <span>{criterionReporter(c.by)}</span>}
-                  {c.at && <time dateTime={c.at} title={c.at}>{new Date(c.at).toLocaleString()}</time>}
-                </span>
-              )}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+    <Suspense fallback={<p role="status" className="mt-2 text-ink-3">{t("common.loading")}</p>}>
+      <LazyCriteriaList list={list} />
+    </Suspense>
   );
 }
 
