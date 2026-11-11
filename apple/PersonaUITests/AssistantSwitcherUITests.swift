@@ -62,10 +62,28 @@ final class AssistantSwitcherUITests: XCTestCase {
         XCTAssertTrue(element(app, "managers.row.m-3fa21c").waitForExistence(timeout: 10), "Settings › Assistants did not open:\n\(app.debugDescription)")
     }
 
+    /// Another assistant made current closes a page pushed on the Persona page (the profile here): it read the one
+    /// before and would write to the next. Regular width only, where the sidebar's switcher stays beside a pushed page.
+    @MainActor func testSwitchingClosesAPushedPage() throws {
+        let app = launch(["-openAssistantPage", "profile"])
+        guard app.windows.firstMatch.frame.width > 700 else { throw XCTSkip("the switcher beside a pushed page: regular width only") }
+        let profile = element(app, "assistant-main-tasks-quiet")
+        XCTAssertTrue(profile.waitForExistence(timeout: 20), "the profile did not open:\n\(app.debugDescription)")
+        let header = switcherHeader(app)
+        XCTAssertTrue(header.waitForExistence(timeout: 20), "no switcher in the sidebar's header:\n\(app.debugDescription)")
+        header.tap()
+        let work = element(app, "assistant-switcher-row-m-3fa21c")
+        XCTAssertTrue(work.waitForExistence(timeout: 10), "the list did not open:\n\(app.debugDescription)")
+        work.tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: profile)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "the profile stayed after switching:\n\(app.debugDescription)")
+        shot(app, "switcher-switched-closes-page")
+    }
+
     // MARK: -
 
-    /// The Persona page's sidebar out, on the default assistant, with the switcher's list open.
-    @MainActor private func openList(_ extra: [String] = []) -> XCUIApplication {
+    /// The app on the Persona page, its sidebar out, on the default assistant.
+    @MainActor private func launch(_ extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-app.tab", "assistant", "-openAssistantSidebar", "YES",
@@ -74,9 +92,20 @@ final class AssistantSwitcherUITests: XCTestCase {
         // A fresh install asks for notifications first, and the app waits inactive (no roster) until it is answered.
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["允许", "Allow"] where springboard.buttons[label].waitForExistence(timeout: 2) { springboard.buttons[label].tap() }
-        // The drawer's identifier can cover its header's on a phone (`drawerSettingsButton`): the default's name then.
-        let header = app.buttons.matching(NSPredicate(format: "identifier == %@ OR (identifier == %@ AND label BEGINSWITH %@)",
-                                                      "assistant-switcher", "assistant-sidebar", "助手")).firstMatch
+        return app
+    }
+
+    /// The sidebar's header. The drawer's identifier can cover its own on a phone (`drawerSettingsButton`): the
+    /// default's name then.
+    @MainActor private func switcherHeader(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier == %@ OR (identifier == %@ AND label BEGINSWITH %@)",
+                                         "assistant-switcher", "assistant-sidebar", "助手")).firstMatch
+    }
+
+    /// The Persona page's sidebar out, on the default assistant, with the switcher's list open.
+    @MainActor private func openList(_ extra: [String] = []) -> XCUIApplication {
+        let app = launch(extra)
+        let header = switcherHeader(app)
         XCTAssertTrue(header.waitForExistence(timeout: 20), "no switcher in the sidebar's header:\n\(app.debugDescription)")
         header.tap()
         XCTAssertTrue(element(app, "assistant-switcher-new").waitForExistence(timeout: 10), "the list did not open:\n\(app.debugDescription)")
