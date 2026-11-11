@@ -126,6 +126,7 @@ An Agent's session and a conversation with the assistant read the same on Androi
 - **C12.** Rename through `POST /api/v1/sessions/{mid}/{sid}/rename` with `title`, which records a user-given title for assistant conversations (`docs/protocol/protocol.md`); a swipe on the history row; an Archived page reusing `android/feature/agents/src/main/kotlin/persona/feature/agents/AgentArchivesScreen.kt`'s list.
 - **C13.** `AssistantTaskCards.kt` stops filtering the record kinds iOS draws; each kind gets a renderer next to the interruption record's.
 - **C14.** A connection pill in the shared chrome, fed by the connection state the red tint already reads.
+  Done (11-12): `JLinkPill` under the home bar on the home pages (Assistant and Agents), whose shared bar replaced their titles in every style; an Agent's chat keeps saying it in its title (`HomeLinkPillTest`).
 - **C18.** Decode `turn_error_code` in `android/core/contracts/src/main/kotlin/persona/core/contracts/Models.kt` and draw the card; `spec/fixtures/wire` has no case for it yet, so add one.
 
 ### Order of work

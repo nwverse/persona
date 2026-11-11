@@ -319,6 +319,7 @@ fun JTopBar(
     LocalHomeChrome.current?.takeIf { onBack == null }?.let { home ->
         CompositionLocalProvider(LocalIconsRaised provides true) {
             HomeNavigation(home.items, home.selected, home.onSelect, home.leading,
+                modifier = home.barHeight?.let { height -> Modifier.onSizeChanged { height.intValue = it.height } } ?: Modifier,
                 trailing = actions, onSelectedMenu = onTitleClick)
         }
         return
