@@ -75,9 +75,9 @@ func badAgentName(title, cwd string) bool {
 	}
 	// i18n-ignore: Instruction-template openings must match the original text.
 	for _, prefix := range []string{
-		"用中文工作", "用中文汇报", "请全程用中文", "请用中文", "任务：", "任务:", "## 需求", "## 任务", "这是一次只读", "这是一次技术验收",
+		"用中文工作", "用中文汇报", "请全程用中文", "请用中文", "任务：", "任务:", "## 需求", "## 任务", "这是一次只读", "这是一次技术验收", // i18n-ignore: match instruction-template data
 		"/loop", "<system-reminder", "<persona-context", "ultrathink", "ultracode",
-		"work in chinese", "please work in chinese", "task:", "## task", "this is a read-only", "日本語で作業", "中国語で作業",
+		"work in chinese", "please work in chinese", "task:", "## task", "this is a read-only", "日本語で作業", "中国語で作業", // i18n-ignore: match instruction-template data
 	} {
 		if strings.HasPrefix(low, strings.ToLower(prefix)) {
 			return true
@@ -268,7 +268,7 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 	if err == nil {
 		reply, err = s.purposeModel("inbox.triage").Chat(callCtx, ai.Request{System: prompts.RenderAgentSessionName(), Messages: []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderAgentSessionNameInput(prompts.AgentSessionNameInput{First: first, Recent: recent})}}, MaxTokens: 256, BoundOutput: true})
 	}
-	title := strings.TrimSpace(strings.Trim(strings.TrimSpace(reply.Text), "\"“”『』"))
+	title := strings.TrimSpace(strings.Trim(strings.TrimSpace(reply.Text), "\"“”『』")) // i18n-ignore: punctuation normalization
 	if err == nil && (reply.Truncated || !validAgentName(title)) {
 		err = errors.New("invalid name")
 	}
@@ -298,7 +298,9 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 		return true
 	}
 	if title == r.Title || title == current.Title {
-		r.NextAttempt = now.Add(time.Hour)
+		// A successful check that keeps the same name still advances the periodic
+		// baseline. Otherwise a daily setting would call again every hour.
+		r.NamedAt, r.NamedOutput, r.Failures, r.NextAttempt = now, c.OutputTokens, 0, time.Time{}
 		_ = s.putAgentNameLocked(ctx, key, r)
 		return true
 	}

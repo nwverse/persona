@@ -276,6 +276,43 @@ func TestAgentNamePeriodicRefreshUsesNewOutputAndTotalLimit(t *testing.T) {
 	}
 }
 
+func TestAgentNameUnchangedResultKeepsConfiguredInterval(t *testing.T) {
+	s, f, calls := namingFixture(t, func(w http.ResponseWriter, r *http.Request) { namingReply(w, "修复 PDF 导出图片") })
+	maximum, hours := 5, 24
+	setSettings(t, s, func(v *Settings) { v.AgentAutoNamingMax = &maximum; v.AgentAutoNamingIntervalHours = &hours })
+	c := f.sessions["server"][0]
+	key := agentNameKey("server", c.SessionID)
+	s.agentNames.mu.Lock()
+	if !s.agentNamesLocked(context.Background()) {
+		t.Fatal("ledger load")
+	}
+	rec := agentNameRecord{Machine: "server", Session: c.SessionID, Title: "修复 PDF 导出图片", RawTitle: c.Title, Changes: 1, NamedAt: time.Now().Add(-25 * time.Hour), NamedOutput: c.OutputTokens - 1}
+	if err := s.putAgentNameLocked(context.Background(), key, rec); err != nil {
+		t.Fatal(err)
+	}
+	s.agentNames.mu.Unlock()
+	now := time.Now()
+	if !s.tryAgentName(context.Background(), "server", c, now) || calls.Load() != 1 {
+		t.Fatal("periodic check missing")
+	}
+	s.agentNames.mu.Lock()
+	got := s.agentNames.records[key]
+	s.agentNames.mu.Unlock()
+	if got.Changes != 1 || got.NamedOutput != c.OutputTokens || !got.NamedAt.Equal(now) {
+		t.Fatalf("unchanged name did not advance its cost baseline: %+v", got)
+	}
+	c.OutputTokens++
+	c.UpdatedAt = now.Add(2 * time.Hour)
+	v := s.settings(context.Background())
+	if agentNameDue(v, got, c, now.Add(2*time.Hour)) {
+		t.Fatal("daily setting retried an unchanged name after only two hours")
+	}
+	c.UpdatedAt = now.Add(25 * time.Hour)
+	if !agentNameDue(v, got, c, now.Add(25*time.Hour)) {
+		t.Fatal("daily refresh never became due again")
+	}
+}
+
 func TestAgentNameContextBoundsAndGolden(t *testing.T) {
 	s, f, _ := namingFixture(t, func(w http.ResponseWriter, r *http.Request) { namingReply(w, "修复导出") })
 	f.items[0].Text = strings.Repeat("首条请求", 3000)

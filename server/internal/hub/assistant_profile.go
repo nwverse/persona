@@ -231,7 +231,12 @@ func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	out := json.RawMessage(`{"ok":true}`)
-	if p["title"] != nil || p["tab_name"] != nil {
+	owner := h.sessionOwner(m.cfg.ID, sid)
+	sess, _ := m.session(sid)
+	// Ordinary extension calls keep the existing node authorization boundary.
+	// Older managers cannot record ordinary Agent titles; preserve their native path.
+	recordAgent := principalOf(r.Context()).Role != roleExtension && h.archiveManagerHas(owner, assistantwire.CapabilityAgentNaming) == http.StatusOK
+	if (p["title"] != nil || p["tab_name"] != nil) && (m.isAssistant(sess) || recordAgent) {
 		ext := ""
 		if pr := principalOf(r.Context()); pr.Role == roleExtension {
 			ext = pr.Extension
@@ -243,6 +248,12 @@ func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 		}
 		if len(res) > 0 {
 			out = res
+		}
+	} else if p["title"] != nil || p["tab_name"] != nil {
+		p["session_id"] = sid
+		if err := m.call(ctx, "session.rename", p, &out); err != nil {
+			callErr(w, err)
+			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

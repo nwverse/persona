@@ -120,6 +120,10 @@ What each tool does: Codex threads are archived with the app-server's `thread/ar
 
 ### Agent naming metadata
 
+| Manager capability | Contract |
+| --- | --- |
+| `agent_naming.v1` | Full-user ordinary Agent renames persist manual intent in the manager before node dispatch. Older/offline managers retain the native node path; ordinary extension calls retain the existing node authorization boundary. |
+
 Session rows may carry `title_source` (`manual`, `auto`, `prompt` or `runtime`), `title_manual` and cumulative
 `output_tokens` (#4812). These are additive node facts, not instructions to rename a session. Absent or unknown
 provenance never proves that a title was not manually chosen. The manager uses them for guarded naming,
