@@ -126,16 +126,31 @@ final class ExtensionSettingsReviewTests: XCTestCase {
                     XCTAssertTrue(review.isHittable, "\(look): no Review button:\n\(app.debugDescription)")
                     review.tap()
                 } else {
-                    // The market page of an extension not installed yet: Install runs the same operation.
-                    app = launch(hub, look: look, extra: large + ["-openMarketExtension", "3f2a9c1d0b/example-calendar"], page: false)
+                    // The market page of an extension not installed yet: Install runs the same operation. One launch in
+                    // the first run came up on the Assistant page with the page arguments unused (docs/lessons/testing.md,
+                    // "-pairURL"); the page is where the test starts, not what it checks, so that launch is tried once more.
+                    let args = large + ["-openMarketExtension", "3f2a9c1d0b/example-calendar"]
+                    var launched = launch(hub, look: look, extra: args, page: false)
+                    if !launched.buttons["market-install"].waitForExistence(timeout: 15) {
+                        launched.terminate()
+                        launched = launch(hub, look: look, extra: args, page: false)
+                    }
+                    app = launched
                     let install = app.buttons["market-install"]
                     XCTAssertTrue(install.waitForExistence(timeout: 15), "\(look): no Install:\n\(app.debugDescription)")
-                    scrollTo(install, in: app, swipes: 30)
                     install.tap()
                 }
+                // At this size the card starts below the screen, where a list has not made it yet: scroll while it starts,
+                // then bring its title near the top so its line and steps are on the screen too.
                 let card = app.descendants(matching: .any)["extension-operation"]
-                XCTAssertTrue(card.waitForExistence(timeout: 10), "\(look) \(page): no operation:\n\(app.debugDescription)")
-                scrollTo(card, in: app)
+                let shown = Date.now.addingTimeInterval(15)
+                while Date.now < shown, !(card.exists && card.frame.minY < app.frame.maxY - 80) { app.swipeUp() }
+                XCTAssertTrue(card.exists, "\(look) \(page): no operation:\n\(app.debugDescription)")
+                let lift = card.frame.minY - app.frame.height * 0.2
+                if lift > 0 {
+                    let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+                    from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: -lift)), withVelocity: .slow, thenHoldForDuration: 0.3)
+                }
                 let prefix = page == "settings" ? "" : "market-"
                 shot(app, prefix + "downloading-large", look: look)
                 XCTAssertTrue(waitFor(card, value: "failed", timeout: 30), "\(look) \(page): no failure:\n\(app.debugDescription)")
