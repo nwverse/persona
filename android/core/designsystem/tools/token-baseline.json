@@ -427,6 +427,9 @@
     "android/feature/chat/src/main/kotlin/persona/feature/chat/MessageMenu.kt": {
       "icon": 11
     },
+    "android/feature/chat/src/main/kotlin/persona/feature/chat/ModelFallback.kt": {
+      "dp": 17
+    },
     "android/feature/chat/src/main/kotlin/persona/feature/chat/NextWaiting.kt": {
       "icon": 1
     },
