@@ -51,6 +51,15 @@ func resumeTest(t *testing.T) (*sdkFixture, string) {
 	return f, real
 }
 
+func lookupEnv(env []string, key string) (string, bool) {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 func writeProfileTranscript(t *testing.T, profile, cwd, id string) {
 	t.Helper()
 	writeFile(t, filepath.Join(profile, "projects", "-assistant", id+".jsonl"),
@@ -82,7 +91,7 @@ func TestAssistantResumesHomeProfileConversationWithTheVariableUnset(t *testing.
 // is older or its projects/ is a symlink to another profile's.
 func TestAssistantResumeFollowsTheTranscriptOverARecordedProfile(t *testing.T) {
 	for _, runtime := range []string{"", proto.AssistantRuntimeAgentSDK} {
-		for _, scenario := range []string{"recorded-lacks-transcript", "recorded-holds-older-copy", "recorded-shares-projects"} {
+		for _, scenario := range []string{"recorded-lacks-transcript", "recorded-lacks-home-transcript", "recorded-holds-older-copy", "recorded-shares-projects"} {
 			t.Run(runtime+"/"+scenario, func(t *testing.T) {
 				f, real := resumeTest(t)
 				n := f.n
@@ -96,6 +105,9 @@ func TestAssistantResumeFollowsTheTranscriptOverARecordedProfile(t *testing.T) {
 				case "recorded-lacks-transcript":
 					want = other
 					writeProfileTranscript(t, other, cwd, id)
+				case "recorded-lacks-home-transcript": // e.g. a private-profile launcher, then the main chat's
+					want = "default"
+					writeProfileTranscript(t, filepath.Join(real, ".claude"), cwd, id)
 				case "recorded-holds-older-copy":
 					writeProfileTranscript(t, private, cwd, id)
 					old := filepath.Join(private, "projects", "-assistant", id+".jsonl")
@@ -123,15 +135,17 @@ func TestAssistantResumeFollowsTheTranscriptOverARecordedProfile(t *testing.T) {
 					t.Fatalf("resume failed: %v (child saw %q)", err, f.file("cli-profile"))
 				}
 				p := f.proc(id)
-				if got := envValue(p.cmd.Environ(), "CLAUDE_CONFIG_DIR"); !sameScopePath(got, want) {
-					t.Fatalf("process profile %q, want %q", got, want)
+				got, set := lookupEnv(p.cmd.Environ(), "CLAUDE_CONFIG_DIR")
+				if want == "default" && set || want != "default" && !sameScopePath(got, want) {
+					t.Fatalf("process profile %q (set %v), want %q", got, set, want)
 				}
 				if runtime == "" {
-					if got := strings.TrimSuffix(f.file("cli-profile"), "\n"); !sameScopePath(strings.TrimPrefix(got, "set:"), want) {
+					got := strings.TrimSuffix(f.file("cli-profile"), "\n")
+					if want == "default" && got != "unset" || want != "default" && !sameScopePath(strings.TrimPrefix(got, "set:"), want) {
 						t.Fatalf("CLI child profile %q, want %q", got, want)
 					}
 				}
-				if st, _ := n.state.get(id); !sameScopePath(st.ConfigDir, want) {
+				if st, _ := n.state.get(id); st.ConfigDir != want && !sameScopePath(st.ConfigDir, want) {
 					t.Fatalf("recorded profile %q, want %q", st.ConfigDir, want)
 				}
 				// The recorded profile, asked for explicitly, is no move.
