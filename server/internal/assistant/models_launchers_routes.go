@@ -23,11 +23,15 @@ import (
 
 func (s *Service) launcherRoutes() {
 	s.handle("GET /api/v1/launchers", func(w http.ResponseWriter, r *http.Request) {
-		// Each machine gets launcherSyncTimeout: one that is slow or gone never holds the page (sync says which).
 		ctx, cancel := context.WithTimeout(r.Context(), launcherSyncTimeout+5*time.Second)
 		defer cancel()
-		// A launcher just added to an rc file shows up (the node caches a minute).
-		zshrc := s.zshrcLaunchers(ctx, true)
+		// A last-seen snapshot answers at once; a first-ever list still fills before it answers.
+		zshrc, cached := s.zshrcLaunchersLastSeen(ctx)
+		if cached {
+			s.refreshZshrcLaunchers(r.Context())
+		} else {
+			zshrc = s.zshrcLaunchers(ctx, true)
+		}
 		views := s.withKeyMachines(ctx, s.launcherViewsOf(ctx, zshrc))
 		if b, ok := s.builtinClaude(ctx, zshrc); ok {
 			views = append(views, b)
@@ -151,6 +155,10 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-models_launchers.err_name_taken", i18n.Args{"name": in.Name}))
 			return
 		}
+		if err := s.sealKeyReferences(ctx, &in, false); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		l, err := s.saveLauncher(ctx, in, nil)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -202,6 +210,10 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		if err := s.sealKeyReferences(r.Context(), &in, true); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		saved, err := s.saveLauncher(r.Context(), in, old)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -240,15 +252,14 @@ func (s *Service) launcherRoutes() {
 				apierr.Write(w, 409, i18n.Err("assistant-models_launchers.err_in_use", i18n.Args{"uses": strings.Join(uses, i18n.T(s.requestCtxLang(r.Context()), "assistant-models_launchers.list_sep"))}))
 				return
 			}
+			s.forgetLauncherSecrets(name) // what was kept of its keys (launcher_secrets.go)
 			apierr.WriteJSON(w, map[string]any{"ok": true, "deleted": true})
 			return
 		}
 		s.models.mu.Unlock()
-		if name == "claude" { // plain claude is every machine's default launcher: there is nothing to hide
-			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-models_launchers.err_builtin_hide"))
-			return
-		}
-		hidden := s.hiddenLaunchers(ctx) // an rc-file launcher: hidden in Persona, the file is not touched
+		// an rc-file launcher, or plain claude (#4384): hidden in Persona, the file is not touched; a start that names it,
+		// or a default that runs it, still runs it
+		hidden := s.hiddenLaunchers(ctx)
 		if !slices.Contains(hidden, name) {
 			hidden = append(hidden, name)
 		}
@@ -362,9 +373,9 @@ type pickerTier struct {
 }
 
 // pickerTiers are the presets the New Agent form offers on a machine with these launchers: the tiers of the profile
-// in use, by name, but those whose launcher the machine does not have (a direct API provider is in no machine's list;
-// one whose check failed there is offered, the form marks it). None when no profile is in use or it cannot be read:
-// the form then has no preset row.
+// in use, by name, but those whose launcher the machine does not have (a direct API provider is in no machine's list)
+// or the list leaves out because its latest check failed. None when no profile is in use or it cannot be read: the
+// form then has no preset row.
 func (s *Service) pickerTiers(ctx context.Context, launchers []ConfiguredLauncher) (*ModelProfile, []pickerTier) {
 	p, _, err := s.activeModelProfile(ctx)
 	if err != nil || p == nil {
@@ -400,9 +411,18 @@ func (s *Service) machineLauncherRoutes() {
 			apierr.Call(w, err)
 			return
 		}
-		out := map[string]any{"launchers": s.withHealth(ctx, mid, list), "default": s.pickerDefault(ctx, r)}
+		// A launcher whose latest check failed is left out of the pickers and of the presets that name it; the launcher
+		// the configuration runs with no pick stays, with its record, so the form can still say why this start may fail.
+		def := s.pickerDefault(ctx, r)
+		keep, _ := def["provider"].(string)
+		shown := s.withHealth(ctx, mid, list, keep)
+		out := map[string]any{"launchers": shown, "default": def}
 		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
-			if p, tiers := s.pickerTiers(ctx, list); len(tiers) > 0 {
+			usable := make([]ConfiguredLauncher, 0, len(shown))
+			for _, l := range shown {
+				usable = append(usable, l.ConfiguredLauncher)
+			}
+			if p, tiers := s.pickerTiers(ctx, usable); len(tiers) > 0 {
 				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
 			}
 		}

@@ -12,6 +12,10 @@ extension Theme {
         static let errorFilled = "exclamationmark.triangle.fill"
         /// The highest alert level, above `error` (a machine's critical alert).
         static let critical = "exclamationmark.octagon.fill"
+        /// A tool call the user, a permission rule or a hook turned down (Denied, #4303): gray, not an error.
+        static let denied = "hand.raised.slash"
+        /// A tool call refused before it ran (Did not run): a skipped step.
+        static let didNotRun = skipped
         static let success = "checkmark.circle"
         static let successFilled = "checkmark.circle.fill"
         static let done = "checkmark"
@@ -329,6 +333,8 @@ extension Theme {
         static let context = "gauge.with.dots.needle.33percent"
         /// A piece of context a message carries (a page excerpt, a part of a Feishu /agent request's context).
         static let quote = "text.quote"
+        /// The mark at the top of a quote in a reply (#2984).
+        static let quoteMark = "quote.closing"
         /// The context a message carries, folded into one row.
         static let contexts = "rectangle.stack"
         static let space = "square.stack.3d.up"
@@ -425,6 +431,9 @@ extension Theme {
         /// A hub behind Cloudflare Access and the service token that lets the app through (Settings › hub › Cloudflare
         /// Access, docs/operations/network.md "Behind Cloudflare Access").
         static let cloudflareAccess = "person.badge.shield.checkmark"
+        /// A paired hub's other addresses, tried after its paired one (Settings › hub › Addresses, docs/operations/network.md
+        /// "Client-added candidates").
+        static let hubAddresses = "signpost.right.and.left"
         /// This device's own SSH key (its public half, to copy onto the server).
         static let sshKey = "key.horizontal"
         /// The SSH server's key fingerprint, confirmed and pinned.
@@ -592,6 +601,8 @@ extension Theme {
         static let findFiles = "folder.badge.questionmark"
         /// Text searched for inside files (Grep).
         static let findText = "text.magnifyingglass"
+        /// A command watched in the background, each line it prints an event (Claude Code's Monitor, its task notes).
+        static let monitor = "waveform.path.ecg"
         /// A subagent the agent started (the Agent / Task tool, a session's subagents); one at work.
         static let subagent = "person.2"
         static let subagentWorking = "person.2.badge.gearshape"
