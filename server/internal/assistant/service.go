@@ -117,6 +117,7 @@ type Service struct {
 	origins   originBook    // origins.go
 	guests    guestBook     // guest.go
 	relays    relayBook     // conversations.go
+	avail     availBook     // availability.go
 	quiet     quietBook     // quiet.go
 	supervise superviseBook // supervise_signals.go
 	preempt   preemptBook   // owner_preempt.go
@@ -232,6 +233,7 @@ func New(o Options) *Service {
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()
+	s.availabilityRoutes()
 	s.startRoutes()
 	s.workoutRoutes()
 	s.scheduleRoutes()
@@ -321,6 +323,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {
 			source, _ := p["message_source"].(*proto.MessageSource)
+			if id, _ := p["session_id"].(string); source != nil && method == DeviceAssistantSend {
+				// What the round it starts is spent on (availability.go). Only a source the sender named: a relay
+				// without one is noted by deliverRelay, and one read off the text below is not what started it.
+				s.availInput(device, id, source.Kind, time.Now())
+			}
 			if source == nil {
 				source = prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: text})
 			}
@@ -595,6 +602,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
+	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
 	s.meetingTurnUserSpoke(r.MachineID, r.SessionID)
@@ -618,6 +626,7 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool) {
 	s.taskWorking(ctx, r.MachineID, r.SessionID)
 	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
+	s.availTurnStarted(r.MachineID, r.SessionID, newTurn, time.Now())
 }
 
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
@@ -632,6 +641,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	if !meeting {
+		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 		// A review's reviewer answered (supervise_autoreview.go).
 		go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
@@ -661,6 +671,7 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 	if f := s.ixResolved; f != nil {
 		f(r)
 	}
+	s.availAskEnded(r, time.Now()) // who answered it, and after how long (availability.go)
 	s.taskPlanApproval()
 	s.taskAnswered(ctx, r.Interaction, r.Resolution, r.Status)
 	s.cardDecisions(ctx, r.Interaction, r.Resolution, r.Status)
