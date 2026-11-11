@@ -37,7 +37,8 @@ class AgentsTreeTest {
 
     @Test fun searchingOpensQuietSpacesAndFoldingAComputerLeavesOnlyItsHeading() {
         val searched = agentTreeEntries(buildAgentList(rows, machines, settings = AgentListSettings(grouping = AgentGrouping.MachineSpace, query = "notes")), "")
-        assertEquals(listOf("machine-header:machine/mac", "group:mac/notes", "session:mac/c", "session:mac/d"), searched.map { it.key })
+        // One computer left: no heading over its own list, as iOS (#4338 A7).
+        assertEquals(listOf("group:mac/notes", "session:mac/c", "session:mac/d"), searched.map { it.key })
         val rowsOfNotes = searched.filterIsInstance<TreeRowEntry>()
         assertEquals(listOf(true, false), rowsOfNotes.map { it.first })
         assertEquals(listOf(false, true), rowsOfNotes.map { it.last })
