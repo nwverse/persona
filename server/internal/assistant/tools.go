@@ -268,6 +268,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err := s.sendTaskAllowed(ctx, self, am, c, *a.Task, a.Text); err != nil {
 				return "", err
 			}
+		} else if err := s.exitAllowed(ctx, self, am, c, a.Text, len(atts)); err != nil {
+			return "", err
 		}
 		if ok, err := s.confirmOutbound(ctx, machine, self, name, agentLabel(c)+" · "+am.Name+"\n\n"+a.Text, args); err != nil {
 			return "", err
@@ -282,10 +284,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		text := a.Text
 		if a.Task == nil {
-			if err := s.ensureTodosLoaded(ctx); err != nil {
+			if t, theirs, err := s.supervisedElsewhere(ctx, self, am, c); err != nil {
 				return "", err // Unknown task ownership must not strip message provenance.
-			}
-			if assigned, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && assigned.Supervision != nil && assigned.Supervision.Supervisor != self {
+			} else if theirs {
+				// Read after the phone: the agent may have become another conversation's task while the user was asked.
+				if err := exitRefused(c, t, a.Text, len(atts)); err != nil {
+					return "", err
+				}
 				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
 			}
 		}
