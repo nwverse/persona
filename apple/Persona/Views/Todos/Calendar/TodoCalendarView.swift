@@ -75,7 +75,8 @@ struct TodoCalendarView: View {
     /// A to-do is being dragged: a sideways move carries it, it doesn't turn the page.
     @State private var carrying = false
     #if DEBUG
-    @State private var debugRescheduled = false
+    /// The `-openRescheduleTitled` sheet came up (then it isn't asked for again).
+    @State private var debugRescheduleShown = false
     #endif
 
     private let calendar = TodoCalendar.userCalendar
@@ -102,18 +103,31 @@ struct TodoCalendarView: View {
         }
         .sheet(item: $rescheduling) { todo in
             TodoRescheduleSheet(todo: todo)
+                #if DEBUG
+                .onAppear {
+                    debugRescheduleShown = true
+                    CalendarDragTrace.shared.note("sheet shown") // i18n-ignore: DEBUG trace
+                }
+                #endif
         }
         #if DEBUG
         // `-openRescheduleTitled <text>`: the first to-do whose title has it opens its "Change Due Date…" (the UI test
-        // of the way without dragging, screenshots).
+        // of the way without dragging, screenshots). A sheet asked for during the page's push or the switch to the
+        // calendar can be dropped: it is asked for again until it is up.
         .task(id: todos.count) {
-            guard !debugRescheduled, let match = UserDefaults.standard.string(forKey: "openRescheduleTitled"),
-                  let todo = todos.first(where: { $0.title.contains(match) }) else { return }
-            // after the page's push: a sheet asked for during it is dropped
-            try? await Task.sleep(for: .milliseconds(800))
-            guard !Task.isCancelled, !debugRescheduled else { return }
-            debugRescheduled = true
-            rescheduling = todo
+            guard !debugRescheduleShown,
+                  let match = UserDefaults.standard.string(forKey: "openRescheduleTitled") else { return }
+            guard let todo = todos.first(where: { $0.title.contains(match) }) else {
+                return CalendarDragTrace.shared.note("sheet: no to-do of \(todos.count)") // i18n-ignore: DEBUG trace
+            }
+            for attempt in 1...5 {
+                try? await Task.sleep(for: .milliseconds(800))
+                guard !Task.isCancelled, !debugRescheduleShown else { return }
+                CalendarDragTrace.shared.note("sheet asked \(attempt)") // i18n-ignore: DEBUG trace
+                rescheduling = nil
+                try? await Task.sleep(for: .milliseconds(100))
+                rescheduling = todo
+            }
         }
         #endif
     }

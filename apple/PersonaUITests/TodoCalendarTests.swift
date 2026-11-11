@@ -239,7 +239,7 @@ final class TodoCalendarTests: XCTestCase {
             if calendarSwitch.isSelected { app.buttons["列表"].tap() }
             calendarSwitch.tap()
         }
-        XCTAssertTrue(allDay.waitForExistence(timeout: 30))
+        XCTAssertTrue(allDay.waitForExistence(timeout: 30), "no sheet; trace: \(trace())")
         XCTAssertTrue(app.navigationBars["改截止时间"].exists)
         shot("reschedule-sheet")
         allDay.switches.firstMatch.tap()
@@ -270,7 +270,7 @@ final class TodoCalendarTests: XCTestCase {
             if calendarSwitch.isSelected { app.buttons["列表"].tap() }
             calendarSwitch.tap()
         }
-        XCTAssertTrue(allDay.waitForExistence(timeout: 30))
+        XCTAssertTrue(allDay.waitForExistence(timeout: 30), "no sheet; trace: \(trace())")
         shot("large-sheet")
         app.terminate()
         start(hub, ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
@@ -309,13 +309,27 @@ final class TodoCalendarTests: XCTestCase {
         }
     }
 
-    /// A block scrolled out of the part of the axis in sight (above it: the axis opened on a later hour) is brought
-    /// back with short swipes down.
+    /// The block put an hour under the All Day row, whatever the time: the axis opens on the hour it is now, so a
+    /// 10:00 block can be above or below the part in sight (and swipes fling on). The axis is dragged by its hours'
+    /// column and held at the end, so it stops where it was let go; long ways take a few drags.
     @MainActor private func bringIntoView(_ element: XCUIElement) {
-        var tries = 0
-        while !element.isHittable && tries < 5 {
-            app.swipeDown(velocity: .fast)
-            tries += 1
+        let allDay = app.staticTexts["全天"].firstMatch
+        let bar = app.descendants(matching: .any)["todo.calendar.undated"]
+        let axis = app.descendants(matching: .any)["todo.calendar.axis"].firstMatch
+        guard allDay.waitForExistence(timeout: 10), bar.exists, axis.exists else { return }
+        let top = allDay.frame.maxY, bottom = bar.frame.minY
+        let target = top + Self.hour, room = bottom - top - Self.hour
+        // frames are the screen's; an iPad's app can sit in a window away from its corner
+        let origin = app.coordinate(withNormalizedOffset: .zero), window = app.frame
+        for _ in 0..<6 {
+            let dy = target - element.frame.minY
+            if abs(dy) < Self.hour / 2 { return }
+            let step = max(-room, min(room, dy))
+            // from near the axis's bottom when it goes up, near its top when it goes down: the drag stays on it
+            let y0 = step < 0 ? bottom - Self.hour / 2 : top + Self.hour / 2
+            let start = origin.withOffset(CGVector(dx: axis.frame.minX - Self.hour / 4 - window.minX, dy: y0 - window.minY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: step)), withVelocity: .slow,
+                        thenHoldForDuration: 0.3)
         }
     }
 
