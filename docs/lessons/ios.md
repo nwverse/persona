@@ -2,6 +2,16 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## The general pasteboard belongs to the app on screen (#4192)
+
+`UIPasteboard.general.string = …` neither throws nor returns anything, and in the background (an app woken by a silent
+push, or a connection outliving the app on screen) iOS drops the write; a read there comes back empty with `hasStrings`
+false, which looks like an empty clipboard rather than the paste prompt. A tool that answered ok after the assignment
+told the model a secret was copied when nothing was. Check `applicationState == .active` before touching the pasteboard,
+and after a write check that `changeCount` moved and `hasStrings` is true before saying it worked. Neither property
+shows the paste prompt. Waking the phone by push for such a call is pointless: the hub answers at once instead
+(`phoneOnScreenTools`, `docs/apple/phone-tools.md` "Foreground restrictions").
+
 ## A dispatch link must retain its target and its hand-off (#3711)
 
 A passing task-sheet test is not evidence that a dispatch link pushes an Agent on iPhone. Test the actual feed link,
