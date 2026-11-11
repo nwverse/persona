@@ -573,7 +573,8 @@ internal fun AgentsScreen(
                 })
         }
     }
-    operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId]) { operationDialog = null } }
+    operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId], creationModel?.service,
+        page.machines.firstOrNull { m -> m.id == it.session.machineId }) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
         TodoPickerSheet(
             todos = assistant.todosFor(todos, targetSession.machineId,
@@ -620,7 +621,8 @@ internal fun AgentsScreen(
         MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) }
     }
     if (newAgent) {
-        if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online) { newAgent = false }
+        if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online,
+            onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) }) { newAgent = false }
         else JDialog(onDismiss = { newAgent = false }, title = stringResource(R.string.agents_action_new_session),
             text = stringResource(R.string.agents_new_session_unavailable), confirm = stringResource(R.string.agents_close) to { newAgent = false }, dismiss = null)
     }

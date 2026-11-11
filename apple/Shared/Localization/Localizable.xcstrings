@@ -1,350 +1,281 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "AI [Inbox FYI Tag]": {
+    "Connection method": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI"
+            "value": "Connection method"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI"
+            "value": "连接方式"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続方法"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Ignore [Inbox Menu]": {
+    "Password sign-in": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ignore"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無視"
+            "value": "Password sign-in"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "忽略"
+            "value": "密码登录"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードログイン"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Ignored [Inbox Section]": {
+    "Scan or token": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ignored"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無視"
+            "value": "Scan or token"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "忽略"
+            "value": "扫码或其他配对方式"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキャンまたはトークン"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Ignored [Inbox Toast]": {
+    "HTTPS hub address": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ignored"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無視しました"
+            "value": "HTTPS hub address"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已忽略"
+            "value": "HTTPS hub 地址"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTPS ハブアドレス"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Mark as FYI": {
+    "Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates.": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mark as FYI"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "参考程度に変更"
+            "value": "Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "改为知悉即可"
+            "value": "在系统登录窗口输入管理员设置的连接密码。自签名证书请使用扫码配对。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "システムのログイン画面で管理者が設定した接続用パスワードを入力してください。自己署名証明書の場合は QR コードでペアリングしてください。"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Mark as Needs You": {
+    "Enter a valid HTTPS hub address": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mark as Needs You"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "要対応に変更"
+            "value": "Enter a valid HTTPS hub address"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "改为需要你处理"
+            "value": "请输入有效的 HTTPS hub 地址"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有効な HTTPS ハブアドレスを入力してください"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Marked by You": {
+    "Invalid hub address": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Marked by You"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "あなたが分類"
+            "value": "Invalid hub address"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "你标记的"
+            "value": "hub 地址无效"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブアドレスが無効です"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Moved by you": {
+    "Could not create the sign-in request": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Moved by you"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "あなたが変更"
+            "value": "Could not create the sign-in request"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "你改的"
+            "value": "无法创建登录请求"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログインリクエストを作成できませんでした"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Moved to %@": {
+    "Invalid sign-in callback. Try again": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Moved to %1$@"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@に移動しました"
+            "value": "Invalid sign-in callback. Try again"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已改为%1$@"
+            "value": "登录回调无效，请重试"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログインのコールバックが無効です。もう一度お試しください"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Moved to %@. You’ve moved similar items before, so Persona is drafting a rule for you to approve.": {
+    "Sign-in authorization has expired. Sign in again": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Moved to %1$@. You’ve moved similar items before, so Persona is drafting a rule for you to approve."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@に移動しました。同じような変更が続いたので、Persona が承認用のルールを作成しています。"
+            "value": "Sign-in authorization has expired. Sign in again"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已改为%1$@。同类的事你改过几次了，Persona 正在起草一条规则，等你确认。"
+            "value": "登录授权已失效，请重新登录"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログイン認可の有効期限が切れています。再度ログインしてください"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Not Interested": {
+    "Invalid device credential": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not Interested"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "興味なし"
+            "value": "Invalid device credential"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "不感兴趣"
+            "value": "设备凭据无效"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイスの認証情報が無効です"
           }
         }
-      },
-      "extractionState": "manual"
+      }
     },
-    "Picked by the AI": {
+    "Could not create a secure sign-in request": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Picked by the AI"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI が分類"
+            "value": "Could not create a secure sign-in request"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI 推荐的"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
-    "Review the AI’s picks first": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Review the AI’s picks first"
+            "value": "无法创建安全登录请求"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "先に AI の分類を確認"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "先看完上面 AI 推荐的"
+            "value": "安全なログインリクエストを作成できませんでした"
           }
         }
-      },
-      "extractionState": "manual"
-    },
-    "With the AI": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "With the AI"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI が対応中"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI 处理中"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
-    "You [Inbox FYI Tag]": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "手動"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "人工"
-          }
-        }
-      },
-      "extractionState": "manual"
+      }
     },
     "Background round": {
       "extractionState": "manual",
@@ -49353,6 +49284,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "结束对话"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "End of output": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End of output"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出力の末尾"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输出末尾"
           }
         }
       },
@@ -120277,6 +120231,29 @@
       },
       "extractionState": "manual"
     },
+    "Subtasks (%lld)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subtasks (%lld)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サブタスク（%lld）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子任务（%lld）"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Succeeded": {
       "localizations": {
         "en": {
@@ -158891,7 +158868,421 @@
         }
       }
     }
-  }
+  },
+    "Cron": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron"
+          }
+        }
+      }
+    },
+    "Cron Expression": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron Expression"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron 表达式"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "cron 式"
+          }
+        }
+      }
+    },
+    "Runs when its cron expression matches, in your time zone. To change the expression, edit it in Persona on the web or ask Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs when its cron expression matches, in your time zone. To change the expression, edit it in Persona on the web or ask Persona."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按你的时区，在 cron 表达式匹配时运行。要改表达式，请在网页版 Persona 里编辑，或者直接告诉 Persona。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたのタイムゾーンで、cron 式に一致したときに実行します。式を変えるには、Web 版の Persona で編集するか、Persona に頼んでください。"
+          }
+        }
+      }
+    },
+    "AI [Inbox FYI Tag]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Ignore [Inbox Menu]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignore"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無視"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "忽略"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Ignored [Inbox Section]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignored"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無視"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "忽略"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Ignored [Inbox Toast]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignored"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無視しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已忽略"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Mark as FYI": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as FYI"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参考程度に変更"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改为知悉即可"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Mark as Needs You": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as Needs You"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要対応に変更"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改为需要你处理"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Marked by You": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked by You"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたが分類"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你标记的"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Moved by you": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moved by you"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたが変更"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你改的"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Moved to %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moved to %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@に移動しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已改为%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Moved to %@. You’ve moved similar items before, so Persona is drafting a rule for you to approve.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moved to %1$@. You’ve moved similar items before, so Persona is drafting a rule for you to approve."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@に移動しました。同じような変更が続いたので、Persona が承認用のルールを作成しています。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已改为%1$@。同类的事你改过几次了，Persona 正在起草一条规则，等你确认。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Not Interested": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Interested"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "興味なし"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不感兴趣"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Picked by the AI": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Picked by the AI"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI が分類"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 推荐的"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Review the AI’s picks first": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review the AI’s picks first"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先に AI の分類を確認"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先看完上面 AI 推荐的"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "With the AI": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With the AI"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI が対応中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 处理中"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "You [Inbox FYI Tag]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "人工"
+          }
+        }
+      },
+      "extractionState": "manual"
+    }
   },
   "version": "1.0"
 }

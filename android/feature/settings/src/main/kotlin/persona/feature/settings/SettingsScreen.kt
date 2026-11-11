@@ -589,7 +589,7 @@ private fun SettingsContent(
             }
             if (paired) item {
                 JButton(stringResource(R.string.settings_disconnect_forget), { confirmDisconnect = true },
-                    Modifier.fillMaxWidth().padding(top = ContentTokens.legacyXl), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
+                    Modifier.fillMaxWidth().padding(top = Tokens.Space.section), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
             }
             item { deviceFeedback() }
         }

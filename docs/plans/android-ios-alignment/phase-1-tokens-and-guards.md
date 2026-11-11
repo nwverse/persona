@@ -105,7 +105,7 @@ Call sites of the names that change meaning:
 
 1. One pixel-identical codemod commit: rename the old `xl` (20) to a temporary name, then `xxl` to `xl` and `xxxl` to `xxl`, and `tightGap` to `sm`. Check it with `scripts/app/android_shots_diff.py` before and after. `xl` and `xxl` change meaning, so this must be one atomic commit. Done with step 2: the temporary name is `ContentTokens.legacyXl`, and instead of screenshots the codemod checked that every file refers to the same sequence of values before and after.
 2. Rewrite `dimension.json` with the iOS names and values (the aliases as references) and regenerate.
-3. A design pass on the 21 places that used 20 (nine in settings, six in the Inbox, the rest in knowledge, chat and three design-system files): each moves to 16 or 24, with screenshots next to iOS. Seven of them sized an icon and one a swatch, which iOS sizes with `Theme.Size.iconXS`, 20: those take `Tokens.Size.iconXS` and keep their size, and `spec/tokens` gains the icon sizes Android uses.
+3. A design pass on the 21 places that used 20 (nine in settings, six in the Inbox, the rest in knowledge, chat and three design-system files): each moves to 16 or 24, with screenshots next to iOS. Seven of them sized an icon and one a swatch, which iOS sizes with `Theme.Size.iconXS`, 20: those take `Tokens.Size.iconXS` and keep their size, and `spec/tokens` gains the icon sizes Android uses. The 13 gaps take the value iOS uses in the same place: 24 between sections (8), iOS's explicit 24 in the Lark profile and document footer (2), 16 around the health page's title (1), and nothing extra at two pages' ends, where iOS has only the list's own margin (2). The diff view's sign column takes iOS's `Theme.Size.dotXL` (10, growing with the font) and `sm` before the code.
 4. The Swift drift test from T1 keeps the two in step.
 
 ### T3. Motion
@@ -125,7 +125,7 @@ Call sites of the names that change meaning:
 
 Android's springs use damping 0.82 or 0.9 at stiffness 400; Brief (140/240 ms) and Board (100/160 ms) use tweens. In `Tokens.Motion` only `reduced` is read.
 
-**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS.
+**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS. Done in two PRs: the tokens, the drift test and Glass's state and layout springs first (`IosSpring`), then the breathing ring, which changes how the mark looks.
 
 Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; Android's count and breathe timings have no iOS counterpart and stay Android-only until iOS has one.
 
@@ -133,7 +133,7 @@ Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; A
 
 **Today.** iOS `Theme.Font`: display 28 bold, title 22 semibold, heading 17 semibold, body 17, secondary 15, caption 13, section header 13 semibold, label 12, code 13 monospaced, with line heights per level. Android's `Tokens.Type` still carries retired iOS names (panel title, card body, greeting, micro 11); `Typography.kt` reads only their sizes, the 28 and 22 are literals, and line heights, weights and families are never read.
 
-**Change.** Rewrite `type.json` as the nine iOS levels with size, weight and line height. Glass's typography reads them, and `GlassTokenContractTest` checks against the tokens instead of its own numbers. `RepositoryTests` compares the levels with `Theme.Font`.
+**Change.** Rewrite `type.json` as the nine iOS levels with size, weight and line height. Glass's typography reads them, and `GlassTokenContractTest` checks against the tokens instead of its own numbers. `RepositoryTests` compares the levels with `Theme.Font`. Done: the line heights are `Theme.Level`'s multipliers, which Glass doesn't read; Android's smaller code (12) takes the label level's size, since iOS has one code level.
 
 Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`), there is a 12 sp floor, and Brief and Board are pinned by hash in the contract test.
 
@@ -161,7 +161,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 4. `StyleContrastTest` gets floors per style: Glass fails on the three iOS floors and reports the WCAG checks without failing, as `rules.json` does; Brief and Board keep 4.5:1.
 5. `GlassTokenContractTest`, `docs/android/android-design.md` and rule 7 of `DESIGN_SYSTEM.md` section 6 are updated in the same PR.
 
-**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it.
+**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it. Done: the extension themes keep their 4.5:1 check, since a theme applies to every style and Brief and Board keep 4.5:1; places that picked black or white by contrast on the accent now use the palette's `onAccent` (white in Glass).
 
 ### T7. Icons by meaning
 
@@ -174,7 +174,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 3. A Python test that every name exists in `Icons.swift` and every glyph in the Phosphor list.
 4. A ratchet in `scripts/app/android_token_baseline.py` that moves pages from `PhIcons.*` to meaning names, file by file.
 
-Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout.
+Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout. Done: `spec/icons/meanings.json` maps 168 of iOS's meanings (the ones with a fitting glyph among the 170 generated), `PersonaIcons` is generated from it, and the ratchet's `icon` category starts at the 1,190 direct glyph references in pages.
 
 ### T8. Guards
 
@@ -200,6 +200,8 @@ Outside the design system, 151 production files import `androidx.compose.materia
 3. Short rows and headers: `heightIn(min = 48.dp)` with transparent padding.
 
 Risks: layouts grow where these controls sit in rows, so screenshot baselines move. Brief and Board share the components and get the fix too.
+
+Finding (11-11): step 1 as written moved pixels. With `minimumInteractiveComponentSize()` before `size()`, a switch's row grew 12dp next to rows without one, and the Agents computer and space headings grew too (screenshots in #4209). Compose already stretches a small pointer target to the system's 48dp touch area where no other target is closer, so the switch, the search field's clear button and a heading action keep their size, the no-op calls go, and `TouchTargetTest` guards the 48dp reach (the heading action joins its cases; the clear button has its own test, since the text sits on its left). Steps 2 and 3 grow layouts as well; each needs a reason a target is missed (an overlapping neighbour) before it changes how a screen looks.
 
 ### T10. Haptics
 

@@ -8,6 +8,7 @@
 -                    /api/v1/admin/extensions/
 -                    /api/v1/agents
 -                    /api/v1/agents/
+-                    /api/v1/auth/password/
 -                    /api/v1/bots/
 -                    /api/v1/channels/{id}/bind
 -                    /api/v1/connectors
@@ -49,6 +50,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/followups/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
 -                    DELETE /api/v1/assistant/places/{id}
+-                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
@@ -96,6 +98,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    GET /api/v1/admin/network
 -                    GET /api/v1/admin/overview
 -                    GET /api/v1/admin/owner-subjects
+-                    GET /api/v1/admin/password-login
 -                    GET /api/v1/admin/peers
 -                    GET /api/v1/admin/routes
 -                    GET /api/v1/admin/state
@@ -120,6 +123,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/directions/offers
+-                    GET /api/v1/assistant/directions/tree
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
 leaders.read         GET /api/v1/assistant/leaders
@@ -129,7 +133,10 @@ leaders.read         GET /api/v1/assistant/leaders
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
+-                    GET /api/v1/assistant/standing-authorizations
 -                    GET /api/v1/assistant/tasks
+-                    GET /api/v1/assistant/tasks/cron
+-                    GET /api/v1/auth/password/state
 -                    GET /api/v1/auth/tokens
 -                    GET /api/v1/bots/feishu
 -                    GET /api/v1/channels
@@ -310,6 +317,8 @@ todos.write          PATCH /api/v1/todos/{id}
 -                    POST /api/v1/admin/machines/{id}/reconnect
 -                    POST /api/v1/admin/owner-subjects
 -                    POST /api/v1/admin/password
+-                    POST /api/v1/admin/password-login/register/finish
+-                    POST /api/v1/admin/password-login/register/start
 -                    POST /api/v1/admin/peers
 -                    POST /api/v1/admin/peers/code
 -                    POST /api/v1/admin/peers/probe
@@ -355,6 +364,9 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/tasks/{id}/run
 -                    POST /api/v1/assistant/warm
 -                    POST /api/v1/auth/pair-codes
+-                    POST /api/v1/auth/password/exchange
+-                    POST /api/v1/auth/password/finish
+-                    POST /api/v1/auth/password/start
 -                    POST /api/v1/auth/tokens
 -                    POST /api/v1/bots/feishu/pair
 -                    POST /api/v1/bots/feishu/test
@@ -466,6 +478,8 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/phone/runtime-cli
 -                    POST /api/v1/phone/write-queue/{id}/cancel
 -                    POST /api/v1/recordings/{id}/ask
+-                    POST /api/v1/recordings/{id}/followup
+-                    POST /api/v1/recordings/{id}/just-me
 -                    POST /api/v1/recordings/{id}/live
 -                    POST /api/v1/recordings/{id}/minutes
 -                    POST /api/v1/recordings/{id}/minutes/todos
@@ -481,6 +495,7 @@ agents.permission_mode POST /api/v1/sessions/{mid}/{sid}/modes
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue/send-now
 agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
+-                    POST /api/v1/sessions/{mid}/{sid}/restore-model
 -                    POST /api/v1/sessions/{mid}/{sid}/rewind
 -                    POST /api/v1/sessions/{mid}/{sid}/screen/before
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
@@ -518,6 +533,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/admin/machines/{id}
 -                    PUT /api/v1/admin/network/access
 -                    PUT /api/v1/admin/network/public
+-                    PUT /api/v1/admin/password-login
 -                    PUT /api/v1/admin/usage-sources
 -                    PUT /api/v1/admin/usage-sources/{id}
 -                    PUT /api/v1/agents/prefs
@@ -574,6 +590,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/mutes
 -                    PUT /api/v1/pins
 -                    PUT /api/v1/recordings/{id}
+-                    PUT /api/v1/recordings/{id}/private
 -                    PUT /api/v1/subscriptions/{id}
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}

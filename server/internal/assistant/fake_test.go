@@ -129,6 +129,7 @@ type fakeHub struct {
 	hubCards       []proto.Interaction // interactions.list: what the hub has up
 	told           []told              // the manager's fleet.* events (Tell)
 	failSend       error               // session.send fails with it
+	sentOnce       []map[string]any    // session.send_once params, in order
 	failSendOnce   map[string]error    // session.send_once fails with these, by "machine/session"
 	failInterrupt  error               // session.interrupt fails with it
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
@@ -245,6 +246,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if sid, _ := a["session_id"].(string); f.failSendOnce[p.Device+"/"+sid] != nil {
 			return nil, f.failSendOnce[p.Device+"/"+sid]
 		}
+		f.sentOnce = append(f.sentOnce, a)
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers
@@ -469,6 +471,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		f.sends = append(f.sends, a)
 		id, _ := a["session_id"].(string)
+		if want, _ := a["new_session_id"].(string); id == "" && want != "" { // a new conversation under the id asked for
+			if f.known[want] {
+				return json.Marshal(map[string]any{"session_id": want, "existed": true})
+			}
+			id = want
+			f.known[id] = true
+		}
 		if id == "" { // a new conversation
 			f.made++
 			id = fmt.Sprintf("s%d", f.made)

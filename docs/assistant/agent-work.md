@@ -248,7 +248,7 @@ A subscription's 5-hour or weekly usage limit (#1710) is no failure to report an
 
 ## Safety boundary
 
-Persona **sends to Agents on its own** only six kinds of message, none introducing new intent:
+Persona **sends to Agents on its own** the following kinds of message, none introducing new intent:
 
 1. Continuation after a transient error: like "Retry" on the App's error card, it resumes the interrupted task; likewise the continuation once a subscription's usage limit reset (`prompts/agents/limit_continue.md`: go on with what you were doing, without redoing what is done);
 2. A wakeup after a registered wait: asks only whether the awaited event is ready, and explicitly says `接下来要推代码、部署、给别人发消息、合并或改别人的 MR 时先停下来问用户，不要自己做` ("Before pushing code, deploying, messaging others, or merging / modifying someone else's MR, stop and ask the user; do not do it yourself");
@@ -271,6 +271,68 @@ Any next step involving **pushing code, deploying / releasing, messaging others,
 - Merging, releasing, deploying (`合入`, `发布`, `上线`, `部署`, merge, release…): only when the to-do text contains the same word and no negation (`不要`, `别`, `禁止`, don't…) precedes it in the same clause.
 
 With no open to-do, or with a step its to-do does not authorize, the hub neither wakes it nor opens a card of its own: a card only carries a question the Agent actually wrote (#3290). With the wake switch off nothing is woken either, and a card the Agent wrote still goes up. With more than one question or an authorization link, the task does not auto-approve the step.
+
+### Standing authorization answers
+
+Before supervisor routing, `announce` checks a hook-waited question or plan against the persisted
+[standing authorizations](unified-entry.md#standing-authorizations). A matching answer says “Already authorized,
+continue,” with the grant ID, original words and source, without showing a pending card or notifying the supervisor
+or user. The current task must be open, and both its bound directory and the node's current session directory must match the computer and scope;
+the card's own `cwd` is not trusted. Explicit task prohibitions and read-only launches block this path.
+
+Simple single-action confirmations use a deterministic fast path. Natural questions (including PR numbers and
+free-form choice descriptions) and multi-step plans use the existing `agent.delegate` model purpose to classify the
+complete action set and choose exact affirmative labels. The manager checks every action against one grant; local
+read/edit/verification steps may accompany an authorized external action. A merge grant cannot approve a plan that
+also pushes, deploys or deletes. Failed, incomplete or ambiguous classification keeps the original route. Selected
+wait/cancel/defer or runtime-action options are rejected; an unselected defer option does not block a valid answer.
+Forms, passwords, assistant `ask_user`, runtime-local dialogs and extra tool-input fields keep their existing route.
+The judge uses the model configuration for `agent.delegate`, including its selected managed provider and model;
+it never starts an unconfigured CLI. The synchronous authorization attempt has a five-second classification and evidence-read context budget
+(including classification and scope/evidence reads), reduced from sixty seconds so a slow model promptly falls back
+to the normal card route. This favors manual confirmation over waiting for a slow automatic answer; it does not
+introduce background approval or change resolution persistence. If that model is unavailable, the card follows the existing supervisor/user
+route, and counts as a user confirmation only when that route actually notifies the user.
+A conservative code scan adds sensitive effects even if classification misses them; unspecified deployments remain
+production-sensitive. Every explicit card path is independently resolved and checked against repository scope, including relative paths
+(`../other`, `./server`, `server/internal`), `~`, `$HOME` and `$PWD` (including braced forms). Relative paths use the
+node's session directory; home expansion and physical Git identity come from that node. Unknown session variables,
+shell substitutions, globs, quoted variable/home expansions, ambiguous quoting and failed identity reads keep confirmation manual. Paths are kept literally, including trailing dots and parent segments;
+sentence punctuation on an unquoted path may therefore require manual confirmation. A node must advertise
+`path_resolved: true`, proving it resolves symlinks before parent segments; older nodes keep path cards manual.
+Resolution persistence has its own timeout and is outside the five-second classification budget. The judge's
+`within_task` can veto a card but cannot prove that a path is authorized. The model's output never grants tool permissions or replaces condition evidence.
+
+Tool `permission` cards are never approved by standing authorization. Production deployment, external sending,
+deletion (including force-pushing or replacing remote history) and spending each require their own explicit action and `reversible: true`; task notes alone still cannot
+authorize the `userOnlyWords` actions described above. A plan answer explicitly uses runtime mode `default`, so it
+does not grant bypass permissions. Existing per-session tool grants are separate and unchanged.
+
+`ci_green` and `no_conflicts` gate every action in the grant: the manager reads the current branch through `git.pr`, requires an
+open, non-draft PR with a head commit, and binds explicit PR URLs or numbers to the returned PR. Multiple distinct PR targets remain manual. CI requires a complete,
+nonempty list of fewer than 100 checks, all passing; pending, failed or skipped checks do not pass. No conflicts
+requires `mergeable: MERGEABLE`. A condition written in other words is saved and injected but remains manual until
+there is an independent verifier for it. A card's claim that checks passed is never evidence. Conditions are checked
+at answer time. Push and test deployment with these conditions also require the node's current local HEAD to match
+the checked PR head, so old remote CI cannot approve new unpushed commits. This does not replace the repository's merge-time quality gates or protect against a later head change.
+
+The registry is re-read after those checks. A database transaction locks the grant against revocation, verifies the
+task is still open and unchanged since the checks started (including its decisions), and commits the interaction resolution, `source: agent` task decision with authority, and automatic
+count together before the waiting hook receives its answer. Failed audit writes leave the card pending. This path
+neither changes a risky wait's existing wake rules nor invents a new task or permission.
+
+### Daily confirmation counts
+
+Morning and evening briefing facts, cards, text fallback and feed include the current local day's confirmation counts,
+from the user's calendar-day start to the briefing snapshot. Counts group by computer, Agent session, task and card
+kind (`question`, `permission`, `plan`, and any other recorded kind). Each interaction counts once when `tellUser`
+first dispatches it to the user layer; cards held by a supervisor or shown only on apps are excluded. Several cards
+sharing one push each count as a card. Muting may suppress the push while channels still receive the card: these
+numbers measure dispatch to the user layer, not APNs delivery receipts. Automatic standing card answers count separately; existing task-note risky waits that never create a card are outside this card count.
+
+The interaction table keeps the first notification and automatic-answer timestamps and grant/task IDs across
+restarts. A card created yesterday and first notified today counts today. History from versions without these markers
+is not guessed or backfilled. A failed lookup is displayed as unknown, never as zero.
 
 ## Avoid conflicting with manual user actions
 
