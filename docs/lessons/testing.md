@@ -805,7 +805,7 @@ On a Linux development machine without the Android SDK or Xcode, pure-logic clie
   This catches syntax, type and isolation errors and really runs the tests, but it is not an Xcode build: say "not compiled with Xcode" in the PR; Xcode 26.0 is not verified either.
   A list's logic that sits in a SwiftUI file builds too when only its `nonisolated` top-level declarations are taken, each from its first line to the
   next line that is only `}` (`SpaceGroup` and `AgentFilter` from `ChatsView.swift`, `AppGroups` from `AgentAppGroups.swift`): the real `AgentListProjection.swift`
-  and its tests ran so with about 40 lines of stand-ins (#4767). Tests that reach `AppModel`, `AgentListRows` or the projection's cache still need Xcode.
+  and its tests ran so with about 90 lines of stand-ins (#4767). Tests that reach `AppModel`, `AgentListRows` or the projection's cache still need Xcode.
 
 ## 后台测量停滞时，先区分未完成测量与残留管道（2026-11-06，#5766）
 
