@@ -361,10 +361,11 @@ export class SessionList<T> {
       try { page = await this.page(generation, { cursor: this.cursor }); }
       catch (error) {
         if (!this.expired(error)) throw error;
-        this.clearBaseline();
-        if (!this.current(generation)) return;
-        this.publish({ loading: true });
-        await this.refresh(generation, false);
+        // The hub keeps a frozen view 5 minutes (fewer when newer ones push it out), so reaching the end of a list
+        // left open that long always lands here. Emptying the list first collapsed it to its first page and threw the
+        // reader back to the top; keep the rows on screen and read a fresh view as deep as they have scrolled, plus
+        // the page they asked for.
+        await Promise.all([this.rebaseline(generation, this.prefixSize + PAGE_SIZE), this.readCounts(generation)]);
         return;
       }
       if (!page || !this.current(generation)) return;
@@ -375,6 +376,30 @@ export class SessionList<T> {
     }
     this.prefixSize += PAGE_SIZE;
     this.publish({ rows: this.visible(), hasMore: !!this.cursor || this.candidateCount() > this.prefixSize });
+  }
+
+  /** A fresh frozen view at least `depth` rows deep, swapped in at once; the old rows stay until then. */
+  private async rebaseline(generation: number, depth: number): Promise<void> {
+    const first = await this.page(generation);
+    if (!first || !this.current(generation)) return;
+    const frozen = new Map(first.sessions.map((row) => [this.identity(row), row]));
+    let cursor = first.has_more ? first.next_cursor : undefined;
+    let size = PAGE_SIZE;
+    while (cursor && size < depth) {
+      const page = await this.page(generation, { cursor });
+      if (!page || !this.current(generation)) return;
+      if (page.revision !== first.revision) throw new Error(t("paged-agents.inconsistent_page"));
+      for (const row of page.sessions) frozen.set(this.identity(row), row);
+      cursor = page.has_more ? page.next_cursor : undefined;
+      size += PAGE_SIZE;
+    }
+    this.frozen = frozen;
+    this.overlay = new Map();
+    this.prefixSize = size;
+    this.cursor = cursor;
+    this.frozenRevision = first.revision;
+    this.checkpoint = first.revision;
+    this.publish({ rows: this.visible(), loaded: true, total: first.total, hasMore: !!cursor || this.candidateCount() > size });
   }
 
   private candidates(): Map<string, T> {
