@@ -16,5 +16,6 @@
   "editing_hint": "Enter rewinds the chat to before it and sends this · Esc cancels",
   "cancel_editing": "Cancel editing",
   "edit_ended": "Your last message changed, so this is no longer an edit: it will go as a new message.",
-  "edit_wait": "Can't rewind the chat right now ({reason}). Your edit is still in the box."
+  "edit_wait": "Can't rewind the chat right now ({reason}). Your edit is still in the box.",
+  "edit_not_sent": "Claude's input box on the computer still has text in it, so your edit was not sent. It is back in the box."
 }
