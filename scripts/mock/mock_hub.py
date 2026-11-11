@@ -1751,11 +1751,19 @@ if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
              ("task", "idle", "1104 | 定时 | 晨间简报", 60 * 27),
              ("lark_agent", "idle", "1105 | 整理 | 群里的需求", 60 * 2),
              ("spawned", "idle", "1103 | 研究 | 竞品的定价", 60 * 50)]
+    # MOCK_EXTERNAL=1 (#3758): one more, opened by an extension that isn't Lark /agent; with the Lark /agent one, the
+    # conversations the apps mark as external (their items are below, after ITEMS).
+    if os.environ.get("MOCK_EXTERNAL") == "1":
+        _AUTO[8] = ("lark_agent", "idle", "1105 | 研究 | 群里的需求汇总", 60 * 2)
+        _AUTO.append(("extension", "idle", "1104 | 文档 | 周报草稿", 60 * 26))
     for _n, (_origin, _state, _title, _min) in enumerate(_AUTO):
         _s = assistant_sess("b2e4d6f8-0000-4000-8000-%012d" % (300 + _n), _title, _min,
                             "这是收件箱里的一件事，你作为我的 AI 分身先处理它……" if _origin == "inbox" else "处理好了。")
         _s.update(origin=_origin, state=_state, status=STATUS_OF_STATE[_state],
                   pending_interactions=1 if _state == "needs_you" else 0)
+        if _origin in ("lark_agent", "extension"):
+            _s.update(origin_ref="example-ext" if _origin == "extension" else "larkext",
+                      opened_by="example-ext" if _origin == "extension" else "larkext")
         ASSISTANT.append(_s)
 
 def next_at(hhmm, weekdays):
@@ -6012,28 +6020,43 @@ if MAIN_ACTIONS and os.environ.get("MOCK_COMPACTION") in ("running", "done", "fa
 
 ITEMS[ASK2] = [it("user", "text", 60 * 5, text="⏰ 早报")] + [it("assistant", "text", 60 * 5, text="早上好！今天 2 个会议，3 封邮件需要回复。")]
 ITEMS[ASK3] = [it("user", "text", 60 * 29, text="帮我约周五和韩梅梅吃饭")] + [it("assistant", "text", 60 * 28, text="已经在日历里加好了。")]
-# MOCK_LARK_AGENT=1: the Friday scheduling request is a Feishu /agent conversation instead (prompts/lark/chat_agent.md): the
-# instructions and context in <persona-context> blocks, only the request outside them (the apps fold the blocks, #876).
-if os.environ.get("MOCK_LARK_AGENT") == "1":
-    _lark_ctx = [
-        ("instructions", "给 Agent 的说明", "", "示例用户在飞书「发布群」里用 /agent 叫你。这不是在电脑上开的会话，你只知道下面给出的上下文。\n\n"
-         "他的请求是这条消息最后、所有 <persona-context> 标签外面的那段文字；其余标签里是 hub 收集好的上下文。\n\n## 怎么做\n\n"
-         "- 能做的直接做掉：查资料、读代码、看日志、跑命令。\n- 做完用 lark_agent_reply 回复一次。"),
-        ("context", "请求的位置", "", "位置：群聊「发布群」（feed_id 7000000000000000001）；请求消息 id 7000000000000000002，2026-11-03 16:48 发出。"),
-        ("context", "前面的聊天", "", "\n".join(f"11-03 16:{10 + n:02d} {'韩梅梅' if n % 2 else '李雷'}：第 {n + 1} 条讨论构建失败的消息" for n in range(30))),
-        ("context", "请求引用的消息", "", "韩梅梅：构建在 lint 那一步挂了，帮忙看下是哪里被拦截了"),
-        ("doc", "文档 · 发布手册", "https://example.feishu.cn/docx/AbC123", "# 发布手册\n\n1. 冻结提交\n2. 跑全部测试\n3. 上传构建"),
-        ("context", "会话档案 · 发布群", "", "# 发布群\n\n## 这是什么\n\n每周五发版的协调群。"),
-        ("context", "项目 · 周五发版", "", ""),
-    ]
-    _lark_text = "".join(
+def lark_agent_request(request):
+    """A Feishu /agent conversation's first message (prompts/lark/chat_agent.md): the instructions and context in
+    <persona-context> blocks, only the request outside them (the apps fold the blocks, #876)."""
+    return "".join(
         f'<persona-context kind="{k}" title="{t}"' + (f' url="{u}"' if u else "") + f">\n{b}\n</persona-context>\n"
-        for k, t, u, b in _lark_ctx) + "看看哪里被拦截了"
-    ITEMS[ASK3] = [it("user", "text", 60 * 29, text=_lark_text),
+        for k, t, u, b in _LARK_CTX) + request
+
+
+_LARK_CTX = [
+    ("instructions", "给 Agent 的说明", "", "示例用户在飞书「发布群」里用 /agent 叫你。这不是在电脑上开的会话，你只知道下面给出的上下文。\n\n"
+     "他的请求是这条消息最后、所有 <persona-context> 标签外面的那段文字；其余标签里是 hub 收集好的上下文。\n\n## 怎么做\n\n"
+     "- 能做的直接做掉：查资料、读代码、看日志、跑命令。\n- 做完用 lark_agent_reply 回复一次。"),
+    ("context", "请求的位置", "", "位置：群聊「发布群」（feed_id 7000000000000000001）；请求消息 id 7000000000000000002，2026-11-03 16:48 发出。"),
+    ("context", "前面的聊天", "", "\n".join(f"11-03 16:{10 + n:02d} {'韩梅梅' if n % 2 else '李雷'}：第 {n + 1} 条讨论构建失败的消息" for n in range(30))),
+    ("context", "请求引用的消息", "", "韩梅梅：构建在 lint 那一步挂了，帮忙看下是哪里被拦截了"),
+    ("doc", "文档 · 发布手册", "https://example.feishu.cn/docx/AbC123", "# 发布手册\n\n1. 冻结提交\n2. 跑全部测试\n3. 上传构建"),
+    ("context", "会话档案 · 发布群", "", "# 发布群\n\n## 这是什么\n\n每周五发版的协调群。"),
+    ("context", "项目 · 周五发版", "", ""),
+]
+# MOCK_LARK_AGENT=1: the Friday scheduling request is a Feishu /agent conversation instead.
+if os.environ.get("MOCK_LARK_AGENT") == "1":
+    ITEMS[ASK3] = [it("user", "text", 60 * 29, text=lark_agent_request("看看哪里被拦截了")),
                    it("assistant", "text", 60 * 28, text="lint 那一步被新加的隐私扫描拦下了：`site/` 里有一张截图带了内网地址。已经换成占位图，重跑通过。")]
 ITEMS[ASK4] = [x for n in range(1, 31) for x in (
     it("user", "text", 60 * 50 + 61 - 2 * n, text=f"第 {n} 本也整理一下"),
     it("assistant", "text", 60 * 50 + 60 - 2 * n, text=f"第 {n} 本整理好了：\n\n- 三个主要观点\n- 两段摘抄\n- 一条和上一本的联系\n\n要接着整理第 {n + 1} 本吗？"))]
+
+# MOCK_EXTERNAL=1 (with MOCK_AUTO_CONVERSATIONS=1, #3758): what the two conversations extensions opened say. The Lark /agent
+# one opens with the request and its context blocks; the other extension's with plain text. The apps write where each
+# came from under its first message.
+if os.environ.get("MOCK_EXTERNAL") == "1":
+    ITEMS["b2e4d6f8-0000-4000-8000-000000000308"] = [
+        it("user", "text", 60 * 2 + 1, text=lark_agent_request("把群里这周提的需求汇总一下")),
+        it("assistant", "text", 60 * 2, text="汇总好了，已经回复到群里：这周一共 5 条需求，2 条和发布有关，1 条要你拍板。")]
+    ITEMS["b2e4d6f8-0000-4000-8000-000000000310"] = [
+        it("user", "text", 60 * 26 + 1, text="把这周的工作记录整理成周报草稿"),
+        it("assistant", "text", 60 * 26, text="周报草稿写好了：完成 4 件，进行中 2 件，下周计划 3 件。")]
 
 INTERACTION_HISTORY = [  # GET /api/v1/interactions/history: requests already answered
     {"id": "ix_blog_done", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
@@ -20505,6 +20528,7 @@ MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Per
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 
 
 
