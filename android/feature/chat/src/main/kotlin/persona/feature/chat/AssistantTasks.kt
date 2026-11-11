@@ -117,7 +117,7 @@ internal class AssistantTaskHost(
     /** Original records remain inspectable from Progress, never discarded by the conversation projection. */
     val backgroundRecords: List<persona.core.domain.lines.ChatLine> = emptyList(),
     val onOpenBackground: (() -> Unit)? = null,
-    /** The conversation's own manager (its session row), for a plan's Start / Don't start; null: not known. */
+    /** The conversation's own manager (its session row), for plan and Brief writes; null: not known. */
     val manager: String? = null,
 ) {
     /** Each session's first card ([firstBySession]). */

@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -14,6 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.BriefBody
 import persona.core.contracts.BriefDone
@@ -27,10 +28,14 @@ import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JButtonSize
 import persona.core.designsystem.JCard
+import persona.core.designsystem.JDivider
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.ProgressStep
 import persona.core.designsystem.Status
+import persona.core.designsystem.StepProgress
+import persona.core.designsystem.StepState
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.currentLocale
 import persona.core.designsystem.icons.PhIcon
@@ -49,16 +54,16 @@ internal fun BriefCard(item: FeedItem, host: AssistantTaskHost) {
             Text(brief.title.ifBlank { stringResource(R.string.brief_default_title) },
                 style = PersonaTheme.type.label, color = PersonaTheme.palette.ink2, maxLines = 1)
             BriefWaiting(brief, host)
-            HorizontalDivider(color = PersonaTheme.palette.line)
+            JDivider()
             BriefPast(brief, host)
-            HorizontalDivider(color = PersonaTheme.palette.line)
+            JDivider()
             BriefAccept(brief, host)
             if (brief.later.isNotEmpty() || brief.laterTotal > 0) {
-                HorizontalDivider(color = PersonaTheme.palette.line)
+                JDivider()
                 BriefLater(brief, host)
             }
             if (brief.progressTotal > 0) {
-                HorizontalDivider(color = PersonaTheme.palette.line)
+                JDivider()
                 BriefProgress(brief, host)
             }
         }
@@ -67,7 +72,7 @@ internal fun BriefCard(item: FeedItem, host: AssistantTaskHost) {
 
 @Composable
 private fun BriefHead(icon: PhIcon, status: Status?, title: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.semantics { heading() }, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
         JIcon(icon, decorative = true, size = Tokens.Space.l,
             tint = status?.let { PersonaTheme.palette.status(it).text } ?: PersonaTheme.palette.accent)
         Text(title, style = PersonaTheme.type.label, color = PersonaTheme.palette.ink2)
@@ -90,24 +95,24 @@ private fun BriefOpen(tag: String, onClick: () -> Unit) {
 }
 
 @Composable
+private fun briefMetadata(parts: List<String>): String =
+    parts.joinToString(stringResource(persona.core.designsystem.R.string.designsystem_separator))
+
+@Composable
 private fun briefMeta(row: BriefRow): String {
     val minutes = (row.waitedS.coerceAtLeast(60) + 59) / 60
     val waited = when {
         minutes < 60 -> stringResource(R.string.brief_waited_minutes, minutes)
-        minutes < 1_440 -> {
-            val base = stringResource(R.string.brief_waited_hours, minutes / 60)
-            if (minutes % 60 == 0L) base else "$base ${minutes % 60}m"
-        }
-        else -> {
-            val base = stringResource(R.string.brief_waited_days, minutes / 1_440)
-            if (minutes % 1_440 == 0L) base else "$base ${(minutes % 1_440) / 60}h"
-        }
+        minutes < 1_440 -> if (minutes % 60 == 0L) stringResource(R.string.brief_waited_hours, minutes / 60)
+            else stringResource(R.string.brief_waited_hours_minutes, minutes / 60, minutes % 60)
+        else -> if (minutes % 1_440 == 0L) stringResource(R.string.brief_waited_days, minutes / 1_440)
+            else stringResource(R.string.brief_waited_days_hours, minutes / 1_440, (minutes % 1_440) / 60)
     }
-    return buildList {
+    return briefMetadata(buildList {
         add(waited)
         if (row.nudged) add(stringResource(R.string.brief_nudged))
         row.from?.takeIf(String::isNotBlank)?.let(::add)
-    }.joinToString(" · ")
+    })
 }
 
 @Composable
@@ -135,10 +140,11 @@ private fun BriefWaiting(brief: BriefBody, host: AssistantTaskHost) {
 }
 
 @Composable
-private fun BriefMarkLine(icon: PhIcon, status: Status, id: String, title: String, detail: String?, open: (() -> Unit)?) {
+private fun BriefMarkLine(icon: PhIcon, status: Status, id: String, title: String, detail: String?, open: (() -> Unit)?, danger: Boolean = false) {
     Row(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-        JIcon(icon, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.status(status).text)
+        JIcon(icon, decorative = true, size = Tokens.Space.m,
+            tint = if (danger) PersonaTheme.palette.danger.text else PersonaTheme.palette.status(status).text)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
             Text(title, style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
             detail?.takeIf(String::isNotBlank)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
@@ -165,13 +171,13 @@ private fun BriefPast(brief: BriefBody, host: AssistantTaskHost) {
                 else -> R.string.brief_failed_routine
             })
             BriefMarkLine(PhIcons.XCircle, Status.NeedsYou, row.id, row.title,
-                listOfNotNull(label, briefTime(row.at), row.why?.takeIf(String::isNotBlank)).joinToString(" · "),
-                if (row.kind == "task") ({ host.sheet.value = TaskSheet.Task(row.id) }) else null)
+                briefMetadata(listOfNotNull(label, briefTime(row.at), row.why?.takeIf(String::isNotBlank))),
+                if (row.kind == "task") ({ host.sheet.value = TaskSheet.Task(row.id) }) else null, danger = true)
         }
         brief.done.forEach { row: BriefDone ->
-            BriefMarkLine(PhIcons.CheckCircle, Status.Unread, row.id, row.title, briefTime(row.at)) {
+            BriefMarkLine(PhIcons.CheckCircle, Status.Unread, row.id, row.title, briefTime(row.at), open = {
                 host.sheet.value = TaskSheet.Task(row.id)
-            }
+            })
         }
         BriefMore(brief.pastMore)
     }
@@ -216,13 +222,6 @@ private fun BriefAcceptRow(row: BriefRow, host: AssistantTaskHost) {
             Text(text, Modifier.testTag("brief-outcome-${row.id}"), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            BriefOpen("brief-open-${row.id}") { host.sheet.value = TaskSheet.Task(row.id) }
-            if (outcome == null && row.isDecision) {
-                JButton(stringResource(R.string.brief_complete_directly), {
-                    host.tasks.finishBrief(row.id, askedAt, host.onError)
-                }, Modifier.testTag("brief-finish-${row.id}"), enabled = askedAt.isNotBlank() && !sending,
-                    kind = JButtonKind.Secondary, size = JButtonSize.Small, loading = sending)
-            }
             val take = row.take
             if (outcome == null && take != null) {
                 val label = stringResource(when (take) {
@@ -230,10 +229,17 @@ private fun BriefAcceptRow(row: BriefRow, host: AssistantTaskHost) {
                     BriefTake.GotIt -> R.string.brief_got_it
                     BriefTake.Recommendation -> R.string.brief_take_recommendation
                 })
-                JButton(label, { host.tasks.acceptBrief(row.id, askedAt, host.onError) },
+                JButton(label, { host.tasks.acceptBrief(row.id, askedAt, host.onError, host.manager) },
                     Modifier.testTag("brief-take-${row.id}"), enabled = askedAt.isNotBlank() && !sending,
                     kind = JButtonKind.Primary, size = JButtonSize.Small, loading = sending)
             }
+            if (outcome == null && row.isDecision) {
+                JButton(stringResource(R.string.brief_complete_directly), {
+                    host.tasks.finishBrief(row.id, askedAt, host.onError, host.manager)
+                }, Modifier.testTag("brief-finish-${row.id}"), enabled = askedAt.isNotBlank() && !sending,
+                    kind = JButtonKind.Secondary, size = JButtonSize.Small, loading = sending)
+            }
+            BriefOpen("brief-open-${row.id}") { host.sheet.value = TaskSheet.Task(row.id) }
         }
     }
 }
@@ -266,13 +272,40 @@ private fun BriefLaterRow(row: BriefRow, host: AssistantTaskHost) {
             Text(text, Modifier.testTag("brief-outcome-${row.id}"), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            if (chat != null) BriefOpen("brief-open-${row.id}") { host.onOpen(chat) }
             if (outcome == null) JButton(stringResource(R.string.brief_handled), {
-                host.tasks.markBriefHandled(row.id, host.onError)
+                host.tasks.markBriefHandled(row.id, host.onError, host.manager)
             }, Modifier.testTag("brief-handled-${row.id}"), enabled = "later:${row.id}" !in busy,
                 kind = JButtonKind.Secondary, size = JButtonSize.Small, loading = "later:${row.id}" in busy)
+            if (chat != null) BriefOpen("brief-open-${row.id}") { host.onOpen(chat) }
         }
     }
+}
+
+private val briefStages = listOf(
+    "plan" to R.string.brief_stage_plan,
+    "develop" to R.string.brief_stage_develop,
+    "review" to R.string.brief_stage_review,
+    "merge" to R.string.brief_stage_merge,
+    "deploy" to R.string.brief_stage_deploy,
+    "verify" to R.string.brief_stage_verify,
+)
+
+@Composable
+private fun BriefStage(row: BriefProgress) {
+    val stage = row.stage?.trim()?.takeIf(String::isNotEmpty) ?: return
+    val current = if (row.stageKind == "code") -1 else briefStages.indexOfFirst { it.first == stage }
+    if (current < 0) {
+        // A newer hub's general stage, or an explicitly free-form code stage, keeps the hub's own words.
+        BriefNote(stage)
+        return
+    }
+    StepProgress(briefStages.mapIndexed { index, (_, label) ->
+        ProgressStep(stringResource(label), when {
+            index < current -> StepState.Complete
+            index == current -> StepState.Active
+            else -> StepState.Pending
+        })
+    })
 }
 
 @Composable
@@ -284,7 +317,7 @@ private fun BriefProgress(brief: BriefBody, host: AssistantTaskHost) {
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
                     Text(row.title, style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
-                    row.stage?.takeIf(String::isNotBlank)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
+                    BriefStage(row)
                 }
                 BriefOpen("brief-open-${row.id}") { host.sheet.value = TaskSheet.Task(row.id) }
             }

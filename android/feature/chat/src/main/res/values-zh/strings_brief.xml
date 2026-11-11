@@ -14,6 +14,8 @@
     <string name="brief_waited_minutes">已等待 %1$d 分钟</string>
     <string name="brief_waited_hours">已等待 %1$d 小时</string>
     <string name="brief_waited_days">已等待 %1$d 天</string>
+    <string name="brief_waited_hours_minutes">已等待 %1$d 小时 %2$d 分钟</string>
+    <string name="brief_waited_days_hours">已等待 %1$d 天 %2$d 小时</string>
     <string name="brief_nudged">已提醒</string>
     <string name="brief_accept_action">验收</string>
     <string name="brief_got_it">知道了</string>
@@ -29,4 +31,10 @@
     <string name="brief_failed_task">未能启动</string>
     <string name="brief_failed_routine">运行失败</string>
     <string name="brief_skipped">已跳过</string>
+    <string name="brief_stage_plan">计划</string>
+    <string name="brief_stage_develop">开发</string>
+    <string name="brief_stage_review">审查</string>
+    <string name="brief_stage_merge">合并</string>
+    <string name="brief_stage_deploy">部署</string>
+    <string name="brief_stage_verify">已验证</string>
 </resources>

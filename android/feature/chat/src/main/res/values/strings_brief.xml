@@ -14,6 +14,8 @@
     <string name="brief_waited_minutes">Waited %1$d min</string>
     <string name="brief_waited_hours">Waited %1$d hr</string>
     <string name="brief_waited_days">Waited %1$d d</string>
+    <string name="brief_waited_hours_minutes">Waited %1$d hr %2$d min</string>
+    <string name="brief_waited_days_hours">Waited %1$d d %2$d hr</string>
     <string name="brief_nudged">nudged</string>
     <string name="brief_accept_action">Accept</string>
     <string name="brief_got_it">Got It</string>
@@ -29,4 +31,10 @@
     <string name="brief_failed_task">Did not start</string>
     <string name="brief_failed_routine">Run failed</string>
     <string name="brief_skipped">Skipped</string>
+    <string name="brief_stage_plan">Plan</string>
+    <string name="brief_stage_develop">Develop</string>
+    <string name="brief_stage_review">Review</string>
+    <string name="brief_stage_merge">Merge</string>
+    <string name="brief_stage_deploy">Deploy</string>
+    <string name="brief_stage_verify">Verified</string>
 </resources>

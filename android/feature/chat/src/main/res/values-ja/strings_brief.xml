@@ -14,6 +14,8 @@
     <string name="brief_waited_minutes">%1$d 分待ち</string>
     <string name="brief_waited_hours">%1$d 時間待ち</string>
     <string name="brief_waited_days">%1$d 日待ち</string>
+    <string name="brief_waited_hours_minutes">%1$d 時間 %2$d 分待ち</string>
+    <string name="brief_waited_days_hours">%1$d 日 %2$d 時間待ち</string>
     <string name="brief_nudged">再通知済み</string>
     <string name="brief_accept_action">承認</string>
     <string name="brief_got_it">了解</string>
@@ -29,4 +31,10 @@
     <string name="brief_failed_task">開始できませんでした</string>
     <string name="brief_failed_routine">実行失敗</string>
     <string name="brief_skipped">スキップしました</string>
+    <string name="brief_stage_plan">計画</string>
+    <string name="brief_stage_develop">開発</string>
+    <string name="brief_stage_review">レビュー</string>
+    <string name="brief_stage_merge">マージ</string>
+    <string name="brief_stage_deploy">デプロイ</string>
+    <string name="brief_stage_verify">検証済み</string>
 </resources>

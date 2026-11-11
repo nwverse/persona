@@ -56,7 +56,7 @@ class TasksContractTest {
             "done":[{"id":"d1","title":"Done"}],"done_total":0,
             "accept":[{"id":"a1","outcome":"decide","recommend":"Canary"},{"id":"a2","outcome":"decide"},{"id":"a3","outcome":"done"}],
             "later":[{"id":"l1","title":"Later"}],"later_total":3,
-            "progress":[{"id":"p1","stage":"future-stage"}],"progress_total":2}}""")
+            "progress":[{"id":"p1","stage":"future-stage","stage_kind":"code"}],"progress_total":2}}""")
         val brief = item.brief ?: error("brief body missing")
         assertEquals("Evening briefing", brief.title)
         assertEquals(12, brief.hours)
@@ -68,6 +68,7 @@ class TasksContractTest {
         assertEquals(listOf(BriefTake.Recommendation, null, BriefTake.GotIt), brief.accept.map { it.take })
         assertEquals(2, brief.laterMore)
         assertEquals("future-stage", brief.progress.single().stage)
+        assertEquals("code", brief.progress.single().stageKind)
         assertEquals(1, brief.progressMore)
     }
 
