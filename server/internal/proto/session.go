@@ -135,6 +135,11 @@ type Session struct {
 	Ultracode        *bool      `json:"ultracode,omitempty"`
 	UltracodeNote    string     `json:"ultracode_note,omitempty"`
 	UltracodeLostAt  *time.Time `json:"ultracode_lost_at,omitempty"`
+	// PendingSwitch is a switch of this running Claude Code Agent to another launcher (model provider) of the same
+	// engine that the user picked and that waits for the next message (#5035, docs/integrations/claude-integration.md
+	// "Switching a running Agent to another provider"): that message quits the agent and resumes the same conversation
+	// on the new launcher in the same terminal first. Nil when none waits.
+	PendingSwitch *PendingSwitch `json:"pending_switch,omitempty"`
 	// ContextTokens is what the model saw in the agent's latest reply (Claude: input + cache read + cache creation;
 	// Codex: the last token_count's input) and ContextWindow the model's window, both read off the transcript tail the
 	// node already reads (#2430). ContextTokens is omitted while unknown (no reply yet); ContextWindow too, when the
@@ -389,6 +394,47 @@ const (
 	CodeModesOnComputer = "modes_on_computer"
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
 	CodeModesNotRunning = "modes_not_running"
+)
+
+// PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
+// the launcher's own default model; the effort it runs with now), and when the user picked it.
+type PendingSwitch struct {
+	Launcher string    `json:"launcher"`
+	Model    string    `json:"model,omitempty"`
+	Effort   string    `json:"effort,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// Codes a launcher switch of a running Agent refuses with (node/launcher_switch.go, #5035): 409, nothing typed, the
+// text in the request's language (apierr.Call, rpc-errors.<code>); the node's own words, with the names, are the
+// body's detail. The first five come back from POST …/modes when the switch is picked, and again from the message
+// that would carry it out when something changed since; the rest only from that message. A refused switch stays
+// pending, except where its code says it was carried out.
+const (
+	// CodeSwitchUnsupported: not a Claude Code Agent running in a terminal Persona can restart it in (Codex, another
+	// CLI, a runtime's session, an assistant conversation, botmux).
+	CodeSwitchUnsupported = "switch_unsupported"
+	// CodeSwitchLauncherMissing: the launcher picked is not on the session's computer.
+	CodeSwitchLauncherMissing = "switch_launcher_missing"
+	// CodeSwitchOtherAgent: the launcher picked runs another agent than Claude Code.
+	CodeSwitchOtherAgent = "switch_other_agent"
+	// CodeSwitchModelLocked: a model was picked, and the launcher fixes its own.
+	CodeSwitchModelLocked = "switch_model_locked"
+	// CodeSwitchConfigDir: the launcher runs Claude Code with another config directory than the one the conversation
+	// is in: --resume would not find it there, and the sign-in lives in that directory too.
+	CodeSwitchConfigDir = "switch_config_dir"
+	// CodeSwitchBusy: the message came while the agent works, waits for the user, or is still starting.
+	CodeSwitchBusy = "switch_busy"
+	// CodeSwitchBackground: the agent has background work running (commands, subagents, workflows, a /loop) that
+	// quitting it would end.
+	CodeSwitchBackground = "switch_background"
+	// CodeSwitchNotStopped: the agent did not quit; it runs on as before.
+	CodeSwitchNotStopped = "switch_not_stopped"
+	// CodeSwitchFailed: the agent did not come up on the new launcher; it is back on its own one.
+	CodeSwitchFailed = "switch_failed"
+	// CodeSwitchFailedStopped: the agent did not come up on the new launcher and could not be brought back on its own
+	// one: it has stopped (Resume on its terminal page).
+	CodeSwitchFailedStopped = "switch_failed_stopped"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).
