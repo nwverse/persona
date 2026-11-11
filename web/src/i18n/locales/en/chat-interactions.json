@@ -1,4 +1,8 @@
 {
+  "close_agent": "Close Agent",
+  "close_agent_confirm": "Close and archive",
+  "close_agent_cancel": "Cancel",
+  "close_agent_hint": "Cancel the pending confirmation and close this Agent? Its conversation is kept.",
   "approve_not_allowed": "This session doesn't allow approvals",
   "already_answered": "This card was already answered",
   "prompt_changed": "The dialog on the computer changed, so the card was rebuilt from the new screen",

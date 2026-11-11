@@ -14,7 +14,7 @@ fun chatLines(items: List<LineItem>, options: LineOptions = LineOptions()): Chat
 /** The items [chatLines] draws, in reading order; a frozen window's up to the item it froze at. */
 internal fun lineSource(items: List<LineItem>, options: LineOptions): List<LineItem> {
     val frozen = options.frozen
-    return items.sortedWith(itemOrder).let { ordered ->
+    return withoutViewFeedback(items).sortedWith(itemOrder).let { ordered ->
         if (frozen == null) ordered else ordered.takeWhile {
             positionCompare(it.seq, it.part, frozen.seq, frozen.part) <= 0
         }
@@ -41,7 +41,25 @@ internal fun chatSnapshot(
  * [chatLines]' turns alone, built by the same code: for callers that need where turns begin (the items cache keeps the
  * last two) and not the lines drawn from them, the task index or the folds.
  */
-fun chatTurns(items: List<LineItem>): List<ChatTurn> = lineBlocks(items.sortedWith(itemOrder)).turns()
+fun chatTurns(items: List<LineItem>): List<ChatTurn> = lineBlocks(withoutViewFeedback(items).sortedWith(itemOrder)).turns()
+
+private val viewFeedbackRe = Regex("""<persona-view-errors\b[^>]*>[\s\S]*?</persona-view-errors>\s*""")
+
+/**
+ * The node's `<persona-view-errors>` feedback after the assistant's snapshot (its last rich views failed their check) is
+ * for the model, not the user's words: an older hub (#4315) gave it as a user item of its own, the line's block before
+ * the message, or at the start of the message, and the bubble showed its raw tags. Taken out of user text; an item
+ * left with nothing goes.
+ */
+fun withoutViewFeedback(items: List<LineItem>): List<LineItem> {
+    fun carries(it: LineItem) = it.item.role == "user" && it.kind == "text" && it.item.text?.contains("<persona-view-errors") == true
+    if (items.none(::carries)) return items
+    return items.mapNotNull { line ->
+        if (!carries(line)) return@mapNotNull line
+        val left = viewFeedbackRe.replace(line.item.text.orEmpty(), "")
+        if (left.isBlank()) null else line.copy(item = line.item.copy(text = left))
+    }
+}
 
 private fun lineBlocks(source: List<LineItem>): List<Block> = buildBlocks(buildLineRows(foldCompactions(source)))
 

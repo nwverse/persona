@@ -283,6 +283,8 @@ internal fun ChatLineContent(
     waiting: Boolean = false,
     /** The reply whose closeout block the card above the transcript shows (#3612, [closeoutReplyId]); null: none. */
     closeoutReply: String? = null,
+    /** The main conversation folds its background rounds (#4314): a scheduled task's or follow-up's prompt is never shown. */
+    hideTaskPrompts: Boolean = false,
 ) {
     val res = LocalResources.current
     when (line) {
@@ -291,8 +293,8 @@ internal fun ChatLineContent(
                 val source = persona.core.domain.sourceOf(item)
                 when {
                     source != null -> SourceMessage(item, source, showSourceLabel, textUpdates[item.id],
-                        images = userPictures(userImages, session, loader))
-                    line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!)
+                        images = userPictures(userImages, session, loader), hidePrompt = hideTaskPrompts)
+                    line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!, showDetail = !hideTaskPrompts)
                     else -> MergedUserBubble(listOf(item), textUpdates, onLastLine.takeIf { line.row.id == lastUserId },
                         images = userPictures(userImages, session, loader))
                 }
@@ -312,7 +314,10 @@ internal fun ChatLineContent(
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
-        is ChatLine.Extra -> AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
+        is ChatLine.Extra -> {
+            val round = line.payload as? persona.core.domain.tasks.BackgroundRound
+            if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
+        }
         is ChatLine.ApiError -> ApiErrorLine(line)
         is ChatLine.UserImages -> if (!imagesInUserBubble) UserBubbleFrame {
             line.images.forEach { ChatPicture(session, it.item, loader, alignEnd = true) }
@@ -338,14 +343,19 @@ internal fun ChatLineContent(
 
 @Composable
 private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
-    val state = stringResource(if (line.open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
-    val label = pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools)
+    AssistantFoldLine(pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools), line.open) { onToggle(line.id) }
+}
+
+/** One muted line that opens and closes what it stands for: the work summary, a folded background round (#4314). */
+@Composable
+internal fun AssistantFoldLine(label: String, open: Boolean, modifier: Modifier = Modifier, onToggle: () -> Unit) {
+    val state = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
     val spoken = stringResource(persona.core.designsystem.R.string.designsystem_with_state, label, state)
-    Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { onToggle(line.id) }
+    Row(modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onToggle)
         .then(Modifier.semantics { stateDescription = state; contentDescription = spoken })
         .padding(vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-        JIcon(if (line.open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true,
+        JIcon(if (open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true,
             size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
         Text(label,
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
