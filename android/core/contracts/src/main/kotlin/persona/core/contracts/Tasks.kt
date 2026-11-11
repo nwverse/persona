@@ -220,6 +220,12 @@ sealed interface TodoDue {
 }
 
 /**
+ * A to-do's due date, reminder and priority as the detail page sets them together (#4636, iOS `TodoPlanChange`,
+ * docs/assistant/todos.md PATCH): [due] null clears it, [remindAt] null clears it, [priority] "" normal, "high" or "low".
+ */
+data class TodoPlan(val due: TodoDue?, val remindAt: Instant?, val priority: String)
+
+/**
  * Why an open to-do has nobody working on it (docs/assistant/todos.md "Nobody is working on this"): [reason] error (closed
  * after a model error), offline (its computer is not connected) or closed, kept as sent; [since] when the hub first saw it.
  */
