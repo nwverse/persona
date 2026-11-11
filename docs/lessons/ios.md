@@ -1775,6 +1775,14 @@ When the segment writer opens a new file, record the tap callback's host time an
 
 The watch only prunes by age. Segments the phone has not confirmed stay up to `undeliveredHours`; bookmarked ones stay `keptDays` so the phone can still mark them kept.
 
+## A queue drained through a continuation must end on cancellation (2026-11-10, #3067)
+
+- `RFBClient` runs its reader and its sender in one `withThrowingTaskGroup`. When the reader throws (the Mac hangs up),
+  leaving the group still waits for the sender. An `AsyncStream` iterator returns nil on cancellation, so the old
+  sender ended; a hand-written queue whose `next()` parks a `CheckedContinuation` does not, and the client never
+  reported the end (found by replaying a recording that ran out). `RFBOutbox.next()` wraps the wait in
+  `withTaskCancellationHandler` and resumes the parked continuation with nil, with a flag for a cancel that comes
+  before the continuation is stored (`RFBFrameTests.outboxHandsOverInOrderAndEndsOnFinishOrCancel`).
 ## Simulator arguments and screenshot settling (#1872)
 
 - On Xcode 27.2, a direct `simctl launch` can drop leading DEBUG arguments before they reach `UserDefaults`; put `--` before them. Verify the App actually adopted the mock pairings—an old real-hub cache on screen is a launch-environment failure, not the target RED. UI launch helpers can carry the same separator without changing the assertions.
