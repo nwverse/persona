@@ -175,7 +175,13 @@ left="$(find "$WEBDIST/assets" -type f -size +1023c \( -name '*.js' -o -name '*.
 
 # Public dependency constants are classified by build-info checksums; verify the actual module cache before building.
 (cd server && go mod verify)
-LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$PERSONA_PUBLISH_URL/dl"
+# Where the binaries look for their updates: the config's publish.update_url, else this site's dl/
+# (scripts/persona_config.py update_url; a GitHub repository's releases/latest/download works as it is). A hub's
+# hub.json update.url replaces it at run time (docs/operations/hub-update.md "Update source").
+UPDATE_URL="${PERSONA_UPDATE_URL:-$PERSONA_PUBLISH_URL/dl}"
+[ "$UPDATE_URL" = "$PERSONA_PUBLISH_URL/dl" ] \
+  || echo "note: these binaries look for updates at $UPDATE_URL (publish.update_url), not at the $PERSONA_PUBLISH_URL/dl this publishes to" >&2
+LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$UPDATE_URL"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 (cd server && go generate ./internal/runtimepkg)
 # The tags are server/build-tags.txt (server/internal/buildtags). No persona file builds differently with any of them
@@ -238,6 +244,9 @@ done
 # The manifest hubs update from: version, build number, commit and every download's sha256 (not signed, the user's
 # call: it guards against a broken download over HTTPS, docs/operations/hub-update.md "Security").
 "$host_bin" release manifest --dir "$OUT/bin" --version "$VERSION" --build "$BUILD" --commit "$COMMIT" --out "$OUT/bin/latest.json"
+# The latest.json about to go up, read back against the downloads it lists: sizes and sha256s, this machine's binaries
+# run (version -v), the others' build number. A manifest of another build than its binaries (v0.2.1, #4522) stops here.
+"$host_bin" release verify --dir "$OUT/bin" --manifest "$OUT/bin/latest.json"
 
 # The site with dl/ and install.sh added, deployed from a copy (site/ in the tree stays as committed).
 rm -rf "$OUT/site"

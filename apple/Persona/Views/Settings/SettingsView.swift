@@ -99,7 +99,7 @@ struct SettingsView: View {
                         .settingsListRow(SettingsPage.modelConfiguration)
                         NavigationLink(value: SettingsPage.assistant) {
                             // No model here: the assistant's model is Model Settings › Main Chat (#1291).
-                            SettingsRow(title: String(localized: "Assistant"), symbol: Theme.Icon.ai, tint: Theme.ai)
+                            SettingsRow(title: String(localized: "Assistant Profile"), symbol: Theme.Icon.ai, tint: Theme.ai)
                         }
                         .settingsListRow(SettingsPage.assistant)
                         .accessibilityIdentifier("settings-assistant")
@@ -221,9 +221,9 @@ struct SettingsView: View {
                             }
                             .settingsListRow(SettingsPage.hub)
                             .accessibilityIdentifier("settings.hub")
-                            // The hub's managers, each a whole assistant (docs/assistant/managers.md).
+                            // The hub's managers, "assistants" in the interface (docs/assistant/managers.md).
                             NavigationLink(value: SettingsPage.managers) {
-                                SettingsRow(title: String(localized: "Managers"), symbol: Theme.Icon.managers, tint: Theme.ai)
+                                SettingsRow(title: String(localized: "Assistants"), symbol: Theme.Icon.managers, tint: Theme.ai)
                             }
                             .settingsListRow(SettingsPage.managers)
                             .accessibilityIdentifier("settings.managers")
@@ -385,13 +385,16 @@ struct SettingsView: View {
         else if d.bool(forKey: "openNotificationSettings") { p.append(SettingsPage.notifications) }
         else if d.string(forKey: "openAssistantPage") != nil { p.append(SettingsPage.assistant) }
         else if d.bool(forKey: "openDevices") { p.append(SettingsPage.devices) }
-        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") || d.bool(forKey: "openLocalProxy") || d.bool(forKey: "openCloudflareAccess") {
+        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") || d.bool(forKey: "openLocalProxy") || d.bool(forKey: "openCloudflareAccess")
+                    || d.bool(forKey: "openHubAddresses") {
             p.append(SettingsPage.hubs)
             // `-openSSHTunnel YES` / `-openLocalProxy YES`: the first hub's Settings › hub › SSH Tunnel / Local Proxy (screenshots).
             if d.bool(forKey: "openSSHTunnel"), let first = model.registry.hubs.first { p.append(SettingsPage.sshTunnel(first.id)) }
             if d.bool(forKey: "openLocalProxy"), let first = model.registry.hubs.first { p.append(SettingsPage.localProxy(first.id)) }
             // `-openCloudflareAccess YES`: its Settings › hub › Cloudflare Access.
             if d.bool(forKey: "openCloudflareAccess"), let first = model.registry.hubs.first { p.append(SettingsPage.cloudflareAccess(first.id)) }
+            // `-openHubAddresses YES`: its Settings › hub › Addresses (`-seedHubAddresses` fills them).
+            if d.bool(forKey: "openHubAddresses"), let first = model.registry.hubs.first { p.append(SettingsPage.hubAddresses(first.id)) }
         }
         else if d.bool(forKey: "openHubUpdate") { p.append(SettingsPage.hub) }
         else if d.bool(forKey: "openManagers") || d.string(forKey: "openManagerPage") != nil || d.bool(forKey: "showManagerCode") {
@@ -402,6 +405,9 @@ struct SettingsView: View {
         else if d.bool(forKey: "openSentAsYou") { p = SettingsPage.sentPath }
         else if d.bool(forKey: "openConnectors") { p.append(SettingsPage.connectors) }
         else if d.bool(forKey: "openSkills") { p.append(SettingsPage.skills) }
+        else if let scope = str("openSubscriptions") { // the source subscription pages: `all`, or their first state (#2041)
+            p.append(SettingsPage.subscriptions(state: scope == "all" ? nil : scope))
+        }
         else if flag("openExtensions") || str("openExtension") != nil { // Settings › Extensions (› one (› a page of it))
             p.append(SettingsPage.plugins)
             if let id = str("openExtension") {
@@ -536,6 +542,9 @@ enum SettingsPage: Hashable {
     /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「Declarative UI」), titled until its View says
     /// otherwise; `manager`: the plugin's (nil: the default's).
     case pluginPage(plugin: String, ui: String, title: String, manager: String? = nil)
+    /// The source subscription pages (#2041, docs/extensions/subscriptions.md "Pages"), drawn by the manager; `state` opens them on
+    /// one extension's or one connector's (`SubscriptionsUI.state`), nil on every subscription.
+    case subscriptions(state: String? = nil)
     /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
@@ -550,6 +559,8 @@ enum SettingsPage: Hashable {
     case localProxy(String)
     /// Settings › hub › Cloudflare Access of one paired hub (docs/operations/network.md "Behind Cloudflare Access").
     case cloudflareAccess(String)
+    /// Settings › hub › Addresses of one paired hub (#4670, docs/operations/network.md "Client-added candidates").
+    case hubAddresses(String)
     /// Settings › Managers, and one manager by its id (docs/assistant/managers.md).
     case managers
     case manager(String)
@@ -622,6 +633,7 @@ private struct SettingsDestinations: ViewModifier {
         case .inAppTunnel(let id): HubInAppTunnelPage(hubID: id)
         case .localProxy(let id): HubLocalProxyPage(hubID: id)
         case .cloudflareAccess(let id): HubCloudflareAccessPage(hubID: id)
+        case .hubAddresses(let id): HubAddressesPage(hubID: id)
         case .managers: ManagersView()
         case .manager(let id): ManagerDetailView(id: id)
         case .connectors: ConnectorsView()
@@ -631,6 +643,8 @@ private struct SettingsDestinations: ViewModifier {
         case .plugins: ExtensionsView()
         case .plugin(let id, let manager): ExtensionDetailView(id: id, manager: manager)
         case .pluginPage(let plugin, let ui, let title, let manager): ExtensionPageView(plugin: plugin, ui: ui, title: title, manager: manager)
+        case .subscriptions(let state):
+            ExtensionPageView(plugin: SubscriptionsUI.id, ui: SubscriptionsUI.page, title: String(localized: "Subscriptions [Source Subscriptions]"), state: state)
         case .pluginMarket: ExtensionMarketView()
         case .marketExtension(let market, let id): MarketExtensionDetailView(market: market, id: id)
         case .pluginMarkets: ExtensionMarketsView()
@@ -1513,11 +1527,15 @@ struct SettingsRow: View {
     var look: ValueLook = .plain
     /// A brand's own mark (an asset of `Theme.Brand`) in place of the tinted tile, in the BeautifulUI style.
     var brand: String? = nil
+    /// Public catalog artwork; absent artwork preserves the existing row mark.
+    var iconURL: String? = nil
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
             BUIListRow(title, value: value.flatMap { $0.isEmpty ? nil : $0 }) {
-                if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
+                if let iconURL, ExtensionImageCache.url(iconURL) != nil {
+                    ExtensionLogo(url: iconURL, side: Theme.Size.iconL)
+                } else if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
             }
         } else if let value {
             LabeledContent {

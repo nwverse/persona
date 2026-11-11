@@ -17,6 +17,11 @@ nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
         return result == nil
     }
     var isError: Bool { agentStatus == "failed" || agentStatus == "error" || (result?.isError ?? false) }
+    /// What it came to, when the node said (`ToolOutcome`).
+    var outcome: ToolOutcome? { result?.outcome }
+    /// An error that is not the call being denied, refused or interrupted: what it ran failed. The red a row and its
+    /// chip turn; `isError` still says the model got an error back.
+    var failed: Bool { isError && !(outcome?.stopped ?? false) }
 }
 
 nonisolated extension ChatRow {
@@ -1471,10 +1476,12 @@ nonisolated enum ChatCache {
     /// v12: relayed and automated assistant input retains additive source metadata.
     /// v13: cached tails count user questions, not automatic supervision; discard the old shallow tails.
     /// v14: injected supervision levels and folded promotion are retained, including client evidence on replaced folds.
+    /// v16: tool results carry `outcome` (docs/protocol/protocol.md "Tool outcomes", #4303); older copies have none, and
+    /// their denied or interrupted calls would stay red.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v15"
+    static let folder = "chats-v16"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v14"
+    private static let previous = "chats-v15"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1611,6 +1618,11 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     var stalledSince: Date?
 
     private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused }
+
+    /// Only on this phone as far as it knows: failed, or waiting for the network. Deleting it (its long press, its mark's
+    /// menu) drops the bubble and its outbox entry and sends nothing (#4626). One being sent may be arriving and a sent
+    /// one is the hub's: neither can be deleted.
+    var onlyHere: Bool { state == .failed || state == .waiting }
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
     /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either

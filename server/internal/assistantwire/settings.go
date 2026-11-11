@@ -10,8 +10,9 @@ import "github.com/nwverse/persona/server/internal/proto"
 // the assistant's own). The hub keeps the last
 // one; before one came in it goes by hub.json's assistant section, its own time zone and no main conversation.
 type Profile struct {
-	MachineID string `json:"machine_id"` // where its conversations run
-	Main      string `json:"main,omitempty"`
+	MachineID     string `json:"machine_id"` // where its conversations run
+	Main          string `json:"main,omitempty"`
+	MainMachineID string `json:"main_machine_id,omitempty"` // confirmed route of Main, independent of the default
 	// Launcher is the one it runs on when "Models" › main chat names none (its own setting, else hub.json's, else claude):
 	// that purpose's default.
 	Launcher string `json:"launcher"`
@@ -19,6 +20,14 @@ type Profile struct {
 	// Keep are the conversations their machines list however long they are quiet: the main one, the main ones it
 	// replaced, scheduled tasks' own (node.configure keep_sessions: a busy machine's newest transcripts crowd them out).
 	Keep []SessionRef `json:"keep"`
+}
+
+// MainRouteMachine keeps legacy profiles usable while preferring the confirmed main binding.
+func (p Profile) MainRouteMachine() string {
+	if p.MainMachineID != "" {
+		return p.MainMachineID
+	}
+	return p.MachineID
 }
 
 // The hub asks the assistant (Handler) for what its own features need of the assistant's conversations.
@@ -38,7 +47,8 @@ const (
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
 const (
 	// DeviceAssistantPrepare: {dir, claude_md, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
-	DeviceAssistantPrepare = "assistant.prepare"
+	DeviceAssistantPrepare   = "assistant.prepare"
+	DeviceAssistantExecution = "assistant.execution" // {session_id} → proto.AssistantExecution
 	// DeviceAssistantGuestPrepare: {dir, claude_md} → {cwd}: a guest conversation's directory (assistant/guest.go), only
 	// its CLAUDE.md / AGENTS.md written; the assistant's connectors, CLIs and skills are left as they are. A node without
 	// it answers "unknown method": no guest conversation starts there.
@@ -104,6 +114,11 @@ type SendParams struct {
 	SessionID string         `json:"session_id"`
 	Params    map[string]any `json:"params"`
 	Lang      string         `json:"lang,omitempty"`
+	// Human is the hub's word that a person's own app sent this message: the request's credential is a full device's
+	// (never an extension's, a computer link's or the hub's own token). Set by the hub's auth, never from the request;
+	// the manager's own sends (channels, the inbox, meetings) never set it, and an older hub never sends it. A hand-off's
+	// Always rule spares the card only for a turn of such messages (assistant secret_handoff.go).
+	Human bool `json:"human,omitempty"`
 }
 
 // RenameParams is assistant.rename's params: Params are the app's ({title?, tab_name?}).

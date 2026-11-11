@@ -164,7 +164,8 @@ extension Session {
         case .errors:
             fields = [startError ?? "", turnError ?? "", failureReason ?? "", attentionReason ?? "", work?.line ?? "", title]
         case .all:
-            fields = [title, cwd, repoRoot ?? "", lastText ?? "", asks ?? "", spaceName ?? "", slotName ?? "", agentLabel, model ?? "", launcher ?? "", startError ?? "", turnError ?? ""]
+            // The branch too, as the web, Android and the hub's paged list search it (#4770).
+            fields = [title, cwd, repoRoot ?? "", branch ?? "", lastText ?? "", asks ?? "", spaceName ?? "", slotName ?? "", agentLabel, model ?? "", launcher ?? "", startError ?? "", turnError ?? ""]
         }
         return terms.allSatisfy { term in
             fields.contains { $0.localizedCaseInsensitiveContains(term) }
@@ -304,6 +305,8 @@ nonisolated struct AgentListProjection: Sendable {
     /// The listed chats' subagents that pass the list's filters: one waiting for the user is in Needs You.
     var admittedTasks: [Session] = []
     var quietWorktrees: [String: Bool] = [:]
+    /// By App's sections, their projects in them (`AppGroups`); empty under any other grouping.
+    var apps: [AppGroup] = []
     var menuSections: [String] = []
     var searchPlan = AgentSearchPlan(code: "session.where(s => true)", parsed: .init())
     /// Searching can match an Agent-free worktree even when no session matches the query.
@@ -454,7 +457,8 @@ nonisolated struct AgentListProjection: Sendable {
             }
             result.menuSections = result.tree.flatMap(\.repos).filter { result.repositories[$0.id]?.quiet != true }.map(\.id)
         } else if settings.grouping == "app" {
-            result.menuSections = AppGroups.build(result.unpinned).map(\.id)
+            result.apps = AppGroups.build(result.unpinned) // the list's sections, built once (`AppGroups`)
+            result.menuSections = result.apps.map(\.id)
         } else if settings.grouping != "recent" && settings.grouping != "todo" {
             result.menuSections = order.sectionIDs(result.unpinned, byMachine: settings.grouping == "machine")
         }

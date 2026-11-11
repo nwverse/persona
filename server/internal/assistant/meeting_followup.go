@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // After the meeting: the follow-up (docs/assistant/meeting-minutes.md "After the meeting: the follow-up"). The
@@ -23,6 +26,10 @@ import (
 // followupTranscriptRunes is how much of the transcript of record the seed holds; a longer one gives its start and its
 // end.
 const followupTranscriptRunes = 100000
+
+// followupPhotoRunes is how much of the photos' recognized text the seed holds, the earliest photos' first; the rest
+// is cut (kb_get has it whole).
+const followupPhotoRunes = 20000
 
 // followupRoute is POST /api/v1/recordings/{id}/followup.
 func (s *Service) followupRoute(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +153,7 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 		return kb.ConvView{}, false, errors.New("the meeting could not be written")
 	}
 	text := s.followupSeed(ctx, e, rec, m, msg.Text)
-	sess, err := s.start(ctx, StartParams{Text: text, Images: msg.Images, Origin: OriginMeetingFollowup, OriginRef: id, MachineID: machine,
+	sess, err := s.startSignedIn(ctx, StartParams{Text: text, Images: msg.Images, Origin: OriginMeetingFollowup, OriginRef: id, MachineID: machine,
 		NewSessionID: want, ClientMsgID: msgID})
 	if err != nil {
 		return kb.ConvView{}, false, err
@@ -155,6 +162,30 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 	made := &kb.MeetingFollowup{MachineID: sess.MachineID, SessionID: sess.SessionID, OpID: msg.ID}
 	s.followupSet(e, id, made)
 	return kb.ConvView{MachineID: sess.MachineID, SessionID: sess.SessionID}, true, nil
+}
+
+// meetingProfile is the Claude profile (config_dir) a meeting's conversations, its room and its follow-up, start in: the
+// one the assistant's conversations had before each new one got a private profile, a config directory with no login
+// in it (docs/assistant/meeting-minutes.md "The room conversation").
+const meetingProfile = "legacy"
+
+// startSignedIn starts p in meetingProfile, or as it is on a node too old to be told a profile, whose conversations
+// all start in that one: the hub refuses the profile before anything starts (devices/machine.go), so the second start
+// is the only one.
+func (s *Service) startSignedIn(ctx context.Context, p StartParams) (proto.Session, error) {
+	p.ConfigDir = meetingProfile
+	sess, err := s.start(ctx, p)
+	if nodeOutdated(err) {
+		p.ConfigDir = ""
+		return s.start(ctx, p)
+	}
+	return sess, err
+}
+
+// nodeOutdated: the hub refused a call for something the node is too old for.
+func nodeOutdated(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == proto.CodeNodeOutdated
 }
 
 // followupSet writes recording id's follow-up (nil: none); false when it could not be written.
@@ -197,6 +228,21 @@ func (s *Service) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recordi
 	}
 	if rec.Trimmed() {
 		return prompts.RenderMeetingFollowupSeed(d)
+	}
+	// The photos still listed: their words after the minutes, the room's notes on them with the room thread. One the
+	// owner deleted is in neither (a follow-up made before keeps its copy).
+	budget := followupPhotoRunes
+	for _, p := range meetingPhotos(e.PhotoTexts(rec.ID)) {
+		if n := utf8.RuneCountInString(p.Text); n > budget {
+			p.Text, d.PhotosCut = cutRunes(p.Text, budget), true
+		}
+		budget -= utf8.RuneCountInString(p.Text)
+		if p.Caption != "" || p.Text != "" {
+			d.Photos = append(d.Photos, p)
+		}
+		if p.Note != "" {
+			d.Notes = append(d.Notes, p)
+		}
 	}
 	if l, _, err := e.LiveRead(rec.ID); err == nil {
 		for _, a := range l.Asks {

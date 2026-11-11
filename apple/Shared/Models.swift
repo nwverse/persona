@@ -694,6 +694,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Claude Code's permission mode and effort level right now (`SessionModes`); nil while unknown and for Codex
     /// (a Codex thread the hub drives through its app-server has an effort, never a mode).
     var permissionMode: String? = nil
+    /// This Claude Code can be switched to bypassPermissions (Allow Everything) while it runs: its claude was started with
+    /// a flag that puts that mode in its shift+tab cycle (`bypass_available`, #1379, read off the process by the node).
+    /// False while unknown and from older hubs; then Allow Everything is only a start's choice.
+    var bypassAvailable: Bool = false
     var effort: String? = nil
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
@@ -983,7 +987,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case codexRoute = "codex_route", codexRouteNote = "codex_route_note"
         case agentLabelHint = "agent_label"
         case agentSurface = "agent_surface"
-        case permissionMode = "permission_mode"
+        case permissionMode = "permission_mode", bypassAvailable = "bypass_available"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root", worktree, branch
@@ -1032,6 +1036,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         launcher = try c.decodeIfPresent(String.self, forKey: .launcher)
         model = try c.decodeIfPresent(String.self, forKey: .model)
         permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
+        bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
@@ -1791,6 +1796,36 @@ nonisolated struct TaskNote: Codable, Hashable, Sendable {
     var failed: Bool { status == "failed" || (exitCode ?? 0) != 0 }
 }
 
+/// What a tool call came to (`outcome` on a tool_result, docs/protocol/protocol.md "Tool outcomes"), read by the node from
+/// the runtime's own record so the app need not guess from the text. Only what the app draws is kept; every field is
+/// optional, and a value of an unexpected type is left unread rather than dropping the item it came with.
+nonisolated struct ToolOutcome: Codable, Hashable, Sendable {
+    /// ok, failed, no_match, denied, blocked, interrupted, timed_out, background; or one a later node adds.
+    var status: String?
+    var exitCode: Int?
+    /// The output's last lines, sent only when the page cut the result's text.
+    var tail: String?
+
+    enum CodingKeys: String, CodingKey { case status, tail; case exitCode = "exit_code" }
+
+    init(status: String? = nil, exitCode: Int? = nil, tail: String? = nil) {
+        self.status = status
+        self.exitCode = exitCode
+        self.tail = tail
+    }
+
+    init(from decoder: Decoder) {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        status = (try? c?.decodeIfPresent(String.self, forKey: .status)) ?? nil
+        exitCode = (try? c?.decodeIfPresent(Int.self, forKey: .exitCode)) ?? nil
+        tail = (try? c?.decodeIfPresent(String.self, forKey: .tail)) ?? nil
+    }
+
+    /// The call did not run, or was stopped partway: denied (by the user, a rule or a hook), blocked (refused before it
+    /// ran), interrupted. Nothing it ran failed, so it is not drawn in red.
+    var stopped: Bool { ["denied", "blocked", "interrupted"].contains(status) }
+}
+
 nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var seq: Int
@@ -1831,9 +1866,11 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var supervisionUser: Bool? = nil
     /// Additive display provenance; kept as JSON so future kinds and malformed optional fields remain readable.
     var source: JSONValue? = nil
+    /// kind == .toolResult: what the call came to. Nil from older nodes.
+    var outcome: ToolOutcome? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source, outcome
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id"
     }

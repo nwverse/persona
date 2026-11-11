@@ -282,8 +282,8 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return
 	}
 	long := t.longTurn()
-	if report {
-		long = 0
+	if report || sess.Assistant && strings.TrimSpace(sess.TurnError) != "" {
+		long = 0 // a failed assistant turn is pushed however quick it was, as other failures are (#4669)
 	}
 	// The own conversation of a scheduled task that pushes only what its runs send, finished normally (#2396): its
 	// news, if any, went out with notify_user. Decided after settle, not as a push: a turn held for its background
@@ -498,7 +498,7 @@ func (s *Service) mainSessionRep(machine, session string) bool {
 	r.mu.RLock()
 	p := r.profile
 	r.mu.RUnlock()
-	return p != nil && p.Main == session && p.MachineID == machine
+	return p != nil && p.Main == session && p.MainRouteMachine() == machine
 }
 
 // taskSessionRep says whether session is a scheduled task's own conversation as the last snapshot has it, whatever

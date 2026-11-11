@@ -242,7 +242,8 @@ func (s *Service) roomCreate(ctx context.Context, machine, sid string, r kb.Reco
 		"guest":          map[string]any{"tools": meetingRoomToolNames(), "kind": guestKindMeeting},
 		"message_source": &proto.MessageSource{Kind: proto.SourceMeeting, Title: feedMeetingName(r, s.location(ctx))},
 		"client_msg_id":  "meeting-" + r.ID}
-	if err := s.applyModel(ctx, "assistant", params); err != nil {
+	// The main chat's launcher and model, on the CLI even when the main chat runs on the Agent SDK: a room never does.
+	if err := s.applyModelCLI(ctx, "assistant", params); err != nil {
 		return "", "", err
 	}
 	delete(params, "permission_mode")
@@ -251,7 +252,13 @@ func (s *Service) roomCreate(ctx context.Context, machine, sid string, r kb.Reco
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
-	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
+	params["config_dir"] = meetingProfile
+	err := s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	if nodeOutdated(err) {
+		delete(params, "config_dir") // a node too old to be told a profile: its conversations all start in that one
+		err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	}
+	if err != nil {
 		switch {
 		case guestAgentRefused(err):
 			return "", kb.RoomRuntimeUnsupported, nil
@@ -308,11 +315,15 @@ func guestAgentRefused(err error) bool {
 
 // roomFeed feeds recording id's room what is due (a batch, or with end the end batch), as the feeder feeds an
 // attending session ("Feeding"), but with no meeting-turn mark, and held while an ask waits for the room or runs in
-// it. When to look again; with end, zero once the end batch went (or there was none to send).
-func (s *Service) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time, end bool) time.Time {
+// it. The photos go before a batch, one a look (meeting_photos.go roomPhotos): none after the meeting's end, and only
+// their withdrawals while the role is off; one whose sends keep failing lets the batch go and is looked at again
+// soon. When to look again; with end, zero once the end batch went (or there was none to send) and no photo message is
+// left failing.
+func (s *Service) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time, end bool) (next time.Time) {
 	if !r.Attending() {
 		s.attendNote(e, id, func(l *kb.Live) { l.FedTo, l.Problem = nil, "" }) // turned on again: the meeting so far
-		return time.Time{}
+		next, _ = s.roomPhotos(ctx, e, id, r, now, false)
+		return next
 	}
 	room := r.Conv.Room
 	if roomAskWaiting(l) {
@@ -325,6 +336,11 @@ func (s *Service) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb.Li
 	if roomAskWaiting(l) {
 		return now.Add(feedBusyPoll) // an ask goes first; the batch after it
 	}
+	photos, held := s.roomPhotos(ctx, e, id, r, now, !end)
+	if held {
+		return photos // the batch waits for the photo's turn
+	}
+	defer func() { next = feedEarliest(next, photos) }() // a photo message failing: tried again first at the next look
 	if !end && !l.FedAt.IsZero() && now.Before(l.FedAt.Add(feedBatchEvery)) {
 		return l.FedAt.Add(feedBatchEvery)
 	}

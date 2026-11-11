@@ -32,13 +32,15 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		v.other, v.unparsed, v.unknown = true, true, true
 		return v
 	}
+	v.unknown = shellCommandUnknown(cmd, false, depth)
 	merge := func(child larkVerdict) {
 		v.calls = append(v.calls, child.calls...)
 		if child.deny != "" {
 			v.deny = child.deny
 		}
-		v.unknown = v.unknown || child.unknown || child.unparsed
+		v.unknown = v.unknown || child.unknown || child.unparsed && larkCLIRe.MatchString(cmd)
 		v.cliWrite = v.cliWrite || child.cliWrite
+		v.unread = append(v.unread, child.unread...)
 	}
 	for _, g := range gates {
 		for _, name := range g.Secret {
@@ -58,13 +60,15 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 	}
 	segs, ok := shellSegments(cmd)
 	if !ok {
-		v.other, v.unparsed = true, true
+		v.other, v.unparsed, v.unknown = true, true, v.unknown || larkCLIRe.MatchString(cmd) || shellCommandUnknown(cmd, true, depth)
 		return v
 	}
 	vars := map[string]string{}
+	executableEnv := false
 	for _, s := range segs {
-		if s.subst {
-			v.unsure = true
+		if s.argSubst {
+			v.unsure, v.other = true, true
+			v.unknown = v.unknown || larkCLIRe.MatchString(cmd)
 		}
 		for _, nested := range s.nested {
 			child := classifyLarkDepth(nested, gates, cwd, risk, depth+1)
@@ -83,6 +87,17 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 			v.other = true
 		}
 		// Leading assignments: alone they set a variable for later words; before ol only the account / timeout.
+		envWords := words
+		if len(envWords) > 0 && envWords[0] == "export" {
+			envWords = envWords[1:]
+		}
+		for _, w := range envWords {
+			if !isAssignment(w) {
+				break
+			}
+			k, _, _ := strings.Cut(w, "=")
+			executableEnv = executableEnv || larkExecutableEnv[k]
+		}
 		var env []string
 		for len(words) > 0 && isAssignment(words[0]) {
 			env = append(env, words[0])
@@ -95,12 +110,24 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 			}
 			continue
 		}
-		// `timeout 20 ol …` (the prompt asks for timeouts), `command -v ol`.
-		if len(words) > 2 && words[0] == "timeout" && timeoutArg.MatchString(words[1]) {
-			words = words[2:]
+		for _, word := range words {
+			if isAssignment(word) {
+				k, _, _ := strings.Cut(word, "=")
+				executableEnv = executableEnv || larkExecutableEnv[k]
+			}
 		}
-		if len(words) > 1 && words[0] == "command" && (words[1] == "-v" || words[1] == "-V") {
-			words = []string{"which"}
+		var parsed bool
+		words, parsed = unwrapCommand(words)
+		if !parsed {
+			v.other = true
+			v.unknown = v.unknown || larkCLIRe.MatchString(s.text)
+			for _, word := range words {
+				v.unknown = v.unknown || strings.ContainsAny(word, "$`*?[]{}")
+			}
+			continue
+		}
+		if len(words) == 0 {
+			continue
 		}
 		name := words[0]
 		gate := -1
@@ -113,10 +140,16 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 			gate = gateOf(gates, name)
 		}
 		switch {
-		case (name == "sh" || name == "bash") && len(words) == 3 && (words[1] == "-c" || words[1] == "-lc"):
+		case shellScriptIndex(words) >= 0:
 			v.other = true
-			merge(classifyLarkDepth(words[2], gates, cwd, risk, depth+1))
+			merge(classifyLarkDepth(words[shellScriptIndex(words)], gates, cwd, risk, depth+1))
+		case name == "eval":
+			v.other = true
+			merge(classifyLarkDepth(strings.Join(words[1:], " "), gates, cwd, risk, depth+1))
 		case isLarkCLI(name):
+			if strings.ContainsAny(strings.Join(words[1:], " "), "$`") {
+				v.other, v.unknown = true, true
+			}
 			c, deny, ok := parseLarkCLI(words[1:], risk)
 			if deny != "" {
 				v.deny = deny
@@ -125,9 +158,6 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 			if !ok {
 				v.other, v.cliWrite, v.unknown = true, true, true
 				continue
-			}
-			if s.redirect != "" && !safeRedirect(s.redirect) {
-				v.other = true
 			}
 			if !c.cliRead() {
 				v.cliWrite = true
@@ -147,12 +177,10 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 			}
 			if !ok {
 				v.other, v.unknown = true, true
+				v.unread = append(v.unread, gate)
 				continue
 			}
 			c.Gate = gate
-			if s.redirect != "" && !safeRedirect(s.redirect) {
-				v.other = true
-			}
 			v.calls = append(v.calls, c)
 		case name == "curl" || name == "wget" || name == "http" || name == "xh":
 			if g, ok := gateAimed(gates, s.text); ok {
@@ -160,13 +188,16 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 				return v
 			}
 			v.other = true
-		case larkFilters[name] && len(env) == 0 && (s.redirect == "" || safeRedirect(s.redirect)):
+		case larkFilters[name] && len(env) == 0:
 		default:
 			v.other = true
-			if larkCLIRe.MatchString(s.text) {
-				v.cliWrite, v.unknown = true, true // a CLI invocation in an unknown interpreter or wrapper
+			if larkCLIRe.MatchString(s.text) || dynamicCommandName(name) || larkCLIRe.MatchString(cmd) && indirectLarkCommand(name) {
+				v.unknown = true // an interpreter, wrapper or script may invoke the CLI
 			}
 		}
+	}
+	if executableEnv && (len(v.calls) > 0 || larkCLIRe.MatchString(cmd)) {
+		v.other, v.unknown = true, true
 	}
 	if len(v.calls) == 0 {
 		v.other = true
@@ -189,11 +220,65 @@ func isAssignment(w string) bool {
 	return true
 }
 
-// safeRedirect: output into /tmp, or stderr folded or dropped.
+// indirectLarkCommand identifies opaque execution in a command already naming the CLI.
+// Without that context, interpreters and script files stay outside this gate.
+func indirectLarkCommand(name string) bool {
+	if name == "[" || name == "[[" {
+		return false
+	}
+	if strings.ContainsAny(name, "$`*?[]{}~") {
+		return true
+	}
+	base := filepath.Base(name)
+	if larkInterpreter.MatchString(base) {
+		return true
+	}
+	switch base {
+	case "sh", "bash", "zsh", "dash", "ksh", "fish", "python", "python2", "python3", "node", "nodejs", "perl", "ruby", "lua", "php", "eval", "xargs", "source", ".", "env", "exec", "command", "sudo", "timeout", "builtin", "busybox", "time", "!", "nohup", "nice", "setsid", "ssh", "awk", "gawk", "sed", "find":
+		return true
+	}
+	if strings.Contains(name, "/") {
+		if dir := filepath.Dir(name); dir == "/bin" || dir == "/usr/bin" {
+			if larkFilters[base] {
+				return false
+			}
+			switch base {
+			case "rm", "git", "tee", "ls", "cat", "curl", "wget":
+				return false
+			}
+		}
+		return true
+	}
+	return strings.HasSuffix(name, ".sh") || strings.HasSuffix(name, ".py") || strings.HasSuffix(name, ".js")
+}
+
+// These variables can replace the executable or load code before a nominally read-only CLI call.
+var larkExecutableEnv = map[string]bool{
+	"PATH": true, "NODE_OPTIONS": true, "NODE_PATH": true, "BASH_ENV": true, "ENV": true, "ZDOTDIR": true,
+	"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "DYLD_INSERT_LIBRARIES": true,
+	"PYTHONPATH": true, "PYTHONSTARTUP": true,
+}
+
+var larkInterpreter = lazyre.New(`^(?:python|node|perl|ruby|lua|php)(?:[0-9]+(?:\.[0-9]+)*)?$`)
+
+var redirectFD = lazyre.New(`^[0-9]*[<>]&[0-9]+$`)
+
+// safeRedirect is used only by readsOnlyMemory. It accepts /tmp and /dev/null;
+// readsOnlyMemory rejects /tmp separately. Lark redirect targets are not checked here.
 func safeRedirect(r string) bool {
 	for _, t := range strings.Fields(r) {
+		if strings.ContainsAny(t, "$`*?[]{}~\"'\\") {
+			return false
+		}
+		if strings.HasSuffix(t, ">") || strings.HasSuffix(t, "<") {
+			return false
+		}
+		if redirectFD.MatchString(t) {
+			continue
+		}
 		t = strings.TrimLeft(t, "0123456789&>")
-		if t == "" || t == "/dev/null" || strings.HasPrefix(t, "/tmp/") {
+		t = filepath.Clean(t)
+		if t == "/dev/null" || strings.HasPrefix(t, "/tmp/") {
 			continue
 		}
 		return false

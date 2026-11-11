@@ -480,6 +480,9 @@ data class Session(
     @SerialName("ultracode_note") val ultracodeNote: String? = null,
     /** A change of it waits for the agent's turn to end (or a draft / dialog in the terminal): a queue flag, not the value. */
     @SerialName("ultracode_pending") val ultracodePending: Boolean = false,
+    /** It was on and a resume started it off (#582, docs/protocol/protocol.md "Claude Code ultracode"): the chat offers it back
+     *  until it is on again or the notice is dismissed; the hub never turns it back on by itself. */
+    @WireTime @SerialName("ultracode_lost_at") val ultracodeLostAt: String? = null,
     /** Present on bounded summary rows; absent on legacy complete rows. */
     val waiting: Boolean? = null,
     @SerialName("background_count") val backgroundCountHint: Int? = null,
@@ -490,6 +493,11 @@ data class Session(
     /** Newest running workflow; bounded list metadata without its agent or phase arrays. */
     @SerialName("workflow_progress") val workflowProgress: Workflow? = null,
     @SerialName("background_working") val backgroundWorking: Boolean? = null,
+    /**
+     * Working only because of background work that only waits (`sleep`, a `--watch`, `tail -f`; the hub's
+     * `background_waiting`, #6045): set only with `state` working. False from older hubs.
+     */
+    @SerialName("background_waiting") val backgroundWaiting: Boolean = false,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */

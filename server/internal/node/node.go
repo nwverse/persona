@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"io"
 	"log"
@@ -123,7 +124,6 @@ type Node struct {
 	resumes   resumeLocks                // one resume report at a time per herdr pane (herdrresume.go reportResume)
 	panes     map[string]string          // pane id -> session id (learned from hooks)
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
-	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
 	procs     map[string]*assistantProc  // headless assistant conversations (assistant.go)
 	titles    map[string]string          // session id -> title given before its transcript existed (rename.go retitle)
 	spare     *assistantProc             // warm process waiting for the next new conversation
@@ -164,10 +164,12 @@ type Node struct {
 	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
 	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
-	starts    startLog        // sessions starting in the background (starting.go)
-	ups       uploads         // files arriving from the phone (upload.go)
-	sysOnce   sync.Once       // system: read once (metrics.go)
-	sys       proto.System
+	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
+	freshForks map[string]bool
+	starts     startLog  // sessions starting in the background (starting.go)
+	ups        uploads   // files arriving from the phone (upload.go)
+	sysOnce    sync.Once // system: read once (metrics.go)
+	sys        proto.System
 
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
@@ -406,7 +408,6 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
-	go n.watchShellTabs(ctx)
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
 	return n.peer.Serve(ctx, r)
@@ -635,6 +636,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		NewSessionID   string          `json:"new_session_id"` // assistant.send: start the new conversation under this id
 		Raw            json.RawMessage `json:"-"`
 
+		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
+
 		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
 		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
@@ -646,10 +649,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == "assistant.permissions.reset") {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能判断操作目标；未读取或发送", nil)
 	}
-	if n.codexBlocked(p.ResumeSessionID) && method == "session.start" {
+	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能恢复", nil)
 	}
-	if method == "session.start" && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(p.ResumeSessionID) { // codex_resume.go
+	if devicewire.IsSessionStart(method) && n.externalCodex(p.ResumeSessionID) && !n.codexResumable(withStartHost(ctx, p.Host), p.ResumeSessionID) { // codex_resume.go
 		return nil, refusal("codex_read_only", "外部 Codex 会话只能接入原 app-server，不能用启动器恢复", nil)
 	}
 	if n.externalCodex(p.SessionID) {
@@ -669,9 +672,23 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(n.interruptCodex(ctx, p.SessionID))
 		}
 	}
-	if method == "session.retire" { // before the runtimes: a session another tool owns is refused, not handed on
-		closed, err := n.retire(ctx, p.SessionID)
-		return map[string]any{"closed": closed}, err
+	// Before the runtimes: a session another tool owns is refused, not handed on. Neither closes the agent's pane
+	// (retire.go, #4754): session.retire is what a hub before #4754 asks, answered as it expects ("closed").
+	if method == "session.retire" {
+		var a struct {
+			CloseTerminal bool `json:"close_terminal"` // the user's "Archive and close"
+		}
+		_ = json.Unmarshal(params, &a)
+		done, err := n.retire(ctx, p.SessionID, a.CloseTerminal)
+		return map[string]any{"closed": done}, err
+	}
+	if method == "session.stop" {
+		var a struct {
+			Retire bool `json:"retire"`
+		}
+		_ = json.Unmarshal(params, &a)
+		stopped, err := n.stop(ctx, p.SessionID, a.Retire)
+		return map[string]any{"stopped": stopped}, err
 	}
 	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing
 		return n.restoreModel(ctx, p.SessionID)
@@ -925,7 +942,31 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
-	case "session.start":
+	case "session.start.options":
+		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
+	case "session.start", devicewire.MethodStartWorkSession:
+		if p.ResumeSessionID != "" && p.Host == "" {
+			p.Host = n.startKind(n.withResumeHost(ctx, p.ResumeSessionID))
+		}
+		var work workStartOptions
+		if method == devicewire.MethodStartWorkSession {
+			if p.ResumeSessionID != "" {
+				return nil, workStartRefused("work_target_required", "A work session must be new.")
+			}
+			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort)
+			if err != nil {
+				return nil, workStartRefused("work_project_unavailable", "The project folder or start options are no longer valid.")
+			}
+			p.Cwd = cwd
+			opts, err := n.workSessionOptions(ctx, p.Launcher, p.ConfiguredAgent, p.Host, p.Configured, p.Model != "")
+			if err != nil {
+				return nil, err
+			}
+			if err := opts.validate(p.AgentType, p.Model, p.Prompt, p.Async); err != nil {
+				return nil, err
+			}
+			work, p.Host = opts, opts.host
+		}
 		if p.CreationID != "" && p.ResumeSessionID == "" && p.SessionID != "" {
 			if _, exists := n.state.get(p.SessionID); exists {
 				return nil, errors.New("creation identifier requires a new session")
@@ -970,7 +1011,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				return nil, refusal(secretEnvGoneCode, errSecretTicket.Error(), nil)
 			}
 		}
-		if p.ResumeSessionID == "" {
+		if work.runtime != nil {
+			rp.Model = work.runtimeModel // the runtime's configured default, never a caller override
+			s, err := n.runtimeStartOn(ctx, work.runtime, rp)
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		}
+		if method == "session.start" && p.ResumeSessionID == "" {
 			if s, err, ok := n.runtimeStart(ctx, rp); ok { // a runtime's launcher
 				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 			}
@@ -992,12 +1038,20 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			execution: modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket}}
 		if p.ResumeSessionID != "" {
 			r = n.fillResume(p.ResumeSessionID, r) // what it ran with, for what the start leaves out (retire.go)
+			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
+			// still there (stopped.go).
+			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
 		}
 		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, "", p.AgentType, r.execution)
+		if err == nil && p.ResumeSessionID != "" {
+			n.forkStarted(p.ResumeSessionID)
+		}
 		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
+	case "assistant.execution":
+		return n.assistantExecution(ctx, p.SessionID), nil
 	case "assistant.send":
 		if p.ResumeOnly && !n.assistantResumable(p.SessionID) {
 			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
@@ -1190,7 +1244,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.terminalWatch(ctx, p.SessionID, a.Control)
 	case "panes.list": // the terminal browser: every workspace, tab and pane, agent or shell (panes.go)
 		n.configured()
-		return n.listPanes(ctx)
+		res, err := n.listPanes(ctx)
+		if err == nil {
+			n.paneForegrounds(ctx, &res)
+		}
+		return res, err
 	case "panes.new": // an explicit "New terminal" from the browser: a shell tab in a workspace (panes.go)
 		var a struct {
 			Kind        string `json:"kind"`
@@ -1198,6 +1256,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		_ = json.Unmarshal(params, &a)
 		return n.newShell(ctx, a.Kind, a.WorkspaceID)
+	case "panes.close_finished": // the user's "Close finished terminals" (stopped.go, #4754)
+		var a struct {
+			Panes   string `json:"panes"`
+			Preview bool   `json:"preview"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.closeFinished(ctx, a.Panes, a.Preview)
 	case "panes.close":
 		return ok(n.closePane(ctx, p.Pane))
 	case "panes.split":
@@ -1731,9 +1796,9 @@ func nonNil(items []proto.Item) []proto.Item {
 // managedUser is the launcher a method runs (or asks a CLI about) that may need a managed provider's secrets.
 func managedUser(method, launcher, name string) string {
 	switch method {
-	case "session.start", "assistant.send", "assistant.warm", "session.send":
+	case "session.start", devicewire.MethodStartWorkSession, "assistant.send", "assistant.warm", "session.send":
 		return launcher
-	case "launchers.check", "claude.auth_status", "launchers.models", "launchers.http", "launchers.probe", "launchers.model.check":
+	case "session.start.options", "launchers.check", "claude.auth_status", "launchers.models", "launchers.http", "launchers.probe", "launchers.model.check":
 		return name
 	}
 	return ""
@@ -1785,13 +1850,31 @@ func (n *Node) herdrRunning(ctx context.Context) (running, known bool) {
 }
 
 func claudeVersion(ctx context.Context) string {
+	v, _ := claudeProbe(ctx)
+	return v
+}
+
+// claudeProbe asks claude's version in the login shell, and says whether the shell found no claude at all (missing).
+// Only a shell that could not find the command is missing: a run that took longer than its 10 s on a busy machine,
+// an rc file that failed, or output with no version leaves the version unknown this time, not Claude Code absent.
+func claudeProbe(ctx context.Context) (version string, missing bool) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out, err := loginShell(ctx, "command claude --version").Output()
-	if err != nil {
-		return ""
+	return claudeProbeResult(out, err, ctx.Err() != nil)
+}
+
+// claudeProbeResult reads claudeProbe's run: its stdout, its error, and whether its time ran out.
+func claudeProbeResult(out []byte, err error, timedOut bool) (version string, missing bool) {
+	if err == nil {
+		return parseClaudeVersion(string(out)), false
 	}
-	return parseClaudeVersion(string(out))
+	var ee *exec.ExitError
+	if timedOut || !errors.As(err, &ee) {
+		return "", false // killed, or the shell did not start: nothing said about claude
+	}
+	lines := strings.Split(string(out)+"\n"+string(ee.Stderr), "\n")
+	return "", missingFrom("claude", lines, ee.ExitCode() == 127) == proto.CodeClaudeMissing
 }
 
 // parseClaudeVersion takes the version out of `claude --version` run in an interactive shell, whose ~/.zshrc may
