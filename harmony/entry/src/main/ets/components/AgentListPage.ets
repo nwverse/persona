@@ -2,10 +2,21 @@ import { CapsuleSegmentButtonV2, ComposeListItemV2, ContentItemV2, SegmentButton
 import { ClientModel } from '../models/ClientModel';
 import { AgentWorkspace, AgentWorkspaceGroup } from '../models/AgentWorkspace';
 import { ResourceRow, Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 
 const QUICK_FILTERS: string[] = ['all', 'needs_you', 'working', 'unread'];
+
+@ObservedV2
+class BoundAgentGroup {
+  readonly identity: string;
+  readonly key: string;
+  @Trace value: AgentWorkspaceGroup;
+  @Trace rows: BoundRow<ResourceRow>[] = [];
+
+  constructor(identity: string, key: string, value: AgentWorkspaceGroup) { this.identity = identity; this.key = key; this.value = value; }
+}
 
 @ComponentV2
 export struct AgentListPage {
@@ -19,17 +30,22 @@ export struct AgentListPage {
   @Event onOpen: (row: ResourceRow) => void = () => {};
   @Event onVisible: (row: ResourceRow, ratio: number) => void = () => {};
   @Local workspace: AgentWorkspace = new AgentWorkspace();
+  @Local flatRowBindings: BoundRow<ResourceRow>[] = [];
+  @Local groupBindings: BoundAgentGroup[] = [];
+  private rowBindingOwner: Object | undefined;
+  private rowBindingScope: string = '';
+  private groupBindingSequence: number = 0;
   @Local editorOpen: boolean = false;
   @Local editingRow: ResourceRow | undefined;
   @Local renameTitle: string = '';
   @Local renameTab: string = '';
 
-  aboutToAppear(): void { if (!this.active) return; this.workspace.open(this.model, this.readingDetail).then(() => this.workspace.selectExternal(this.selectedRow)).catch(() => undefined); }
+  aboutToAppear(): void { this.syncRowBindings(); if (!this.active) return; this.workspace.open(this.model, this.readingDetail).then(() => { this.workspace.selectExternal(this.selectedRow); this.syncRowBindings(); }).catch(() => undefined); }
   aboutToDisappear(): void { this.editorOpen = false; this.editingAdmission = undefined; this.workspace.hide(); }
 
-  @Monitor('active') visibleChanged(): void { if (!this.active) { this.editorOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; this.workspace.hide(); } else this.workspace.open(this.model, this.readingDetail).then(() => this.workspace.selectExternal(this.selectedRow)).catch(() => undefined); }
+  @Monitor('active') visibleChanged(): void { if (!this.active) { this.editorOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; this.workspace.hide(); } else this.workspace.open(this.model, this.readingDetail).then(() => { this.workspace.selectExternal(this.selectedRow); this.syncRowBindings(); }).catch(() => undefined); }
   @Monitor('model.forgottenEpoch') forgottenChanged(): void { this.workspace.forgetHub(this.model.forgottenProfile); if (this.editingRow?.group === this.model.forgottenProfile) { this.editorOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; } }
-  @Monitor('model.profile') profileChanged(): void { this.editorOpen = false; this.editingAdmission = undefined; if (!this.active) return; this.workspace.open(this.model, this.readingDetail).then(() => this.workspace.selectExternal(this.selectedRow)).catch(() => undefined); }
+  @Monitor('model.profile') profileChanged(): void { this.editorOpen = false; this.editingAdmission = undefined; this.syncRowBindings(); if (!this.active) return; this.workspace.open(this.model, this.readingDetail).then(() => { this.workspace.selectExternal(this.selectedRow); this.syncRowBindings(); }).catch(() => undefined); }
   @Monitor('selectedRow') externalSelectionChanged(): void { this.workspace.selectExternal(this.selectedRow); }
   @Monitor('model.directorySessions', 'model.directoryReady') directoryChanged(): void { if (!this.active) return; this.workspace.update(this.model, this.readingDetail); this.workspace.selectExternal(this.selectedRow); }
   @Monitor('model.sessionsReady') catalogChanged(): void { if (!this.active) return; this.workspace.update(this.model, this.readingDetail); }
@@ -44,7 +60,42 @@ export struct AgentListPage {
     if (!this.active) return; this.workspace.update(this.model, this.readingDetail);
     if (this.model.connected) this.workspace.refresh(this.model).catch(() => undefined);
   }
+  @Monitor('workspace.groups', 'workspace.groupingMode') rowsChanged(): void { this.syncRowBindings(); }
   @Monitor('readingDetail') detailChanged(): void { this.workspace.setReadingDetail(this.readingDetail); }
+
+  private syncRowBindings(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
+    const sameOwnerScope = this.rowBindingOwner === this.model && this.rowBindingScope === scope;
+    this.flatRowBindings = reconcileBoundRows(this.flatRowBindings, this.workspace.visibleRows(), (row: ResourceRow) => row.key(),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    const previous = sameOwnerScope ? this.groupBindings : [];
+    const available = new Map<string, BoundAgentGroup[]>();
+    previous.forEach((binding: BoundAgentGroup) => {
+      const bindings = available.get(binding.identity) || [];
+      bindings.push(binding);
+      available.set(binding.identity, bindings);
+    });
+    const occurrences = new Map<string, number>(), next: BoundAgentGroup[] = [];
+    this.workspace.groups.forEach((group: AgentWorkspaceGroup) => {
+      const occurrence = occurrences.get(group.id) || 0;
+      occurrences.set(group.id, occurrence + 1);
+      const identity = JSON.stringify([group.id, occurrence]);
+      const matches = available.get(identity);
+      const existing = matches && matches.length ? matches.shift() : undefined;
+      let binding: BoundAgentGroup;
+      if (existing) {
+        binding = existing; binding.value = group;
+        binding.rows = reconcileBoundRows(binding.rows, group.rows, (row: ResourceRow) => row.key(), this.model, this.model, scope, scope);
+      } else {
+        this.groupBindingSequence++;
+        binding = new BoundAgentGroup(identity, 'agent-group-binding.' + String(this.groupBindingSequence), group);
+        binding.rows = reconcileBoundRows([], group.rows, (row: ResourceRow) => row.key(), undefined, this.model, '', scope);
+      }
+      next.push(binding);
+    });
+    this.groupBindings = next;
+    this.rowBindingOwner = this.model; this.rowBindingScope = scope;
+  }
 
   private quickIndex(): number {
     const index = QUICK_FILTERS.indexOf(this.workspace.quickFilter);
@@ -112,40 +163,40 @@ export struct AgentListPage {
       } } });
   }
 
-  @Builder rowMenu(row: ResourceRow) {
+  @Builder rowMenu(binding: BoundRow<ResourceRow>) {
     Menu() {
-      MenuItem({ content: tr(this.workspace.isPinned(row) ? 'agent_unpin' : 'agent_pin') })
-        .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
-        .onClick(() => this.workspace.togglePin(row).catch(() => undefined))
-      MenuItem({ content: tr(this.workspace.isMuted(row) ? 'unmute' : 'mute') })
-        .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
-        .onClick(() => this.workspace.toggleMute(row).catch(() => undefined))
-      if (this.workspace.isSpacePinned(row) || Wire.text(row.data(), 'space_name')) {
-        MenuItem({ content: tr(this.workspace.isSpacePinned(row) ? 'agent_unpin_space' : 'agent_pin_space') })
-          .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
-          .onClick(() => this.workspace.togglePin(row, true).catch(() => undefined))
-        MenuItem({ content: tr(this.workspace.isSpaceMuted(row) ? 'agent_unmute_space' : 'agent_mute_space') })
-          .enabled(this.workspace.rowOnline(row) && !this.workspace.busy)
-          .onClick(() => this.workspace.toggleMute(row, true).catch(() => undefined))
+      MenuItem({ content: tr(this.workspace.isPinned(binding.value) ? 'agent_unpin' : 'agent_pin') })
+        .enabled(this.workspace.rowOnline(binding.value) && !this.workspace.busy)
+        .onClick(() => this.workspace.togglePin(binding.value).catch(() => undefined))
+      MenuItem({ content: tr(this.workspace.isMuted(binding.value) ? 'unmute' : 'mute') })
+        .enabled(this.workspace.rowOnline(binding.value) && !this.workspace.busy)
+        .onClick(() => this.workspace.toggleMute(binding.value).catch(() => undefined))
+      if (this.workspace.isSpacePinned(binding.value) || Wire.text(binding.value.data(), 'space_name')) {
+        MenuItem({ content: tr(this.workspace.isSpacePinned(binding.value) ? 'agent_unpin_space' : 'agent_pin_space') })
+          .enabled(this.workspace.rowOnline(binding.value) && !this.workspace.busy)
+          .onClick(() => this.workspace.togglePin(binding.value, true).catch(() => undefined))
+        MenuItem({ content: tr(this.workspace.isSpaceMuted(binding.value) ? 'agent_unmute_space' : 'agent_mute_space') })
+          .enabled(this.workspace.rowOnline(binding.value) && !this.workspace.busy)
+          .onClick(() => this.workspace.toggleMute(binding.value, true).catch(() => undefined))
       }
-      if (this.workspace.canMarkSeen(row)) MenuItem({ content: tr('agent_mark_seen') })
-        .enabled(!this.workspace.busy).onClick(() => this.workspace.markSeen(row).catch(() => undefined))
-      if (this.workspace.canRename(row)) MenuItem({ content: tr('rename') }).enabled(!this.workspace.busy)
-        .onClick(() => this.openRename(row))
-      if (this.workspace.canClose(row)) MenuItem({ content: tr('close') }).enabled(!this.workspace.busy)
-        .onClick(() => this.confirmClose(row))
-      if (this.workspace.canDelete(row)) MenuItem({ content: tr('delete') }).enabled(!this.workspace.busy)
-        .onClick(() => this.confirmDelete(row))
+      if (this.workspace.canMarkSeen(binding.value)) MenuItem({ content: tr('agent_mark_seen') })
+        .enabled(!this.workspace.busy).onClick(() => this.workspace.markSeen(binding.value).catch(() => undefined))
+      if (this.workspace.canRename(binding.value)) MenuItem({ content: tr('rename') }).enabled(!this.workspace.busy)
+        .onClick(() => this.openRename(binding.value))
+      if (this.workspace.canClose(binding.value)) MenuItem({ content: tr('close') }).enabled(!this.workspace.busy)
+        .onClick(() => this.confirmClose(binding.value))
+      if (this.workspace.canDelete(binding.value)) MenuItem({ content: tr('delete') }).enabled(!this.workspace.busy)
+        .onClick(() => this.confirmDelete(binding.value))
     }
   }
 
-  @Builder groupHeader(group: AgentWorkspaceGroup) {
+  @Builder groupHeader(binding: BoundAgentGroup) {
     Column({ space: Tokens.fine }) {
-      if (group.showMachine) Text(group.machineName || group.machineId).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
+      if (binding.value.showMachine) Text(binding.value.machineName || binding.value.machineId).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
         .fontColor($r('sys.color.font_secondary')).width('100%')
-      if (group.showRepository) Text(group.repositoryName || tr('agent_filter_repository')).fontSize(Tokens.meta)
+      if (binding.value.showRepository) Text(binding.value.repositoryName || tr('agent_filter_repository')).fontSize(Tokens.meta)
         .fontColor($r('sys.color.font_secondary')).width('100%')
-      if (group.showWorktree) Text(group.branch || group.worktreeName || tr('agent_filter_worktree')).fontSize(Tokens.meta)
+      if (binding.value.showWorktree) Text(binding.value.branch || binding.value.worktreeName || tr('agent_filter_worktree')).fontSize(Tokens.meta)
         .fontWeight(FontWeight.Medium).width('100%')
     }.alignItems(HorizontalAlign.Start)
       .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine }).width('100%')
@@ -166,20 +217,20 @@ export struct AgentListPage {
     }
   }
 
-  @Builder agentRow(row: ResourceRow) {
+  @Builder agentRow(binding: BoundRow<ResourceRow>) {
     ListItem() {
-      if (this.rail) Text((row.title || row.id).slice(0, 1)).fontSize(Tokens.body).height(Tokens.touch).width('100%')
+      if (this.rail) Text((binding.value.title || binding.value.id).slice(0, 1)).fontSize(Tokens.body).height(Tokens.touch).width('100%')
         .textAlign(TextAlign.Center)
-      else ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title || row.id,
-        secondaryText: this.rowSubtitle(row) || undefined }) })
-    }.selectable(true).selected(this.workspace.isSelected(row))
-      .backgroundColor(this.workspace.isSelected(row)
+      else ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || binding.value.id,
+        secondaryText: this.rowSubtitle(binding.value) || undefined }) })
+    }.selectable(true).selected(this.workspace.isSelected(binding.value))
+      .backgroundColor(this.workspace.isSelected(binding.value)
         ? $r('sys.color.comp_background_tertiary') : Color.Transparent)
-      .onClick(() => this.openRow(row))
-      .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.onVisible(row, visible ? ratio : 0))
-      .onDisAppear(() => this.onVisible(row, 0))
-      .bindContextMenu((): void => this.rowMenu(row), ResponseType.LongPress)
-      .id('agent.' + row.group + '.' + row.manager + '.' + row.machine + '.' + row.id)
+      .onClick(() => this.openRow(binding.value))
+      .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.onVisible(binding.value, visible ? ratio : 0))
+      .onDisAppear(() => this.onVisible(binding.value, 0))
+      .bindContextMenu(this.rowMenu(binding), ResponseType.LongPress)
+      .id('agent.' + binding.value.group + '.' + binding.value.manager + '.' + binding.value.machine + '.' + binding.value.id)
   }
 
   @Builder filters() {
@@ -202,7 +253,7 @@ export struct AgentListPage {
             }.alignItems(VerticalAlign.Center)
           }
         }.width('100%')
-        Button(tr('grouping')).bindMenu(this.groupingMenu).height(Tokens.touch)
+        Button(tr('grouping'), { buttonStyle: ButtonStyleMode.TEXTUAL }).bindMenu(this.groupingMenu).height(Tokens.touch)
           .id('agents.grouping')
       }.padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.inset, bottom: Tokens.gap }).width('100%')
     }
@@ -234,15 +285,15 @@ export struct AgentListPage {
       List() {
         if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
         if (this.workspace.groupingMode === 'flat') {
-          ForEach(this.workspace.visibleRows(), (row: ResourceRow) => this.agentRow(row), (row: ResourceRow) =>
-            row.key())
+          ForEach(this.flatRowBindings, (binding: BoundRow<ResourceRow>) => this.agentRow(binding), (binding: BoundRow<ResourceRow>) =>
+            binding.key)
         } else {
-          ForEach(this.workspace.groups, (group: AgentWorkspaceGroup) => {
-            ListItemGroup({ header: () => this.groupHeader(group) }) {
-              ForEach(group.rows, (row: ResourceRow) => this.agentRow(row), (row: ResourceRow) =>
-                row.key())
-            }.id('agents.group.' + group.id)
-          }, (group: AgentWorkspaceGroup) => group.id)
+          ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
+            ListItemGroup({ header: () => this.groupHeader(binding) }) {
+              ForEach(binding.rows, (rowBinding: BoundRow<ResourceRow>) => this.agentRow(rowBinding), (rowBinding: BoundRow<ResourceRow>) =>
+                rowBinding.key)
+            }.id('agents.group.' + binding.value.id)
+          }, (binding: BoundAgentGroup) => binding.key)
         }
         if (!this.workspace.hasRows() && !this.workspace.loading) ListItem() {
           Text(tr(this.workspace.search ? 'no_results' : 'empty')).fontSize(Tokens.meta).padding(Tokens.page).width('100%')

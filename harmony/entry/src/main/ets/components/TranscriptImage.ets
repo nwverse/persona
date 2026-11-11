@@ -209,7 +209,7 @@ export struct TranscriptImage {
   build() {
     Column() {
       if (this.pixels) Image(this.pixels).width('100%').aspectRatio(this.ratio).objectFit(ImageFit.Contain)
-        .onClick(() => this.preview()).bindContextMenu((): void => this.imageMenu(), ResponseType.LongPress)
+        .onClick(() => this.preview()).bindContextMenu(this.imageMenu, ResponseType.LongPress)
         .accessibilityText(tr('image'))
       else if (this.busy) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       else Button(tr(this.failed ? 'retry' : 'image')).onClick(() => this.load())

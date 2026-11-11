@@ -138,6 +138,22 @@ The device matrix includes a straight phone, a conventional Mate X-style foldabl
 
 No AppGallery push, service card or live-window entitlement is implied by native foreground notifications. These system enhancements require their own qualification and device evidence; the core application does not rely on background WebSocket survival.
 
+## Native data updates
+
+ArkUI `ForEach` retains the item generator for an unchanged key. The dynamic Persona, Agent, Inbox, Todo, Knowledge and Health lists, management rows/fields and file/Git/preview rows use renderer-owned `BoundRow` references to keep a stable native key within one model owner and scope while their traced value follows the latest immutable model row. Deferred menus and click handlers read that current value. A new owner or scope receives new native keys; source rows remain immutable because resource admission uses their snapshot identity. Reconciliation indexes identities and duplicate occurrences with maps. Agents freeze list membership only after their saved view and initial rows have loaded; opening a detail during initialization must not freeze a temporary empty list.
+
+Extension JSON is copied into a bounded `UIUtils.makeObserved` presentation tree. Same-page updates retain interactive nodes and draft focus; changing page, model owner or snapshot epoch replaces the presentation generation. Array reconciliation follows the renderer's actual keys, and read-only primitive leaves use content keys. Builder arguments that can change are native bindings, including action values read at the time of a click. Section positions remain live when keyed sections move. Derived chart rows read observable arrays through explicit indices; native update evidence must cover nested values as well as top-level text.
+
+Native buttons retain framework foreground/background pairing and semantic roles. Do not put the brand foreground color on the framework's filled primary background; it can make the caption disappear. Destructive extension buttons use the native error role and the existing confirmation/admission flow.
+
+A streamed action with a confirmation completes the Hub's own permission gate only after the user has confirmed the exact frozen action. The host interaction must match the current manager, page session, epoch, version, saved action and summary, have no input or secret fields, and remain unexpired. Dispatch rechecks ownership and visibility; this never grants generic Agent approval. A restored route can start before the socket hello advertises stream support, so capability arrival retries the stream read and retires the older HTTP read. Falling back to a legacy view preserves its unsent fields.
+
+Inbox lists re-read their aggregate endpoint when the owning client receives an inbox update or a child operation is acknowledged. They do not substitute the client's owner-filtered inbox cache for the aggregate list. A separate list request sequence rejects late rows, source metadata, errors and loading changes without resetting page identity, filters or compose drafts. Todo and Knowledge parent lists also re-read when revealed after a child mutation; reconnect recovery completes interrupted detail initialization while preserving newer local editor input. Acknowledged writes invalidate older reads before they can restore pre-write values.
+
+Environment prerequisites and physical performance procedures are in [device validation](device-validation.md).
+
+See [native device views](screenshots/README.md) for the actual window classes and title/material variants.
+
 ## Platform references
 
 - [ArkUI Navigation](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-basic-components-navigation) and [Tabs](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-container-tabs): native structure and system-owned behavior.

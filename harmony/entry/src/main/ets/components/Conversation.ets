@@ -336,7 +336,7 @@ export struct Conversation {
       if (message.localOperation && this.model.canCheckLocalMessage(message.localOperation)) Button(tr('checked'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.confirmChecked(message.localOperation))
       if (message.localOperation && this.model.canRestoreMessage(message.localOperation)) Button(tr('restore_draft'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.restoreDraft(message))
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap })
-      .bindContextMenu((): void => this.messageMenu(message), ResponseType.LongPress)
+      .bindContextMenu(this.messageMenu(message), ResponseType.LongPress)
   }
   @Builder readingContent() {
     Column() {

@@ -1048,3 +1048,8 @@ The composer uses native GridRow/GridCol spans and order. When the effective app
 leaves too little writing space, the same input occupies a full row and full-width actions stack below it, Send before Attach, with single-line labels. The input and draft
 keep their identity; controls grow with their labels instead of clipping a fixed-height row. Native Ability configuration
 callbacks supply the actual application font scale. A local font multiplier is not a substitute for that system value.
+
+A HarmonyOS destination has one native route title and the Navigation-owned return action. Content does not repeat
+that title or add another route-back button. Local actions such as returning to a file's parent directory or closing
+a message thread keep their separate meaning. A missing resource title falls back to its identifier in the native
+bar. Secondary list actions, such as grouping, use the framework's textual button style.

@@ -764,3 +764,50 @@ test('a pending attachment upload blocks a different client ID for the same conv
   assert.equal(f.byteCalls.length, 1);
   await workspace.close();
 });
+
+test('a superseded list metadata response cannot replace newer data or clear its loading state', async () => {
+  let phase = 'initial', oldSources, newItems, enteredOld, enteredNew;
+  const oldStarted = new Promise(resolve => { enteredOld = resolve; }), newStarted = new Promise(resolve => { enteredNew = resolve; });
+  const f = makeHarness({ rows: [item('first')], handle: async call => {
+    if (pathOnly(call.path) === '/api/v1/messaging' && phase === 'old') { enteredOld(); return new Promise(resolve => { oldSources = resolve; }); }
+    if (pathOnly(call.path) === '/api/v1/inbox' && phase === 'new') { enteredNew(); return new Promise(resolve => { newItems = resolve; }); }
+    if (pathOnly(call.path) === '/api/v1/messaging' && phase === 'new') return { sources: [{ id: 'fresh-source' }] };
+  } });
+  const workspace = new InboxWorkspace(); await workspace.open(f.client);
+  workspace.search = 'retain search'; workspace.sourceFilter = 'mail'; workspace.replyDraft = 'retain draft';
+  phase = 'old'; const older = workspace.refresh(); await oldStarted;
+  phase = 'new'; const latest = workspace.refresh(); await newStarted;
+  oldSources({ sources: [{ id: 'obsolete-source' }] }); await older;
+  assert.equal(workspace.loading, true); assert.notEqual(workspace.sourceDefinitions[0].id, 'obsolete-source');
+  newItems({ items: [item('foreign', { manager: 'other-manager' }), item('newest')] }); await latest;
+  assert.deepEqual(workspace.items.map(row => row.id), ['foreign', 'newest']);
+  assert.equal(workspace.items[0].manager, 'other-manager'); assert.equal(workspace.sourceDefinitions[0].id, 'fresh-source');
+  assert.equal(workspace.loading, false); assert.equal(workspace.search, 'retain search'); assert.equal(workspace.sourceFilter, 'mail');
+  assert.equal(workspace.replyDraft, 'retain draft'); await workspace.close();
+});
+
+test('a late failed inbox read cannot overwrite a newer refresh with an error', async () => {
+  let phase = 'initial', rejectOld, resolveNew, enteredOld, enteredNew;
+  const oldStarted = new Promise(resolve => { enteredOld = resolve; }), newStarted = new Promise(resolve => { enteredNew = resolve; });
+  const f = makeHarness({ rows: [item('first')], handle: async call => {
+    if (pathOnly(call.path) !== '/api/v1/inbox') return undefined;
+    if (phase === 'old') { enteredOld(); return new Promise((_resolve, reject) => { rejectOld = reject; }); }
+    if (phase === 'new') { enteredNew(); return new Promise(resolve => { resolveNew = resolve; }); }
+  } });
+  const workspace = new InboxWorkspace(); await workspace.open(f.client);
+  phase = 'old'; const older = workspace.refresh(); await oldStarted;
+  phase = 'new'; const latest = workspace.refresh(); await newStarted;
+  rejectOld(new Error('obsolete_failure')); await older;
+  assert.equal(workspace.loading, true); assert.equal(workspace.error, '');
+  resolveNew({ items: [item('current')] }); await latest;
+  assert.deepEqual(workspace.items.map(row => row.id), ['current']); assert.equal(workspace.error, ''); await workspace.close();
+});
+
+test('an inbox list refresh never dispatches through a repository replaced by a scope change', async () => {
+  const f = makeHarness({ rows: [item('first')] }), workspace = new InboxWorkspace(); await workspace.open(f.client);
+  f.calls.length = 0;
+  f.state.repo = {};
+  await workspace.refresh();
+  assert.equal(f.calls.length, 0); assert.deepEqual(workspace.items.map(row => row.id), ['first']);
+  await workspace.close();
+});

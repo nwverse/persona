@@ -2,37 +2,171 @@ import { ComposeListItemV2, ContentItemV2 } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { TodoWorkspace, TodoWorkspaceAgent, TodoWorkspaceGroup, TodoWorkspaceItem, TodoWorkspaceSection,
   TodoWorkspaceSpace, TodoWorkspaceSpaceChoice } from '../models/TodoWorkspace';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { ResourceRow, Wire } from '../models/Wire';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { MarkdownText } from './MarkdownText';
+
+@ObservedV2
+class BoundTodoSection {
+  readonly identity: string;
+  readonly key: string;
+  @Trace value: TodoWorkspaceSection;
+  @Trace rows: BoundRow<TodoWorkspaceGroup>[] = [];
+
+  constructor(identity: string, key: string, value: TodoWorkspaceSection) {
+    this.identity = identity;
+    this.key = key;
+    this.value = value;
+  }
+}
 
 @ComponentV2
 export struct TodoWorkspacePage {
   @Require @Param model: ClientModel;
   @Param row: ResourceRow | undefined = undefined;
   @Param list: boolean = true;
+  @Param visible: boolean = true;
   @Event onOpen: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onOpenResource: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Event onCreateAgent: (todo: ResourceRow) => void = (_todo: ResourceRow) => {};
   @Local workspace: TodoWorkspace = new TodoWorkspace();
+  @Local sectionBindings: BoundTodoSection[] = [];
+  @Local lineageRowBindings: BoundRow<ResourceRow>[] = [];
+  @Local relatedTodoBindings: BoundRow<TodoWorkspaceItem>[] = [];
+  @Local spaceBindings: BoundRow<TodoWorkspaceSpace>[] = [];
+  @Local activeAgentBindings: BoundRow<TodoWorkspaceAgent>[] = [];
+  @Local previousAgentBindings: BoundRow<TodoWorkspaceAgent>[] = [];
   @Local previousAgentsOpen: boolean = false;
+  private rowBindingOwner: Object | undefined;
+  private rowBindingScope: string = '';
+  private sectionBindingSequence: number = 0;
+  private pageAvailable: boolean = false;
+  private lastVisible: boolean = true;
+  private workspaceOpening: boolean = false;
+  private workspaceInitialized: boolean = false;
+  private queuedRefresh: boolean = false;
+  private openSerial: number = 0;
 
-  aboutToAppear(): void { this.previousAgentsOpen = false; this.workspace.open(this.model, this.row, this.list).catch(() => undefined); }
-  aboutToDisappear(): void { this.workspace.close(); }
+  aboutToAppear(): void {
+    this.pageAvailable = true;
+    this.lastVisible = this.visible;
+    this.previousAgentsOpen = false;
+    this.syncRowBindings();
+    this.openWorkspace();
+  }
+  aboutToDisappear(): void {
+    this.pageAvailable = false;
+    this.openSerial++;
+    this.workspaceOpening = false;
+    this.workspaceInitialized = false;
+    this.queuedRefresh = false;
+    this.workspace.close();
+  }
+
+  @Monitor('row', 'list') routeChanged(): void { this.syncRowBindings(); if (this.pageAvailable) this.openWorkspace(); }
 
   @Monitor('model.profile') profileChanged(): void {
     this.previousAgentsOpen = false;
-    this.workspace.open(this.model, this.row, this.list).catch(() => undefined);
+    this.syncRowBindings();
+    if (this.pageAvailable) this.openWorkspace();
   }
   @Monitor('model.connected') connectionChanged(): void {
-    if (this.model.connected) this.workspace.refresh().catch(() => undefined);
+    if (!this.pageAvailable) return;
+    if (this.model.connected) this.refreshWhenReady(true);
     else this.workspace.error = 'offline';
+  }
+  @Monitor('visible') visibilityChanged(): void {
+    const becameVisible = !this.lastVisible && this.visible;
+    this.lastVisible = this.visible;
+    if (becameVisible && this.pageAvailable) this.refreshWhenReady();
   }
   @Monitor('model.sessions') sessionsChanged(): void { this.workspace.update(this.model); }
   @Monitor('model.machines') machinesChanged(): void { this.workspace.update(this.model); }
   @Monitor('model.knowledge') projectsChanged(): void { this.workspace.update(this.model); }
+  @Monitor('workspace.selected', 'workspace.items', 'workspace.search', 'workspace.statusFilter', 'workspace.groupBy',
+    'workspace.projects', 'workspace.sessions', 'workspace.machines') rowsChanged(): void { this.syncRowBindings(); }
+
+  private openWorkspace(): void {
+    const serial = ++this.openSerial;
+    this.workspaceOpening = true;
+    this.workspaceInitialized = false;
+    this.queuedRefresh = false;
+    this.workspace.open(this.model, this.row, this.list).catch(() => undefined).finally(() => {
+      if (serial !== this.openSerial) return;
+      this.workspaceOpening = false;
+      this.workspaceInitialized = true;
+      if (this.queuedRefresh && this.pageAvailable && this.visible) {
+        this.queuedRefresh = false;
+        this.workspace.refresh().catch(() => undefined);
+      }
+    });
+  }
+
+  private refreshWhenReady(retryOpening: boolean = false): void {
+    if (!this.pageAvailable || !this.visible) return;
+    if (this.workspaceOpening) {
+      // The initial open loads the workspace and detail target. A connection retry
+      // still needs a fresh read once that open has rebound its owner.
+      if (this.workspaceInitialized || retryOpening) this.queuedRefresh = true;
+      return;
+    }
+    if (this.workspaceInitialized) this.workspace.refresh().catch(() => undefined);
+  }
+
+  private syncRowBindings(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager,
+      this.row?.key() || 'list', this.list ? 'list' : 'detail']);
+    const sameOwnerScope = this.rowBindingOwner === this.model && this.rowBindingScope === scope;
+    const previous = sameOwnerScope ? this.sectionBindings : [];
+    const available = new Map<string, BoundTodoSection[]>();
+    previous.forEach((binding: BoundTodoSection) => {
+      const bindings = available.get(binding.identity) || [];
+      bindings.push(binding);
+      available.set(binding.identity, bindings);
+    });
+    const occurrences = new Map<string, number>(), next: BoundTodoSection[] = [];
+    this.workspace.sections().forEach((section: TodoWorkspaceSection) => {
+      const occurrence = occurrences.get(section.key) || 0;
+      occurrences.set(section.key, occurrence + 1);
+      const identity = JSON.stringify([section.key, occurrence]);
+      const matches = available.get(identity);
+      const existing = matches && matches.length ? matches.shift() : undefined;
+      let binding: BoundTodoSection;
+      if (existing) {
+        binding = existing;
+        binding.value = section;
+        binding.rows = reconcileBoundRows(binding.rows, section.rows, (group: TodoWorkspaceGroup) => group.key,
+          this.model, this.model, scope, scope);
+      } else {
+        this.sectionBindingSequence++;
+        binding = new BoundTodoSection(identity, 'todo-section-binding.' + String(this.sectionBindingSequence), section);
+        binding.rows = reconcileBoundRows([], section.rows, (group: TodoWorkspaceGroup) => group.key,
+          undefined, this.model, '', scope);
+      }
+      next.push(binding);
+    });
+    this.sectionBindings = next;
+    const current = this.workspace.selected;
+    this.lineageRowBindings = reconcileBoundRows(this.lineageRowBindings, current.id ? this.workspace.lineageResources(current) : [],
+      (resource: ResourceRow) => resource.key(), this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.relatedTodoBindings = reconcileBoundRows(this.relatedTodoBindings, current.id ? this.workspace.relatedTodos(current) : [],
+      (todo: TodoWorkspaceItem) => JSON.stringify([todo.manager, todo.id]),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.spaceBindings = reconcileBoundRows(this.spaceBindings, current.id ? current.spaces : [],
+      (space: TodoWorkspaceSpace) => JSON.stringify([space.machineId, space.space]),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.activeAgentBindings = reconcileBoundRows(this.activeAgentBindings, current.id ? current.activeAgents() : [],
+      (agent: TodoWorkspaceAgent) => JSON.stringify([agent.machineId, agent.sessionId]),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.previousAgentBindings = reconcileBoundRows(this.previousAgentBindings, current.id ? current.previousAgents() : [],
+      (agent: TodoWorkspaceAgent) => JSON.stringify([agent.machineId, agent.sessionId]),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.rowBindingOwner = this.model;
+    this.rowBindingScope = scope;
+  }
 
   private statusOptions(): SelectOption[] {
     const options: SelectOption[] = [{ value: tr('all') }];
@@ -151,14 +285,19 @@ export struct TodoWorkspacePage {
   }
 
   private confirmUnlinkAgent(todo: TodoWorkspaceItem, agent: TodoWorkspaceAgent): void {
-    const target = todo.id, machine = this.workspace.machineName(agent.machineId);
+    const target = todo.id, identity = JSON.stringify([agent.machineId, agent.sessionId]);
+    const currentAgent = todo.agents.find((item: TodoWorkspaceAgent) => JSON.stringify([item.machineId, item.sessionId]) === identity);
+    if (!currentAgent || !currentAgent.isActive()) return;
+    const machine = this.workspace.machineName(currentAgent.machineId);
     const generation = this.model.connectionGeneration(), scope = this.model.scope();
     this.getUIContext().showAlertDialog({ title: tr('todo_unlink_agent'),
-      message: todo.title + '\n' + (agent.title || tr('agent')) + ' · ' + machine,
+      message: todo.title + '\n' + (currentAgent.title || tr('agent')) + ' · ' + machine,
       primaryButton: { value: tr('cancel'), action: () => {} },
       secondaryButton: { value: tr('todo_unlink_agent'), action: () => {
-        if (this.targetCurrent(todo, generation, scope) && this.workspace.selected.id === target && agent.isActive())
-          this.workspace.unlinkAgent(todo, agent).catch(() => undefined);
+        const selected = this.workspace.selected;
+        const latest = selected.agents.find((item: TodoWorkspaceAgent) => JSON.stringify([item.machineId, item.sessionId]) === identity);
+        if (this.targetCurrent(todo, generation, scope) && selected.id === target && latest?.isActive())
+          this.workspace.unlinkAgent(selected, latest).catch(() => undefined);
       } } });
   }
 
@@ -176,13 +315,18 @@ export struct TodoWorkspacePage {
   }
 
   private confirmUnlinkSpace(todo: TodoWorkspaceItem, space: TodoWorkspaceSpace): void {
+    const identity = JSON.stringify([space.machineId, space.space]);
+    const currentSpace = todo.spaces.find((item: TodoWorkspaceSpace) => JSON.stringify([item.machineId, item.space]) === identity);
+    if (!currentSpace) return;
     const target = todo.id, generation = this.model.connectionGeneration(), scope = this.model.scope();
     this.getUIContext().showAlertDialog({ title: tr('todo_remove_project'), message: todo.title + '\n' +
-      space.space + ' · ' + this.workspace.machineName(space.machineId),
+      currentSpace.space + ' · ' + this.workspace.machineName(currentSpace.machineId),
       primaryButton: { value: tr('cancel'), action: () => {} },
       secondaryButton: { value: tr('todo_remove_project'), action: () => {
-        if (this.targetCurrent(todo, generation, scope) && this.workspace.selected.id === target)
-          this.workspace.unlinkSpace(todo, space).catch(() => undefined);
+        const selected = this.workspace.selected;
+        const latest = selected.spaces.find((item: TodoWorkspaceSpace) => JSON.stringify([item.machineId, item.space]) === identity);
+        if (this.targetCurrent(todo, generation, scope) && selected.id === target && latest)
+          this.workspace.unlinkSpace(selected, latest).catch(() => undefined);
       } } });
   }
 
@@ -192,15 +336,16 @@ export struct TodoWorkspacePage {
     }
   }
 
-  @Builder todoRow(group: TodoWorkspaceGroup) {
+  @Builder todoRow(binding: BoundRow<TodoWorkspaceGroup>) {
     ListItem() {
-      ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: group.lead.title, secondaryText: this.todoSubtitle(group) }) })
-    }.onClick(() => this.onOpenResource(this.workspace.todoResource(group.lead)))
-      .id('todo.' + group.lead.manager + '.' + group.lead.id)
+      ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.lead.title,
+        secondaryText: this.todoSubtitle(binding.value) }) })
+    }.onClick(() => this.onOpenResource(this.workspace.todoResource(binding.value.lead)))
+      .id('todo.' + binding.value.lead.manager + '.' + binding.value.lead.id)
   }
 
-  @Builder sectionHeader(section: TodoWorkspaceSection) {
-    Text(this.sectionTitle(section))
+  @Builder sectionHeader(binding: BoundTodoSection) {
+    Text(this.sectionTitle(binding.value))
       .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
       .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine })
   }
@@ -224,48 +369,50 @@ export struct TodoWorkspacePage {
         .fontColor($r('app.color.persona_danger')).padding(Tokens.inset).width('100%')
       List() {
         if (this.workspace.loading && !this.workspace.items.length) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
-        ForEach(this.workspace.sections(), (section: TodoWorkspaceSection) => {
+        ForEach(this.sectionBindings, (section: BoundTodoSection) => {
           ListItemGroup({ header: () => this.sectionHeader(section) }) {
-            ForEach(section.rows, (group: TodoWorkspaceGroup) => this.todoRow(group), (group: TodoWorkspaceGroup) => group.key)
-          }.id('todo.section.' + section.key)
-        }, (section: TodoWorkspaceSection) => section.key)
-        if (!this.workspace.sections().length && !this.workspace.loading) ListItem() {
+            ForEach(section.rows, (binding: BoundRow<TodoWorkspaceGroup>) => this.todoRow(binding),
+              (binding: BoundRow<TodoWorkspaceGroup>) => binding.key)
+          }.id(section.key)
+        }, (section: BoundTodoSection) => section.key)
+        if (!this.sectionBindings.length && !this.workspace.loading) ListItem() {
           Text(tr(this.workspace.search ? 'no_results' : 'empty')).fontSize(Tokens.meta).padding(Tokens.page).width('100%')
         }
       }.width('100%').layoutWeight(1).padding({ bottom: Tokens.listTail })
     }.width('100%').height('100%')
   }
 
-  @Builder agentRow(agent: TodoWorkspaceAgent) {
-    if (agent.isActive()) {
-      ListItem() { this.agentContent(agent) }.onClick(() => this.onOpen(this.workspace.agentSession(agent)))
-        .bindContextMenu((): void => this.agentMenu(this.workspace.selected, agent), ResponseType.LongPress)
-        .id('todo.agent.' + agent.machineId + '.' + agent.sessionId)
+  @Builder agentRow(binding: BoundRow<TodoWorkspaceAgent>) {
+    if (binding.value.isActive()) {
+      ListItem() { this.agentContent(binding) }.onClick(() => this.onOpen(this.workspace.agentSession(binding.value)))
+        .bindContextMenu(this.agentMenu(binding), ResponseType.LongPress)
+        .id('todo.agent.' + binding.value.machineId + '.' + binding.value.sessionId)
     } else {
-      ListItem() { this.agentContent(agent) }.onClick(() => this.onOpen(this.workspace.agentSession(agent)))
-        .id('todo.agent.' + agent.machineId + '.' + agent.sessionId)
+      ListItem() { this.agentContent(binding) }.onClick(() => this.onOpen(this.workspace.agentSession(binding.value)))
+        .id('todo.agent.' + binding.value.machineId + '.' + binding.value.sessionId)
     }
   }
 
-  @Builder agentContent(agent: TodoWorkspaceAgent) {
-    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: agent.title || tr('agent'),
-      secondaryText: this.workspace.machineName(agent.machineId) + ' · ' + tr('todo_state_' + this.workspace.agentState(agent)) }) })
+  @Builder agentContent(binding: BoundRow<TodoWorkspaceAgent>) {
+    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || tr('agent'),
+      secondaryText: this.workspace.machineName(binding.value.machineId) + ' · ' +
+        tr('todo_state_' + this.workspace.agentState(binding.value)) }) })
   }
 
-  @Builder agentMenu(todo: TodoWorkspaceItem, agent: TodoWorkspaceAgent) {
-    Menu() { MenuItem({ content: tr('todo_unlink_agent') }).onClick(() => this.confirmUnlinkAgent(todo, agent)) }
+  @Builder agentMenu(binding: BoundRow<TodoWorkspaceAgent>) {
+    Menu() { MenuItem({ content: tr('todo_unlink_agent') }).onClick(() => this.confirmUnlinkAgent(this.workspace.selected, binding.value)) }
   }
 
-  @Builder spaceRow(space: TodoWorkspaceSpace) {
+  @Builder spaceRow(binding: BoundRow<TodoWorkspaceSpace>) {
     ListItem() {
-      ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: space.space,
-        secondaryText: this.workspace.machineName(space.machineId) }) })
-    }.bindContextMenu((): void => this.spaceMenu(this.workspace.selected, space), ResponseType.LongPress)
-      .id('todo.space.' + space.machineId + '.' + space.space)
+      ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.space,
+        secondaryText: this.workspace.machineName(binding.value.machineId) }) })
+    }.bindContextMenu(this.spaceMenu(binding), ResponseType.LongPress)
+      .id('todo.space.' + binding.value.machineId + '.' + binding.value.space)
   }
 
-  @Builder spaceMenu(todo: TodoWorkspaceItem, space: TodoWorkspaceSpace) {
-    Menu() { MenuItem({ content: tr('todo_remove_project') }).onClick(() => this.confirmUnlinkSpace(todo, space)) }
+  @Builder spaceMenu(binding: BoundRow<TodoWorkspaceSpace>) {
+    Menu() { MenuItem({ content: tr('todo_remove_project') }).onClick(() => this.confirmUnlinkSpace(this.workspace.selected, binding.value)) }
   }
 
   @Builder detailContent() {
@@ -273,7 +420,7 @@ export struct TodoWorkspacePage {
       Scroll() {
         if (this.workspace.selected.id) Column({ space: Tokens.page }) {
           Text(tr(this.workspace.stateLabelKey(this.workspace.selected))).fontSize(Tokens.meta).width('100%')
-            .bindContextMenu((): void => this.todoMenu(this.workspace.selected), ResponseType.LongPress)
+            .bindContextMenu(this.todoMenu(this.workspace.selected), ResponseType.LongPress)
           if (this.workspace.selected.startError) Text(this.workspace.selected.startError).fontColor($r('app.color.persona_danger')).width('100%')
           if (this.workspace.selected.doneReason) Text(this.workspace.selected.doneReason).fontSize(Tokens.meta).width('100%')
           if (this.workspace.selected.notes) MarkdownText({ text: this.workspace.selected.notes, onLink: (address: string) => this.onLink(address) })
@@ -290,30 +437,30 @@ export struct TodoWorkspacePage {
             Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('todo_source_conversation') }) }) }
               .onClick(() => this.openSource())
           }
-          ForEach(this.workspace.lineageResources(this.workspace.selected), (resource: ResourceRow) => {
-            Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: resource.title || tr('todo_related') }) }) }
-              .onClick(() => this.onOpenResource(resource))
-          }, (resource: ResourceRow) => resource.id)
-          ForEach(this.workspace.relatedTodos(this.workspace.selected), (todo: TodoWorkspaceItem) => {
-            Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: todo.title }) }) }
-              .onClick(() => this.onOpenResource(this.workspace.todoResource(todo)))
-          }, (todo: TodoWorkspaceItem) => todo.id)
+          ForEach(this.lineageRowBindings, (binding: BoundRow<ResourceRow>) => {
+            Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || tr('todo_related') }) }) }
+              .onClick(() => this.onOpenResource(binding.value))
+          }, (binding: BoundRow<ResourceRow>) => binding.key)
+          ForEach(this.relatedTodoBindings, (binding: BoundRow<TodoWorkspaceItem>) => {
+            Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title }) }) }
+              .onClick(() => this.onOpenResource(this.workspace.todoResource(binding.value)))
+          }, (binding: BoundRow<TodoWorkspaceItem>) => binding.key)
 
-          if (this.workspace.selected.spaces.length) {
+          if (this.spaceBindings.length) {
             Text(tr('todo_projects')).fontSize(Tokens.meta).width('100%')
-            List() { ForEach(this.workspace.selected.spaces, (space: TodoWorkspaceSpace) => this.spaceRow(space),
-              (space: TodoWorkspaceSpace) => space.machineId + '/' + space.space) }.height(Math.min(300, Tokens.touch * this.workspace.selected.spaces.length))
+            List() { ForEach(this.spaceBindings, (binding: BoundRow<TodoWorkspaceSpace>) => this.spaceRow(binding),
+              (binding: BoundRow<TodoWorkspaceSpace>) => binding.key) }.height(Math.min(300, Tokens.touch * this.spaceBindings.length))
           }
 
           Text(tr('todo_agents')).fontSize(Tokens.meta).width('100%')
-          ForEach(this.workspace.selected.activeAgents(), (agent: TodoWorkspaceAgent) => this.agentRow(agent),
-            (agent: TodoWorkspaceAgent) => 'active:' + agent.machineId + '/' + agent.sessionId)
-          if (this.workspace.selected.previousAgents().length) {
+          ForEach(this.activeAgentBindings, (binding: BoundRow<TodoWorkspaceAgent>) => this.agentRow(binding),
+            (binding: BoundRow<TodoWorkspaceAgent>) => binding.key)
+          if (this.previousAgentBindings.length) {
             Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('todo_previously_involved') }) }) }
               .onClick(() => { this.previousAgentsOpen = !this.previousAgentsOpen; })
             if (this.previousAgentsOpen) {
-              ForEach(this.workspace.selected.previousAgents(), (agent: TodoWorkspaceAgent) => this.agentRow(agent),
-                (agent: TodoWorkspaceAgent) => 'past:' + agent.machineId + '/' + agent.sessionId)
+              ForEach(this.previousAgentBindings, (binding: BoundRow<TodoWorkspaceAgent>) => this.agentRow(binding),
+                (binding: BoundRow<TodoWorkspaceAgent>) => binding.key)
             }
           }
 

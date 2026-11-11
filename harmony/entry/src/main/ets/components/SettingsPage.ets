@@ -2,6 +2,7 @@ import { ComposeListItemV2, ContentItemV2 } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { ManagementModel, ManagementRow, ManagementInput } from '../models/ManagementModel';
 import { ResourceRow, Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { nativeNotifications, NativeNotifications } from '../platform/NativeNotifications';
@@ -29,6 +30,22 @@ export struct SettingsPage {
   @Event onComputer: (row: ResourceRow) => void = () => {};
   @Event onChat: (row: ResourceRow) => void = () => {};
   @Local management: ManagementModel = new ManagementModel();
+  @Local extensionConfigFieldsBindings: BoundRow<ManagementInput>[] = [];
+  @Local extensionSecretFieldsBindings: BoundRow<ManagementInput>[] = [];
+  @Local authFieldsBindings: BoundRow<ManagementInput>[] = [];
+  @Local connectorFieldsBindings: BoundRow<ManagementInput>[] = [];
+  @Local channelFieldsBindings: BoundRow<ManagementInput>[] = [];
+  private inputBindingScope: string = '';
+  private inputBindingOwner: Object | undefined;
+  @Local channelFeatureBindings: BoundRow<Record<string, Object>>[] = [];
+  private channelFeatureScope: string = '';
+  @Local managementRowBindings: BoundRow<ManagementRow>[] = [];
+  @Local scheduleRunBindings: BoundRow<ManagementRow>[] = [];
+  private managementBindingOwner: Object | undefined;
+  private managementBindingScope: string = '';
+  @Local catalogRowBindings: BoundRow<ManagementRow>[] = [];
+  private catalogBindingOwner: Object | undefined;
+  private catalogBindingScope: string = '';
   @Local notifications: NativeNotifications = nativeNotifications;
   @Local addComputerOpen: boolean = false;
   @Local computerName: string = '';
@@ -42,7 +59,7 @@ export struct SettingsPage {
   @Local channelTargetDraft: string = '';
   @Local look: DeviceLook = deviceLook;
 
-  aboutToAppear(): void { this.mounted = true; this.loadSettingsPage(); this.loadLook(); }
+  aboutToAppear(): void { this.mounted = true; this.syncCatalogRows(); this.syncManagementRows(); this.syncInputRows(); this.loadSettingsPage(); this.loadLook(); }
   private async loadLook(): Promise<void> {
     if (!this.mounted || !this.active || this.page !== 'appearance') return;
     const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration(), pairing = owner.pairingRevision();
@@ -80,7 +97,52 @@ export struct SettingsPage {
   @Monitor('management.extensionDetailMissing') extensionRemoved(): void { if (this.mounted && this.active && this.page === 'extension_detail' && this.management.extensionDetailMissing) this.onBack(); }
   @Monitor('active') machineVisibilityChanged(): void { if (!this.active) { this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); } else if (this.mounted) { this.loadSettingsPage(); this.loadLook(); } }
   @Monitor('model.connected') settingsConnectionChanged(): void { if (this.mounted && this.active) { if (this.model.connected) this.loadSettingsPage(); this.loadLook(); } }
-  @Monitor('model.profile', 'model.forgottenEpoch') scheduleOwnerChanged(): void { this.management.scheduleReceiptChat(this.model); this.loadLook(); }
+  @Monitor('model.profile', 'model.forgottenEpoch') scheduleOwnerChanged(): void { this.syncCatalogRows(); this.syncManagementRows(); this.management.scheduleReceiptChat(this.model); this.loadLook(); }
+  @Monitor('management.catalogRows') catalogRowsChanged(): void { this.syncCatalogRows(); }
+
+  @Monitor('management.rows', 'management.scheduleRuns', 'management.channelDetail', 'management.selectedId', 'page', 'model.profile', 'machineOwner')
+  managementRowsChanged(): void { this.syncManagementRows(); }
+
+  @Monitor('management.extensionConfigFields', 'management.extensionSecretFields', 'management.authFields', 'management.connectorFields', 'management.channelFields', 'management.selectedId', 'page', 'model.profile')
+  inputRowsChanged(): void { this.syncInputRows(); }
+
+  private syncInputRows(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager, this.page, this.management.selectedId]);
+    this.extensionConfigFieldsBindings = reconcileBoundRows(this.extensionConfigFieldsBindings, this.management.extensionConfigFields,
+      (field: ManagementInput) => field.key, this.inputBindingOwner, this.model, this.inputBindingScope, scope);
+    this.extensionSecretFieldsBindings = reconcileBoundRows(this.extensionSecretFieldsBindings, this.management.extensionSecretFields,
+      (field: ManagementInput) => field.key, this.inputBindingOwner, this.model, this.inputBindingScope, scope);
+    this.authFieldsBindings = reconcileBoundRows(this.authFieldsBindings, this.management.authFields,
+      (field: ManagementInput) => field.key, this.inputBindingOwner, this.model, this.inputBindingScope, scope);
+    this.connectorFieldsBindings = reconcileBoundRows(this.connectorFieldsBindings, this.management.connectorFields,
+      (field: ManagementInput) => field.key, this.inputBindingOwner, this.model, this.inputBindingScope, scope);
+    this.channelFieldsBindings = reconcileBoundRows(this.channelFieldsBindings, this.management.channelFields,
+      (field: ManagementInput) => field.key, this.inputBindingOwner, this.model, this.inputBindingScope, scope);
+    this.inputBindingOwner = this.model; this.inputBindingScope = scope;
+  }
+
+  private syncManagementRows(): void {
+    const owner = this.page === 'machines' ? this.machineOwner || this.model : this.model;
+    const scope = JSON.stringify([owner.scope(), owner.profile.id, owner.profile.manager, this.page]);
+    this.managementRowBindings = reconcileBoundRows(this.managementRowBindings, this.management.rows,
+      (row: ManagementRow) => row.id, this.managementBindingOwner, owner, this.managementBindingScope, scope);
+    this.scheduleRunBindings = reconcileBoundRows(this.scheduleRunBindings, this.management.scheduleRuns,
+      (row: ManagementRow) => row.id, this.managementBindingOwner, owner, this.managementBindingScope, scope);
+    const featureScope = JSON.stringify([scope, this.management.selectedId]);
+    this.channelFeatureBindings = reconcileBoundRows(this.channelFeatureBindings, Wire.rows(this.management.channelData(), 'features'),
+      (feature: Record<string, Object>) => Wire.text(feature, 'id'), this.managementBindingOwner, owner,
+      this.channelFeatureScope, featureScope);
+    this.channelFeatureScope = featureScope;
+    this.managementBindingOwner = owner; this.managementBindingScope = scope;
+  }
+
+  private syncCatalogRows(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager, 'extension_catalog']);
+    this.catalogRowBindings = reconcileBoundRows(this.catalogRowBindings, this.management.catalogRows,
+      (row: ManagementRow) => Wire.text(row.raw, 'market') + '.' + row.id, this.catalogBindingOwner, this.model,
+      this.catalogBindingScope, scope);
+    this.catalogBindingOwner = this.model; this.catalogBindingScope = scope;
+  }
   private machineOptions(): ResourceRow[] { return this.model.directoryReady ? this.model.directoryMachines : this.model.machines; }
   private machineLabel(row: ResourceRow): string { return [this.model.groupName(row), row.manager, row.title || row.id].filter((value: string) => !!value).join(' · '); }
   private async loadMachineDirectory(): Promise<void> {
@@ -547,34 +609,34 @@ export struct SettingsPage {
   @Builder schedulesPage() {
     List() {
       ListItem() { Button(tr('add')).bindMenu(this.scheduleCreateMenu) }
-      ForEach(this.management.rows, (row: ManagementRow) => {
+      ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
           Column() {
             Row() {
-              ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title,
-                secondaryText: Wire.text(row.raw, 'next_run', Wire.text(row.raw, 'last_status')) }) }).layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: Wire.bool(row.raw, 'enabled') })
-                .onChange((enabled: boolean) => this.management.setScheduleEnabled(this.model, row, enabled))
-                .accessibilityText(row.title)
+              ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
+                secondaryText: Wire.text(binding.value.raw, 'next_run', Wire.text(binding.value.raw, 'last_status')) }) }).layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: Wire.bool(binding.value.raw, 'enabled') })
+                .onChange((enabled: boolean) => this.management.setScheduleEnabled(this.model, binding.value, enabled))
+                .accessibilityText(binding.value.title)
             }
             Row() {
-              Button(tr('edit')).onClick(() => { this.management.beginSchedule(row); this.scheduleEditOpen = true; })
-              Button(tr('run_now')).onClick(() => this.confirmScheduleRun(row))
-              Button(tr('delete')).onClick(() => this.confirmScheduleDelete(row))
+              Button(tr('edit')).onClick(() => { this.management.beginSchedule(binding.value); this.scheduleEditOpen = true; })
+              Button(tr('run_now')).onClick(() => this.confirmScheduleRun(binding.value))
+              Button(tr('delete')).onClick(() => this.confirmScheduleDelete(binding.value))
             }
           }
-        }.id('schedule.' + row.id)
-      }, (row: ManagementRow) => row.id)
+        }.id('schedule.' + binding.value.id)
+      }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (this.management.lastRunReceipt['session_id']) ListItem() {
         ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('run_started') }) })
       }.onClick(() => { const target = this.management.scheduleReceiptChat(this.model); if (target) this.onChat(target); }).id('schedule.receipt')
       ListItem() { Button(tr('refresh')).onClick(() => this.management.load('schedules', this.model)) }
-      ForEach(this.management.scheduleRuns, (row: ManagementRow) => {
-        ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title,
-          secondaryText: Wire.text(row.raw, 'status') + ' · ' + Wire.text(row.raw, 'at', Wire.text(row.raw, 'due')) }) }) }
-          .id('schedule.run.' + row.id)
-          .onClick(() => { const target = this.management.scheduleRunChat(this.model, row); if (target) this.onChat(target); })
-      }, (row: ManagementRow) => row.id)
+      ForEach(this.scheduleRunBindings, (binding: BoundRow<ManagementRow>) => {
+        ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
+          secondaryText: Wire.text(binding.value.raw, 'status') + ' · ' + Wire.text(binding.value.raw, 'at', Wire.text(binding.value.raw, 'due')) }) }) }
+          .id('schedule.run.' + binding.value.id)
+          .onClick(() => { const target = this.management.scheduleRunChat(this.model, binding.value); if (target) this.onChat(target); })
+      }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
       if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
@@ -616,7 +678,7 @@ export struct SettingsPage {
         ForEach(Wire.rows(this.management.operation, 'steps'), (step: Record<string, Object>) => {
           Text(Wire.text(step, 'id') + ' · ' + Wire.text(step, 'state') + (Wire.bool(step, 'cached') ? ' · ' + tr('cached') : ''))
             .fontSize(Tokens.meta).padding(Tokens.inset)
-        }, (step: Record<string, Object>) => Wire.text(step, 'id'))
+        }, (step: Record<string, Object>, index: number) => JSON.stringify([index, step]))
         Row() {
           if (['running', 'needs_consent'].includes(Wire.text(this.management.operation, 'state')))
             Button(tr('refresh')).onClick(() => this.refreshOperation())
@@ -696,17 +758,17 @@ export struct SettingsPage {
             index === 0 ? '' : Wire.text(this.management.catalogMarkets[index - 1], 'id')))
       }
       this.extensionOperationPanel()
-      ForEach(this.management.catalogRows, (row: ManagementRow) => {
+      ForEach(this.catalogRowBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
           Column() {
-            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title,
-              secondaryText: Wire.text(row.raw, 'problem', Wire.text(row.raw, 'description', Wire.text(row.raw, 'version'))) }) })
-            Button(tr(Wire.bool(row.raw, 'upgradable') ? 'upgrade' : 'preview'))
-              .enabled(Wire.bool(this.management.data, 'can_install') && !Wire.text(row.raw, 'problem') && !this.management.saving)
-              .onClick(() => this.previewCatalogRow(row))
+            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
+              secondaryText: Wire.text(binding.value.raw, 'problem', Wire.text(binding.value.raw, 'description', Wire.text(binding.value.raw, 'version'))) }) })
+            Button(tr(Wire.bool(binding.value.raw, 'upgradable') ? 'upgrade' : 'preview'))
+              .enabled(Wire.bool(this.management.data, 'can_install') && !Wire.text(binding.value.raw, 'problem') && !this.management.saving)
+              .onClick(() => this.previewCatalogRow(binding.value))
           }.padding(Tokens.inset).width('100%').alignItems(HorizontalAlign.Start)
-        }.id('catalog.' + Wire.text(row.raw, 'market') + '.' + row.id)
-      }, (row: ManagementRow) => Wire.text(row.raw, 'market') + '.' + row.id)
+        }.id('catalog.' + Wire.text(binding.value.raw, 'market') + '.' + binding.value.id)
+      }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.catalogRows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
       if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
@@ -718,37 +780,37 @@ export struct SettingsPage {
       if (Wire.bool(this.management.extensionDetail, 'read_only')) ListItem() { Text(tr('read_only')).padding(Tokens.inset) }
       this.extensionOperationPanel()
       if (this.management.extensionConfigFields.length > 0 && this.management.extensionSchemaSupported) {
-        ForEach(this.management.extensionConfigFields, (field: ManagementInput) => {
+        ForEach(this.extensionConfigFieldsBindings, (binding: BoundRow<ManagementInput>) => {
           ListItem() {
             Column() {
-              Text(field.label).fontSize(Tokens.body)
-              if (field.kind === 'boolean') Toggle({ type: ToggleType.Switch, isOn: field.value === 'true' })
-                .onChange((value: boolean) => this.management.changeInput(this.management.extensionConfigFields, field.key, String(value)))
-              else if (field.kind === 'enum') Select(this.selectOptions(field.options))
-                .selected(Math.max(0, field.options.indexOf(field.value))).value(field.value)
-                .onSelect((index: number) => this.management.changeInput(this.management.extensionConfigFields, field.key, field.options[index]))
-              else TextInput({ text: field.value, placeholder: field.label })
-                .type(field.kind === 'integer' || field.kind === 'number' ? InputType.Number : InputType.Normal)
-                .onChange((value: string) => this.management.changeInput(this.management.extensionConfigFields, field.key, value))
+              Text(binding.value.label).fontSize(Tokens.body)
+              if (binding.value.kind === 'boolean') Toggle({ type: ToggleType.Switch, isOn: binding.value.value === 'true' })
+                .onChange((value: boolean) => this.management.changeInput(this.management.extensionConfigFields, binding.value.key, String(value)))
+              else if (binding.value.kind === 'enum') Select(this.selectOptions(binding.value.options))
+                .selected(Math.max(0, binding.value.options.indexOf(binding.value.value))).value(binding.value.value)
+                .onSelect((index: number) => this.management.changeInput(this.management.extensionConfigFields, binding.value.key, binding.value.options[index]))
+              else TextInput({ text: binding.value.value, placeholder: binding.value.label })
+                .type(binding.value.kind === 'integer' || binding.value.kind === 'number' ? InputType.Number : InputType.Normal)
+                .onChange((value: string) => this.management.changeInput(this.management.extensionConfigFields, binding.value.key, value))
             }.padding(Tokens.inset).width('100%').alignItems(HorizontalAlign.Start)
-          }.id('extension.config.' + field.key)
-        }, (field: ManagementInput) => field.key)
+          }.id('extension.config.' + binding.value.key)
+        }, (binding: BoundRow<ManagementInput>) => binding.key)
         ListItem() { Button(tr('save')).enabled(this.management.extensionConfigChanged() && !this.management.saving && !Wire.bool(this.management.extensionDetail, 'read_only'))
           .onClick(() => this.confirmExtensionSave()) }
       } else if (!this.management.extensionSchemaSupported) ListItem() { Text(tr('unknown_field')).padding(Tokens.inset) }
-      ForEach(this.management.extensionSecretFields, (field: ManagementInput) => {
+      ForEach(this.extensionSecretFieldsBindings, (binding: BoundRow<ManagementInput>) => {
         ListItem() {
           Column() {
-            TextInput({ text: field.value, placeholder: field.label }).type(InputType.Password).showPasswordIcon(false)
-              .onChange((value: string) => this.management.changeInput(this.management.extensionSecretFields, field.key, value))
+            TextInput({ text: binding.value.value, placeholder: binding.value.label }).type(InputType.Password).showPasswordIcon(false)
+              .onChange((value: string) => this.management.changeInput(this.management.extensionSecretFields, binding.value.key, value))
             Row() {
-              Button(tr('save')).enabled(!!field.value && !this.management.saving).onClick(() => this.management.saveExtensionSecret(this.model, field))
-              if (this.secretSet(field.key)) Button(tr('clear')).onClick(() => this.management.clearExtensionSecret(this.model, field))
+              Button(tr('save')).enabled(!!binding.value.value && !this.management.saving).onClick(() => this.management.saveExtensionSecret(this.model, binding.value))
+              if (this.secretSet(binding.value.key)) Button(tr('clear')).onClick(() => this.management.clearExtensionSecret(this.model, binding.value))
             }
           }.padding(Tokens.inset).width('100%').alignItems(HorizontalAlign.Start)
-        }.id('extension.secret.' + field.key)
-      }, (field: ManagementInput) => field.key)
-      if (this.model.features.includes('extension_auth')) {
+        }.id('extension.secret.' + binding.value.key)
+      }, (binding: BoundRow<ManagementInput>) => binding.key)
+      if (this.model.features.includes('extension_auth') && Object.keys(this.management.auth).length > 0) {
         ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('sign_in'),
           secondaryText: Wire.text(this.management.auth, 'account', Wire.text(this.management.auth, 'state')) }) }) }
         if (['signed_out', 'expired'].includes(Wire.text(this.management.auth, 'state')))
@@ -760,10 +822,10 @@ export struct SettingsPage {
           if (Wire.text(this.management.authPrompt, 'user_code')) ListItem() { Text(Wire.text(this.management.authPrompt, 'user_code')).copyOption(CopyOptions.LocalDevice).padding(Tokens.inset) }
           if (Wire.text(this.management.authPrompt, 'hint')) ListItem() { Text(Wire.text(this.management.authPrompt, 'hint')).padding(Tokens.inset) }
           if (this.qrPayload(this.management.authPrompt)) ListItem() { QRCode(this.qrPayload(this.management.authPrompt)).width(Tokens.qr).height(Tokens.qr).margin(Tokens.page) }
-          ForEach(this.management.authFields, (field: ManagementInput) => ListItem() {
-            TextInput({ text: field.value, placeholder: field.label }).type(field.secret ? InputType.Password : InputType.Normal)
-              .onChange((value: string) => this.management.changeInput(this.management.authFields, field.key, value))
-          }.id('extension.auth.' + field.key), (field: ManagementInput) => field.key)
+          ForEach(this.authFieldsBindings, (binding: BoundRow<ManagementInput>) => ListItem() {
+            TextInput({ text: binding.value.value, placeholder: binding.value.label }).type(binding.value.secret ? InputType.Password : InputType.Normal)
+              .onChange((value: string) => this.management.changeInput(this.management.authFields, binding.value.key, value))
+          }.id('extension.auth.' + binding.value.key), (binding: BoundRow<ManagementInput>) => binding.key)
           if (Wire.text(this.management.authPrompt, 'error')) ListItem() { Text(Wire.text(this.management.authPrompt, 'error')).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
           ListItem() { Button(tr(Wire.text(this.management.authPrompt, 'kind') ? 'check_status' : 'continue'))
             .onClick(() => this.management.extensionAuthStep(this.model, this.management.selectedId, false)) }
@@ -818,11 +880,11 @@ export struct SettingsPage {
         if (Wire.text(this.management.connectorPrompt, 'user_code')) ListItem() { Text(Wire.text(this.management.connectorPrompt, 'user_code')).copyOption(CopyOptions.LocalDevice).padding(Tokens.inset) }
         if (Wire.text(this.management.connectorPrompt, 'hint')) ListItem() { Text(Wire.text(this.management.connectorPrompt, 'hint')).padding(Tokens.inset) }
         if (this.qrPayload(this.management.connectorPrompt)) ListItem() { QRCode(this.qrPayload(this.management.connectorPrompt)).width(Tokens.qr).height(Tokens.qr).margin(Tokens.page) }
-        ForEach(this.management.connectorFields, (field: ManagementInput) => {
-          ListItem() { TextInput({ text: field.value, placeholder: field.label }).type(field.secret ? InputType.Password : InputType.Normal)
-            .onChange((value: string) => this.management.changeInput(this.management.connectorFields, field.key, value)) }
-            .id('connector.login.' + field.key)
-        }, (field: ManagementInput) => field.key)
+        ForEach(this.connectorFieldsBindings, (binding: BoundRow<ManagementInput>) => {
+          ListItem() { TextInput({ text: binding.value.value, placeholder: binding.value.label }).type(binding.value.secret ? InputType.Password : InputType.Normal)
+            .onChange((value: string) => this.management.changeInput(this.management.connectorFields, binding.value.key, value)) }
+            .id('connector.login.' + binding.value.key)
+        }, (binding: BoundRow<ManagementInput>) => binding.key)
         if (Wire.text(this.management.connectorPrompt, 'error')) ListItem() { Text(Wire.text(this.management.connectorPrompt, 'error')).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
         if (!Wire.text(this.selectedConnector()?.raw || {}, 'account')) ListItem() {
           Button(tr(Object.keys(this.management.connectorPrompt).length === 0 ? 'sign_in' : Wire.text(this.management.connectorPrompt, 'kind') ? 'check_status' : 'continue'))
@@ -842,22 +904,22 @@ export struct SettingsPage {
         Button(tr('extension_market')).onClick(() => this.openCatalog())
       }
       this.extensionOperationPanel()
-      ForEach(this.management.rows, (row: ManagementRow) => {
+      ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
           Column() {
             Row() {
-              ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title,
-                secondaryText: Wire.text(row.raw, 'error', row.detail || Wire.text(row.raw, 'via', Wire.text(row.raw, 'status'))) }) }).layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.rowEnabled(row) })
-                .onChange((value: boolean) => page === 'extensions' ? this.management.setExtensionEnabled(this.model, row, value) : this.management.setConnectorSetting(this.model, row, 'enabled', value))
-                .accessibilityText(row.title)
+              ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
+                secondaryText: Wire.text(binding.value.raw, 'error', binding.value.detail || Wire.text(binding.value.raw, 'via', Wire.text(binding.value.raw, 'status'))) }) }).layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.rowEnabled(binding.value) })
+                .onChange((value: boolean) => page === 'extensions' ? this.management.setExtensionEnabled(this.model, binding.value, value) : this.management.setConnectorSetting(this.model, binding.value, 'enabled', value))
+                .accessibilityText(binding.value.title)
             }
             Button(tr('details')).onClick(() => {
-              this.openDetail(page === 'extensions' ? 'extension_detail' : 'connector_detail', row);
+              this.openDetail(page === 'extensions' ? 'extension_detail' : 'connector_detail', binding.value);
             })
           }
-        }.id(page + '.' + row.id)
-      }, (row: ManagementRow) => row.id)
+        }.id(page + '.' + binding.value.id)
+      }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
       if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
@@ -889,16 +951,16 @@ export struct SettingsPage {
               .enabled(!this.management.saving)
               .onSelect((index: number) => this.selectChannelConversation(index))
           }
-          ForEach(Wire.rows(this.management.channelData(), 'features'), (feature: Record<string, Object>) => {
+          ForEach(this.channelFeatureBindings, (binding: BoundRow<Record<string, Object>>) => {
             ListItem() {
               Row() {
-                ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: Wire.text(feature, 'title', Wire.text(feature, 'id')) }) }).layoutWeight(1)
-                Toggle({ type: ToggleType.Switch, isOn: Wire.bool(feature, 'on') })
-                  .onChange((value: boolean) => this.management.setChannelFeature(this.model, this.management.selectedId, Wire.text(feature, 'id'), value))
-                  .accessibilityText(Wire.text(feature, 'title', Wire.text(feature, 'id')))
+                ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: Wire.text(binding.value, 'title', Wire.text(binding.value, 'id')) }) }).layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: Wire.bool(binding.value, 'on') })
+                  .onChange((value: boolean) => this.management.setChannelFeature(this.model, this.management.selectedId, Wire.text(binding.value, 'id'), value))
+                  .accessibilityText(Wire.text(binding.value, 'title', Wire.text(binding.value, 'id')))
               }
-            }.id('channel.feature.' + Wire.text(feature, 'id'))
-          }, (feature: Record<string, Object>) => Wire.text(feature, 'id'))
+            }.id('channel.feature.' + Wire.text(binding.value, 'id'))
+          }, (binding: BoundRow<Record<string, Object>>) => binding.key)
         }
         if (Wire.text(this.management.channelData(), 'bind', 'none') !== 'none' && !Wire.bool(this.management.channelData(), 'read_only')) {
           if (this.channelBound())
@@ -909,11 +971,11 @@ export struct SettingsPage {
           if (Wire.text(this.management.channelPrompt, 'user_code')) ListItem() { Text(Wire.text(this.management.channelPrompt, 'user_code')).copyOption(CopyOptions.LocalDevice).padding(Tokens.inset) }
           if (Wire.text(this.management.channelPrompt, 'hint')) ListItem() { Text(Wire.text(this.management.channelPrompt, 'hint')).padding(Tokens.inset) }
           if (this.qrPayload(this.management.channelPrompt)) ListItem() { QRCode(this.qrPayload(this.management.channelPrompt)).width(Tokens.qr).height(Tokens.qr).margin(Tokens.page) }
-          ForEach(this.management.channelFields, (field: ManagementInput) => {
-            ListItem() { TextInput({ text: field.value, placeholder: field.label }).type(field.secret ? InputType.Password : InputType.Normal)
-              .onChange((value: string) => this.management.changeInput(this.management.channelFields, field.key, value)) }
-              .id('channel.bind.' + field.key)
-          }, (field: ManagementInput) => field.key)
+          ForEach(this.channelFieldsBindings, (binding: BoundRow<ManagementInput>) => {
+            ListItem() { TextInput({ text: binding.value.value, placeholder: binding.value.label }).type(binding.value.secret ? InputType.Password : InputType.Normal)
+              .onChange((value: string) => this.management.changeInput(this.management.channelFields, binding.value.key, value)) }
+              .id('channel.bind.' + binding.value.key)
+          }, (binding: BoundRow<ManagementInput>) => binding.key)
           if (Wire.text(this.management.channelPrompt, 'error')) ListItem() { Text(Wire.text(this.management.channelPrompt, 'error')).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
           if (Object.keys(this.management.channelPrompt).length > 0) ListItem() {
             Button(tr(Wire.text(this.management.channelPrompt, 'kind') ? 'check_status' : 'continue'))
@@ -931,22 +993,22 @@ export struct SettingsPage {
 
   @Builder channelsPage() {
     List() {
-      ForEach(this.management.rows, (row: ManagementRow) => {
+      ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
           Column() {
             Row() {
-              ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title,
-                secondaryText: Wire.text(row.raw, 'status', row.detail) }) }).layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.rowEnabled(row) })
-                .enabled(Wire.bool(row.raw, 'installed', true) && !Wire.bool(row.raw, 'read_only'))
-                .onChange((value: boolean) => this.management.setChannelEnabled(this.model, row, value)).accessibilityText(row.title)
+              ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
+                secondaryText: Wire.text(binding.value.raw, 'status', binding.value.detail) }) }).layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.rowEnabled(binding.value) })
+                .enabled(Wire.bool(binding.value.raw, 'installed', true) && !Wire.bool(binding.value.raw, 'read_only'))
+                .onChange((value: boolean) => this.management.setChannelEnabled(this.model, binding.value, value)).accessibilityText(binding.value.title)
             }
-            Button(tr('details')).enabled(Wire.bool(row.raw, 'installed', true)).onClick(() => {
-              this.openDetail('channel_detail', row);
+            Button(tr('details')).enabled(Wire.bool(binding.value.raw, 'installed', true)).onClick(() => {
+              this.openDetail('channel_detail', binding.value);
             })
           }
-        }.id('channel.' + row.id)
-      }, (row: ManagementRow) => row.id)
+        }.id('channel.' + binding.value.id)
+      }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
       if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
     }.width('100%').height('100%')
@@ -954,17 +1016,17 @@ export struct SettingsPage {
 
   @Builder ledgerPage() {
     List() {
-      ForEach(this.management.rows, (row: ManagementRow) => {
+      ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
           Column() {
-            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title,
-              secondaryText: row.detail || Wire.text(row.raw, 'action') }) })
-            Text(Wire.text(row.raw, 'text')).fontSize(Tokens.body).copyOption(CopyOptions.LocalDevice).width('100%')
-            Text(Wire.text(row.raw, 'at')).fontSize(Tokens.meta).width('100%')
-            Text(Wire.text(Wire.object(row.raw, 'origin'), 'session_id')).fontSize(Tokens.meta).width('100%')
+            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title,
+              secondaryText: binding.value.detail || Wire.text(binding.value.raw, 'action') }) })
+            Text(Wire.text(binding.value.raw, 'text')).fontSize(Tokens.body).copyOption(CopyOptions.LocalDevice).width('100%')
+            Text(Wire.text(binding.value.raw, 'at')).fontSize(Tokens.meta).width('100%')
+            Text(Wire.text(Wire.object(binding.value.raw, 'origin'), 'session_id')).fontSize(Tokens.meta).width('100%')
           }.padding(Tokens.inset).width('100%').alignItems(HorizontalAlign.Start)
-        }.id('sent.' + row.id)
-      }, (row: ManagementRow) => row.id)
+        }.id('sent.' + binding.value.id)
+      }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (!this.management.rows.length && !this.management.loading) ListItem() { Text(tr('empty')).padding(Tokens.page) }
       if (Wire.identifier(this.management.data, 'next')) ListItem() { Button(tr('load_more')).enabled(!this.management.loading).onClick(() => this.management.loadMoreLedger(this.model)) }
       if (this.management.error) ListItem() { Text(tr(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }

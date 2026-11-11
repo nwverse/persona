@@ -26,6 +26,19 @@ const MAX_PENDING_EVENTS: number = 32;
 const MAX_PRESENTED_RECEIPTS: number = 64;
 const STREAM_WAIT_MS: number = 45000;
 
+/** Host confirmation compares saved actions structurally, independent of JSON member order. */
+function equalActionValue(left: Object | undefined, right: Object | undefined, depth: number = 0, budget: number[] = [0]): boolean {
+  if (++budget[0] > 4096 || depth > 16) return false;
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left)) {
+    const a = left as Object[], b = right as Object[];
+    return a.length === b.length && a.every((value: Object, index: number): boolean => equalActionValue(value, b[index], depth + 1, budget));
+  }
+  const a = Wire.record(left), b = Wire.record(right), keys = Object.keys(a), names = new Set<string>(Object.keys(b));
+  return keys.length === names.size && keys.every((key: string): boolean => names.has(key) && equalActionValue(a[key], b[key], depth + 1, budget));
+}
+
 class ExtensionUIPageState {
   key: string = '';
   ui: string = '';
@@ -60,6 +73,7 @@ class ExtensionUIEvent {
   pageKey: string = '';
   requestId: string = '';
   status: string = 'pending';
+  confirmed: boolean = false;
   timeout: number = -1;
   constructor(interaction: ExtensionViewRecord, action: ExtensionViewRecord, values: Record<string, Object>, pageKey: string, requestId: string) {
     this.interaction = interaction; this.action = action; this.values = values; this.pageKey = pageKey; this.requestId = requestId;
@@ -67,6 +81,7 @@ class ExtensionUIEvent {
 }
 
 class ExtensionUIConfirmation {
+  confirmed: boolean = false;
   token: string = '';
   pageKey: string = '';
   generation: number = 0;
@@ -157,6 +172,7 @@ export class ExtensionUIModel implements ExtensionPresentation {
   private presented: Set<string> = new Set();
   private drafts: Map<string, string> = new Map();
   private secrets: Map<string, string> = new Map();
+  private answeredHostConfirmations: Map<string, number> = new Map();
   private pendingConfirmation: ExtensionUIConfirmation | undefined;
   private confirmationResult: ((accepted: boolean) => void) | undefined;
   private detachedOpens: Map<string, ExtensionUIDetachedOpen> = new Map();
@@ -202,6 +218,10 @@ export class ExtensionUIModel implements ExtensionPresentation {
   setLinkHandler(onLink: (address: string) => void): void { this.callbackLink = onLink; }
   setNavigationHandler(onNavigate?: (effect: ExtensionUINavigationEffect) => void): void { this.callbackNavigate = onNavigate; }
   private currentPage(): ExtensionUIPageState | undefined { return this.stack.length ? this.stack[this.stack.length - 1] : undefined; }
+  get presentationKey(): string {
+    const snapshot = this.currentPage()?.snapshot;
+    return JSON.stringify([this.profileId, this.managerId, this.extensionId, this.currentPage()?.key || '', snapshot?.session || '', snapshot?.epoch || '']);
+  }
   currentUI(): string { return this.currentPage()?.ui || this.rootUI; }
   getSnapshot(): ExtensionUIStreamSnapshot | undefined { return this.currentPage()?.snapshot; }
   isStream(): boolean { return !!this.currentPage()?.stream; }
@@ -359,13 +379,13 @@ export class ExtensionUIModel implements ExtensionPresentation {
       this.phase = 'recovering'; this.loading = true; this.error = '';
       if (request && !this.sendLifecycle(request, 'resume', page.key)) { this.phase = 'disconnected'; this.loading = false; }
     } else if (page.openRequest) { this.phase = 'opening'; this.loading = true; this.sendLifecycle(page.openRequest, 'open', page.key); }
-    else this.renderPage(page, true).catch((error: Error) => this.error = this.safeError(error));
+    else this.refresh();
   }
 
   /** Called by the authenticated ClientModel event fan-out; all writes stay on its existing socket. */
   receive(raw: string): void {
     let frame: ExtensionViewRecord;
-    try { frame = parseExtensionUIEvent(raw); } catch (_) { return; }
+    try { frame = parseExtensionUIEvent(raw); } catch (_) { this.receiveHostInteractions(raw); return; }
     if (Wire.text(frame, 'type') === 'extension_ui') { this.receiveInvalidation(frame); return; }
     if (this.disposed || !this.ownerCurrent()) return;
     if (Wire.has(frame, 'manager') && Wire.text(frame, 'manager') !== this.managerId) return;
@@ -376,6 +396,48 @@ export class ExtensionUIModel implements ExtensionPresentation {
     if (kind === 'error') { this.receiveError(frame, requestId); return; }
     if (kind === 'suspended') { this.ackLifecycle(frame, requestId, 'suspend'); return; }
     if (kind === 'closed') this.ackLifecycle(frame, requestId, 'close');
+  }
+  private receiveHostInteractions(raw: string): void {
+    if (raw.length > 1024 * 1024 || !this.events.size || !this.ownerCurrent() || !this.active || this.phase !== 'ready' || !this.client?.connected) return;
+    let envelope: ExtensionViewRecord;
+    try { envelope = Wire.parse(raw); } catch (_) { return; }
+    if (Wire.has(envelope, 'manager') && Wire.text(envelope, 'manager') !== this.managerId) return;
+    const type = Wire.text(envelope, 'type');
+    if (type === 'interaction') this.receiveHostConfirmation(Wire.object(envelope, 'interaction'));
+    else if (type === 'interactions') for (const value of Wire.rows(envelope, 'interactions')) this.receiveHostConfirmation(value);
+  }
+  private confirmedHostEvent(interaction: ExtensionViewRecord): ExtensionUIEvent | undefined {
+    const page = this.currentPage(), snapshot = page?.snapshot;
+    const expiry = Date.parse(Wire.text(interaction, 'expires_at'));
+    if (!page || !snapshot || !page.stream || !this.ownerCurrent() || !this.active || this.phase !== 'ready' || !this.client?.connected ||
+      Wire.text(interaction, 'manager') !== this.managerId || Wire.text(interaction, 'kind') !== 'permission' ||
+      Wire.text(interaction, 'tool_name') !== 'extension.ui' || Wire.text(interaction, 'machine_id') !== '' ||
+      Wire.text(interaction, 'session_id') !== snapshot.session || !Number.isFinite(expiry) || expiry <= Date.now() ||
+      Wire.bool(interaction, 'secret') || Wire.bool(interaction, 'requires_input') || Wire.rows(interaction, 'fields').length ||
+      Wire.rows(interaction, 'questions').length || Wire.has(interaction, 'elicitation')) return undefined;
+    const matches: ExtensionUIEvent[] = [];
+    for (const event of this.events.values()) {
+      const input = event.interaction;
+      if (!event.confirmed || event.status !== 'pending' || event.pageKey !== page.key ||
+        Wire.text(input, 'session') !== snapshot.session || Wire.text(input, 'epoch') !== snapshot.epoch || Wire.number(input, 'version') !== snapshot.version ||
+        !Wire.text(event.action, 'confirm') || Wire.text(interaction, 'summary') !== Wire.text(event.action, 'confirm') ||
+        !equalActionValue(event.action, Wire.object(interaction, 'tool_input'))) continue;
+      const saved = this.actionFor(Wire.text(input, 'key'), Wire.text(input, 'action'), Wire.text(input, 'event'));
+      if (saved && equalActionValue(saved, event.action)) matches.push(event);
+    }
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  private receiveHostConfirmation(interaction: ExtensionViewRecord): void {
+    const now = Date.now();
+    this.answeredHostConfirmations.forEach((expiry: number, id: string): void => { if (expiry <= now) this.answeredHostConfirmations.delete(id); });
+    const id = Wire.text(interaction, 'id'), event = this.confirmedHostEvent(interaction), client = this.client;
+    if (!id || id.length > 256 || !event || !client || this.answeredHostConfirmations.has(id) || this.answeredHostConfirmations.size >= 64) return;
+    this.answeredHostConfirmations.set(id, Date.parse(Wire.text(interaction, 'expires_at')));
+    const admit = (): boolean => this.confirmedHostEvent(interaction) === event;
+    // This completes only the exact page action the user already confirmed. The Hub rechecks its source and grants.
+    const resolution: ExtensionViewRecord = { allow: true };
+    client.repo().call('/api/v1/interactions/' + segment(id) + '/resolve', 'POST', resolution, util.generateRandomUUID(), admit)
+      .catch((error: Error): void => { if (this.ownerCurrent() && this.active && this.events.get(Wire.text(event.interaction, 'event_id')) === event) this.error = this.safeError(error); });
   }
   private receiveSnapshot(frame: ExtensionViewRecord, requestId: string): void {
     const envelopeSnapshot = Wire.object(frame, 'snapshot'), request = requestId ? this.requestPages.get(requestId) : undefined;
@@ -478,7 +540,7 @@ export class ExtensionUIModel implements ExtensionPresentation {
       this.events.size === 0 && this.uncertainEvents.size === 0 && ['negotiation', 'rejected'].includes(code)) {
       // A legacy render page has no component mount. Only an initial read may change transport.
       opening.preferLegacy = true; opening.stream = false; opening.openRequest = undefined; this.openRead = false;
-      this.renderPage(opening).catch(() => undefined); return;
+      this.renderPage(opening, opening.hasView).catch(() => undefined); return;
     }
     if (pending && pending.kind === 'event') {
       const event = this.events.get(pending.eventId);
@@ -678,6 +740,9 @@ export class ExtensionUIModel implements ExtensionPresentation {
       const request = this.makeLifecycle('snapshot', page);
       this.phase = 'recovering'; this.loading = true; this.error = '';
       if (request && !this.sendLifecycle(request, 'snapshot', page.key)) { this.phase = 'disconnected'; this.loading = false; }
+    } else if (!this.compact && !page.preferLegacy && this.client?.features.includes(STREAM_FEATURE)) {
+      // A restored route can open before hello advertises stream support. Retire that older HTTP read.
+      this.operationSequence++; this.clearLegacyRefresh(); this.open();
     } else this.renderPage(page, true).catch((error: Error) => this.error = this.safeError(error));
   }
   setVisible(value: boolean): void {
@@ -852,6 +917,7 @@ export class ExtensionUIModel implements ExtensionPresentation {
     this.cancelConfirmation();
     if (!allow) { complete?.(false); return; }
     if (!this.captureCurrent(capture)) { this.error = 'request_updated'; complete?.(false); return; }
+    capture.confirmed = true;
     this.executeCaptured(capture).then(() => complete?.(true)).catch((error: Error) => {
       this.error = this.safeError(error); complete?.(false);
     });
@@ -939,6 +1005,7 @@ export class ExtensionUIModel implements ExtensionPresentation {
     const interaction: ExtensionViewRecord = { protocol: 1, session: snapshot.session, epoch: snapshot.epoch, version: snapshot.version,
       event_id: eventId, key: capture.key, action: Wire.text(saved, 'id'), event: capture.event, value: cloneRecord(capture.values) };
     const event = new ExtensionUIEvent(interaction, cloneRecord(saved), cloneRecord(capture.values), page.key, requestId);
+    event.confirmed = capture.confirmed;
     this.events.set(eventId, event); this.busy = true; this.error = ''; this.notice = '';
     const request: ExtensionViewRecord = { request: 'event', protocol: 1, request_id: requestId, interaction: interaction };
     if (!this.sendLifecycle(request, 'event', page.key, eventId)) {
@@ -1032,7 +1099,7 @@ export class ExtensionUIModel implements ExtensionPresentation {
       const request: ExtensionViewRecord = { request: 'close', protocol: 1, request_id: util.generateRandomUUID(), session: page.snapshot.session, epoch: page.snapshot.epoch };
       try { this.client.repo().transport.send(streamRequestText(request, this.managerEnvelopeValue())); } catch (_) { }
     }
-    this.clearFields(); this.clearAllEventTimeouts(); this.events.clear(); this.uncertainEvents.clear(); this.presentations.clear(); this.requestPages.clear();
+    this.clearFields(); this.clearAllEventTimeouts(); this.events.clear(); this.uncertainEvents.clear(); this.presentations.clear(); this.requestPages.clear(); this.answeredHostConfirmations.clear();
     this.uncertainEventId = '';
     this.eventsOff?.(); this.eventsOff = undefined;
     this.phase = 'closed'; this.loading = false; this.busy = false; this.view = { sections: [] }; this.pageTitle = '';

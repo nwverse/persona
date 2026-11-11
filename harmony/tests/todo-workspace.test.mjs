@@ -38,6 +38,7 @@ registerHooks({
 
 const { TodoWorkspace, TodoWorkspaceItem, TodoWorkspaceSpace, TodoWorkspaceSpaceChoice,
   todoWorkspaceStatus, relatedTodoMembers } = await import('../entry/src/main/ets/models/TodoWorkspace.ets');
+const { reconcileBoundRows } = await import('../entry/src/main/ets/models/RowBinding.ets');
 const { ResourceRow } = await import('../entry/src/main/ets/models/Wire.ets');
 const { HttpFailure } = await import('persona-todo:transport');
 
@@ -206,6 +207,40 @@ test('search, filters, and status, project, and thread groupings use the selecte
   workspace.close();
 });
 
+test('same-key Todo group bindings replace immutable values and deferred row actions use the current lead', async () => {
+  const { workspace } = await opened({ todos: [todo('t1', { plan_id: 'plan-a' }), todo('t2', { plan_id: 'plan-a' })] });
+  const owner = {};
+  const initialGroup = workspace.sections()[0].rows[0];
+  const initialBindings = reconcileBoundRows([], [initialGroup], (group) => group.key, undefined, owner, '', 'scope-a');
+  const originalNativeKey = initialBindings[0].key;
+
+  workspace.items = workspace.items.map((item) => item.id === 't1'
+    ? new TodoWorkspaceItem({ ...item.data(), title: 'Renamed latest', updated_at: '2026-11-11T11:00:00Z' }, 'work')
+    : item);
+  const currentGroup = workspace.sections()[0].rows[0];
+  const currentBindings = reconcileBoundRows(initialBindings, [currentGroup], (group) => group.key, owner, owner, 'scope-a', 'scope-a');
+  let openedTitle = '';
+  const deferredOpen = () => { openedTitle = currentBindings[0].value.lead.title; };
+  deferredOpen();
+
+  assert.strictEqual(currentBindings[0], initialBindings[0]);
+  assert.equal(currentBindings[0].key, originalNativeKey);
+  assert.equal(currentBindings[0].value.lead.title, 'Renamed latest');
+  assert.equal(openedTitle, 'Renamed latest');
+
+  const page = readFileSync(new URL('../entry/src/main/ets/components/TodoWorkspacePage.ets', import.meta.url), 'utf8');
+  assert.match(page, /ForEach\(section\.rows, \(binding: BoundRow<TodoWorkspaceGroup>\) => this\.todoRow\(binding\),\s*\(binding: BoundRow<TodoWorkspaceGroup>\) => binding\.key\)/);
+  assert.match(page, /\.onClick\(\(\) => this\.onOpenResource\(this\.workspace\.todoResource\(binding\.value\.lead\)\)\)/);
+  assert.match(page, /ForEach\(this\.lineageRowBindings/);
+  assert.match(page, /ForEach\(this\.relatedTodoBindings/);
+  assert.match(page, /ForEach\(this\.spaceBindings, \(binding: BoundRow<TodoWorkspaceSpace>\) => this\.spaceRow\(binding\)/);
+  assert.match(page, /ForEach\(this\.activeAgentBindings, \(binding: BoundRow<TodoWorkspaceAgent>\) => this\.agentRow\(binding\)/);
+  assert.match(page, /ForEach\(this\.previousAgentBindings, \(binding: BoundRow<TodoWorkspaceAgent>\) => this\.agentRow\(binding\)/);
+  assert.match(page, /\.onClick\(\(\) => this\.confirmUnlinkAgent\(this\.workspace\.selected, binding\.value\)\)/);
+  assert.match(page, /\.onClick\(\(\) => this\.confirmUnlinkSpace\(this\.workspace\.selected, binding\.value\)\)/);
+  workspace.close();
+});
+
 test('create, edit, done, reopen, existing-Agent link, project link, and delete use exact Todo routes', async () => {
   const linked = todo('t1', { agents: [], spaces: [], thread: { channel: 'lark', chat_id: 'room', thread_id: 'thread-1', title: 'Release thread' } });
   const agent = session('s1', 'working', { cwd: '/repo', agent: 'claude', space_name: 'persona project' });
@@ -297,6 +332,169 @@ test('unknown and pending writes stay blocked without a replacement request', as
   }
 });
 
+test('a parent list refresh shows independently completed, renamed, and deleted detail mutations', async () => {
+  const harness = makeHarness({ todos: [todo('t1')] });
+  const parent = new TodoWorkspace(), detail = new TodoWorkspace();
+  await parent.open(harness.client);
+  const row = new ResourceRow('t1', 'Todo t1', 'todo');
+  row.manager = 'work';
+  await detail.open(harness.client, row, false);
+  parent.setSearch('kept search');
+  parent.setStatusFilter('all');
+  parent.setGroupBy('project');
+  parent.startCreate();
+  parent.setTitleDraft('Unsubmitted parent draft');
+  parent.setNotesDraft('Keep this text');
+
+  assert.equal(await detail.setDone(detail.selected, true), true);
+  assert.equal(parent.items[0].isDone(), false, 'the parent has an independent list snapshot before returning');
+  await parent.refresh();
+  assert.equal(parent.items[0].isDone(), true);
+
+  await detail.openRow(detail.selected);
+  detail.setTitleDraft('Renamed in detail');
+  assert.equal(await detail.save(), true);
+  await parent.refresh();
+  assert.equal(parent.items[0].title, 'Renamed in detail');
+
+  assert.equal(await detail.remove(detail.selected), true);
+  await parent.refresh();
+  assert.equal(parent.items.length, 0);
+  assert.equal(parent.search, 'kept search');
+  assert.equal(parent.statusFilter, 'all');
+  assert.equal(parent.groupBy, 'project');
+  assert.equal(parent.editorOpen, true);
+  assert.equal(parent.titleDraft, 'Unsubmitted parent draft');
+  assert.equal(parent.notesDraft, 'Keep this text');
+  parent.close();
+  detail.close();
+});
+
+test('only the latest Todo list request replaces rows or clears the loading state', async () => {
+  const requests = [];
+  const harness = makeHarness({ request: async (call) => {
+    if (call.method !== 'GET') return { ok: true };
+    const pending = deferred();
+    requests.push(pending);
+    return pending.promise;
+  } });
+  const workspace = new TodoWorkspace();
+  const opening = workspace.open(harness.client);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 1);
+
+  const secondRefresh = workspace.refresh();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  requests[1].resolve({ todos: [todo('second', { title: 'Second result' })] });
+  await secondRefresh;
+  assert.equal(workspace.items[0].title, 'Second result');
+
+  const thirdRefresh = workspace.refresh();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 3);
+  assert.equal(workspace.loading, true);
+  requests[0].resolve({ todos: [todo('stale', { title: 'Stale result' })] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(workspace.items[0].title, 'Second result');
+  assert.equal(workspace.loading, true, 'a stale read cannot clear the newer request spinner');
+
+  requests[2].resolve({ todos: [todo('third', { title: 'Third result' })] });
+  await Promise.all([thirdRefresh, opening]);
+  assert.equal(workspace.items[0].title, 'Third result');
+  assert.equal(workspace.loading, false);
+  workspace.close();
+});
+
+test('an initial detail open waits for the newest list read before restoring its target', async () => {
+  const firstRead = deferred(), secondRead = deferred();
+  let getCount = 0;
+  const harness = makeHarness({ request: async (call) => {
+    if (call.method !== 'GET') return { ok: true };
+    getCount++;
+    return getCount === 1 ? firstRead.promise : secondRead.promise;
+  } });
+  const workspace = new TodoWorkspace(), row = new ResourceRow('t1', 'Todo t1', 'todo');
+  row.manager = 'work';
+  const opening = workspace.open(harness.client, row, false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(getCount, 1);
+  const newestRead = workspace.refresh();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(getCount, 2);
+
+  firstRead.resolve({ todos: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.notEqual(workspace.error, 'todo_gone', 'a replaced read cannot report that the detail target is missing');
+  assert.equal(workspace.selected.id, '');
+
+  secondRead.resolve({ todos: [todo('t1')] });
+  await Promise.all([opening, newestRead]);
+  assert.equal(workspace.selected.id, 't1');
+  assert.equal(workspace.draftReady, true);
+  assert.equal(workspace.error, '');
+  workspace.close();
+});
+
+test('a successful Todo write invalidates an older read without rolling back its row or spinner', async () => {
+  const staleRead = deferred();
+  let holdRead = false, held = false;
+  const request = async (call, fixture) => {
+    if (call.method === 'GET') {
+      if (holdRead && !held) { held = true; return staleRead.promise; }
+      return { todos: structuredClone(fixture.todos) };
+    }
+    if (call.method === 'PATCH') {
+      const id = decodeURIComponent(call.path.split('/')[4].split('?')[0]);
+      const index = fixture.todos.findIndex((item) => item.id === id);
+      const updated = { ...fixture.todos[index], ...call.body, updated_at: '2026-11-11T10:01:00Z' };
+      if (call.body.done === true) { updated.done_at = '2026-11-11T10:01:00Z'; updated.start_error = ''; }
+      fixture.todos[index] = updated;
+      return { todo: structuredClone(updated) };
+    }
+    return { ok: true };
+  };
+  const { workspace } = await opened({ todos: [todo('t1')], request });
+  await workspace.openRow(workspace.items[0]);
+  holdRead = true;
+  const read = workspace.refresh();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(held, true);
+  assert.equal(workspace.loading, true);
+
+  assert.equal(await workspace.setDone(workspace.selected, true), true);
+  assert.equal(workspace.items[0].isDone(), true);
+  assert.equal(workspace.loading, false, 'the acknowledged write ends the superseded spinner');
+  staleRead.resolve({ todos: [todo('t1', { title: 'Stale row' })] });
+  await read;
+  assert.equal(workspace.items[0].isDone(), true);
+  assert.equal(workspace.selected.isDone(), true);
+  assert.equal(workspace.loading, false);
+  workspace.close();
+});
+
+test('a list read from a replaced root source cannot replace the new source rows', async () => {
+  const oldRead = deferred();
+  const oldHarness = makeHarness({ manager: 'parent', request: async (call) => {
+    if (call.method === 'GET') return oldRead.promise;
+    return { ok: true };
+  } });
+  const newHarness = makeHarness({ manager: 'detail', todos: [todo('detail-source', { title: 'Detail source', manager: 'detail' })] });
+  const workspace = new TodoWorkspace();
+  const oldOpen = workspace.open(oldHarness.client);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(oldHarness.state.calls.length, 1);
+
+  await workspace.open(newHarness.client);
+  assert.equal(workspace.items[0].title, 'Detail source');
+  oldRead.resolve({ todos: [todo('old-source', { title: 'Old parent source', manager: 'parent' })] });
+  await oldOpen;
+  assert.equal(workspace.items[0].title, 'Detail source');
+  assert.equal(workspace.items[0].manager, 'detail');
+  assert.equal(workspace.loading, false);
+  workspace.close();
+});
+
 test('a delayed mutation response from a previous owner cannot update the current workspace', async () => {
   const response = deferred();
   const { workspace, state } = await opened({ todos: [todo('t1')], request: async (call, fixture) => {
@@ -354,11 +552,16 @@ test('native page exposes parent navigation, Markdown links, and Todo-aware Agen
   const page = readFileSync(new URL('../entry/src/main/ets/components/TodoWorkspacePage.ets', import.meta.url), 'utf8');
   assert.match(page, /@Param row: ResourceRow \| undefined/);
   assert.match(page, /@Param list: boolean/);
+  assert.match(page, /@Param visible: boolean/);
   assert.match(page, /@Event onOpen: \(row: ResourceRow\) => void/);
   assert.match(page, /@Event onOpenResource: \(row: ResourceRow\) => void/);
   assert.match(page, /@Event onLink: \(address: string\) => void/);
   assert.match(page, /@Event onCreateAgent: \(todo: ResourceRow\) => void/);
   assert.match(page, /this\.onCreateAgent\(this\.workspace\.todoResource\(this\.workspace\.selected\)\)/);
+  assert.match(page, /@Monitor\('visible'\) visibilityChanged\(\): void/);
+  assert.match(page, /if \(becameVisible && this\.pageAvailable\) this\.refreshWhenReady\(\)/);
+  assert.match(page, /if \(this\.model\.connected\) this\.refreshWhenReady\(true\)/);
+  assert.match(page, /workspace\.selected', 'workspace\.items', 'workspace\.search', 'workspace\.statusFilter', 'workspace\.groupBy',[\s\S]*'workspace\.projects', 'workspace\.sessions', 'workspace\.machines'/);
 });
 
 

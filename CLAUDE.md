@@ -180,6 +180,7 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
   run `python3 scripts/persona_config.py xcconfig`; before a manual `xcodebuild`, `eval "$(python3 scripts/persona_config.py env)"` or an
   old Xcode reports errors that look like someone else's breakage.
 - Android: `scripts/app/android.sh [install|apk|test|lint|shots]` (`docs/android/android.md`).
+- HarmonyOS: from `harmony/`, run `node --test tests/*.test.mjs` and `node tests/run-domain.mjs` (Node.js 24+), then `devecocli build --build-mode release` with the API 26 SDK and locked native SSH core. Native device checks and fixture setup: `docs/harmony/harmony.md` ("Verification").
 - Web: `cd web && npm test && npm run build`; deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
 - Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py`, `python3 scripts/test/test_doc_sections.py`
   (a section name quoted after a doc path names a current heading) and `python3 scripts/test/test_doc_wire.py`

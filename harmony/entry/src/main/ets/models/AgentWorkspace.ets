@@ -110,6 +110,7 @@ export class AgentWorkspace {
   private historyLoaded: boolean = false;
   private frozenGroups: AgentWorkspaceGroup[] | undefined;
   private readingDetail: boolean = false;
+  private openingView: boolean = false;
   private freezeSuppressed: boolean = false;
   private historyRequest: number = 0;
   private persistTimer: number = -1;
@@ -139,7 +140,7 @@ export class AgentWorkspace {
     const revision = ++this.revision;
     this.client = client; this.scope = client.scope(); this.owner = client.profile.manager;
     this.viewScope = JSON.stringify([this.scope, this.owner]);
-    this.loading = true; this.busy = false; this.error = '';
+    this.openingView = true; this.loading = true; this.busy = false; this.error = '';
     this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
     this.quickFilter = 'all'; this.groupingMode = 'flat'; this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
     this.readingDetail = false; this.freezeSuppressed = false;
@@ -168,12 +169,12 @@ export class AgentWorkspace {
     } catch (failure) {
       if (this.loadCurrent(client, revision)) this.fail(failure as Error);
     } finally {
-      if (this.loadCurrent(client, revision)) this.loading = false;
+      if (this.loadCurrent(client, revision)) { this.openingView = false; this.loading = false; this.rebuild(); }
     }
   }
 
   hide(): void {
-    this.revision++; this.client = undefined; this.groups = []; this.sourceRows = []; this.historyRows = []; this.historyLoaded = false;
+    this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.sourceRows = []; this.historyRows = []; this.historyLoaded = false;
     this.frozenGroups = undefined; this.readingDetail = false;
     if (this.persistTimer !== -1) clearTimeout(this.persistTimer);
     this.persistTimer = -1;
@@ -604,7 +605,7 @@ export class AgentWorkspace {
     this.freezeSuppressed = true; this.frozenGroups = undefined;
   }
 
-  private sourceReady(): boolean { return this.history ? this.historyLoaded : !!this.client && (this.client.directoryReady || this.client.sessionsReady) && !this.client.directoryLoading; }
+  private sourceReady(): boolean { return !this.openingView && (this.history ? this.historyLoaded : !!this.client && (this.client.directoryReady || this.client.sessionsReady) && !this.client.directoryLoading); }
 
   private refreezeAfterFilter(): void {
     if (!this.readingDetail) return;

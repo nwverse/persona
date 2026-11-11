@@ -1,3 +1,4 @@
+import { Binding, UIUtils } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { dataSharePredicates } from '@kit.ArkData';
 import { fileIo, picker } from '@kit.CoreFileKit';
@@ -5,6 +6,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { ClientModel } from '../models/ClientModel';
 import { HealthMemoryFile, HealthReport, HealthWorkspace } from '../models/HealthWorkspace';
 import { ResourceRow, Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { MarkdownText } from './MarkdownText';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
@@ -28,6 +30,11 @@ export struct HealthWorkspacePage {
   @Event onChat: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (url: string) => void = (_url: string) => {};
   @Local workspace: HealthWorkspace = new HealthWorkspace();
+  @Local conversationRowBindings: BoundRow<ResourceRow>[] = [];
+  @Local memoryRowBindings: BoundRow<HealthMemoryFile>[] = [];
+  @Local reportRowBindings: BoundRow<HealthReport>[] = [];
+  private rowBindingOwner: Object | undefined;
+  private rowBindingScope: string = '';
   @Local editingMemory: boolean = false;
   @Local pickerBusy: boolean = false;
   @Local pickerError: string = '';
@@ -37,6 +44,7 @@ export struct HealthWorkspacePage {
 
   aboutToAppear(): void {
     this.active = true; this.routedKey = ''; this.pickerRevision++;
+    this.syncRowBindings();
     this.workspace.open(this.model).then(() => this.routeRow()).catch(() => undefined);
   }
   aboutToDisappear(): void {
@@ -47,10 +55,23 @@ export struct HealthWorkspacePage {
   @Monitor('list') listChanged(): void { if (this.active) this.workspace.open(this.model).then(() => this.routeRow()).catch(() => undefined); }
   @Monitor('model.profile') profileChanged(): void {
     this.pickerRevision++; this.pickerBusy = false; this.pickerError = '';
+    this.syncRowBindings();
     if (this.active) this.workspace.open(this.model).then(() => this.routeRow()).catch(() => undefined);
   }
   @Monitor('model.connected') connectionChanged(): void {
     if (this.active && this.model.connected) this.workspace.refresh().catch(() => undefined);
+  }
+  @Monitor('workspace.conversations', 'workspace.reports', 'workspace.memories') rowsChanged(): void { this.syncRowBindings(); }
+
+  private syncRowBindings(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager, 'health']);
+    this.conversationRowBindings = reconcileBoundRows(this.conversationRowBindings, this.workspace.conversations,
+      (row: ResourceRow) => row.key(), this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.reportRowBindings = reconcileBoundRows(this.reportRowBindings, this.workspace.reports,
+      (report: HealthReport) => report.row.key(), this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.memoryRowBindings = reconcileBoundRows(this.memoryRowBindings, this.workspace.memoryEntries(),
+      (file: HealthMemoryFile) => file.name, this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.rowBindingOwner = this.model; this.rowBindingScope = scope;
   }
 
   private send(text: string): void {
@@ -222,34 +243,34 @@ export struct HealthWorkspacePage {
     if (row) this.onOpenResource(row);
   }
 
-  @Builder memoryDetail(file: HealthMemoryFile) {
+  @Builder memoryDetail(binding: Binding<HealthMemoryFile>) {
     Column({ space: Tokens.gap }) {
       Row({ space: Tokens.gap }) {
-        Text(file.name === 'MEMORY.md' ? tr('health_memory_index') : file.name).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
-        if (file.name !== 'MEMORY.md' && !this.editingMemory) Button(tr('health_memory_edit')).height(Tokens.touch)
+        Text(binding.value.name === 'MEMORY.md' ? tr('health_memory_index') : binding.value.name).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
+        if (binding.value.name !== 'MEMORY.md' && !this.editingMemory) Button(tr('health_memory_edit')).height(Tokens.touch)
           .onClick(() => this.editingMemory = true).id('health.memory.edit')
       }.width('100%')
-      if (this.editingMemory && file.name !== 'MEMORY.md') {
+      if (this.editingMemory && binding.value.name !== 'MEMORY.md') {
         TextArea({ text: this.workspace.memoryDraft, placeholder: tr('health_memory_content') }).height(Tokens.inputExpanded)
           .onChange((value: string) => this.workspace.setMemoryDraft(value)).id('health.memory.editor')
         if (this.workspace.memoryError) Text(tr(this.workspace.memoryError)).fontSize(Tokens.meta)
           .fontColor($r('app.color.persona_danger')).width('100%')
         Row({ space: Tokens.gap }) {
           Button(tr('cancel')).layoutWeight(1).height(Tokens.touch).onClick(() => {
-            this.editingMemory = false; this.workspace.openMemory(file);
+            this.editingMemory = false; this.workspace.openMemory(binding.value);
           })
           Button(tr('save')).layoutWeight(1).height(Tokens.touch).enabled(this.workspace.canSaveMemory())
             .onClick(() => this.workspace.saveMemory().then((saved: boolean) => { if (saved) this.editingMemory = false; }).catch(() => false))
             .id('health.memory.save')
           Button(tr('delete')).layoutWeight(1).height(Tokens.touch).enabled(this.workspace.canEditMemory() && !this.workspace.busy)
-            .onClick(() => this.confirmDeleteMemory(file)).id('health.memory.delete')
+            .onClick(() => this.confirmDeleteMemory(binding.value)).id('health.memory.delete')
         }.width('100%')
       } else {
         MarkdownText({ text: this.workspace.memoryDraft, onLink: (url: string) => this.safeLink(url) })
         if (this.workspace.memoryError) Text(tr(this.workspace.memoryError)).fontSize(Tokens.meta)
           .fontColor($r('app.color.persona_danger')).width('100%')
-        if (file.name !== 'MEMORY.md') Button(tr('delete')).height(Tokens.touch).enabled(this.workspace.canEditMemory() && !this.workspace.busy)
-          .onClick(() => this.confirmDeleteMemory(file)).id('health.memory.delete')
+        if (binding.value.name !== 'MEMORY.md') Button(tr('delete')).height(Tokens.touch).enabled(this.workspace.canEditMemory() && !this.workspace.busy)
+          .onClick(() => this.confirmDeleteMemory(binding.value)).id('health.memory.delete')
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
       .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
@@ -261,20 +282,20 @@ export struct HealthWorkspacePage {
       if (this.workspace.loading && !this.workspace.conversations.length) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       else if (!this.workspace.conversations.length) Text(tr(this.workspace.error ? 'health_chats_unavailable' : 'health_no_chats'))
         .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
-      ForEach(this.workspace.conversations, (row: ResourceRow) => {
+      ForEach(this.conversationRowBindings, (binding: BoundRow<ResourceRow>) => {
         Row({ space: Tokens.gap }) {
           Button() {
             Column({ space: Tokens.fine }) {
-              Text(row.title || tr('health_new_chat')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(1).width('100%')
-              if (Wire.text(row.data(), 'last_text', row.detail)) Text(Wire.text(row.data(), 'last_text', row.detail)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(2).width('100%')
+              Text(binding.value.title || tr('health_new_chat')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(1).width('100%')
+              if (Wire.text(binding.value.data(), 'last_text', binding.value.detail)) Text(Wire.text(binding.value.data(), 'last_text', binding.value.detail)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(2).width('100%')
             }.alignItems(HorizontalAlign.Start).width('100%')
           }.layoutWeight(1).height(Tokens.touch).onClick(() => {
-          if (this.workspace.isHealthConversation(row)) this.onChat(row);
-          }).id('health.chat.' + row.id)
-      Button(tr('health_archive')).height(Tokens.touch).enabled(!this.workspace.busy && this.workspace.canArchiveConversation(row))
-            .onClick(() => this.confirmArchive(row)).id('health.chat.archive.' + row.id)
+          if (this.workspace.isHealthConversation(binding.value)) this.onChat(binding.value);
+          }).id('health.chat.' + binding.value.id)
+      Button(tr('health_archive')).height(Tokens.touch).enabled(!this.workspace.busy && this.workspace.canArchiveConversation(binding.value))
+            .onClick(() => this.confirmArchive(binding.value)).id('health.chat.archive.' + binding.value.id)
         }.width('100%').alignItems(VerticalAlign.Center)
-      }, (row: ResourceRow) => row.key())
+      }, (binding: BoundRow<ResourceRow>) => binding.key)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -284,13 +305,13 @@ export struct HealthWorkspacePage {
       if (this.workspace.loading && !this.workspace.memories.length) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       else if (!this.workspace.memoryEntries().length && !this.workspace.indexMemory()) Text(tr('health_no_memory'))
         .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
-      ForEach(this.workspace.memoryEntries(), (file: HealthMemoryFile) => Button(file.name).width('100%').height(Tokens.touch)
-        .onClick(() => { this.editingMemory = false; this.workspace.openMemory(file); }).id('health.memory.' + file.name),
-        (file: HealthMemoryFile) => file.name)
+      ForEach(this.memoryRowBindings, (binding: BoundRow<HealthMemoryFile>) => Button(binding.value.name).width('100%').height(Tokens.touch)
+        .onClick(() => { this.editingMemory = false; this.workspace.openMemory(binding.value); }).id('health.memory.' + binding.value.name),
+        (binding: BoundRow<HealthMemoryFile>) => binding.key)
       if (this.workspace.indexMemory()) Button(tr('health_memory_index')).width('100%').height(Tokens.touch)
         .onClick(() => { this.editingMemory = false; const index = this.workspace.indexMemory(); if (index) this.workspace.openMemory(index); })
         .id('health.memory.index')
-      if (this.workspace.selectedMemory) this.memoryDetail(this.workspace.selectedMemory)
+      if (this.workspace.selectedMemory) this.memoryDetail(UIUtils.makeBinding((): HealthMemoryFile => this.workspace.selectedMemory || new HealthMemoryFile()))
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -300,22 +321,22 @@ export struct HealthWorkspacePage {
       if (this.workspace.loading && !this.workspace.reports.length) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       else if (!this.workspace.reports.length && !this.workspace.error) Text(tr('health_no_reports'))
         .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
-      ForEach(this.workspace.reports, (report: HealthReport) => {
+      ForEach(this.reportRowBindings, (binding: BoundRow<HealthReport>) => {
         Column({ space: Tokens.fine }) {
-          Text(report.title || report.name).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(2).width('100%')
-          Text(tr(report.recordPath ? 'health_report_summarized' : 'health_report_not_summarized')).fontSize(Tokens.meta)
+          Text(binding.value.title || binding.value.name).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(2).width('100%')
+          Text(tr(binding.value.recordPath ? 'health_report_summarized' : 'health_report_not_summarized')).fontSize(Tokens.meta)
             .fontColor($r('sys.color.font_secondary')).width('100%')
           Row({ space: Tokens.gap }) {
-            if (report.recordPath) Button(tr('health_report_summary')).layoutWeight(1).height(Tokens.touch)
-              .onClick(() => this.openReport(report, true)).id('health.report.summary.' + report.name)
-            if (report.path) Button(tr('health_report_original')).layoutWeight(1).height(Tokens.touch)
-              .onClick(() => this.openReport(report, false)).id('health.report.original.' + report.name)
+            if (binding.value.recordPath) Button(tr('health_report_summary')).layoutWeight(1).height(Tokens.touch)
+              .onClick(() => this.openReport(binding.value, true)).id('health.report.summary.' + binding.value.name)
+            if (binding.value.path) Button(tr('health_report_original')).layoutWeight(1).height(Tokens.touch)
+              .onClick(() => this.openReport(binding.value, false)).id('health.report.original.' + binding.value.name)
             Button(tr('delete')).height(Tokens.touch).enabled(!this.workspace.busy)
-              .onClick(() => this.confirmDeleteReport(report)).id('health.report.delete.' + report.name)
+              .onClick(() => this.confirmDeleteReport(binding.value)).id('health.report.delete.' + binding.value.name)
           }.width('100%')
         }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
           .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
-      }, (report: HealthReport) => report.row.key())
+      }, (binding: BoundRow<HealthReport>) => binding.key)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -323,7 +344,6 @@ export struct HealthWorkspacePage {
     Scroll() {
       Column({ space: Tokens.section }) {
         Column({ space: Tokens.gap }) {
-          Text(tr('health_home_title')).fontSize(Tokens.title).fontWeight(FontWeight.Bold).width('100%')
           Text(tr('health_privacy_note')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
           if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).width('100%')
         }.alignItems(HorizontalAlign.Start).width('100%')

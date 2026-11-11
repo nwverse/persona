@@ -1,6 +1,7 @@
 import { ClientModel } from '../models/ClientModel';
 import { KnowledgeDirectory, KnowledgeSearchHit, KnowledgeWorkspace } from '../models/KnowledgeWorkspace';
 import { ResourceRow, Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { MarkdownText } from './MarkdownText';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
@@ -8,6 +9,8 @@ import { common } from '@kit.AbilityKit';
 import { KnowledgeRecording } from '../models/KnowledgeRecording';
 import { NativeRecording } from '../platform/NativeRecording';
 import { KnowledgeRecordingView } from './KnowledgeRecordingView';
+import { UIUtils } from '@kit.ArkUI';
+import type { Binding } from '@kit.ArkUI';
 
 const KB_KINDS: string[] = ['projects', 'chats', 'people', 'docs', 'meetings', 'events', 'recordings'];
 
@@ -16,22 +19,70 @@ export struct KnowledgeWorkspacePage {
   @Require @Param model: ClientModel;
   @Param row: ResourceRow | undefined = undefined;
   @Param list: ResourceRow[] = [];
+  @Param visible: boolean = true;
   @Param rail: boolean = false;
   @Event onOpenResource: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onChat: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (url: string) => void = (_url: string) => {};
   @Local workspace: KnowledgeWorkspace = new KnowledgeWorkspace();
+  @Local entryRowBindings: BoundRow<ResourceRow>[] = [];
+  @Local resultRowBindings: BoundRow<KnowledgeSearchHit>[] = [];
+  @Local agentRowBindings: BoundRow<ResourceRow>[] = [];
+  private rowBindingOwner: Object | undefined;
+  private rowBindingScope: string = '';
   @Local momentText: string = '';
   @Local selectedActions: string[] = [];
   @Local recordingOpen: boolean = false;
   @Local recording: KnowledgeRecording = new KnowledgeRecording(new NativeRecording());
+  private lastVisible: boolean = true;
+  private workspaceOpening: boolean = false;
+  private queuedRefresh: boolean = false;
+  private openSerial: number = 0;
+  private pageAvailable: boolean = false;
 
-  aboutToAppear(): void { this.workspace.open(this.model, this.row, this.list).catch(() => undefined); }
-  aboutToDisappear(): void { this.workspace.hide(); this.recording.dispose().catch(() => undefined); }
+  aboutToAppear(): void { this.pageAvailable = true; this.lastVisible = this.visible; this.syncRowBindings(); this.openWorkspace(); }
+  aboutToDisappear(): void {
+    this.pageAvailable = false; this.openSerial++; this.workspaceOpening = false; this.queuedRefresh = false;
+    this.workspace.hide(); this.recording.dispose().catch(() => undefined);
+  }
 
-  @Monitor('row') rowChanged(): void { this.workspace.open(this.model, this.row, this.list).catch(() => undefined); }
-  @Monitor('model.profile') profileChanged(): void { this.recordingOpen = false; this.recording.stopForBackground().catch(() => undefined); this.workspace.open(this.model, this.row, this.list).catch(() => undefined); }
-  @Monitor('model.connected') connectionChanged(): void { if (this.model.connected) { this.workspace.refresh().catch(() => undefined); if (this.recordingOpen) this.openRecording(); } }
+  @Monitor('row') rowChanged(): void { this.syncRowBindings(); this.openWorkspace(); }
+  @Monitor('model.profile') profileChanged(): void { this.recordingOpen = false; this.recording.stopForBackground().catch(() => undefined); this.syncRowBindings(); this.openWorkspace(); }
+  @Monitor('model.connected') connectionChanged(): void { if (this.model.connected) { this.refreshWhenReady(); if (this.recordingOpen) this.openRecording(); } }
+  @Monitor('visible') visibilityChanged(): void {
+    const becameVisible = !this.lastVisible && this.visible;
+    this.lastVisible = this.visible;
+    if (becameVisible && this.pageAvailable && !this.row) this.refreshWhenReady();
+  }
+  @Monitor('workspace.entries', 'workspace.results', 'workspace.agents') rowSourcesChanged(): void { this.syncRowBindings(); }
+
+  private openWorkspace(): void {
+    const serial = ++this.openSerial;
+    this.workspaceOpening = true;
+    this.workspace.open(this.model, this.row, this.list).catch(() => undefined).finally(() => {
+      if (serial !== this.openSerial) return;
+      this.workspaceOpening = false;
+      const shouldRefresh = this.queuedRefresh; this.queuedRefresh = false;
+      if (shouldRefresh && this.pageAvailable) this.workspace.refresh().catch(() => undefined);
+    });
+  }
+
+  private refreshWhenReady(): void {
+    if (!this.pageAvailable) return;
+    if (this.workspaceOpening) { this.queuedRefresh = true; return; }
+    this.workspace.refresh().catch(() => undefined);
+  }
+
+  private syncRowBindings(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager, this.row?.key() || 'list']);
+    this.entryRowBindings = reconcileBoundRows(this.entryRowBindings, this.workspace.entries, (row: ResourceRow) => row.key(),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.resultRowBindings = reconcileBoundRows(this.resultRowBindings, this.workspace.results, (hit: KnowledgeSearchHit) => hit.entry.key(),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.agentRowBindings = reconcileBoundRows(this.agentRowBindings, this.workspace.agents, (row: ResourceRow) => row.key(),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.rowBindingOwner = this.model; this.rowBindingScope = scope;
+  }
 
   private async openRecording(): Promise<void> {
     const context = this.getUIContext().getHostContext();
@@ -93,30 +144,30 @@ export struct KnowledgeWorkspacePage {
       if (this.workspace.query.trim()) {
         if (!this.workspace.results.length && !this.workspace.loading && !this.workspace.error) Text(tr('knowledge_no_results')).fontSize(Tokens.body).width('100%')
         List() {
-          ForEach(this.workspace.results, (hit: KnowledgeSearchHit) => {
+          ForEach(this.resultRowBindings, (binding: BoundRow<KnowledgeSearchHit>) => {
             ListItem() {
               Column({ space: Tokens.fine }) {
-                Text(hit.entry.title || hit.entry.id).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(2).width('100%')
-                Text(this.kindLabel(hit.entry.path) + ' · ' + String(hit.count)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
-                ForEach(hit.hits.slice(0, 3), (line: string, index: number) => Text(line).fontSize(Tokens.meta).maxLines(3).width('100%'),
-                  (line: string, index: number) => String(index) + line.slice(0, 40))
+                Text(binding.value.entry.title || binding.value.entry.id).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(2).width('100%')
+                Text(this.kindLabel(binding.value.entry.path) + ' · ' + String(binding.value.count)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
+                ForEach(binding.value.hits.slice(0, 3), (line: string, index: number) => Text(line).fontSize(Tokens.meta).maxLines(3).width('100%'),
+                  (line: string, index: number) => JSON.stringify([index, line]))
               }.alignItems(HorizontalAlign.Start).padding(Tokens.inset).width('100%')
-            }.onClick(() => this.workspace.openEntry(hit.entry).then((entry: ResourceRow) => this.onOpenResource(entry)).catch(() => undefined))
-              .id('knowledge.hit.' + hit.entry.path + '.' + hit.entry.id)
-          }, (hit: KnowledgeSearchHit) => hit.entry.key())
+            }.onClick(() => this.workspace.openEntry(binding.value.entry).then((entry: ResourceRow) => this.onOpenResource(entry)).catch(() => undefined))
+              .id('knowledge.hit.' + binding.value.entry.path + '.' + binding.value.entry.id)
+          }, (binding: BoundRow<KnowledgeSearchHit>) => binding.key)
         }.width('100%').layoutWeight(1)
       } else {
         if (!this.workspace.entries.length && !this.workspace.loading && !this.workspace.error) Text(tr('knowledge_empty')).fontSize(Tokens.body).width('100%')
         List() {
-          ForEach(this.workspace.entries, (entry: ResourceRow) => {
+          ForEach(this.entryRowBindings, (binding: BoundRow<ResourceRow>) => {
             ListItem() {
               Column({ space: Tokens.fine }) {
-                Text(entry.title || entry.id).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(2).width('100%')
-                if (this.rowSubtitle(entry)) Text(this.rowSubtitle(entry)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(3).width('100%')
+                Text(binding.value.title || binding.value.id).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(2).width('100%')
+                if (this.rowSubtitle(binding.value)) Text(this.rowSubtitle(binding.value)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(3).width('100%')
               }.alignItems(HorizontalAlign.Start).padding(Tokens.inset).width('100%')
-            }.onClick(() => this.workspace.openEntry(entry).then((next: ResourceRow) => this.onOpenResource(next)).catch(() => undefined))
-              .id('knowledge.entry.' + entry.path + '.' + entry.id)
-          }, (entry: ResourceRow) => entry.key())
+            }.onClick(() => this.workspace.openEntry(binding.value).then((next: ResourceRow) => this.onOpenResource(next)).catch(() => undefined))
+              .id('knowledge.entry.' + binding.value.path + '.' + binding.value.id)
+          }, (binding: BoundRow<ResourceRow>) => binding.key)
         }.width('100%').layoutWeight(1)
       }
     }.padding(Tokens.inset).width('100%').height('100%').alignItems(HorizontalAlign.Start)
@@ -225,15 +276,16 @@ export struct KnowledgeWorkspacePage {
         if (this.workspace.agents.length) {
           Column({ space: Tokens.gap }) {
             Text(tr('knowledge_project_agents')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
-            ForEach(this.workspace.agents, (agent: ResourceRow) => Button(agent.title || agent.id).width('100%').height(Tokens.touch)
-              .onClick(() => this.onChat(agent)).id('knowledge.agent.' + agent.id), (agent: ResourceRow) => agent.key())
+            ForEach(this.agentRowBindings, (binding: BoundRow<ResourceRow>) => Button(binding.value.title || binding.value.id).width('100%').height(Tokens.touch)
+              .onClick(() => this.onChat(binding.value)).id('knowledge.agent.' + binding.value.id), (binding: BoundRow<ResourceRow>) => binding.key)
           }.width('100%').alignItems(HorizontalAlign.Start)
         }
         if (this.workspace.matches.length) {
           Column({ space: Tokens.gap }) {
             Text(tr('knowledge_search_matches')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
             ForEach(this.workspace.matches, (match: Record<string, Object>, index: number) => Text(Wire.text(match, 'line'))
-              .fontSize(Tokens.meta).width('100%').id('knowledge.match.' + String(index)), (match: Record<string, Object>, index: number) => String(index))
+              .fontSize(Tokens.meta).width('100%').id('knowledge.match.' + String(index)),
+              (match: Record<string, Object>, index: number) => JSON.stringify([index, Wire.text(match, 'id'), JSON.stringify(match)]))
           }.width('100%').alignItems(HorizontalAlign.Start)
         }
         if (Wire.text(this.workspace.detail, 'summary')) {
@@ -244,10 +296,10 @@ export struct KnowledgeWorkspacePage {
         if (Wire.strings(this.workspace.detail, 'log').length) {
           Column({ space: Tokens.gap }) { Text(tr('knowledge_timeline')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
             ForEach(Wire.strings(this.workspace.detail, 'log').slice().reverse(), (line: string, index: number) => Text(line).fontSize(Tokens.meta).width('100%')
-              .id('knowledge.timeline.' + String(index)), (line: string, index: number) => String(index) + line.slice(0, 24))
+              .id('knowledge.timeline.' + String(index)), (line: string, index: number) => JSON.stringify([index, line]))
           }.width('100%').alignItems(HorizontalAlign.Start)
         }
-        if (this.workspace.selected.path === 'recordings') this.recordingSection(this.workspace.detail)
+        if (this.workspace.selected.path === 'recordings') this.recordingSection(UIUtils.makeBinding((): Record<string, Object> => this.workspace.detail))
         if (this.workspace.selected.path !== 'recordings' && Wire.text(this.workspace.detail, 'recent')) {
           Column({ space: Tokens.gap }) { Text(tr('knowledge_recent')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
             Text(Wire.text(this.workspace.detail, 'recent')).fontSize(Tokens.meta).width('100%')
@@ -258,11 +310,11 @@ export struct KnowledgeWorkspacePage {
             Text(tr('knowledge_related_moments')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
             ForEach(Wire.rows(this.workspace.detail, 'moments'), (moment: Record<string, Object>) => Button(Wire.text(moment, 'author') + ' · ' + Wire.text(moment, 'text'))
               .width('100%').height(Tokens.touch).onClick(() => this.loadMoment(Wire.text(moment, 'id'))).id('knowledge.moment.' + Wire.text(moment, 'id')),
-              (moment: Record<string, Object>) => Wire.text(moment, 'id'))
+              (moment: Record<string, Object>, index: number) => JSON.stringify([index, Wire.text(moment, 'id'), JSON.stringify(moment)]))
             if (this.momentText) MarkdownText({ text: this.momentText, onLink: (url: string) => this.openSafeLink(url) })
           }.width('100%').alignItems(HorizontalAlign.Start)
         }
-        this.relatedEntries(this.workspace.detail)
+        this.relatedEntries(UIUtils.makeBinding((): Record<string, Object> => this.workspace.detail))
         if (Wire.text(Wire.object(this.workspace.detail, 'meta'), 'url')) Button(tr('knowledge_open_link')).height(Tokens.touch).onClick(() => this.openSafeLink(Wire.text(Wire.object(this.workspace.detail, 'meta'), 'url')))
         if (Wire.text(this.workspace.detail, 'path')) Text(Wire.text(this.workspace.detail, 'path')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
         if (this.workspace.selected.path === 'recordings') Button(tr('knowledge_forget_recording')).enabled(this.workspace.canDeleteRecording())
@@ -271,37 +323,37 @@ export struct KnowledgeWorkspacePage {
     }.scrollable(ScrollDirection.Vertical).scrollBar(BarState.Auto).width('100%').height('100%')
   }
 
-  @Builder relatedEntries(detail: Record<string, Object>) {
-    if (Wire.rows(detail, 'links').length) {
+  @Builder relatedEntries(detail: Binding<Record<string, Object>>) {
+    if (Wire.rows(detail.value, 'links').length) {
       Column({ space: Tokens.gap }) {
         Text(tr('knowledge_related')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
-        ForEach(Wire.rows(detail, 'links'), (item: Record<string, Object>) => {
+        ForEach(Wire.rows(detail.value, 'links'), (item: Record<string, Object>) => {
           Button(Wire.text(item, 'title', Wire.text(item, 'id'))).width('100%').height(Tokens.touch).onClick(() => this.openRelated(item)).id('knowledge.related.' + Wire.text(item, 'kind') + '.' + Wire.text(item, 'id'))
-        }, (item: Record<string, Object>) => Wire.text(item, 'kind') + '/' + Wire.text(item, 'id'))
+        }, (item: Record<string, Object>, index: number) => JSON.stringify([index, Wire.text(item, 'kind') + '/' + Wire.text(item, 'id'), JSON.stringify(item)]))
       }.width('100%').alignItems(HorizontalAlign.Start)
     }
   }
 
-  @Builder recordingSection(detail: Record<string, Object>) {
+  @Builder recordingSection(detail: Binding<Record<string, Object>>) {
     Column({ space: Tokens.gap }) {
-      if (Object.keys(Wire.object(detail, 'minutes')).length) {
+      if (Object.keys(Wire.object(detail.value, 'minutes')).length) {
         Text(tr('knowledge_minutes')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
-        if (Wire.text(Wire.object(detail, 'minutes'), 'markdown')) MarkdownText({ text: Wire.text(Wire.object(detail, 'minutes'), 'markdown'), onLink: (url: string) => this.openSafeLink(url) })
-        ForEach(Wire.rows(Wire.object(detail, 'minutes'), 'actions'), (action: Record<string, Object>) => {
+        if (Wire.text(Wire.object(detail.value, 'minutes'), 'markdown')) MarkdownText({ text: Wire.text(Wire.object(detail.value, 'minutes'), 'markdown'), onLink: (url: string) => this.openSafeLink(url) })
+        ForEach(Wire.rows(Wire.object(detail.value, 'minutes'), 'actions'), (action: Record<string, Object>) => {
           Row({ space: Tokens.gap }) { Toggle({ type: ToggleType.Checkbox, isOn: this.selectedActions.includes(Wire.text(action, 'id')) }).onChange(() => this.toggleAction(Wire.text(action, 'id')))
             Text(Wire.text(action, 'what')).fontSize(Tokens.meta).layoutWeight(1)
           }.width('100%').id('knowledge.minutes.action.' + Wire.text(action, 'id'))
-        }, (action: Record<string, Object>) => Wire.text(action, 'id'))
+        }, (action: Record<string, Object>, index: number) => JSON.stringify([index, Wire.text(action, 'id'), JSON.stringify(action)]))
         if (this.selectedActions.length) Button(tr('knowledge_minutes_add_todos')).height(Tokens.touch).onClick(() => this.confirmAddTodos())
       }
       Button(tr('knowledge_minutes_make')).enabled(!this.workspace.busy && this.workspace.writeState !== 'pending' && this.workspace.writeState !== 'unknown')
         .height(Tokens.touch).onClick(() => this.workspace.makeMinutes()).id('knowledge.minutes.make')
-      if (Wire.rows(detail, 'segments').length) {
+      if (Wire.rows(detail.value, 'segments').length) {
         Text(tr('knowledge_transcript')).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
-        ForEach(Wire.rows(detail, 'segments'), (line: Record<string, Object>, index: number) => Text(Wire.text(line, 'text'))
+        ForEach(Wire.rows(detail.value, 'segments'), (line: Record<string, Object>, index: number) => Text(Wire.text(line, 'text'))
           .fontSize(Tokens.meta).width('100%').id('knowledge.transcript.' + String(index)),
-          (line: Record<string, Object>, index: number) => String(index))
-      } else if (Wire.text(detail, 'recent')) Text(Wire.text(detail, 'recent')).fontSize(Tokens.meta).width('100%')
+          (line: Record<string, Object>, index: number) => JSON.stringify([index, JSON.stringify(line)]))
+      } else if (Wire.text(detail.value, 'recent')) Text(Wire.text(detail.value, 'recent')).fontSize(Tokens.meta).width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 

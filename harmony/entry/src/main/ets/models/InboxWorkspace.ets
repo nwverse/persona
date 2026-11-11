@@ -276,6 +276,7 @@ export class InboxWorkspace {
   private visibleReadPositions: Record<string, string> = {};
   private visibleReadBadges: Record<string, number> = {};
   private readTimer: number = -1;
+  private listRequest: number = 0;
   private draftWrite: Promise<void> = Promise.resolve();
   private composeWrite: Promise<void> = Promise.resolve();
   private currentSource: string = '';
@@ -522,24 +523,27 @@ export class InboxWorkspace {
     if (this.referenceMode) { await this.refreshConversation(); return; }
     let owner: OwnerSnapshot;
     try { owner = this.capture(undefined); } catch (error) { this.error = error instanceof Error ? error.message : 'offline'; return; }
+    if (!this.owns(owner, false)) return;
+    const request = ++this.listRequest;
+    const current = (): boolean => request === this.listRequest && this.owns(owner, false);
     this.loading = true; this.error = '';
     try {
       const result = await owner.repo.call('/api/v1/inbox' + managerQuery(owner.managerId, Wire.payload(['sources'], ['all'])));
-      if (!this.owns(owner, false)) return;
+      if (!current()) return;
       const rows = Wire.rows(result, 'items').map((item: Record<string, Object>) => {
         const row = ResourceRow.from(item, 'inbox');
         if (!row.manager) row.manager = owner.managerId;
         return row;
       });
-      // Explicit refresh rebuilds membership; updates while a reader is open are only applied to the existing row.
+      // List reads rebuild membership; detail acknowledgements patch their existing row.
       this.items = rows;
       try {
         const sources = await owner.repo.call('/api/v1/messaging' + managerQuery(owner.managerId));
-        if (!this.owns(owner, false)) return;
+        if (!current()) return;
         this.sourceDefinitions = Wire.rows(sources, 'sources');
-      } catch (_) { if (this.owns(owner, false)) this.sourceDefinitions = []; }
-    } catch (error) { if (this.owns(owner, false)) this.error = this.errorCode(error as Error); }
-    finally { if (this.owns(owner, false)) this.loading = false; }
+      } catch (_) { if (current()) this.sourceDefinitions = []; }
+    } catch (error) { if (current()) this.error = this.errorCode(error as Error); }
+    finally { if (current()) this.loading = false; }
   }
 
   async openRow(row: ResourceRow): Promise<void> {

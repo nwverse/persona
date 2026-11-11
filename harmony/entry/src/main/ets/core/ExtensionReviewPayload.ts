@@ -156,10 +156,11 @@ export function lineWindowOffset(requestedStart: number, resultStart: number, li
 export function chartRows(chartValue: Record<string, Object>): ExtensionChartRow[] {
   const kind = text(chartValue, 'kind'), unit = text(chartValue, 'unit');
   const rows: ExtensionChartRow[] = [];
-  for (const seriesValue of array(chartValue['series'])) {
-    const series = record(seriesValue), seriesName = text(series, 'name');
-    for (const pointValue of array(series['points'])) {
-      const point = record(pointValue), rawValue = String(number(point, 'value')) + unit;
+  const allSeries = array(chartValue['series']);
+  for (let seriesIndex = 0; seriesIndex < allSeries.length; seriesIndex++) {
+    const series = record(allSeries[seriesIndex]), seriesName = text(series, 'name'), points = array(series['points']);
+    for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
+      const point = record(points[pointIndex]), rawValue = String(number(point, 'value')) + unit;
       const display = text(point, 'display');
       const row: ExtensionChartRow = { series: seriesName, label: text(point, 'label'), value: display ? display + ' · ' + rawValue : rawValue,
         open: '', high: '', low: '', close: '', volume: '' };

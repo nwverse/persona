@@ -352,3 +352,16 @@ test('native rename, close and delete retain the owner generation captured when 
 
 test('forget cancels an aggregate history pass even after that Hub rows were collected',async()=>{const a=clientFixture(),b=clientFixture({history:[agent('b-history')]}),c=clientFixture();a.client.profile.id='hub-a';b.client.profile.id='hub-b';c.client.profile.id='hub-c';b.state.scope='hub-b:work';c.state.scope='hub-c:work';b.client.features=c.client.features=['agent_session_archives'];a.client.directoryOwners=()=>[a.client,b.client,c.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:row.group==='hub-c'?c.client:a.client;let release,started;const gate=new Promise(r=>release=r),entered=new Promise(r=>started=r);c.state.request=async call=>{if(call.path.startsWith('/api/v1/sessions/archived')){started();return gate;}};const w=new AgentWorkspace();await w.open(a.client);const history=w.setHistory(true);await entered;w.forgetHub('hub-b');release({sessions:[agent('c-history').data()]});await history;assert.equal(w.loading,false);assert.equal(w.historyRows.some(row=>row.group==='hub-b'),false);assert.equal(w.visibleRows().some(row=>row.group==='hub-b'),false);});
 test('turning history off invalidates its pending response before restoring the live list',async()=>{const f=clientFixture();f.client.features=['agent_session_archives'];let release,started;const gate=new Promise(r=>release=r),entered=new Promise(r=>started=r);f.state.request=async call=>{if(call.path.startsWith('/api/v1/sessions/archived')){started();return gate;}};const w=new AgentWorkspace();await w.open(f.client);const old=w.setHistory(true);await entered;await w.setHistory(false);release({sessions:[agent('stale-archive').data()]});await old;assert.equal(w.history,false);assert.deepEqual(w.visibleRows().map(row=>row.id),['s1']);assert.equal(w.loading,false);});
+
+test('detail activation while opening cannot freeze an empty list before its saved view loads', async () => {
+  const { client } = clientFixture(), workspace = new AgentWorkspace();
+  const opening = workspace.open(client, true);
+  workspace.setReadingDetail(true);
+  await opening;
+  assert.deepEqual(workspace.visibleRows().map(row => row.id), ['s1']);
+  client.sessions = [agent('s1', { state: 'idle' }), agent('new-later')];
+  workspace.update(client, true);
+  assert.deepEqual(workspace.visibleRows().map(row => row.id), ['s1']);
+  assert.equal(workspace.visibleRows()[0].state, 'idle');
+  workspace.hide();
+});

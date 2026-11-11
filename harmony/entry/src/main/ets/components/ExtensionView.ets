@@ -1,3 +1,6 @@
+import { UIUtils } from '@kit.ArkUI';
+import type { Binding } from '@kit.ArkUI';
+import { reconcileJsonProjection } from '../core/JsonProjection';
 import { image } from '@kit.ImageKit';
 import { url } from '@kit.ArkTS';
 import type { ExtensionPresentation } from '../core/ExtensionPresentation';
@@ -58,6 +61,16 @@ function toneKey(value: string): string {
 function displayedLineCount(value: string): number {
   const rows = value.split('\n').length - (value.endsWith('\n') ? 1 : 0);
   return Math.max(1, rows);
+}
+
+interface NativeActionButton {
+  action: ExtensionViewRecord;
+  key: string;
+  title: string;
+  event: string;
+  role: string;
+  summary: string;
+  values: ExtensionViewRecord;
 }
 
 interface ExtensionControlFlight {
@@ -125,7 +138,7 @@ struct ExtensionImage {
 
   aboutToAppear(): void { this.sourceKey = this.sourceIdentity(); if (this.active && this.visible) this.load(); }
   aboutToDisappear(): void { this.visible = false; this.releaseImage(); }
-  @Monitor('source') sourceChanged(): void { this.reset(); }
+  @Monitor('source', 'source.path', 'source.url') sourceChanged(): void { this.reset(); }
   @Monitor('active') activeChanged(): void { if (this.active) { if (this.visible) this.load(); } else this.releaseImage(); }
 
   private reset(): void {
@@ -225,6 +238,11 @@ export struct ExtensionView {
   @Param active: boolean = true;
   @Param showTitle: boolean = true;
   @Event onLink: (address: string) => void = (_address: string): void => {};
+  @Local presentedView: ExtensionViewRecord | undefined = undefined;
+  @Local projectionError: boolean = false;
+  @Local projectionGeneration: number = 0;
+  private projectionOwner: ExtensionPresentation | undefined = undefined;
+  private projectionScope: string = '';
   @Local searchDraft: string = '';
   @Local filterDraft: string = '';
   @Local tabDraft: string = '';
@@ -250,31 +268,47 @@ export struct ExtensionView {
   private tabDirty: boolean = false;
   private searchTimer: number = -1;
 
-  aboutToAppear(): void { this.lineResultsRevision = this.model.lineResultRevision; this.syncToolbar(); this.syncControls(); }
+  aboutToAppear(): void { this.syncProjection(); this.lineResultsRevision = this.model.lineResultRevision; this.syncToolbar(); this.syncControls(); }
   aboutToDisappear(): void { this.clearSearchTimer(); this.cancelControlFlights(); }
   @Monitor('active') visibilityChanged(): void {
-    if (this.active) { this.syncToolbar(); this.syncControls(); this.resumeControlFlights(); }
+    if (this.active) { this.syncProjection(); this.syncToolbar(); this.syncControls(); this.resumeControlFlights(); }
     else { this.clearSearchTimer(); this.cancelControlFlights(); }
   }
-  @Monitor('model.revision', 'model.viewVersion') viewChanged(): void { this.syncToolbar(); this.syncControls(); this.settleControlFlights(); }
+  @Monitor('model', 'model.revision', 'model.viewVersion') viewChanged(): void { this.syncProjection(); this.syncToolbar(); this.syncControls(); this.settleControlFlights(); }
   @Monitor('model.busy', 'model.error') actionStateChanged(): void {
     if (this.model.busy) for (const state of this.controlFlights.values()) if (state.queue.inFlight()) state.observedBusy = true;
     this.settleControlFlights();
   }
   @Monitor('model.lineResultRevision') lineResultsChanged(): void { this.lineResultsRevision = this.model.lineResultRevision; }
 
+  private renderView(): ExtensionViewRecord { return this.presentedView || this.model.view; }
+  private syncProjection(): void {
+    const scope = this.model.presentationKey || this.rootKey();
+    if (!this.presentedView || this.projectionOwner !== this.model || this.projectionScope !== scope) {
+      this.clearSearchTimer(); this.cancelControlFlights(); this.controlFlights.clear(); this.controlServerValues.clear();
+      this.controlView = ''; this.localValues = {}; this.toolbarView = '';
+      this.searchIdentity = ''; this.filterIdentity = ''; this.tabIdentity = '';
+      this.searchDirty = false; this.filterDirty = false; this.tabDirty = false;
+      this.lineStates.clear(); this.lineIdentities.clear(); this.lineIdentityView = undefined; this.lineIdentityRevision = -1;
+      this.projectionOwner = this.model; this.projectionScope = scope; this.projectionGeneration++;
+      this.presentedView = UIUtils.makeObserved<ExtensionViewRecord>({});
+    }
+    try { reconcileJsonProjection(this.presentedView, this.model.view); this.projectionError = false; }
+    catch (_) { this.clearSearchTimer(); this.cancelControlFlights(); this.controlFlights.clear(); this.projectionError = true; }
+  }
+
   private clearSearchTimer(): void { if (this.searchTimer !== -1) clearTimeout(this.searchTimer); this.searchTimer = -1; }
   private toolbarIdentity(name: string): string {
-    const part = Wire.object(this.model.view, name), choices = this.choices(part['choices'] || part['items']);
-    return JSON.stringify([this.rootKey(), Wire.text(this.model.view, 'title'), Wire.text(part, 'name'), Wire.text(part, 'key'),
+    const part = Wire.object(this.renderView(), name), choices = this.choices(part['choices'] || part['items']);
+    return JSON.stringify([this.rootKey(), Wire.text(this.renderView(), 'title'), Wire.text(part, 'name'), Wire.text(part, 'key'),
       Wire.text(Wire.object(part, 'action'), 'id'), choices.map((choice: Record<string, Object>) => Wire.text(choice, 'value'))]);
   }
   private syncToolbar(): void {
-    const encoded = JSON.stringify(this.model.view);
+    const encoded = JSON.stringify(this.renderView());
     if (encoded === this.toolbarView) return;
     this.toolbarView = encoded;
     const searchIdentity = this.toolbarIdentity('search'), filterIdentity = this.toolbarIdentity('filter'), tabIdentity = this.toolbarIdentity('tabs');
-    const search = Wire.object(this.model.view, 'search'), filter = Wire.object(this.model.view, 'filter'), tabs = Wire.object(this.model.view, 'tabs');
+    const search = Wire.object(this.renderView(), 'search'), filter = Wire.object(this.renderView(), 'filter'), tabs = Wire.object(this.renderView(), 'tabs');
     const searchValue = Wire.text(search, 'value'), filterValue = Wire.text(filter, 'value'), tabValue = Wire.text(tabs, 'value');
     if (searchIdentity !== this.searchIdentity) { this.searchIdentity = searchIdentity; this.searchDraft = searchValue; this.searchDirty = false; }
     else if (this.searchDirty) { if (searchValue === this.searchDraft) this.searchDirty = false; }
@@ -286,7 +320,7 @@ export struct ExtensionView {
     else if (this.tabDirty) { if (tabValue === this.tabDraft) this.tabDirty = false; }
     else this.tabDraft = tabValue;
   }
-  private sections(): ExtensionViewRecord[] { return records(this.model.view['sections']); }
+  private sections(): ExtensionViewRecord[] { return records(this.renderView()['sections']); }
   private itemKey(section: ExtensionViewRecord, sectionIndex: number, item: ExtensionViewRecord, itemIndex: number): string {
     return Wire.text(item, 'key', '@item:' + String(sectionIndex) + ':' + String(itemIndex));
   }
@@ -392,7 +426,7 @@ export struct ExtensionView {
     return result;
   }
   private syncControls(): void {
-    const encodedView = JSON.stringify(this.model.view), viewChanged = encodedView !== this.controlView;
+    const encodedView = JSON.stringify(this.renderView()), viewChanged = encodedView !== this.controlView;
     this.controlView = encodedView;
     const current = this.controlsInView(), present = new Set<string>();
     for (const identity of current.keys()) {
@@ -537,7 +571,7 @@ export struct ExtensionView {
       ForEach(this.numberValues(value, 'values').slice(0, 16), (point: number, index: number) => {
         Column() {}.width(4).height(Math.max(3, Math.min(18, Math.abs(point) + 3)))
           .backgroundColor($r(toneKey(Wire.text(value, 'tone')))).borderRadius(Tokens.fine)
-      }, (point: number, index: number) => String(index))
+      }, (point: number, index: number) => String(index) + ':' + String(point))
     }.height(20).alignItems(VerticalAlign.Bottom)
   }
   private numberValues(value: ExtensionViewRecord, name: string): number[] {
@@ -546,36 +580,36 @@ export struct ExtensionView {
   }
 
   @Builder private toolbarContent() {
-    if (Wire.has(this.model.view, 'search') || Wire.has(this.model.view, 'filter')) {
+    if (Wire.has(this.renderView(), 'search') || Wire.has(this.renderView(), 'filter')) {
       Row({ space: Tokens.gap }) {
-        if (Wire.has(this.model.view, 'search')) {
-          Search({ value: this.searchDraft, placeholder: Wire.text(Wire.object(this.model.view, 'search'), 'placeholder', tr('search')) })
+        if (Wire.has(this.renderView(), 'search')) {
+          Search({ value: this.searchDraft, placeholder: Wire.text(Wire.object(this.renderView(), 'search'), 'placeholder', tr('search')) })
             .onChange((value: string) => { this.searchDraft = value; this.searchDirty = true; this.clearSearchTimer(); this.searchTimer = setTimeout(() => {
-              this.searchTimer = -1; this.runAction(Wire.object(Wire.object(this.model.view, 'search'), 'action'), this.rootKey(), 'change', this.safeActionValues('q', value));
+              this.searchTimer = -1; this.runAction(Wire.object(Wire.object(this.renderView(), 'search'), 'action'), this.rootKey(), 'change', this.safeActionValues('q', value));
             }, 300); }).layoutWeight(1)
         }
-        if (Wire.has(this.model.view, 'filter')) {
-          if (this.choices(Wire.object(this.model.view, 'filter')['choices']).length) Select(this.choiceOptions(this.choices(Wire.object(this.model.view, 'filter')['choices']))).value(this.filterTitle(this.choices(Wire.object(this.model.view, 'filter')['choices']), this.filterDraft)).enabled(this.model.canInteract())
+        if (Wire.has(this.renderView(), 'filter')) {
+          if (this.choices(Wire.object(this.renderView(), 'filter')['choices']).length) Select(this.choiceOptions(this.choices(Wire.object(this.renderView(), 'filter')['choices']))).value(this.filterTitle(this.choices(Wire.object(this.renderView(), 'filter')['choices']), this.filterDraft)).enabled(this.model.canInteract())
             .onSelect((index: number) => {
-              const choice = this.choices(Wire.object(this.model.view, 'filter')['choices'])[index]; if (!choice) return;
+              const choice = this.choices(Wire.object(this.renderView(), 'filter')['choices'])[index]; if (!choice) return;
               this.filterDraft = Wire.text(choice, 'value'); this.filterDirty = true;
-              const values = this.safeActionValues(Wire.text(Wire.object(this.model.view, 'filter'), 'name'), this.filterDraft);
-              if (Wire.has(this.model.view, 'search')) values['q'] = this.searchDraft;
-              this.runAction(Wire.object(Wire.object(this.model.view, 'filter'), 'action'), this.rootKey(), 'change', values);
+              const values = this.safeActionValues(Wire.text(Wire.object(this.renderView(), 'filter'), 'name'), this.filterDraft);
+              if (Wire.has(this.renderView(), 'search')) values['q'] = this.searchDraft;
+              this.runAction(Wire.object(Wire.object(this.renderView(), 'filter'), 'action'), this.rootKey(), 'change', values);
             }).layoutWeight(1)
         }
       }.width('100%').padding({ top: Tokens.gap, bottom: Tokens.gap })
     }
-    if (Wire.has(this.model.view, 'tabs')) {
+    if (Wire.has(this.renderView(), 'tabs')) {
       Scroll() {
         Row({ space: Tokens.fine }) {
-          ForEach(this.choices(Wire.object(this.model.view, 'tabs')['items']), (tab: Record<string, Object>, index: number) => {
+          ForEach(this.choices(Wire.object(this.renderView(), 'tabs')['items']), (tab: Record<string, Object>, index: number) => {
             Button(this.choiceTitle(tab), { buttonStyle: Wire.text(tab, 'value') === this.tabDraft ? ButtonStyleMode.NORMAL : ButtonStyleMode.TEXTUAL })
               .enabled(this.model.canInteract()).onClick(() => {
                 this.tabDraft = Wire.text(tab, 'value'); this.tabDirty = true;
-                const values = this.safeActionValues(Wire.text(Wire.object(this.model.view, 'tabs'), 'name'), this.tabDraft);
-                if (Wire.has(this.model.view, 'search')) values['q'] = this.searchDraft;
-                this.runAction(Wire.object(Wire.object(this.model.view, 'tabs'), 'action'), this.rootKey(), 'change', values);
+                const values = this.safeActionValues(Wire.text(Wire.object(this.renderView(), 'tabs'), 'name'), this.tabDraft);
+                if (Wire.has(this.renderView(), 'search')) values['q'] = this.searchDraft;
+                this.runAction(Wire.object(Wire.object(this.renderView(), 'tabs'), 'action'), this.rootKey(), 'change', values);
               })
           }, (tab: Record<string, Object>, index: number) => Wire.text(tab, 'value', String(index)))
         }
@@ -584,18 +618,17 @@ export struct ExtensionView {
   }
   private filterTitle(choices: Record<string, Object>[], value: string): string {
     const found = choices.find((choice: Record<string, Object>) => Wire.text(choice, 'value') === value);
-    return found ? this.choiceTitle(found) : Wire.text(Wire.object(this.model.view, 'filter'), 'title', value);
+    return found ? this.choiceTitle(found) : Wire.text(Wire.object(this.renderView(), 'filter'), 'title', value);
   }
 
-  @Builder private sectionView(section: ExtensionViewRecord, sectionIndex: number) {
+  @Builder private sectionView(section: ExtensionViewRecord, sectionIndex: Binding<number>) {
     Column({ space: Tokens.gap }) {
       if (Wire.text(section, 'title')) Text(Wire.text(section, 'title')).fontSize(Tokens.title)
         .fontWeight(FontWeight.Bold).width('100%')
       ForEach(this.sectionItems(section), (item: ExtensionViewRecord, itemIndex: number) => {
-        this.componentView(item, this.itemKey(section, sectionIndex, item, itemIndex))
-      }, (item: ExtensionViewRecord, itemIndex: number) => this.itemKey(section, sectionIndex, item, itemIndex))
-      if (Wire.has(section, 'more')) this.actionButton(Wire.object(Wire.object(section, 'more'), 'action'),
-        this.sectionKey(section, sectionIndex), Wire.text(Wire.object(section, 'more'), 'title', tr('more')), 'press')
+        this.componentView(item, this.itemKey(section, sectionIndex.value, item, itemIndex))
+      }, (item: ExtensionViewRecord, itemIndex: number) => this.itemKey(section, sectionIndex.value, item, itemIndex))
+      if (Wire.has(section, 'more')) this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(Wire.object(section, 'more'), 'action'), key: this.sectionKey(section, sectionIndex.value), title: Wire.text(Wire.object(section, 'more'), 'title', tr('more')), event: 'press', role: '', summary: '', values: {} })))
       if (Wire.text(section, 'footer')) Text(Wire.text(section, 'footer')).fontSize(Tokens.meta)
         .fontColor($r('sys.color.font_secondary')).width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start).padding(this.compact ? Tokens.inset : Tokens.page)
@@ -608,7 +641,7 @@ export struct ExtensionView {
     else if (Wire.text(item, 'type') === 'metric') this.metricView(item)
     else if (Wire.text(item, 'type') === 'progress') this.progressView(item)
     else if (Wire.text(item, 'type') === 'row') this.rowView(item, key)
-    else if (Wire.text(item, 'type') === 'button') this.actionButton(Wire.object(item, 'action'), key, Wire.text(item, 'title'), 'press', Wire.text(item, 'role'))
+    else if (Wire.text(item, 'type') === 'button') this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(item, 'action'), key: key, title: Wire.text(item, 'title'), event: 'press', role: Wire.text(item, 'role'), summary: '', values: {} })))
     else if (Wire.text(item, 'type') === 'link') this.linkView(item)
     else if (Wire.text(item, 'type') === 'field') this.fieldView(item, key)
     else if (Wire.text(item, 'type') === 'divider') Divider().strokeWidth(Tokens.hairline).color($r('sys.color.font_secondary')).width('100%')
@@ -664,7 +697,7 @@ export struct ExtensionView {
     Column({ space: Tokens.gap }) {
       Row({ space: Tokens.gap }) {
         if (Wire.text(item, 'icon')) Text(Wire.text(item, 'icon')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width(Tokens.touch).textAlign(TextAlign.Center)
-        if (Wire.has(item, 'avatar')) this.avatarView(Wire.object(item, 'avatar'), Wire.text(item, 'title'))
+        if (Wire.has(item, 'avatar')) this.avatarView(Wire.object(item, 'avatar'), UIUtils.makeBinding((): string => Wire.text(item, 'title')))
         if (Wire.has(item, 'thumbnail')) this.thumbnailView(Wire.object(item, 'thumbnail'))
         Column({ space: Tokens.fine }) {
           Text(Wire.text(item, 'title')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
@@ -675,34 +708,36 @@ export struct ExtensionView {
         if (Wire.has(item, 'spark')) this.spark(Wire.object(item, 'spark'))
       }.width('100%').alignItems(VerticalAlign.Center)
         .onClick(() => { if (Wire.has(item, 'action')) this.runAction(Wire.object(item, 'action'), key, 'press', {}, '', Wire.text(item, 'title')); })
-      if (Wire.has(item, 'control')) this.rowControl(Wire.object(item, 'control'), key, Wire.text(item, 'title'))
+      if (Wire.has(item, 'control')) this.rowControl(Wire.object(item, 'control'), key, UIUtils.makeBinding((): string => Wire.text(item, 'title')))
       ForEach(this.choices(item['actions']), (candidate: Record<string, Object>, index: number) => {
-        this.actionButton(Wire.object(candidate, 'action'), key, Wire.text(candidate, 'title'), 'press', Wire.text(candidate, 'role'))
+        this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(candidate, 'action'), key: key, title: Wire.text(candidate, 'title'), event: 'press', role: Wire.text(candidate, 'role'), summary: '', values: {} })))
       }, (candidate: Record<string, Object>, index: number) => Wire.text(Wire.object(candidate, 'action'), 'id', String(index)))
     }.width('100%').padding(Tokens.inset).backgroundColor($r('sys.color.comp_background_secondary'))
       .border({ width: Tokens.hairline, color: $r('sys.color.font_secondary'), radius: Tokens.gap })
   }
-  @Builder private avatarView(avatar: ExtensionViewRecord, title: string) {
-    if (Wire.text(avatar, 'path') || Wire.text(avatar, 'url')) ExtensionImage({ ui: this.model, budget: this.imageBudget, active: this.active, source: avatar, alt: title, aspect: 'square', imageHeight: 36 })
+  @Builder private avatarView(avatar: ExtensionViewRecord, title: Binding<string>) {
+    if (Wire.text(avatar, 'path') || Wire.text(avatar, 'url')) ExtensionImage({ ui: this.model, budget: this.imageBudget, active: this.active, source: avatar, alt: title.value, aspect: 'square', imageHeight: 36 })
       .width(36).height(36).borderRadius(Tokens.touch)
-    else Text(initials(Wire.text(avatar, 'text'), title)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
+    else Text(initials(Wire.text(avatar, 'text'), title.value)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
       .width(36).height(36).textAlign(TextAlign.Center).backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.touch)
   }
   @Builder private thumbnailView(thumbnail: ExtensionViewRecord) {
     if (Wire.text(thumbnail, 'path') || Wire.text(thumbnail, 'url')) ExtensionImage({ ui: this.model, budget: this.imageBudget, active: this.active, source: thumbnail, alt: '', aspect: Wire.text(thumbnail, 'aspect', 'square'), imageHeight: 56 }).width(72).height(56)
   }
-  @Builder private actionButton(action: ExtensionViewRecord, key: string, title: string, event: string = 'press', role: string = '',
-    summary: string = '', values: ExtensionViewRecord = {}) {
-    if (Wire.text(action, 'id')) Button(title || Wire.text(action, 'id'))
-      .fontColor($r(role === 'destructive' ? 'app.color.persona_danger' : 'app.color.persona_brand'))
-      .enabled(this.model.canInteract()).height(Tokens.touch).onClick(() => this.runAction(action, key, event, values, role, summary || title))
+  @Builder private actionButton(button: Binding<NativeActionButton>) {
+    if (Wire.text(button.value.action, 'id')) Button(button.value.title || Wire.text(button.value.action, 'id'))
+      .role(button.value.role === 'destructive' ? ButtonRole.ERROR : ButtonRole.NORMAL)
+      .enabled(this.model.canInteract()).height(Tokens.touch).onClick(() => {
+        const current = button.value;
+        this.runAction(current.action, current.key, current.event, current.values, current.role, current.summary || current.title);
+      })
   }
 
-  @Builder private rowControl(control: ExtensionViewRecord, key: string, label: string) {
+  @Builder private rowControl(control: ExtensionViewRecord, key: string, label: Binding<string>) {
     if (Wire.text(control, 'kind') === 'switch') {
       Toggle({ type: ToggleType.Switch, isOn: Wire.bool(control, 'on') }).enabled(!Wire.bool(control, 'disabled') && this.model.canInteract())
         .onChange((on: boolean) => this.runAction(Wire.object(control, 'action'), key, 'change', this.safeActionValues(Wire.text(control, 'name'), String(on))))
-        .accessibilityText(label)
+        .accessibilityText(label.value)
     } else if (Wire.text(control, 'kind') === 'slider') {
       Row({ space: Tokens.gap }) {
         Slider({ value: Number(this.controlDraft(control, key)), min: Wire.number(control, 'min', 0), max: Wire.number(control, 'max', 100), step: Wire.number(control, 'step', 1) })
@@ -791,7 +826,7 @@ export struct ExtensionView {
             .fontSize(Tokens.meta).fontWeight(FontWeight.Bold).width(160).padding(Tokens.gap), (column: Record<string, Object>, index: number) => String(index)) }
           ForEach(recordArrays(item['rows']), (row: Object[], rowIndex: number) => {
             Row() { ForEach(row, (cell: Object, cellIndex: number) => Text(typeof cell === 'string' ? cell as string : '')
-              .fontSize(Tokens.meta).width(160).padding(Tokens.gap).border({ width: Tokens.hairline, color: $r('sys.color.font_secondary') }), (cell: Object, cellIndex: number) => String(cellIndex)) }
+              .fontSize(Tokens.meta).width(160).padding(Tokens.gap).border({ width: Tokens.hairline, color: $r('sys.color.font_secondary') }), (cell: Object, cellIndex: number) => String(cellIndex) + ':' + JSON.stringify(cell)) }
           }, (_row: Object[], rowIndex: number) => String(rowIndex))
         }
       }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).width('100%')
@@ -817,12 +852,12 @@ export struct ExtensionView {
           Text('O ' + point.open + '   H ' + point.high + '   L ' + point.low + '   C ' + point.close + (point.volume ? '   V ' + point.volume : ''))
             .fontSize(Tokens.meta - 1).fontFamily('monospace').width('100%').wordBreak(WordBreak.BREAK_WORD)
         }.width('100%').padding(Tokens.gap).backgroundColor($r('sys.color.comp_background_secondary')),
-          (point: ExtensionChartRow, pointIndex: number) => String(pointIndex))
+          (point: ExtensionChartRow, pointIndex: number) => String(pointIndex) + ':' + JSON.stringify(point))
       } else {
         ForEach(chartRows(item), (point: ExtensionChartRow, pointIndex: number) => Row({ space: Tokens.gap }) {
           Text(this.chartPointLabel(point)).fontSize(Tokens.meta - 1).layoutWeight(1).wordBreak(WordBreak.BREAK_WORD)
           Text(point.value).fontSize(Tokens.meta - 1).textAlign(TextAlign.End).wordBreak(WordBreak.BREAK_WORD)
-        }.width('100%').padding({ top: Tokens.fine, bottom: Tokens.fine }), (point: ExtensionChartRow, pointIndex: number) => String(pointIndex))
+        }.width('100%').padding({ top: Tokens.fine, bottom: Tokens.fine }), (point: ExtensionChartRow, pointIndex: number) => String(pointIndex) + ':' + JSON.stringify(point))
       }
       if (Wire.text(item, 'detail')) Text(Wire.text(item, 'detail')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
     }.width('100%').padding(Tokens.inset).backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.gap)
@@ -833,7 +868,7 @@ export struct ExtensionView {
       Text(Wire.text(item, 'icon', '○')).fontSize(Tokens.title).fontColor($r('sys.color.font_secondary'))
       Text(Wire.text(item, 'title')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%').textAlign(TextAlign.Center)
       if (Wire.text(item, 'detail')) Text(Wire.text(item, 'detail')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%').textAlign(TextAlign.Center)
-      if (Wire.has(item, 'button')) this.actionButton(Wire.object(Wire.object(item, 'button'), 'action'), key, Wire.text(Wire.object(item, 'button'), 'title'))
+      if (Wire.has(item, 'button')) this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(Wire.object(item, 'button'), 'action'), key: key, title: Wire.text(Wire.object(item, 'button'), 'title'), event: 'press', role: '', summary: '', values: {} })))
     }.width('100%').alignItems(HorizontalAlign.Center).padding(Tokens.page)
   }
   @Builder private loadingView(item: ExtensionViewRecord) {
@@ -850,7 +885,7 @@ export struct ExtensionView {
   @Builder private headerView(item: ExtensionViewRecord) {
     Column({ space: Tokens.gap }) {
       if (Wire.has(item, 'avatar')) Row({ space: Tokens.gap }) {
-        this.avatarView(Wire.object(item, 'avatar'), Wire.text(item, 'title'))
+        this.avatarView(Wire.object(item, 'avatar'), UIUtils.makeBinding((): string => Wire.text(item, 'title')))
         Column({ space: Tokens.fine }) { Text(Wire.text(item, 'title')).fontSize(Tokens.title).fontWeight(FontWeight.Bold)
           if (Wire.text(item, 'subtitle')) Text(Wire.text(item, 'subtitle')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -906,27 +941,26 @@ export struct ExtensionView {
             Text(line || ' ').fontSize(Tokens.meta).fontFamily('monospace').fontColor($r('sys.color.font_primary'))
               .backgroundColor(Wire.number(item, 'start_line', 1) + index >= Wire.number(Wire.object(item, 'highlight'), 'start', -1) && Wire.number(item, 'start_line', 1) + index <= Wire.number(Wire.object(item, 'highlight'), 'end', -1) ? $r('sys.color.comp_background_tertiary') : Color.Transparent)
               .copyOption(CopyOptions.LocalDevice).layoutWeight(1)
-          }.width('100%'), (line: string, index: number) => String(index))
+          }.width('100%'), (line: string, index: number) => String(index) + ':' + line)
         }
       }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).width('100%')
         .backgroundColor($r('sys.color.comp_background_secondary')).padding(Tokens.gap)
-      if (Wire.bool(item, 'truncated') && Wire.has(item, 'load')) this.actionButton(Wire.object(item, 'load'), key,
-        tr('extension_ui_load_more'), 'press', '', '', { path: Wire.text(item, 'path'), from: String(Wire.number(item, 'start_line', 1) + displayedLineCount(Wire.text(item, 'text'))) })
+      if (Wire.bool(item, 'truncated') && Wire.has(item, 'load')) this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(item, 'load'), key: key, title: tr('extension_ui_load_more'), event: 'press', role: '', summary: '', values: { path: Wire.text(item, 'path'), from: String(Wire.number(item, 'start_line', 1) + displayedLineCount(Wire.text(item, 'text'))) } })))
       if (Wire.text(item, 'line_url')) {
         if (safeHTTPS(codeLineAddress(item))) Button(tr('extension_ui_open_lines'), { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.link(codeLineAddress(item)))
       }
-      this.returnedLines(key, Wire.text(item, 'path'))
+      this.returnedLines(key, UIUtils.makeBinding((): string => Wire.text(item, 'path')))
     }.width('100%')
   }
   private lineComponentIdentity(key: string, path: string): string {
-    if (this.lineIdentityView !== this.model.view || this.lineIdentityRevision !== this.model.revision) {
+    if (this.lineIdentityView !== this.renderView() || this.lineIdentityRevision !== this.model.revision) {
       this.lineIdentities.clear();
       for (const section of this.sections()) for (const item of this.sectionItems(section)) {
         if (['code', 'diff'].includes(Wire.text(item, 'type'))) {
           this.lineIdentities.set(JSON.stringify([Wire.text(item, 'key'), Wire.text(item, 'path')]), JSON.stringify(item));
         }
       }
-      this.lineIdentityView = this.model.view; this.lineIdentityRevision = this.model.revision;
+      this.lineIdentityView = this.renderView(); this.lineIdentityRevision = this.model.revision;
     }
     return this.lineIdentities.get(JSON.stringify([key, path])) || '';
   }
@@ -1033,14 +1067,14 @@ export struct ExtensionView {
     const result = this.matchingLineResult(key, path), lines = objectValues(result['lines']);
     return this.lineResultOffset(key, path) + this.lineResultValues(key, path).length < lines.length;
   }
-  @Builder private returnedLines(key: string, path: string) {
-    if (this.lineResultValues(key, path).length) {
-      Text(this.lineResultHeader(key, path)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).width('100%')
-      ForEach(this.lineResultValues(key, path), (line: Object, index: number) => Text(String(Wire.number(this.matchingLineResult(key, path), 'start', 1) + this.lineResultOffset(key, path) + index) + '  ' + String(line))
-        .fontSize(Tokens.meta).fontFamily('monospace').width('100%'), (line: Object, index: number) => String(index))
+  @Builder private returnedLines(key: string, path: Binding<string>) {
+    if (this.lineResultValues(key, path.value).length) {
+      Text(this.lineResultHeader(key, path.value)).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).width('100%')
+      ForEach(this.lineResultValues(key, path.value), (line: Object, index: number) => Text(String(Wire.number(this.matchingLineResult(key, path.value), 'start', 1) + this.lineResultOffset(key, path.value) + index) + '  ' + String(line))
+        .fontSize(Tokens.meta).fontFamily('monospace').width('100%'), (line: Object, index: number) => String(index) + ':' + JSON.stringify(line))
       Row({ space: Tokens.gap }) {
-        if (this.hasEarlierLineWindow(key, path)) Button(tr('back')).onClick(() => this.moveLineWindow(key, path, false))
-        if (this.hasMoreLineWindows(key, path)) Button(tr('more')).onClick(() => this.moveLineWindow(key, path, true))
+        if (this.hasEarlierLineWindow(key, path.value)) Button(tr('back')).onClick(() => this.moveLineWindow(key, path.value, false))
+        if (this.hasMoreLineWindows(key, path.value)) Button(tr('more')).onClick(() => this.moveLineWindow(key, path.value, true))
       }.width('100%')
     }
   }
@@ -1056,7 +1090,7 @@ export struct ExtensionView {
   }
   @Builder private diffContextButtons(item: ExtensionViewRecord, key: string, boundary: 'top' | 'between' | 'bottom', afterHunk: number = -1) {
     ForEach(this.contextRangesAt(item, boundary, afterHunk), (range: ExtensionDiffContextRange, index: number) =>
-      this.actionButton(Wire.object(item, 'context'), key, this.contextTitle(range), 'press', '', '', diffContextValues(Wire.text(item, 'path'), range)),
+      this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(item, 'context'), key: key, title: this.contextTitle(range), event: 'press', role: '', summary: '', values: diffContextValues(Wire.text(item, 'path'), range) }))),
       (range: ExtensionDiffContextRange, index: number) => range.side + ':' + String(range.from) + ':' + String(range.to))
   }
   private expandRequests(item: ExtensionViewRecord): ExtensionDiffExpandRequest[] {
@@ -1064,10 +1098,8 @@ export struct ExtensionView {
   }
   @Builder private diffExpandButtons(item: ExtensionViewRecord, key: string, hunk: number, direction: ExtensionDiffDirection) {
     ForEach(this.expandRequests(item).filter((request: ExtensionDiffExpandRequest) => request.hunk === hunk && request.direction === direction),
-      (request: ExtensionDiffExpandRequest, index: number) => this.actionButton(Wire.object(item, 'expand'), key,
-        tr('extension_ui_expand_diff') + ' ' + request.direction, 'press', '', '',
-        { path: request.path, hunk: String(request.hunk), direction: request.direction }),
-      (request: ExtensionDiffExpandRequest, index: number) => String(request.hunk) + ':' + request.direction)
+      (request: ExtensionDiffExpandRequest, index: number) => this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(item, 'expand'), key: key, title: tr('extension_ui_expand_diff') + ' ' + request.direction, event: 'press', role: '', summary: '', values: { path: request.path, hunk: String(request.hunk), direction: request.direction } }))),
+      (request: ExtensionDiffExpandRequest, index: number) => JSON.stringify(request))
   }
   @Builder private diffView(item: ExtensionViewRecord, key: string) {
     Column({ space: Tokens.gap }) {
@@ -1079,8 +1111,7 @@ export struct ExtensionView {
         Text('+' + String(Wire.number(item, 'additions')) + ' −' + String(Wire.number(item, 'deletions'))).fontSize(Tokens.meta - 1)
       }.width('100%')
       if (Wire.bool(item, 'binary')) Text(tr('extension_ui_binary_diff')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-      else if ((Wire.bool(item, 'collapsed') || !this.choices(item['hunks']).length) && Wire.has(item, 'load')) this.actionButton(Wire.object(item, 'load'), key,
-        tr('extension_ui_load_diff'), 'press', '', '', this.safeActionValues('path', Wire.text(item, 'path')))
+      else if ((Wire.bool(item, 'collapsed') || !this.choices(item['hunks']).length) && Wire.has(item, 'load')) this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(item, 'load'), key: key, title: tr('extension_ui_load_diff'), event: 'press', role: '', summary: '', values: this.safeActionValues('path', Wire.text(item, 'path')) })))
       else {
         if (Wire.has(item, 'context')) this.diffContextButtons(item, key, 'top')
         ForEach(this.choices(item['hunks']), (hunk: Record<string, Object>, hunkIndex: number) => {
@@ -1091,7 +1122,7 @@ export struct ExtensionView {
             if (Array.isArray(hunk['lines'])) ForEach(objectValues(hunk['lines']), (line: Object, lineIndex: number) => {
               Text(diffLineText(line) || ' ').fontSize(Tokens.meta).fontFamily('monospace').wordBreak(WordBreak.BREAK_ALL).width('100%')
                 .fontColor($r(diffLineText(line).charAt(0) === '+' ? 'app.color.persona_brand' : diffLineText(line).charAt(0) === '-' ? 'app.color.persona_danger' : 'sys.color.font_primary'))
-            }, (line: Object, lineIndex: number) => String(lineIndex))
+            }, (line: Object, lineIndex: number) => String(lineIndex) + ':' + JSON.stringify(line))
           }.width('100%').padding(Tokens.gap).backgroundColor($r('sys.color.comp_background_secondary'))
           if (Wire.has(item, 'expand') && !Wire.has(item, 'context')) this.diffExpandButtons(item, key, hunkIndex, 'down')
         }, (_hunk: Record<string, Object>, hunkIndex: number) => String(hunkIndex))
@@ -1101,13 +1132,13 @@ export struct ExtensionView {
         .enabled(this.model.canInteract()).accessibilityText(tr('extension_ui_mark_viewed'))
         .onChange((viewed: boolean) => this.runAction(Wire.object(item, 'mark_viewed'), key, 'press',
           { path: Wire.text(item, 'path'), viewed: String(viewed) }))
-      this.comments(item['threads'], key)
+      this.comments(UIUtils.makeBinding((): Object | undefined => item['threads']), key)
       if (Wire.has(item, 'comment') || Wire.has(item, 'draft')) this.commentComposer(item, key)
-      this.returnedLines(key, Wire.text(item, 'path'))
+      this.returnedLines(key, UIUtils.makeBinding((): string => Wire.text(item, 'path')))
     }.width('100%').padding(Tokens.inset).backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.gap)
   }
-  @Builder private comments(threadsValue: Object | undefined, key: string) {
-    ForEach(records(threadsValue), (thread: Record<string, Object>, index: number) => {
+  @Builder private comments(threadsValue: Binding<Object | undefined>, key: string) {
+    ForEach(records(threadsValue.value), (thread: Record<string, Object>, index: number) => {
       Column({ space: Tokens.gap }) {
         Text(tr('extension_ui_comment_line') + ' ' + String(Wire.number(thread, 'line'))).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
         ForEach(this.choices(thread['comments']), (comment: Record<string, Object>, commentIndex: number) => {
@@ -1119,12 +1150,9 @@ export struct ExtensionView {
         if (Wire.has(thread, 'reply')) {
           TextArea({ text: this.model.fieldValue(key + ':reply:' + String(index)), placeholder: tr('reply') }).height(Tokens.input)
             .onChange((value: string) => this.model.setFieldValue(key + ':reply:' + String(index), value))
-          this.actionButton(Wire.object(thread, 'reply'), key, tr('reply'), 'submit', '', Wire.text(thread, 'id'),
-            threadReplyValues(Wire.text(thread, 'id'), this.model.fieldValue(key + ':reply:' + String(index))))
+          this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(thread, 'reply'), key: key, title: tr('reply'), event: 'submit', role: '', summary: Wire.text(thread, 'id'), values: threadReplyValues(Wire.text(thread, 'id'), this.model.fieldValue(key + ':reply:' + String(index))) })))
         }
-        if (Wire.has(thread, 'resolve')) this.actionButton(Wire.object(thread, 'resolve'), key,
-          Wire.bool(thread, 'resolved') ? tr('extension_ui_reopen_thread') : tr('extension_ui_resolve_thread'), 'press', '', '',
-          { thread: Wire.text(thread, 'id'), resolved: String(!Wire.bool(thread, 'resolved')) })
+        if (Wire.has(thread, 'resolve')) this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(thread, 'resolve'), key: key, title: Wire.bool(thread, 'resolved') ? tr('extension_ui_reopen_thread') : tr('extension_ui_resolve_thread'), event: 'press', role: '', summary: '', values: { thread: Wire.text(thread, 'id'), resolved: String(!Wire.bool(thread, 'resolved')) } })))
       }.width('100%')
     }, (_thread: Record<string, Object>, index: number) => String(index))
   }
@@ -1139,9 +1167,9 @@ export struct ExtensionView {
     }.width('100%')
     TextArea({ text: this.model.fieldValue(key + ':comment'), placeholder: tr('extension_ui_comment_placeholder') }).height(Tokens.inputExpanded)
       .onChange((value: string) => this.model.setFieldValue(key + ':comment', value))
-    this.actionButton(Wire.has(item, 'draft') ? Wire.object(item, 'draft') : Wire.object(item, 'comment'), key, tr('comment'), 'submit', '', Wire.text(item, 'path'), {
+    this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.has(item, 'draft') ? Wire.object(item, 'draft') : Wire.object(item, 'comment'), key: key, title: tr('comment'), event: 'submit', role: '', summary: Wire.text(item, 'path'), values: {
       path: Wire.text(item, 'path'), side: this.local(key + ':comment-side', 'new'), line: this.local(key + ':comment-line', '1'), body: this.model.fieldValue(key + ':comment')
-    })
+    } })))
   }
   @Builder private threadView(item: ExtensionViewRecord, key: string) {
     Column({ space: Tokens.gap }) {
@@ -1156,8 +1184,7 @@ export struct ExtensionView {
       if (Wire.has(item, 'reply')) {
         TextArea({ text: this.model.fieldValue(key + ':reply'), placeholder: tr('reply') }).height(Tokens.input)
           .onChange((value: string) => this.model.setFieldValue(key + ':reply', value))
-        this.actionButton(Wire.object(item, 'reply'), key, tr('reply'), 'submit', '', Wire.text(item, 'title'),
-          threadReplyValues(Wire.text(item, 'id'), this.model.fieldValue(key + ':reply')))
+        this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(item, 'reply'), key: key, title: tr('reply'), event: 'submit', role: '', summary: Wire.text(item, 'title'), values: threadReplyValues(Wire.text(item, 'id'), this.model.fieldValue(key + ':reply')) })))
       }
     }.width('100%').padding(Tokens.inset)
   }
@@ -1166,8 +1193,7 @@ export struct ExtensionView {
       TextArea({ text: this.model.fieldValue(key + ':' + Wire.text(item, 'name'), Wire.text(item, 'value')), placeholder: Wire.text(item, 'placeholder') })
         .height(Tokens.inputExpanded).onChange((value: string) => this.model.setFieldValue(key + ':' + Wire.text(item, 'name'), value))
       Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap }) {
-        ForEach(this.choices(item['buttons']), (button: Record<string, Object>, index: number) => this.actionButton(Wire.object(button, 'action'), key,
-          Wire.text(button, 'title'), 'submit', '', Wire.text(item, 'title'), this.safeActionValues(Wire.text(item, 'name'), this.model.fieldValue(key + ':' + Wire.text(item, 'name'), Wire.text(item, 'value')))),
+        ForEach(this.choices(item['buttons']), (button: Record<string, Object>, index: number) => this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(button, 'action'), key: key, title: Wire.text(button, 'title'), event: 'submit', role: '', summary: Wire.text(item, 'title'), values: this.safeActionValues(Wire.text(item, 'name'), this.model.fieldValue(key + ':' + Wire.text(item, 'name'), Wire.text(item, 'value'))) }))),
           (button: Record<string, Object>, index: number) => Wire.text(Wire.object(button, 'action'), 'id', String(index)))
       }.width('100%')
     }.width('100%')
@@ -1204,26 +1230,24 @@ export struct ExtensionView {
       if (Wire.text(tile, 'value')) Text(Wire.text(tile, 'value')).fontSize(Tokens.title).width('100%')
       if (Wire.has(tile, 'badge')) this.badgeView(Wire.object(tile, 'badge'))
       if (Wire.has(tile, 'spark')) this.spark(Wire.object(tile, 'spark'))
-      if (Wire.has(tile, 'control')) this.rowControl(Wire.object(tile, 'control'), key, Wire.text(tile, 'title'))
-      if (Wire.has(tile, 'action')) this.actionButton(Wire.object(tile, 'action'), key, Wire.text(tile, 'title'), 'press', '', Wire.text(tile, 'title'))
-      ForEach(this.choices(tile['actions']), (entry: Record<string, Object>, index: number) => this.actionButton(Wire.object(entry, 'action'), key,
-        Wire.text(entry, 'title'), 'press', Wire.text(entry, 'role')), (entry: Record<string, Object>, index: number) => String(index))
+      if (Wire.has(tile, 'control')) this.rowControl(Wire.object(tile, 'control'), key, UIUtils.makeBinding((): string => Wire.text(tile, 'title')))
+      if (Wire.has(tile, 'action')) this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(tile, 'action'), key: key, title: Wire.text(tile, 'title'), event: 'press', role: '', summary: Wire.text(tile, 'title'), values: {} })))
+      ForEach(this.choices(tile['actions']), (entry: Record<string, Object>, index: number) => this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(entry, 'action'), key: key, title: Wire.text(entry, 'title'), event: 'press', role: Wire.text(entry, 'role'), summary: '', values: {} }))), (entry: Record<string, Object>, index: number) => String(index))
     }.width(200).padding(Tokens.inset).backgroundColor($r('sys.color.comp_background_tertiary'))
       .border({ width: Tokens.hairline, color: $r('sys.color.font_secondary'), radius: Tokens.gap })
   }
 
   @Builder private reviewBar() {
-    if (Wire.has(this.model.view, 'review')) {
+    if (Wire.has(this.renderView(), 'review')) {
       Column({ space: Tokens.gap }) {
         Row({ space: Tokens.gap }) {
-          Text(Wire.text(Wire.object(this.model.view, 'review'), 'name')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
-          Text(String(Wire.number(Wire.object(this.model.view, 'review'), 'count'))).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+          Text(Wire.text(Wire.object(this.renderView(), 'review'), 'name')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
+          Text(String(Wire.number(Wire.object(this.renderView(), 'review'), 'count'))).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
         }.width('100%')
-        TextArea({ text: this.model.fieldValue('@review'), placeholder: Wire.text(Wire.object(this.model.view, 'review'), 'placeholder') }).height(Tokens.input)
+        TextArea({ text: this.model.fieldValue('@review'), placeholder: Wire.text(Wire.object(this.renderView(), 'review'), 'placeholder') }).height(Tokens.input)
           .onChange((value: string) => this.model.setFieldValue('@review', value))
-        if (Wire.has(Wire.object(this.model.view, 'review'), 'discard')) this.actionButton(Wire.object(Wire.object(this.model.view, 'review'), 'discard'), this.rootKey(), tr('discard'), 'press', 'destructive', Wire.text(Wire.object(this.model.view, 'review'), 'name'))
-        ForEach(this.choices(Wire.object(this.model.view, 'review')['buttons']), (button: Record<string, Object>, index: number) => this.actionButton(Wire.object(button, 'action'), this.rootKey(),
-          Wire.text(button, 'title'), 'submit', '', Wire.text(Wire.object(this.model.view, 'review'), 'name'), this.safeActionValues(Wire.text(Wire.object(this.model.view, 'review'), 'name'), this.model.fieldValue('@review'))),
+        if (Wire.has(Wire.object(this.renderView(), 'review'), 'discard')) this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(Wire.object(this.renderView(), 'review'), 'discard'), key: this.rootKey(), title: tr('discard'), event: 'press', role: 'destructive', summary: Wire.text(Wire.object(this.renderView(), 'review'), 'name'), values: {} })))
+        ForEach(this.choices(Wire.object(this.renderView(), 'review')['buttons']), (button: Record<string, Object>, index: number) => this.actionButton(UIUtils.makeBinding((): NativeActionButton => ({ action: Wire.object(button, 'action'), key: this.rootKey(), title: Wire.text(button, 'title'), event: 'submit', role: '', summary: Wire.text(Wire.object(this.renderView(), 'review'), 'name'), values: this.safeActionValues(Wire.text(Wire.object(this.renderView(), 'review'), 'name'), this.model.fieldValue('@review')) }))),
           (button: Record<string, Object>, index: number) => Wire.text(Wire.object(button, 'action'), 'id', String(index)))
       }.width('100%').padding(Tokens.inset).backgroundColor($r('sys.color.comp_background_tertiary'))
         .border({ width: Tokens.hairline, color: $r('sys.color.font_secondary'), radius: Tokens.gap })
@@ -1232,11 +1256,16 @@ export struct ExtensionView {
 
   build() {
     Column({ space: this.compact ? Tokens.gap : Tokens.page }) {
+      ForEach([this.projectionGeneration], (_generation: number) => {
+      if (this.projectionError) Text(tr('extension_ui_invalid_view')).fontSize(Tokens.meta).width('100%')
+      else {
       this.toolbarContent()
-      if (this.showTitle && Wire.text(this.model.view, 'title')) Text(Wire.text(this.model.view, 'title')).fontSize(Tokens.title).fontWeight(FontWeight.Bold).width('100%')
-      ForEach(this.sections(), (section: ExtensionViewRecord, index: number) => this.sectionView(section, index),
-        (section: ExtensionViewRecord, index: number) => this.sectionKey(section, index))
-      if (Wire.has(this.model.view, 'review')) this.reviewBar()
+      if (this.showTitle && Wire.text(this.renderView(), 'title')) Text(Wire.text(this.renderView(), 'title')).fontSize(Tokens.title).fontWeight(FontWeight.Bold).width('100%')
+      ForEach(this.sections(), (section: ExtensionViewRecord, index: number) => this.sectionView(section, UIUtils.makeBinding((): number => this.sections().indexOf(section))),
+        (section: ExtensionViewRecord, index: number) => this.projectionScope + ':' + this.sectionKey(section, index))
+      if (Wire.has(this.renderView(), 'review')) this.reviewBar()
+      }
+      }, (generation: number) => String(generation))
     }.width('100%').padding(this.compact ? Tokens.inset : 0).alignItems(HorizontalAlign.Start)
   }
 }

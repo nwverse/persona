@@ -116,6 +116,7 @@ test('an uncertain file upload cannot be submitted again after restart',async()=
 });
 
 const {ManagementModel,ManagementRow}=await import('../entry/src/main/ets/models/ManagementModel.ets');
+const {HttpFailure}=await import('persona-test:transport');
 function managementClient(call){return {epoch:42,forgottenEpoch:0,forgottenProfile:'',profile:{id:'hub-profile',manager:'personal'},features:[],scope(){return 'hub:'+this.profile.manager;},connectionGeneration(){return this.epoch},owns(g,s){return g===this.epoch&&s===this.scope()},repo:()=>({call}),target:()=> 'session'};}
 test('settings can be reopened repeatedly regardless of connection generation',async()=>{
  const model=managementClient(async()=>({items:[{id:'one',connector:'mail'}]})),page=new ManagementModel();
@@ -526,4 +527,19 @@ test('edited schedule identity and connection generation must remain current',as
  assert.equal(await page.saveSchedule(model),false);assert.equal(await page.setScheduleEnabled(model,disconnectedRow,false),false);
  await page.load('schedules',model);
  assert.equal(page.scheduleDraft.title,'');assert.equal(await page.setScheduleEnabled(model,disconnectedRow,false),false);assert.equal(writes,0);
+});
+
+
+test('an extension without sign-in omits auth state without reporting a detail failure', async () => {
+ for (const status of [404, 405, 403, 500]) {
+  const model=managementClient(async path=>{
+   if (path.endsWith('/auth')) throw new HttpFailure(status, 'auth_unavailable');
+   if (path.endsWith('/-/')) return {id:'native-check',ui:[{id:'controls',title:'Controls'}]};
+   return {extensions:[{id:'native-check'}]};
+  });
+  model.features=['extension_manager','extension_auth'];const page=new ManagementModel();
+  await page.load('extensions',model);await page.openExtension(model,new ManagementRow('native-check'));
+  assert.deepEqual(page.auth,{});assert.equal(page.extensionDetail.id,'native-check');
+  assert.equal(!!page.error,status!==404&&status!==405);
+ }
 });

@@ -369,3 +369,100 @@ test('native control confirmation stays pending until cancel or the actual HTTP 
  const accepted=model.performAction('volume','volume').then(()=>{settled=true;});model.confirmAction(model.confirmationToken,true);
  await Promise.resolve();assert.equal(settled,false);finish({toast:'Saved'});await accepted;assert.equal(settled,true);model.dispose();
 });
+
+function confirmedStreamFixture() {
+  const f = fixtureClient({ features: ['extension_ui_stream_v1'] }), model = new ExtensionUIModel();
+  const action = { id: 'save', submit: true, confirm: 'Save this note?' };
+  const view = viewWith({ type: 'button', key: 'save', title: 'Save', action });
+  model.bind(f.client, 'demo', 'main', {}, view, false, () => {}, true);
+  const page = model.stack[0]; page.stream = true; page.snapshot = streamSnapshot(view); page.view = view; model.view = view; model.phase = 'ready';
+  const ix = { id: 'native-permission', manager: 'manager-1', machine_id: '', session_id: 'session-1', kind: 'permission', tool_name: 'extension.ui',
+    summary: action.confirm, tool_input: { confirm: action.confirm, submit: true, id: 'save' }, expires_at: new Date(Date.now() + 30000).toISOString() };
+  const approve = async () => { const pending = model.performAction('save', 'save'); model.confirmAction(model.confirmationToken, true); await pending; };
+  const emit = (interaction = ix, type = 'interaction') => model.receive(JSON.stringify(type === 'interactions' ? { type, interactions: [interaction] } : { type, interaction }));
+  const writes = () => f.state.calls.filter(call => call.path.startsWith('/api/v1/interactions/'));
+  return { ...f, model, page, ix, approve, emit, writes };
+}
+
+test('a stream host gate completes only the exact action already confirmed by the user and only once', async () => {
+  const f = confirmedStreamFixture();
+  try {
+    f.emit(); assert.equal(f.writes().length, 0);
+    await f.approve(); f.emit(); f.emit(); f.emit(f.ix, 'interactions');
+    assert.equal(f.writes().length, 1);
+    const write = f.writes()[0]; assert.equal(write.path, '/api/v1/interactions/native-permission/resolve');
+    assert.deepEqual(write.body, { allow: true }); assert.equal(write.method, 'POST'); assert.equal(write.admitted, true);
+  } finally { f.model.dispose(); }
+});
+
+test('foreign, input-bearing, expired and changed host gates never inherit page consent', async () => {
+  const f = confirmedStreamFixture();
+  try {
+    await f.approve();
+    const changes = [
+      { manager: 'other' }, { machine_id: 'agent-machine' }, { session_id: 'other-page' }, { kind: 'question' }, { tool_name: 'Bash' },
+      { secret: true }, { requires_input: true }, { fields: [{ name: 'password' }] }, { questions: [{ question: 'Answer?' }] }, { elicitation: {} },
+      { summary: 'Different action' }, { tool_input: { ...f.ix.tool_input, authority: true } }, { tool_input: { id: 'save', confirm: f.ix.summary } },
+      { expires_at: new Date(Date.now() - 1000).toISOString() }, { expires_at: 'invalid' }
+    ];
+    for (const [index, delta] of changes.entries()) f.emit({ ...f.ix, id: 'foreign-' + index, ...delta });
+    assert.equal(f.writes().length, 0);
+    f.page.snapshot.epoch = 'replaced'; f.emit(); assert.equal(f.writes().length, 0);
+    f.page.snapshot.epoch = 'epoch-1'; f.page.snapshot.version = 2; f.emit(); assert.equal(f.writes().length, 0);
+  } finally { f.model.dispose(); }
+});
+
+test('host gate admission is rechecked after visibility or model ownership changes', async () => {
+  let admission;
+  const f = confirmedStreamFixture();
+  f.repository.call = async (_path, _method, _body, _op, admit) => { admission = admit; return {}; };
+  try {
+    await f.approve(); f.emit(); assert.equal(admission(), true);
+    f.model.active = false; assert.equal(admission(), false);
+    f.model.active = true; f.state.generation++; assert.equal(admission(), false);
+  } finally { f.model.dispose(); }
+});
+
+test('cancelled consent and an unconfirmed pending stream event cannot resolve host permission', async () => {
+  const f = confirmedStreamFixture();
+  try {
+    const pending = f.model.performAction('save', 'save');
+    f.model.confirmAction(f.model.confirmationToken, false); await assert.rejects(pending, /cancelled/);
+    f.emit(); assert.equal(f.writes().length, 0);
+    await f.approve(); for (const event of f.model.events.values()) event.confirmed = false;
+    f.emit(); assert.equal(f.writes().length, 0);
+  } finally { f.model.dispose(); }
+});
+
+
+test('late hello upgrades a restored route to stream and retires the earlier legacy read', async () => {
+  let complete;
+  const f = fixtureClient({ request: () => new Promise(resolve => { complete = resolve; }) }), model = new ExtensionUIModel();
+  try {
+    model.bind(f.client, 'demo', 'main');
+    assert.equal(model.stack[0].stream, false);
+    f.client.features.push('extension_ui_stream_v1'); model.connectionChanged();
+    const request = f.state.sent.at(-1).request;
+    assert.equal(request.request, 'open'); assert.equal(model.stack[0].stream, true);
+    const view = viewWith({ type: 'text', key: 'stream', text: 'Current stream' });
+    model.receive(JSON.stringify({ type: 'extension_ui_stream', manager: 'manager-1', kind: 'snapshot', request_id: request.request_id, snapshot: streamSnapshot(view) }));
+    complete(JSON.stringify({ view: viewWith({ type: 'text', key: 'legacy', text: 'Late legacy' }) }));
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(model.isStream(), true); assert.equal(model.view.sections[0].items[0].text, 'Current stream'); assert.equal(model.phase, 'ready');
+  } finally { model.dispose(); }
+});
+
+
+test('late stream negotiation falling back to an existing legacy view preserves its draft', async () => {
+  const view = viewWith({ type: 'field', key: 'note', name: 'note', kind: 'text', value: 'Server note' });
+  const f = fixtureClient({ request: async () => JSON.stringify({ view }) }), model = new ExtensionUIModel();
+  try {
+    model.bind(f.client, 'demo', 'main', {}, view); model.setFieldValue('note', 'Unsent note');
+    f.client.features.push('extension_ui_stream_v1'); model.connectionChanged();
+    const request = f.state.sent.at(-1).request;
+    model.receive(JSON.stringify({ type: 'extension_ui_stream', manager: 'manager-1', kind: 'error', request_id: request.request_id, error: { code: 'negotiation' } }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(model.isStream(), false); assert.equal(model.phase, 'ready');
+    assert.equal(model.fieldValue('note'), 'Unsent note'); assert.equal(model.stack[0].preferLegacy, true);
+  } finally { model.dispose(); }
+});

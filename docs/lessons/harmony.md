@@ -47,3 +47,33 @@ can cause the node to scan normal personal Agent histories. Keep the override th
 The approved source layers are 1024-square. API 26 may encode packaged layers as 512-square RGBA even when the source
 background is RGB and fully opaque. Validate reference IDs, content and alpha rather than treating the packaged
 encoding as a source-art requirement. AppScope and the entry module must reference the same approved brand.
+
+## Bind native menu builders through ArkUI syntax
+
+A successful ArkTS build does not prove a context menu can open. Pass a parameterized local Builder as
+`bindContextMenu(this.rowMenu(row), ResponseType.LongPress)`; use the method reference for a parameterless Builder.
+On API 26, wrapping the invocation in an ordinary arrow function or manually calling `bind` leaves a bare function
+in emitted code, while the supported Builder syntax produces the native Builder object. Inspect generated code
+when diagnosing this boundary, then long-press a real row and invoke an action on the running application.
+
+## Foldability does not guarantee crease geometry
+
+A HarmonyOS 7 emulator can report a half-folded display while returning no current crease region. The native
+FoldSplitContainer then fails inside its own crease lookup when entering landscape hover; an independent minimal
+native example reproduces it. Sample valid geometry when creating the conversation and retain its native content
+identity through configuration changes. Without geometry, keep ordinary native Column/Scroll layout and record
+hover/hinge avoidance as unverified on that image. Do not invent a crease or fabricate a hover screenshot.
+
+## Retained builders need current data
+
+A stable `ForEach` key retains its item generator and the references it captured. Replacing an immutable row alone does not update that captured object. Keep a renderer-owned observed wrapper, update its traced value, and dereference it inside native attributes and deferred actions. Give replacement wrappers different native keys when their owner or scope changes. Use map indexes so list reconciliation remains linear.
+
+For JSON extension pages, retain an observed presentation copy and reconcile matching nodes in place. Primitive read-only leaves need content-sensitive keys; action payloads and changing builder arguments need native bindings. Include page/model/epoch generation at the presentation boundary, and read current section positions for positional protocol keys. Actual API 26 checks exposed stale nested chart values with iterator-derived rows; explicit indexed reads updated those values while preserving the focused field and draft. Portable tests alone did not reveal this native dependency behavior.
+
+## Freeze membership after initialization
+
+A split detail can become active while the Agents workspace is awaiting its saved view. Global directory readiness does not mean that workspace has loaded its initial rows: freezing membership at that point retained an empty list until the user changed a filter. Gate the first freeze on workspace initialization, then rebuild when opening completes. Keep the existing freeze during later background refreshes so reading does not reorder the list.
+
+## Complete the stream host gate
+
+The native page's local confirmation and the Hub's saved-action permission gate are separate protocol steps for the same operation. After explicit consent, complete only the exact current pending page event's host interaction, with the current manager/session/epoch/version and structurally equal saved action. Reject expired, secret or input-bearing requests and recheck before dispatch. Do not route these native page sessions through generic Agent approval. Test a real component page as well as legacy render/action: a portable stream reducer test did not expose the missing host-interaction subscription.

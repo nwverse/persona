@@ -334,6 +334,9 @@ export class TodoWorkspace {
   private boundRepo: HubRepository | undefined;
   private active: boolean = false;
   private revision: number = 0;
+  private listRequestRevision: number = 0;
+  private latestListReadRevision: number = 0;
+  private latestListRead: Promise<void> | undefined;
   private rootGeneration: number = 0;
   private rootScope: string = '';
   private ownerGeneration: number = 0;
@@ -345,7 +348,7 @@ export class TodoWorkspace {
   private listMode: boolean = true;
 
   async open(client: ClientModel, row?: ResourceRow, list: boolean = true): Promise<void> {
-    const revision = ++this.revision;
+    const revision = ++this.revision, openListRevision = ++this.listRequestRevision;
     this.active = true; this.initialRow = row; this.listMode = list;
     this.rootClient = client;
     this.ownerClient = undefined;
@@ -378,16 +381,20 @@ export class TodoWorkspace {
       this.syncSessions(owner);
       await this.loadView(owner, revision);
       if (!this.loadCurrent(client, revision)) return;
+      const refreshRevision = this.listRequestRevision + 1;
       await this.refresh();
       if (!this.loadCurrent(client, revision)) return;
-      if (!list && row) {
-        const current = this.items.find((item: TodoWorkspaceItem) => item.id === row.id);
-        if (current) await this.openRow(current);
-        else this.error = 'todo_gone';
+      let awaitedRevision = refreshRevision;
+      while (this.listRequestRevision > awaitedRevision) {
+        const latestRead = this.latestListRead, latestRevision = this.latestListReadRevision;
+        if (!latestRead || latestRevision !== this.listRequestRevision) break;
+        awaitedRevision = latestRevision;
+        await latestRead;
+        if (!this.loadCurrent(client, revision)) return;
       }
-      this.loading = false;
+      if (this.listRequestRevision === refreshRevision) this.loading = false;
     } catch (failure) {
-      if (this.loadCurrent(client, revision)) {
+      if (this.loadCurrent(client, revision) && this.listRequestRevision === openListRevision) {
         this.error = this.errorCode(failure as Error);
         this.loading = false;
       }
@@ -397,6 +404,9 @@ export class TodoWorkspace {
   close(): void {
     this.active = false;
     this.revision++;
+    this.listRequestRevision++;
+    this.latestListReadRevision = 0;
+    this.latestListRead = undefined;
     this.rootClient = undefined;
     this.ownerClient = undefined;
     this.boundRepo = undefined;
@@ -477,6 +487,15 @@ export class TodoWorkspace {
     try { return owner.client.repo() === owner.repo && this.boundRepo === owner.repo; } catch (_) { return false; }
   }
 
+  private ownsListRequest(owner: TodoOwnerSnapshot, revision: number): boolean {
+    return this.listRequestRevision === revision && this.revision === owner.revision && this.ownsScope(owner);
+  }
+
+  private invalidateListReads(): void {
+    this.listRequestRevision++;
+    this.loading = false;
+  }
+
   private owns(owner: TodoOwnerSnapshot, requireTodo: boolean = true): boolean {
     if (!this.ownsScope(owner) || this.revision !== owner.revision) return false;
     return !requireTodo || !owner.todoId || (this.selected.id === owner.todoId &&
@@ -504,34 +523,86 @@ export class TodoWorkspace {
     return error.message === 'offline' ? 'offline' : 'failed';
   }
 
-  async refresh(): Promise<void> {
-    const root = this.rootClient;
-    if (!this.active || !root || !root.connected || root.scope() !== this.rootScope) { this.error = 'offline'; return; }
-    if (!this.boundRepo) { await this.open(root, this.initialRow, this.listMode); return; }
-    if (!this.ownerClient || !this.ownerClient.connected || root.connectionGeneration() !== this.rootGeneration || this.ownerClient.connectionGeneration() !== this.ownerGeneration || this.ownerClient.scope() !== this.ownerScope || this.ownerClient.repo() !== this.boundRepo) {
-      const revision = this.revision, scope = root.scope(), generation = root.connectionGeneration();
-      const ref = new ResourceRow('owner', '', 'manager'); ref.manager = this.managerId || this.initialRow?.manager || root.profile.manager;
-      try {
-        const next = await root.viewFor(ref);
-        if (!this.active || revision !== this.revision || this.rootClient !== root || !root.owns(generation, scope)) return;
-        this.ownerClient = next; this.boundRepo = next.repo(); this.ownerGeneration = next.connectionGeneration(); this.ownerScope = next.scope(); this.rootGeneration = generation;
-      } catch (_) { if (this.active && revision === this.revision) this.error = 'offline'; return; }
+  refresh(): Promise<void> {
+    const revision = ++this.listRequestRevision, root = this.rootClient;
+    if (!this.active || !root || !root.connected || root.scope() !== this.rootScope) {
+      if (revision === this.listRequestRevision) { this.error = 'offline'; this.loading = false; }
+      return Promise.resolve();
     }
-    const owner = this.capture(undefined);
-    if (!owner) { this.error = 'offline'; return; }
+    if (!this.boundRepo) return this.open(root, this.initialRow, this.listMode);
+    const rootScope = root.scope(), rootGeneration = root.connectionGeneration();
     this.loading = true;
+    const request = this.readList(revision, root, rootScope, rootGeneration);
+    this.latestListReadRevision = revision;
+    this.latestListRead = request;
+    return request;
+  }
+
+  private async readList(revision: number, root: ClientModel, rootScope: string, rootGeneration: number): Promise<void> {
+    let ownerSnapshot: TodoOwnerSnapshot | undefined;
     try {
+      const previousOwner = this.ownerClient;
+      let repositoryCurrent = false;
+      if (previousOwner && previousOwner.connected && this.boundRepo) {
+        try { repositoryCurrent = previousOwner.repo() === this.boundRepo; } catch (_) { repositoryCurrent = false; }
+      }
+      if (!previousOwner || !repositoryCurrent || rootGeneration !== this.rootGeneration ||
+        previousOwner.connectionGeneration() !== this.ownerGeneration || previousOwner.scope() !== this.ownerScope) {
+        const ref = new ResourceRow('owner', '', 'manager');
+        ref.manager = this.managerId || this.initialRow?.manager || root.profile.manager;
+        const next = await root.viewFor(ref);
+        if (revision !== this.listRequestRevision || !this.active || this.rootClient !== root ||
+          rootScope !== this.rootScope || !root.owns(rootGeneration, rootScope)) return;
+        this.ownerClient = next;
+        this.boundRepo = next.repo();
+        this.ownerGeneration = next.connectionGeneration();
+        this.ownerScope = next.scope();
+        this.rootGeneration = rootGeneration;
+        this.managerId = next.profile.manager;
+        this.syncSessions(next);
+      }
+      const owner = this.capture(undefined);
+      if (!owner) {
+        if (revision === this.listRequestRevision) this.error = 'offline';
+        return;
+      }
+      ownerSnapshot = owner;
       const result = await owner.repo.call('/api/v1/todos' + managerQuery(owner.managerId));
-      if (!this.owns(owner, false)) return;
-      this.items = Wire.rows(result, 'todos').map((item: Record<string, Object>) => new TodoWorkspaceItem(item, owner.managerId));
+      if (!this.ownsListRequest(owner, revision)) return;
+      const items = Wire.rows(result, 'todos').map((item: Record<string, Object>) => new TodoWorkspaceItem(item, owner.managerId));
+      this.items = items;
       this.syncSessions(owner.client);
       if (this.selected.id) {
-        const selected = this.items.find((item: TodoWorkspaceItem) => item.id === this.selected.id);
+        const selectedId = this.selected.id, selectedManager = this.selected.manager || owner.managerId;
+        const selected = items.find((item: TodoWorkspaceItem) => item.id === selectedId && (item.manager || owner.managerId) === selectedManager);
         if (selected) this.selected = selected;
       }
       this.error = '';
-    } catch (failure) { if (this.owns(owner, false)) this.error = this.errorCode(failure as Error); }
-    finally { if (this.owns(owner, false)) this.loading = false; }
+      await this.resumeInitialDetail(owner, revision, items);
+    } catch (failure) {
+      const currentOwner = ownerSnapshot ? this.ownsScope(ownerSnapshot) :
+        this.active && this.rootClient === root && root.owns(rootGeneration, rootScope) && root.scope() === this.rootScope;
+      if (revision === this.listRequestRevision && currentOwner)
+        this.error = ownerSnapshot ? this.errorCode(failure as Error) : 'offline';
+    } finally {
+      if (revision === this.listRequestRevision && this.rootClient === root) this.loading = false;
+    }
+  }
+
+  private async resumeInitialDetail(owner: TodoOwnerSnapshot, revision: number, items: TodoWorkspaceItem[]): Promise<void> {
+    const initial = this.initialRow;
+    if (this.listMode || !initial || this.editorOpen || !this.ownsListRequest(owner, revision)) return;
+    const manager = initial.manager || owner.managerId;
+    const target = items.find((item: TodoWorkspaceItem) => item.id === initial.id && (item.manager || owner.managerId) === manager);
+    if (!target) {
+      if (!this.selected.id || this.selected.id === initial.id) this.error = 'todo_gone';
+      return;
+    }
+    if (this.selected.id) {
+      const selectedManager = this.selected.manager || owner.managerId;
+      if (this.selected.id !== target.id || selectedManager !== manager || this.draftReady) return;
+    }
+    await this.openRow(target);
   }
 
   async openRow(todo: TodoWorkspaceItem): Promise<void> {
@@ -620,6 +691,7 @@ export class TodoWorkspace {
     try {
       const result = await owner.repo.call(path, method, body);
       if (!this.owns(owner, !!todo)) return undefined;
+      this.invalidateListReads();
       this.writeState = 'done';
       return result;
     } catch (failure) {
@@ -692,6 +764,8 @@ export class TodoWorkspace {
     if (!result || !this.owns(owner)) return false;
     this.items = this.items.filter((item: TodoWorkspaceItem) => item.id !== todo.id);
     if (this.selected.id === todo.id) this.selected = new TodoWorkspaceItem();
+    if (this.initialRow?.id === todo.id && (!this.initialRow.manager || this.initialRow.manager === (todo.manager || this.managerId)))
+      this.initialRow = undefined;
     return true;
   }
 

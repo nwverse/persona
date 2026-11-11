@@ -2,6 +2,7 @@ import { ComposeListItemV2, ContentItemV2, CapsuleSegmentButtonV2, SegmentButton
 import { ClientModel } from '../models/ClientModel';
 import { MarkdownText } from './MarkdownText';
 import { ResourceRow, Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 
@@ -13,6 +14,9 @@ export struct ResourcePage {
   @Event onOpen: (row: ResourceRow) => void = () => {};
   @Event onHandoff: (row: ResourceRow) => void = () => {};
   @Event onLink: (address: string) => void = () => {};
+  @Local rowBindings: BoundRow<ResourceRow>[] = [];
+  private bindingOwner: Object | undefined;
+  private bindingScope: string = '';
   @Local search: string = '';
   @Local editing: boolean = false;
   @Local editingNew: boolean = false;
@@ -22,6 +26,14 @@ export struct ResourcePage {
   @Local tag: string = '';
   @Local importance: string = '';
   @Local source: number = 0;
+  aboutToAppear(): void { this.syncRows(); }
+  @Monitor('model.resourceRows', 'model.profile', 'search', 'source', 'kind') rowsChanged(): void { this.syncRows(); }
+  private syncRows(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager, this.kind]);
+    this.rowBindings = reconcileBoundRows(this.rowBindings, this.rows(), (row: ResourceRow) => row.key(),
+      this.bindingOwner, this.model, this.bindingScope, scope);
+    this.bindingOwner = this.model; this.bindingScope = scope;
+  }
   private rows(): ResourceRow[] {
     return this.model.resourceRows.filter((row: ResourceRow) =>
       (!this.search || (row.title + ' ' + row.detail).toLowerCase().includes(this.search.toLowerCase())) &&
@@ -86,10 +98,10 @@ export struct ResourcePage {
       }
       if (this.model.error) Text(tr(this.model.error)).fontSize(Tokens.meta).padding(Tokens.inset)
       List() {
-        ForEach(this.rows(), (row: ResourceRow) => {
-          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title || row.id, secondaryText: row.detail || undefined }) }) }
-            .onClick(() => this.onOpen(row)).id('resource.' + row.id)
-        }, (row: ResourceRow) => row.key())
+        ForEach(this.rowBindings, (binding: BoundRow<ResourceRow>) => {
+          ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || binding.value.id, secondaryText: binding.value.detail || undefined }) }) }
+            .onClick(() => this.onOpen(binding.value)).id('resource.' + binding.value.id)
+        }, (binding: BoundRow<ResourceRow>) => binding.key)
         if (!this.rows().length && !this.model.busy) ListItem() { Text(tr(this.search ? 'no_results' : 'empty')).padding(Tokens.page) }
       }.layoutWeight(1).width('100%')
     }.width('100%').height('100%')

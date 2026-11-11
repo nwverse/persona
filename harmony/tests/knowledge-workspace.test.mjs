@@ -25,9 +25,12 @@ function clone(value) { return structuredClone(value); }
 
 function deferred() {
   let resolve;
-  const promise = new Promise((yes) => { resolve = yes; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
 }
+
+function flush() { return new Promise((resolve) => setTimeout(resolve, 0)); }
 
 function failure(status, code, resultUnknown = false, resultPending = false) {
   const error = new Error(code);
@@ -281,4 +284,297 @@ test('a successful metadata save cannot clear edits typed while its acknowledgem
  const gate=deferred(),entered=deferred(),row=entry('projects','project-1','owner'),{workspace,shared}=await opened({request:async call=>{if(call.method==='PUT'){entered.resolve();await gate.promise;return{ok:true};}}},row);
  workspace.beginEdit();workspace.setEditTags('sent-tags');const saving=workspace.saveEdit();await entered.promise;workspace.setEditTags('newer-tags');gate.resolve();assert.equal(await saving,true);await workspace.draftWrite;
  assert.equal(workspace.editOpen,true);assert.equal(workspace.editTags,'newer-tags');assert.ok([...shared.views.values()].some(raw=>raw.includes('newer-tags')));
+});
+
+test('a child metadata save is reflected after the independent parent list refreshes', async () => {
+  const staleList = deferred(), staleListEntered = deferred();
+  let listReads = 0;
+  const row = entry('projects', 'project-1', 'work'), env = fixture({ request: async (call, state) => {
+    if (call.method === 'GET' && call.path === '/api/v1/kb/projects') {
+      listReads++;
+      if (listReads === 1) { staleListEntered.resolve(); return staleList.promise; }
+      return { items: [{ id: 'project-1', kind: 'projects', name: state.updatedMetadata ? 'Project Updated' : 'Project One',
+        manager: state.manager, tags: state.updatedMetadata?.tags || ['old'] }], tags: ['focus'] };
+    }
+    if (call.method === 'PUT' && call.path === '/api/v1/kb/projects/project-1') {
+      state.updatedMetadata = clone(call.body); return { ok: true };
+    }
+    return undefined;
+  } });
+  const parent = new KnowledgeWorkspace(), child = new KnowledgeWorkspace();
+  const openingParent = parent.open(env.client);
+  await staleListEntered.promise;
+  await child.open(env.client, row);
+  child.beginEdit(); child.setEditTags('new-label');
+  assert.equal(await child.saveEdit(), true);
+
+  await parent.refresh();
+  assert.equal(parent.entries[0].title, 'Project Updated');
+  assert.deepEqual(parent.entries[0].data().tags, ['new-label']);
+  staleList.resolve({ items: [{ id: 'project-1', kind: 'projects', name: 'Stale Project', manager: 'work', tags: ['old'] }], tags: ['old'] });
+  await openingParent;
+  assert.equal(parent.entries[0].title, 'Project Updated');
+  assert.deepEqual(parent.entries[0].data().tags, ['new-label']);
+});
+
+test('a child recording delete disappears after the independent parent list refreshes', async () => {
+  let deleted = false;
+  const listRequested = deferred(), row = entry('recordings', 'recording-1', 'work');
+  const env = await opened({ request: async (call, state) => {
+    if (call.method === 'GET' && call.path === '/api/v1/kb/recordings') {
+      listRequested.resolve();
+      return { items: deleted ? [] : [{ id: 'recording-1', kind: 'recordings', name: 'Recording One', manager: state.manager }], tags: [] };
+    }
+    if (call.method === 'DELETE' && call.path === '/api/v1/recordings/recording-1') { deleted = true; return { ok: true }; }
+    return undefined;
+  } });
+  const parent = env.workspace;
+  parent.setKind('recordings'); await listRequested.promise; await parent.refresh();
+  assert.equal(parent.entries.length, 1);
+  const child = new KnowledgeWorkspace(); await child.open(env.client, row);
+  assert.equal(await child.deleteRecording(), true);
+
+  await parent.refresh();
+  assert.equal(parent.entries.length, 0);
+});
+
+test('an acknowledged recording delete invalidates a detail read already in flight', async () => {
+  const oldDetail = deferred(), oldDetailEntered = deferred();
+  let detailReads = 0;
+  const row = entry('recordings', 'recording-1', 'owner');
+  const { workspace } = await opened({ request: async (call) => {
+    if (call.method === 'GET' && call.path === '/api/v1/kb/recordings/recording-1' && ++detailReads === 2) {
+      oldDetailEntered.resolve(); return oldDetail.promise;
+    }
+    if (call.method === 'DELETE' && call.path === '/api/v1/recordings/recording-1') return { ok: true };
+    return undefined;
+  } }, row);
+  const originalSummary = workspace.detail.summary;
+  const refreshing = workspace.refresh(); await oldDetailEntered.promise;
+  assert.equal(workspace.loading, true);
+  assert.equal(await workspace.deleteRecording(), true);
+  assert.equal(workspace.loading, false);
+
+  oldDetail.resolve({ detail: { id: 'recording-1', kind: 'recordings', summary: 'Stale pre-delete detail', meta: {} }, matches: [], agents: [] });
+  await refreshing;
+  assert.equal(workspace.writeState, 'deleted');
+  assert.equal(workspace.detail.summary, originalSummary);
+  assert.equal(workspace.loading, false);
+});
+
+test('old kind failures and query responses cannot replace current rows, results, errors or loading', async () => {
+  const oldKind = deferred(), currentPeople = deferred(), oldListBeforeSearch = deferred(), firstSearch = deferred(), secondSearch = deferred();
+  const oldKindEntered = deferred(), peopleEntered = deferred(), beforeSearchEntered = deferred(), firstSearchEntered = deferred(), secondSearchEntered = deferred();
+  const env = await opened({ request: async (call) => {
+    if (call.method !== 'GET') return undefined;
+    if (call.path === '/api/v1/kb/projects?tag=slow-kind') { oldKindEntered.resolve(); return oldKind.promise; }
+    if (call.path === '/api/v1/kb/people') { peopleEntered.resolve(); return currentPeople.promise; }
+    if (call.path === '/api/v1/kb/people?tag=slow-query') { beforeSearchEntered.resolve(); return oldListBeforeSearch.promise; }
+    if (call.path === '/api/v1/kb-search?q=first&results=1') { firstSearchEntered.resolve(); return firstSearch.promise; }
+    if (call.path === '/api/v1/kb-search?q=second&results=1') { secondSearchEntered.resolve(); return secondSearch.promise; }
+    return undefined;
+  } });
+  const { workspace } = env;
+
+  workspace.setTag('slow-kind'); await oldKindEntered.promise;
+  workspace.setKind('people'); await peopleEntered.promise;
+  assert.equal(workspace.loading, true);
+  oldKind.reject(failure(503, 'old_kind_failed'));
+  await flush();
+  assert.equal(workspace.loading, true);
+  assert.equal(workspace.error, '');
+  currentPeople.resolve({ items: [{ id: 'person-current', kind: 'people', name: 'Current Person', manager: 'work' }], tags: ['people-tag'] });
+  await flush();
+  assert.equal(workspace.kind, 'people');
+  assert.equal(workspace.entries[0].path, 'people');
+  assert.equal(workspace.entries[0].id, 'person-current');
+  assert.deepEqual(workspace.tags, ['people-tag']);
+
+  workspace.setTag('slow-query'); await beforeSearchEntered.promise;
+  workspace.setQuery('first');
+  oldListBeforeSearch.reject(failure(503, 'old_list_failed'));
+  await flush();
+  assert.equal(workspace.loading, false);
+  assert.equal(workspace.error, '');
+  assert.equal(workspace.entries[0].id, 'person-current');
+
+  await firstSearchEntered.promise;
+  workspace.setQuery('second');
+  await secondSearchEntered.promise;
+  assert.equal(workspace.loading, true);
+  secondSearch.resolve({ results: [{ count: 1, in_name: true,
+    entry: { id: 'second-hit', kind: 'people', title: 'Second result', manager: 'work' }, hits: [{ line: 'second query hit' }] }] });
+  await flush();
+  assert.equal(workspace.results[0].entry.id, 'second-hit');
+  assert.equal(workspace.loading, false);
+  firstSearch.resolve({ results: [{ count: 1, in_name: true,
+    entry: { id: 'first-hit', kind: 'people', title: 'First result', manager: 'work' }, hits: [{ line: 'first query hit' }] }] });
+  await flush();
+  assert.equal(workspace.results[0].entry.id, 'second-hit');
+  assert.equal(workspace.error, '');
+  workspace.hide();
+});
+
+test('a late detail refresh cannot replace the post-save reload or overwrite a dirty editor', async () => {
+  const writeGate = deferred(), writeEntered = deferred(), oldDetail = deferred(), oldDetailEntered = deferred();
+  let detailReads = 0;
+  const row = entry('projects', 'project-1', 'owner');
+  const { workspace } = await opened({ request: async (call) => {
+    if (call.method === 'PUT') { writeEntered.resolve(); await writeGate.promise; return { ok: true }; }
+    if (call.method === 'GET' && call.path === '/api/v1/kb/projects/project-1') {
+      detailReads++;
+      if (detailReads === 2) { oldDetailEntered.resolve(); return oldDetail.promise; }
+      if (detailReads > 2) return { detail: { id: 'project-1', kind: 'projects', summary: 'Fresh post-save detail',
+        meta: { importance: 'P1', relevance: 60, tags: ['saved-tags'], kind: 'short', status: 'active' } }, matches: [], agents: [] };
+    }
+    return undefined;
+  } }, row);
+
+  workspace.beginEdit(); workspace.setEditTags('saved-tags');
+  const saving = workspace.saveEdit(); await writeEntered.promise;
+  const refreshing = workspace.refresh(); await oldDetailEntered.promise;
+  workspace.setEditTags('newer-draft');
+  writeGate.resolve();
+  assert.equal(await saving, true);
+  assert.equal(workspace.detail.summary, 'Fresh post-save detail');
+  assert.equal(workspace.editOpen, true);
+  assert.equal(workspace.editTags, 'newer-draft');
+
+  oldDetail.resolve({ detail: { id: 'project-1', kind: 'projects', summary: 'Old background detail',
+    meta: { importance: 'P2', relevance: 25, tags: ['old'], kind: 'short', status: 'active' } }, matches: [], agents: [] });
+  await refreshing;
+  assert.equal(workspace.detail.summary, 'Fresh post-save detail');
+  assert.equal(workspace.editTags, 'newer-draft');
+});
+
+test('a detail open interrupted by reconnect resumes draft and project targets on the new owner generation', async () => {
+  const oldDetail = deferred(), retryDetail = deferred(), oldEntered = deferred(), retryEntered = deferred();
+  let detailReads = 0;
+  const env = fixture({ request: async (call) => {
+    if (call.method === 'GET' && call.path === '/api/v1/kb/projects/project-1') {
+      detailReads++;
+      if (detailReads === 1) { oldEntered.resolve(); return oldDetail.promise; }
+      if (detailReads === 2) { retryEntered.resolve(); return retryDetail.promise; }
+    }
+    return undefined;
+  } });
+  const row = entry('projects', 'project-1', 'owner'), workspace = new KnowledgeWorkspace();
+  const draftKey = 'knowledge-draft:' + JSON.stringify(['owner', 'projects', 'project-1']);
+  env.shared.views.set(env.owner.state.scope + ':' + draftKey, JSON.stringify({ importance: 'P1', relevance: '41', tags: 'saved across reconnect',
+    project_kind: 'long', status: 'paused', agent_prompt: 'draft prompt', agent_launcher: 'claude', metadata_dirty: true }));
+
+  const opening = workspace.open(env.client, row);
+  await oldEntered.promise;
+  env.owner.state.generation++;
+  const reconnectRead = workspace.refresh();
+  await retryEntered.promise;
+  oldDetail.reject(failure(503, 'old_owner_failed'));
+  await opening;
+  assert.equal(workspace.error, '');
+  assert.equal(workspace.loading, true);
+
+  retryDetail.resolve({ detail: { id: 'project-1', kind: 'projects', summary: 'Loaded after reconnect',
+    meta: { importance: 'P2', relevance: 25, tags: ['server'], kind: 'short', status: 'active', dirs: ['personal-box:/repo', 'untrusted-box:/unsafe'] } },
+    matches: [], agents: [] });
+  await reconnectRead;
+  assert.equal(workspace.detail.summary, 'Loaded after reconnect');
+  assert.equal(workspace.editTags, 'saved across reconnect');
+  assert.equal(workspace.agentDraft, 'draft prompt');
+  assert.deepEqual(workspace.targetMachines.map((item) => item.id), ['personal-box']);
+  assert.deepEqual(workspace.directoryTargets.map((item) => [item.machine, item.path]), [['personal-box', '/repo']]);
+  assert.equal(workspace.loading, false);
+});
+
+test('detail edits made after the reconnect read starts survive its saved draft restore', async () => {
+  const oldDetail = deferred(), retryDetail = deferred(), oldEntered = deferred(), retryEntered = deferred();
+  let detailReads = 0;
+  const env = fixture({ request: async (call) => {
+    if (call.method === 'GET' && call.path === '/api/v1/kb/projects/project-1') {
+      detailReads++;
+      if (detailReads === 1) { oldEntered.resolve(); return oldDetail.promise; }
+      if (detailReads === 2) { retryEntered.resolve(); return retryDetail.promise; }
+    }
+    return undefined;
+  } });
+  const row = entry('projects', 'project-1', 'owner'), workspace = new KnowledgeWorkspace();
+  const opening = workspace.open(env.client, row);
+  await oldEntered.promise;
+  env.owner.state.generation++;
+  const reconnectRead = workspace.refresh();
+  await retryEntered.promise;
+
+  workspace.beginEdit(); workspace.setEditImportance('P0'); workspace.setEditRelevance('73'); workspace.setEditTags('typed after retry');
+  workspace.setAgentDraft('prompt after retry'); workspace.setAgentLauncher('launcher after retry');
+  oldDetail.reject(failure(503, 'old_owner_failed'));
+  await opening;
+  assert.equal(workspace.loading, true);
+
+  retryDetail.resolve({ detail: { id: 'project-1', kind: 'projects', summary: 'Retry detail',
+    meta: { importance: 'P2', relevance: 25, tags: ['server'], kind: 'short', status: 'active', dirs: ['personal-box:/repo'] } }, matches: [], agents: [] });
+  await reconnectRead;
+  assert.equal(workspace.editImportance, 'P0');
+  assert.equal(workspace.editRelevance, '73');
+  assert.equal(workspace.editTags, 'typed after retry');
+  assert.equal(workspace.agentDraft, 'prompt after retry');
+  assert.equal(workspace.agentLauncher, 'launcher after retry');
+  assert.equal(workspace.detail.summary, 'Retry detail');
+  assert.equal(workspace.directoryTargets.length, 1);
+});
+
+test('detail edits made during the first read survive reconnect even when their draft write is pending', async () => {
+  const oldDetail = deferred(), retryDetail = deferred(), oldEntered = deferred(), retryEntered = deferred(), saveGate = deferred(), saveEntered = deferred();
+  let detailReads = 0;
+  const env = fixture({ request: async (call) => {
+    if (call.method === 'GET' && call.path === '/api/v1/kb/projects/project-1') {
+      detailReads++;
+      if (detailReads === 1) { oldEntered.resolve(); return oldDetail.promise; }
+      if (detailReads === 2) { retryEntered.resolve(); return retryDetail.promise; }
+    }
+    return undefined;
+  } });
+  const row = entry('projects', 'project-1', 'owner'), workspace = new KnowledgeWorkspace();
+  const draftKey = 'knowledge-draft:' + JSON.stringify(['owner', 'projects', 'project-1']);
+  const saveView = env.owner.client.saveView.bind(env.owner.client);
+  env.owner.client.saveView = async (key, value, revision) => {
+    if (key === draftKey) { saveEntered.resolve(); await saveGate.promise; }
+    await saveView(key, value, revision);
+  };
+  const opening = workspace.open(env.client, row);
+  await oldEntered.promise;
+  workspace.beginEdit(); workspace.setEditImportance('P1'); workspace.setEditRelevance('64'); workspace.setEditTags('typed before reconnect');
+  workspace.setAgentDraft('prompt before reconnect'); workspace.setAgentLauncher('launcher before reconnect');
+  await saveEntered.promise;
+  env.owner.state.generation++;
+  const reconnectRead = workspace.refresh();
+  await retryEntered.promise;
+
+  oldDetail.reject(failure(503, 'old_owner_failed'));
+  await opening;
+  assert.equal(workspace.loading, true);
+  retryDetail.resolve({ detail: { id: 'project-1', kind: 'projects', summary: 'Recovered detail',
+    meta: { importance: 'P2', relevance: 25, tags: ['server'], kind: 'short', status: 'active', dirs: ['personal-box:/repo'] } }, matches: [], agents: [] });
+  await reconnectRead;
+  assert.equal(workspace.editImportance, 'P1');
+  assert.equal(workspace.editRelevance, '64');
+  assert.equal(workspace.editTags, 'typed before reconnect');
+  assert.equal(workspace.agentDraft, 'prompt before reconnect');
+  assert.equal(workspace.agentLauncher, 'launcher before reconnect');
+  assert.equal(workspace.detail.summary, 'Recovered detail');
+  assert.equal(workspace.directoryTargets.length, 1);
+  saveGate.resolve();
+  await workspace.draftWrite;
+});
+
+test('Knowledge detail immutable leaves key by full content while minutes selection stays logical-id based', () => {
+  const page = readFileSync(new URL('../entry/src/main/ets/components/KnowledgeWorkspacePage.ets', import.meta.url), 'utf8');
+  for (const key of [
+    "JSON.stringify([index, Wire.text(match, 'id'), JSON.stringify(match)])",
+    'JSON.stringify([index, line])',
+    "JSON.stringify([index, Wire.text(moment, 'id'), JSON.stringify(moment)])",
+    "JSON.stringify([index, Wire.text(item, 'kind') + '/' + Wire.text(item, 'id'), JSON.stringify(item)])",
+    "JSON.stringify([index, Wire.text(action, 'id'), JSON.stringify(action)])",
+    'JSON.stringify([index, JSON.stringify(line)])'
+  ]) assert.ok(page.includes(key), 'missing content-sensitive native ForEach key: ' + key);
+  assert.ok(page.includes("this.selectedActions.includes(Wire.text(action, 'id'))"));
+  assert.equal(page.split('JSON.stringify([index, line])').length - 1, 2, 'search snippets and timeline lines keep full-line identity');
 });

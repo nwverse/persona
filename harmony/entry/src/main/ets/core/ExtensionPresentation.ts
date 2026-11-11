@@ -2,6 +2,7 @@ import type { ExtensionUIStreamSnapshot, ExtensionViewRecord } from './Extension
 
 /** The read and interaction surface shared by native extension view hosts. */
 export interface ExtensionPresentation {
+  readonly presentationKey?: string;
   view: ExtensionViewRecord;
   busy: boolean;
   error: string;

@@ -5,6 +5,7 @@ import { ComposeListItemV2, ContentItemV2, CapsuleSegmentButtonV2, SegmentButton
 import { ClientModel } from '../models/ClientModel';
 import { InboxAttachmentDraft, InboxMailComposeSnapshot, InboxMailMessage, InboxMessage, InboxWorkspace } from '../models/InboxWorkspace';
 import { ResourceRow, Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { MarkdownText } from './MarkdownText';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
@@ -171,10 +172,16 @@ export struct InboxWorkspacePage {
   @Require @Param model: ClientModel;
   @Param row: ResourceRow | undefined = undefined;
   @Param list: boolean = true;
+  @Param visible: boolean = true;
+  @Param refreshRevision: number = 0;
+  @Event onChanged: () => void = (): void => {};
   @Event onOpen: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onHandoff: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Local workspace: InboxWorkspace = new InboxWorkspace();
+  @Local itemRowBindings: BoundRow<ResourceRow>[] = [];
+  private rowBindingOwner: Object | undefined;
+  private rowBindingScope: string = '';
   @Local detailOpen: boolean = false;
   @Local sheetOpen: boolean = false;
   @Local activeSheet: string = '';
@@ -187,8 +194,10 @@ export struct InboxWorkspacePage {
   aboutToAppear(): void {
     this.active = true;
     this.detailOpen = !this.list && !!this.row;
+    this.syncItemRows();
     this.workspace.open(this.model, this.row).then(() => {
       if (this.active && this.row && this.list === false) this.detailOpen = true;
+      this.syncItemRows();
     });
   }
 
@@ -202,9 +211,26 @@ export struct InboxWorkspacePage {
 
   @Monitor('model.profile') profileChanged(): void {
     if (!this.active) return;
+    this.syncItemRows();
     this.workspace.close().then(() => {
-      if (this.active) this.workspace.open(this.model, this.row);
+      if (this.active) this.workspace.open(this.model, this.row).then(() => this.syncItemRows());
     });
+  }
+
+  @Monitor('model.inbox', 'refreshRevision', 'visible') listRefreshRequested(): void {
+    if (this.active && this.visible && this.list) this.workspace.refresh().catch(() => undefined);
+  }
+  private acknowledged(changed: boolean): void { if (changed && this.active && this.visible) this.onChanged(); }
+
+  @Monitor('workspace.items', 'workspace.search', 'workspace.sourceFilter', 'workspace.accountFilter', 'workspace.statusFilter') itemRowsChanged(): void {
+    this.syncItemRows();
+  }
+
+  private syncItemRows(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
+    this.itemRowBindings = reconcileBoundRows(this.itemRowBindings, this.workspace.filteredItems, (row: ResourceRow) => row.key(),
+      this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.rowBindingOwner = this.model; this.rowBindingScope = scope;
   }
 
   @Monitor('sheetOpen') sheetChanged(): void {
@@ -255,7 +281,7 @@ export struct InboxWorkspacePage {
     this.getUIContext().showAlertDialog({ title: tr('confirm_send'), message: message,
       primaryButton: { value: tr('cancel'), action: () => {} },
       secondaryButton: { value: tr('send'), action: () => {
-        if (fingerprint === this.workspace.replyConfirmationSnapshot(value)) this.workspace.replyInbox(value, fingerprint);
+        if (fingerprint === this.workspace.replyConfirmationSnapshot(value)) this.workspace.replyInbox(value, fingerprint).then((changed: boolean) => this.acknowledged(changed));
       } } });
   }
 
@@ -268,7 +294,7 @@ export struct InboxWorkspacePage {
       primaryButton: { value: tr('cancel'), action: () => {} },
       secondaryButton: { value: tr('send'), action: () => {
         if (fingerprint === this.workspace.replyConfirmationSnapshot(value))
-          this.workspace.sendConversation(value, this.workspace.threadReplyTo, this.workspace.threadReply);
+          this.workspace.sendConversation(value, this.workspace.threadReplyTo, this.workspace.threadReply).then((changed: boolean) => this.acknowledged(changed));
       } } });
   }
 
@@ -281,7 +307,7 @@ export struct InboxWorkspacePage {
       primaryButton: { value: tr('cancel'), action: () => {} },
       secondaryButton: { value: tr('send'), action: () => {
         if (fingerprint === this.workspace.replyConfirmationSnapshot('attachment:' + item.name + ':' + item.mime + ':' + String(item.size)) &&
-          this.workspace.attachment === item) this.workspace.sendAttachment();
+          this.workspace.attachment === item) this.workspace.sendAttachment().then((changed: boolean) => this.acknowledged(changed));
       } } });
   }
 
@@ -295,7 +321,7 @@ export struct InboxWorkspacePage {
         if (fingerprint !== this.workspace.replyConfirmationSnapshot('handoff:' + text)) return;
         this.workspace.handoff(text).then((target: ResourceRow | undefined) => {
           if (this.active && row.key() === this.workspace.selected.key() && this.workspace.writeState === 'handed_off') {
-            this.sheetOpen = false;
+            this.sheetOpen = false; this.acknowledged(true);
             if (target) this.onHandoff(target);
           }
         });
@@ -314,7 +340,7 @@ export struct InboxWorkspacePage {
     this.getUIContext().showAlertDialog({ title: tr('confirm_send'), message: message,
       primaryButton: { value: tr('cancel'), action: () => {} },
       secondaryButton: { value: tr('send'), action: () => {
-        this.workspace.sendMailCompose(snapshot, confirmation).then((sent: boolean) => { if (sent) this.sheetOpen = false; });
+        this.workspace.sendMailCompose(snapshot, confirmation).then((sent: boolean) => { if (sent) { this.sheetOpen = false; this.acknowledged(true); } });
       } } });
   }
 
@@ -407,13 +433,13 @@ export struct InboxWorkspacePage {
       if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: Tokens.page, right: Tokens.page })
       if (this.workspace.loading) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       List() {
-        ForEach(this.workspace.filteredItems, (item: ResourceRow) => {
+        ForEach(this.itemRowBindings, (binding: BoundRow<ResourceRow>) => {
           ListItem() {
-            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: item.title || item.id,
-              secondaryText: [item.detail || '', this.rowSource(item), this.doneLabel(item)].filter((value: string) => !!value).join(' · ') }) })
-          }.onClick(() => this.openRow(item)).id('inbox.' + item.key())
-        }, (item: ResourceRow) => item.key())
-        if (!this.workspace.filteredItems.length && !this.workspace.loading)
+            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || binding.value.id,
+              secondaryText: [binding.value.detail || '', this.rowSource(binding.value), this.doneLabel(binding.value)].filter((value: string) => !!value).join(' · ') }) })
+          }.onClick(() => this.openRow(binding.value)).id('inbox.' + binding.value.key())
+        }, (binding: BoundRow<ResourceRow>) => binding.key)
+        if (!this.itemRowBindings.length && !this.workspace.loading)
           ListItem() { Text(tr(this.workspace.search ? 'no_results' : 'empty')).padding(Tokens.page).width('100%') }
       }.layoutWeight(1).width('100%')
     }.width('100%').height('100%')
@@ -421,13 +447,8 @@ export struct InboxWorkspacePage {
 
   @Builder header() {
     Row({ space: Tokens.gap }) {
-      Button(tr('back'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.detailOpen = false)
-      Column({ space: Tokens.fine }) {
-        Text(this.workspace.selected.title || this.workspace.workspaceThreadTitle() || this.workspace.selected.id).fontSize(Tokens.title).fontWeight(FontWeight.Medium)
-          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-        Text(this.workspace.isReference() ? this.workspace.referenceSourceLabel() + (this.workspace.replyAccountLabel() ? ' · ' + this.workspace.replyAccountLabel() : '')
-          : this.rowSource(this.workspace.selected)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(1)
-      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      Text(this.workspace.isReference() ? this.workspace.referenceSourceLabel() + (this.workspace.replyAccountLabel() ? ' · ' + this.workspace.replyAccountLabel() : '')
+        : this.rowSource(this.workspace.selected)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(1).layoutWeight(1)
       Button(tr('refresh'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).enabled(!this.workspace.detailLoading)
         .onClick(() => this.workspace.refreshDetail())
     }.width('100%').padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.gap })
@@ -677,7 +698,7 @@ export struct InboxWorkspacePage {
       }.layoutWeight(1).width('100%')
       if (!this.workspace.isReference()) Row({ space: Tokens.gap }) {
         Button(tr(this.workspace.isHandled() ? 'reopen' : 'process')).enabled(!this.workspace.writeState || !['saving', 'sending'].includes(this.workspace.writeState))
-          .onClick(() => this.workspace.processInbox()).layoutWeight(1)
+          .onClick(() => this.workspace.processInbox().then((changed: boolean) => this.acknowledged(changed))).layoutWeight(1)
         Button(tr('handoff')).enabled(!this.workspace.handoffBusy).onClick(() => this.openHandoff()).layoutWeight(1)
       }.width('100%').padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
       this.replyBox()

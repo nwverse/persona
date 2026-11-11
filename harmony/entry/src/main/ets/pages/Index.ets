@@ -23,6 +23,7 @@ import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, SymbolGlyphModifie
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Pairing, PairingTarget } from '../platform/Pairing';
 import { Conversation } from '../components/Conversation';
 import { AgentListPage } from '../components/AgentListPage';
@@ -47,6 +48,7 @@ struct Index {
   @Local chatReady: boolean = true;
   @Local detailRoute: string = '';
   @Local adminRefreshRevision: number = 0;
+  @Local inboxRefreshRevision: number = 0;
   @Local extensionTitle: string = '';
   @Local extensionRefreshRevision: number = 0;
   @Local shownName: string = '';
@@ -57,6 +59,9 @@ struct Index {
   @Local collapsed: boolean = false;
   @Local query: string = '';
   @Local filter: number = 0;
+  @Local conversationRowBindings: BoundRow<ResourceRow>[] = [];
+  private conversationBindingOwner: Object | undefined;
+  private conversationBindingScope: string = '';
   @Local visibilityEpoch: number = 0;
   private rowVisibility: Map<string, number> = new Map();
   @Local readerAddress: string = '';
@@ -122,10 +127,11 @@ struct Index {
   }
   private restoreDeviceOwner(owner: ClientModel): void { if (deviceFeatures.boundTo(owner)) this.bindDeviceOwner(this.model); }
   aboutToAppear(): void {
-    this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE); this.updateBreakpoint(); this.consumePairingLink(); this.restoreScope(); this.consumeNotification();
+    this.syncConversationRows(); this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE); this.updateBreakpoint(); this.consumePairingLink(); this.restoreScope(); this.consumeNotification();
     this.bindDeviceOwner(this.model);
   }
-  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.restoreScope(); deviceFeatures.context(); }
+  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
+  @Monitor('model.conversations', 'model.mainId') conversationsChanged(): void { this.syncConversationRows(); }
   @Monitor('model.appearance') appearanceChanged(): void {
     this.getUIContext().getHostContext()?.getApplicationContext().setColorMode(this.model.appearance === 1 ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT : this.model.appearance === 2 ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
   }
@@ -288,9 +294,17 @@ struct Index {
     }
   }
   @Builder moreButton() { Button(tr('more'), { buttonStyle: ButtonStyleMode.TEXTUAL }).bindMenu(this.moreMenu).height(Tokens.touch) }
-  @Builder row(row: ResourceRow) {
-    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: row.title || row.id,
-      secondaryText: row.kind === 'session' ? [this.model.machineName(row.machine), this.model.shortPath(row.path), row.state ? tr(row.state) : ''].filter((value: string) => value.length > 0).join(' · ') : row.detail || undefined }) })
+  private syncConversationRows(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
+    const rows = this.model.conversations.filter((row: ResourceRow) => row.id !== this.model.mainId);
+    this.conversationRowBindings = reconcileBoundRows(this.conversationRowBindings, rows,
+      (row: ResourceRow) => row.key(), this.conversationBindingOwner, this.model, this.conversationBindingScope, scope);
+    this.conversationBindingOwner = this.model;
+    this.conversationBindingScope = scope;
+  }
+  @Builder row(binding: BoundRow<ResourceRow>) {
+    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || binding.value.id,
+      secondaryText: binding.value.kind === 'session' ? [this.model.machineName(binding.value.machine), this.model.shortPath(binding.value.path), binding.value.state ? tr(binding.value.state) : ''].filter((value: string) => value.length > 0).join(' · ') : binding.value.detail || undefined }) })
   }
   @Builder state() {
     if (this.model.busy) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
@@ -308,9 +322,9 @@ struct Index {
       if (this.model.error) ListItem() { this.connectionState() }
       ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('main_chat'),
         icon: this.look.avatarUri || $r('app.media.foreground'), iconStyle: IconTypeV2.HEAD_SCULPTURE }) }) }.onClick(() => this.openMain()).id('persona.main')
-      ForEach(this.model.conversations.filter((row: ResourceRow) => row.id !== this.model.mainId), (row: ResourceRow) => {
-        ListItem() { this.row(row) }.onClick(() => this.openRow(row))
-      }, (row: ResourceRow) => row.key())
+      ForEach(this.conversationRowBindings, (binding: BoundRow<ResourceRow>) => {
+        ListItem() { this.row(binding) }.onClick(() => this.openRow(binding.value))
+      }, (binding: BoundRow<ResourceRow>) => binding.key)
       ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('new_chat') }) }) }
         .onClick(() => this.newConversation())
       ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('todos') }) }) }.onClick(() => this.openResources('todo'))
@@ -325,7 +339,7 @@ struct Index {
       } })
   }
   @Builder inboxList() {
-    InboxWorkspacePage({ model: this.model, onOpen: (row: ResourceRow) => this.openRow(row), onLink: (address: string) => this.openReader(address),
+    InboxWorkspacePage({ model: this.model, visible: this.model.section === 2, refreshRevision: this.inboxRefreshRevision, onChanged: () => this.inboxRefreshRevision++, onOpen: (row: ResourceRow) => this.openRow(row), onLink: (address: string) => this.openReader(address),
       onHandoff: (row: ResourceRow) => this.openLinkedResource(row) })
   }
   @Builder settingsList() {
@@ -494,15 +508,15 @@ struct Index {
         if (this.targetReady(name, param)) RemoteDocumentPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
       } else if (name === 'inbox' || name === 'todo_source' || name === 'todo_thread' || name === 'resources' && param === 'inbox') {
-        if (name === 'resources' || this.targetReady(name, param)) InboxWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'resources' ? undefined : this.routeRow(param), list: name === 'resources',
-          onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onHandoff: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
+        if (name === 'resources' || this.targetReady(name, param)) InboxWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'resources' ? undefined : this.routeRow(param), list: name === 'resources', visible: this.activeChild === this.childKey(name, param), refreshRevision: this.inboxRefreshRevision,
+          onChanged: () => { if (this.activeChild === this.childKey(name, param)) this.inboxRefreshRevision++; }, onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onHandoff: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
       } else if (name === 'todo' || name === 'resources' && param === 'todo') {
-        if (name === 'resources' || this.targetReady(name, param)) TodoWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'todo' ? this.routeRow(param) : undefined, list: name === 'resources',
+        if (name === 'resources' || this.targetReady(name, param)) TodoWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'todo' ? this.routeRow(param) : undefined, list: name === 'resources', visible: this.activeChild === this.childKey(name, param),
           onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), onCreateAgent: (todo: ResourceRow) => this.createAgentFrom(name, param, todo) })
         else this.targetLoading(name, param)
       } else if (name === 'knowledge' || name === 'resources' && param === 'knowledge') {
-        if (name === 'resources' || this.targetReady(name, param)) KnowledgeWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'knowledge' ? this.routeRow(param) : undefined,
+        if (name === 'resources' || this.targetReady(name, param)) KnowledgeWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'knowledge' ? this.routeRow(param) : undefined, visible: this.activeChild === this.childKey(name, param),
           onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onChat: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
       } else if (name === 'resources' && param === 'health') {
@@ -525,7 +539,7 @@ struct Index {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsModel(param), onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
         else this.targetLoading(name, param)
       }
-    }.title(name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'extension' ? this.extensionTitle : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title)
+    }.title(name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'extension' ? this.extensionTitle : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id)
       .hideTitleBar(name === 'session' && this.hideAgentTitle()).hideBackButton(name === 'session' && this.wide() && this.model.section === 1)
       .menus(name === 'settings' && this.isAdminPage(this.settingsKind(param)) ? this.adminMenus(name, param) : name === 'extension' ? this.extensionMenus(name, param) : (name === 'session' || name === 'conversation') && this.targetReady(name, param) ? this.moreButton : [])
       .onShown(() => this.routeShown(name, param))

@@ -891,6 +891,7 @@ export class AssistantViewModel implements ExtensionPresentation {
     return next;
   }
 
+  get presentationKey(): string { return JSON.stringify([this.profileID, this.owner, this.conversation, this.key, this.pageStack]); }
   getSnapshot(): undefined { return undefined; }
   lineResultFor(_key: string): ExtensionViewRecord { return {}; }
   async imageBytes(_path: string): Promise<ArrayBuffer> { return new ArrayBuffer(0); }

@@ -19,6 +19,6 @@ node --test tests/*.test.mjs
 node tests/run-domain.mjs
 ```
 
-Native SDK tests use the `entry@ohosTest` target and `OpenHarmonyTestRunner`; they exercise actual platform storage, credentials, URL handling, TLS/WebSocket transport and image preview. The transport fixture is separate from a real Hub; see [verification](../docs/harmony/harmony.md#verification).
+Native SDK tests use the `entry@ohosTest` target and `OpenHarmonyTestRunner`; they exercise actual platform storage, credentials, URL handling, TLS/WebSocket transport and image preview. The transport fixture is separate from a real Hub; see [verification](../docs/harmony/harmony.md#verification). The [native extension fixture](tests/native-extension-fixture/README.md) reproduces legacy and streamed component updates, focus retention and the Hub confirmation gate on a disposable Hub.
 
 The application icon reuses Persona's approved artwork. Run `python3 scripts/export-icons.py` from this directory to regenerate its layers, startup image and provenance manifest. The system applies its own launcher mask.

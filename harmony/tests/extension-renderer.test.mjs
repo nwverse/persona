@@ -46,7 +46,7 @@ function rendererMethod(name) {
 const lineStateSource = renderer.slice(renderer.indexOf('class ExtensionLineState {'), renderer.indexOf('/** A picture'));
 let serializedComponents = 0;
 const rendererJSON = {parse: JSON.parse, stringify(value) { if (value?.type === 'code' || value?.type === 'diff') serializedComponents++; return JSON.stringify(value); }};
-const NativeLineRenderer = new Function('JSON','Wire','lineWindowOffset','objectValues','records',stripTypeScriptTypes(lineStateSource)+';return '+stripTypeScriptTypes('class NativeLineRenderer {'+['sections','sectionItems','runAction','rememberLineRequest','lineComponentIdentity','lineState','matchingLineResult','reuseLineResult','lineResultValues','lineResultOffset','moveLineWindow','hasEarlierLineWindow','hasMoreLineWindows'].map(rendererMethod).join('\n')+'}'))(rendererJSON,Wire,payload.lineWindowOffset,value=>Array.isArray(value)?value:[],value=>Array.isArray(value)?value:[]);
+const NativeLineRenderer = new Function('JSON','Wire','lineWindowOffset','objectValues','records',stripTypeScriptTypes(lineStateSource)+';return '+stripTypeScriptTypes('class NativeLineRenderer {'+['renderView','sections','sectionItems','runAction','rememberLineRequest','lineComponentIdentity','lineState','matchingLineResult','reuseLineResult','lineResultValues','lineResultOffset','moveLineWindow','hasEarlierLineWindow','hasMoreLineWindows'].map(rendererMethod).join('\n')+'}'))(rendererJSON,Wire,payload.lineWindowOffset,value=>Array.isArray(value)?value:[],value=>Array.isArray(value)?value:[]);
 function nativeLines(model) {
   const native = new NativeLineRenderer();
   native.model = model; native.rootKey = () => '@root'; native.lineResultsRevision = 0;
@@ -117,7 +117,7 @@ test('returned line replies are path-correlated and bounded in the renderer', ()
   assert.match(renderer, /private matchingLineResult\(key: string, path: string\)/);
   assert.match(renderer, /const resultMatches = Wire\.text\(result, 'path'\) === path && Array\.isArray\(result\['lines'\]\)/);
   assert.match(renderer, /lines\.slice\(state\.offset, state\.offset \+ state\.limit\)/);
-  assert.match(renderer, /this\.returnedLines\(key, Wire\.text\(item, 'path'\)\)/);
+  assert.match(renderer, /this\.returnedLines\(key, UIUtils\.makeBinding\(\(\): string => Wire\.text\(item, 'path'\)\)\)/);
 });
 
 test('multichoice display and toggling retain the initial selection', () => {
@@ -271,8 +271,8 @@ test('whole-file line replies open at the requested interval and expose bounded 
   assert.match(renderer, /this\.rememberLineRequest\(key, payload\)/);
 
   assert.match(renderer, /lines\.slice\(state\.offset, state\.offset \+ state\.limit\)/);
-  assert.match(renderer, /Button\(tr\('back'\)\)\.onClick\(\(\) => this\.moveLineWindow\(key, path, false\)\)/);
-  assert.match(renderer, /Button\(tr\('more'\)\)\.onClick\(\(\) => this\.moveLineWindow\(key, path, true\)\)/);
+  assert.match(renderer, /Button\(tr\('back'\)\)\.onClick\(\(\) => this\.moveLineWindow\(key, path\.value, false\)\)/);
+  assert.match(renderer, /Button\(tr\('more'\)\)\.onClick\(\(\) => this\.moveLineWindow\(key, path\.value, true\)\)/);
   assert.doesNotMatch(renderer, /more lines/);
 
   const fixture = fixtureClient(), model = new ExtensionUIModel();
@@ -330,5 +330,5 @@ test('component line caches survive other replies and cached ranges avoid anothe
 });
 
 test('full-page renderer can omit the title already shown by its host', () => {
-  assert.match(renderer, /if \(this\.showTitle && Wire\.text\(this\.model\.view, 'title'\)\)/);
+  assert.match(renderer, /if \(this\.showTitle && Wire\.text\(this\.renderView\(\), 'title'\)\)/);
 });

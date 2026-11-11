@@ -16,7 +16,7 @@ export struct AttachmentStrip {
     Column({ space: Tokens.fine }) {
       if (item.kind === 'image') {
         Image(item.previewUri).width(Tokens.attachmentPreview).height(Tokens.attachmentPreview).objectFit(ImageFit.Cover).accessibilityText(item.name)
-          .onClick(() => this.onPreview(item)).bindContextMenu((): void => this.imageMenu(item), ResponseType.LongPress);
+          .onClick(() => this.onPreview(item)).bindContextMenu(this.imageMenu(item), ResponseType.LongPress);
       } else {
         Text(item.name).fontSize(Tokens.meta).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
           .width(Tokens.attachmentItem).height(Tokens.attachmentPreview).textAlign(TextAlign.Center).onClick(() => this.onPreview(item));

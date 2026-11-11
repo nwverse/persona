@@ -1065,7 +1065,12 @@ export class ManagementModel {
     try {
       const received = await this.call(model, '/api/v1/extensions/' + segment(id) + '/-/auth'); if (!this.detailOwner(model, generation, scope, owner, 'extensions', id)) return; this.auth = received;
       if (this.detailOwner(model, generation, scope, owner, 'extensions', id)) { this.authPrompt = {}; this.authFields = []; }
-    } catch (error) { if (this.detailOwner(model, generation, scope, owner, 'extensions', id)) this.fail(error as Error); }
+    } catch (error) {
+      if (!this.detailOwner(model, generation, scope, owner, 'extensions', id)) return;
+      if (error instanceof HttpFailure && (error.status === 404 || error.status === 405)) {
+        this.auth = {}; this.authPrompt = {}; this.authFields = [];
+      } else this.fail(error as Error);
+    }
   }
 
   async extensionAuthStep(model: ClientModel, id: string, start: boolean): Promise<boolean> {

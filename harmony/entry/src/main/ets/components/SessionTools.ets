@@ -6,6 +6,7 @@ import { image } from '@kit.ImageKit';
 import { ClientModel } from '../models/ClientModel';
 import { SessionWorkspace, WorkspaceEntry, WorkspaceGitFile, WorkspacePreviewServer, WorkspaceBranch, WorkspaceTrashItem } from '../models/SessionWorkspace';
 import { Wire } from '../models/Wire';
+import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { readerLink } from '../platform/ReaderLink';
@@ -27,6 +28,13 @@ export struct SessionTools {
   @Require @Param model: ClientModel;
   @Param initialFile: string = '';
   @Local workspace: SessionWorkspace = new SessionWorkspace();
+  @Local fileRowBindings: BoundRow<WorkspaceEntry>[] = [];
+  @Local gitRowBindings: BoundRow<WorkspaceGitFile>[] = [];
+  @Local stashRowBindings: BoundRow<Record<string, Object>>[] = [];
+  @Local previewRowBindings: BoundRow<WorkspacePreviewServer>[] = [];
+  private rowBindingOwner: Object | undefined;
+  private rowBindingScope: string = '';
+  private fileBindingScope: string = '';
   @Local pathDraft: string = '';
   @Local terminalInput: string = '';
   @Local transferError: string = '';
@@ -69,6 +77,7 @@ export struct SessionTools {
 
   private bindWorkspace(): void {
     this.workspace.bind(this.model);
+    this.syncRowBindings();
     this.pathDraft = this.workspace.currentPath;
     this.workspace.show();
     this.fileOpen = false; this.fileEditSheetOpen = false; this.diffOpen = false;
@@ -104,6 +113,25 @@ export struct SessionTools {
 
   @Monitor('diffOpen') diffSheetChanged(): void {
     if (!this.diffOpen) this.workspace.closeGitDiff();
+  }
+
+  @Monitor('workspace.entries', 'workspace.gitFiles', 'workspace.gitStashes', 'workspace.previewServers',
+    'workspace.currentPath', 'workspace.cwd', 'model.profile', 'model.selected')
+  rowsChanged(): void { this.syncRowBindings(); }
+
+  private syncRowBindings(): void {
+    const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager,
+      this.model.selected.key(), this.workspace.cwd]);
+    const fileScope = JSON.stringify([scope, this.workspace.currentPath]);
+    this.fileRowBindings = reconcileBoundRows(this.fileRowBindings, this.workspace.entries,
+      (row: WorkspaceEntry) => row.path, this.rowBindingOwner, this.model, this.fileBindingScope, fileScope);
+    this.gitRowBindings = reconcileBoundRows(this.gitRowBindings, this.workspace.gitFiles,
+      (row: WorkspaceGitFile) => row.path, this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.stashRowBindings = reconcileBoundRows(this.stashRowBindings, this.workspace.gitStashes,
+      (row: Record<string, Object>) => Wire.text(row, 'oid'), this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.previewRowBindings = reconcileBoundRows(this.previewRowBindings, this.workspace.previewServers,
+      (row: WorkspacePreviewServer) => row.name, this.rowBindingOwner, this.model, this.rowBindingScope, scope);
+    this.rowBindingOwner = this.model; this.rowBindingScope = scope; this.fileBindingScope = fileScope;
   }
 
   @Monitor('workspace.previewFrame') previewFrameChanged(): void { this.decodePreviewFrame(); }
@@ -502,13 +530,13 @@ export struct SessionTools {
     }
   }
 
-  @Builder fileEntryMenu(entry: WorkspaceEntry) {
+  @Builder fileEntryMenu(binding: BoundRow<WorkspaceEntry>) {
     Menu() {
-      MenuItem({ content: tr('open') }).onClick(() => this.openEntry(entry))
-      if (this.workspace.canEditFiles()) MenuItem({ content: tr('rename') }).onClick(() => this.openFileActions('rename', entry))
+      MenuItem({ content: tr('open') }).onClick(() => this.openEntry(binding.value))
+      if (this.workspace.canEditFiles()) MenuItem({ content: tr('rename') }).onClick(() => this.openFileActions('rename', binding.value))
       if (this.workspace.canEditFiles()) {
-        MenuItem({ content: tr('session_tools_move') }).onClick(() => this.openFileActions('move', entry))
-        MenuItem({ content: tr('session_tools_move_to_trash') }).onClick(() => this.confirmTrash(entry))
+        MenuItem({ content: tr('session_tools_move') }).onClick(() => this.openFileActions('move', binding.value))
+        MenuItem({ content: tr('session_tools_move_to_trash') }).onClick(() => this.confirmTrash(binding.value))
       }
     }
   }
@@ -531,38 +559,38 @@ export struct SessionTools {
     }
   }
 
-  @Builder gitFileMenu(file: WorkspaceGitFile) {
+  @Builder gitFileMenu(binding: BoundRow<WorkspaceGitFile>) {
     Menu() {
-      MenuItem({ content: tr('session_tools_stage') }).enabled(this.workspace.canWriteGit() && (file.untracked || file.unstaged))
-        .onClick(() => this.confirmGitWrite('stage', file.path))
-      MenuItem({ content: tr('session_tools_unstage') }).enabled(this.workspace.canWriteGit() && file.staged)
-        .onClick(() => this.confirmGitWrite('unstage', file.path))
+      MenuItem({ content: tr('session_tools_stage') }).enabled(this.workspace.canWriteGit() && (binding.value.untracked || binding.value.unstaged))
+        .onClick(() => this.confirmGitWrite('stage', binding.value.path))
+      MenuItem({ content: tr('session_tools_unstage') }).enabled(this.workspace.canWriteGit() && binding.value.staged)
+        .onClick(() => this.confirmGitWrite('unstage', binding.value.path))
     }
   }
 
-  @Builder gitStashMenu(stash: Record<string, Object>) {
+  @Builder gitStashMenu(binding: BoundRow<Record<string, Object>>) {
     Menu() {
-      MenuItem({ content: tr('session_tools_stash_apply') }).enabled(this.workspace.canWriteGit() && !!Wire.text(stash, 'oid'))
-        .onClick(() => this.confirmGitWrite('stash_apply', Wire.text(stash, 'oid')))
-      MenuItem({ content: tr('session_tools_stash_pop') }).enabled(this.workspace.canWriteGit() && !!Wire.text(stash, 'oid'))
-        .onClick(() => this.confirmGitWrite('stash_pop', Wire.text(stash, 'oid')))
-      MenuItem({ content: tr('session_tools_stash_drop') }).enabled(this.workspace.canWriteGit() && !!Wire.text(stash, 'oid'))
-        .onClick(() => this.confirmGitWrite('stash_drop', Wire.text(stash, 'oid')))
+      MenuItem({ content: tr('session_tools_stash_apply') }).enabled(this.workspace.canWriteGit() && !!Wire.text(binding.value, 'oid'))
+        .onClick(() => this.confirmGitWrite('stash_apply', Wire.text(binding.value, 'oid')))
+      MenuItem({ content: tr('session_tools_stash_pop') }).enabled(this.workspace.canWriteGit() && !!Wire.text(binding.value, 'oid'))
+        .onClick(() => this.confirmGitWrite('stash_pop', Wire.text(binding.value, 'oid')))
+      MenuItem({ content: tr('session_tools_stash_drop') }).enabled(this.workspace.canWriteGit() && !!Wire.text(binding.value, 'oid'))
+        .onClick(() => this.confirmGitWrite('stash_drop', Wire.text(binding.value, 'oid')))
     }
   }
 
-  @Builder fileRow(entry: WorkspaceEntry) {
+  @Builder fileRow(binding: BoundRow<WorkspaceEntry>) {
     Row({ space: Tokens.gap }) {
-      Text(entry.directory ? '▸' : '·').fontSize(Tokens.body).width(20).textAlign(TextAlign.Center)
+      Text(binding.value.directory ? '▸' : '·').fontSize(Tokens.body).width(20).textAlign(TextAlign.Center)
       Column({ space: Tokens.fine }) {
-        Text(entry.name).fontSize(Tokens.body).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(binding.value.name).fontSize(Tokens.body).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         Row({ space: Tokens.gap }) {
-          if (entry.symlink) Text(tr('symlink')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-          if (entry.ignored) Text(tr('ignored')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-          if (!entry.directory) Text(this.sizeText(entry.size)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+          if (binding.value.symlink) Text(tr('symlink')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+          if (binding.value.ignored) Text(tr('ignored')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+          if (!binding.value.directory) Text(this.sizeText(binding.value.size)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
         }
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Text(entry.directory ? '›' : '').fontSize(Tokens.title).fontColor($r('sys.color.font_secondary'))
+      Text(binding.value.directory ? '›' : '').fontSize(Tokens.title).fontColor($r('sys.color.font_secondary'))
     }.height(Tokens.touch).width('100%').padding({ left: Tokens.inset, right: Tokens.inset })
   }
 
@@ -589,10 +617,10 @@ export struct SessionTools {
       if (this.pickerBusy) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
       if (this.workspace.fileBusy) LoadingProgress().height(Tokens.touch).width(Tokens.touch)
       List() {
-        ForEach(this.workspace.entries, (entry: WorkspaceEntry) => {
-          ListItem() { this.fileRow(entry) }.onClick(() => this.openEntry(entry))
-            .bindContextMenu((): void => this.fileEntryMenu(entry), ResponseType.LongPress).id('session.files.' + entry.path)
-        }, (entry: WorkspaceEntry) => entry.path)
+        ForEach(this.fileRowBindings, (binding: BoundRow<WorkspaceEntry>) => {
+          ListItem() { this.fileRow(binding) }.onClick(() => this.openEntry(binding.value))
+            .bindContextMenu(this.fileEntryMenu(binding), ResponseType.LongPress).id('session.files.' + binding.value.path)
+        }, (binding: BoundRow<WorkspaceEntry>) => binding.key)
         if (!this.workspace.entries.length && !this.workspace.fileBusy && !this.workspace.fileError)
           ListItem() { Text(tr('empty')).padding(Tokens.page) }
         if (this.workspace.hasMoreEntries) ListItem() { Text(tr('session_tools_first_entries')).padding(Tokens.inset) }
@@ -693,37 +721,37 @@ export struct SessionTools {
               }.alignItems(HorizontalAlign.Start).padding(Tokens.page).width('100%')
             }
             ListItem() { Text(tr('session_tools_changes') + ' · ' + String(this.workspace.gitFiles.length)).fontSize(Tokens.body).padding(Tokens.inset) }
-            ForEach(this.workspace.gitFiles, (file: WorkspaceGitFile) => {
+            ForEach(this.gitRowBindings, (binding: BoundRow<WorkspaceGitFile>) => {
               ListItem() {
                 Row({ space: Tokens.gap }) {
-                  Text(file.mark).fontSize(Tokens.body).fontWeight(FontWeight.Bold).width(24).textAlign(TextAlign.Center)
+                  Text(binding.value.mark).fontSize(Tokens.body).fontWeight(FontWeight.Bold).width(24).textAlign(TextAlign.Center)
                   Column({ space: Tokens.fine }) {
-                    Text(file.path).fontSize(Tokens.body).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Text(binding.value.path).fontSize(Tokens.body).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                     Row({ space: Tokens.gap }) {
-                      if (file.originalPath) Text('← ' + file.originalPath).fontSize(Tokens.meta)
+                      if (binding.value.originalPath) Text('← ' + binding.value.originalPath).fontSize(Tokens.meta)
                         .fontColor($r('sys.color.font_secondary'))
-                      if (file.binary) Text(tr('session_tools_binary_file')).fontSize(Tokens.meta)
+                      if (binding.value.binary) Text(tr('session_tools_binary_file')).fontSize(Tokens.meta)
                         .fontColor($r('sys.color.font_secondary'))
-                      else if (file.added + file.deleted > 0) Text('+' + String(file.added) + '  −' + String(file.deleted)).fontSize(Tokens.meta)
+                      else if (binding.value.added + binding.value.deleted > 0) Text('+' + String(binding.value.added) + '  −' + String(binding.value.deleted)).fontSize(Tokens.meta)
                         .fontColor($r('sys.color.font_secondary'))
                     }
                   }.alignItems(HorizontalAlign.Start).layoutWeight(1)
                   Text('›').fontSize(Tokens.title).fontColor($r('sys.color.font_secondary'))
                 }.height(Tokens.touch + Tokens.inset).padding({ left: Tokens.inset, right: Tokens.inset }).width('100%')
-              }.onClick(() => this.openGitFile(file))
-                .bindContextMenu((): void => this.gitFileMenu(file), ResponseType.LongPress).id('session.git.' + file.path)
-            }, (file: WorkspaceGitFile) => file.path)
+              }.onClick(() => this.openGitFile(binding.value))
+                .bindContextMenu(this.gitFileMenu(binding), ResponseType.LongPress).id('session.git.' + binding.value.path)
+            }, (binding: BoundRow<WorkspaceGitFile>) => binding.key)
             if (!this.workspace.gitFiles.length) ListItem() { Text(tr('session_tools_clean')).padding(Tokens.page) }
             if (this.workspace.gitStashes.length) ListItem() { Text(tr('session_tools_stashes')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).padding(Tokens.inset) }
-            ForEach(this.workspace.gitStashes, (stash: Record<string, Object>) => {
+            ForEach(this.stashRowBindings, (binding: BoundRow<Record<string, Object>>) => {
               ListItem() {
                 Row({ space: Tokens.gap }) {
-                  Text('stash@{' + String(Wire.number(stash, 'index')) + '}').fontSize(Tokens.meta).fontFamily('monospace')
-                  Text(Wire.text(stash, 'message')).fontSize(Tokens.meta).layoutWeight(1).maxLines(2)
+                  Text('stash@{' + String(Wire.number(binding.value, 'index')) + '}').fontSize(Tokens.meta).fontFamily('monospace')
+                  Text(Wire.text(binding.value, 'message')).fontSize(Tokens.meta).layoutWeight(1).maxLines(2)
                 }.height(Tokens.touch).padding({ left: Tokens.inset, right: Tokens.inset }).width('100%')
-              }.bindContextMenu((): void => this.gitStashMenu(stash), ResponseType.LongPress)
-                .id('session.git.stash.' + Wire.text(stash, 'oid'))
-            }, (stash: Record<string, Object>) => Wire.text(stash, 'oid'))
+              }.bindContextMenu(this.gitStashMenu(binding), ResponseType.LongPress)
+                .id('session.git.stash.' + Wire.text(binding.value, 'oid'))
+            }, (binding: BoundRow<Record<string, Object>>) => binding.key)
           }.width('100%').layoutWeight(1)
         }
       } else if (!this.workspace.gitBusy && !this.workspace.gitError) {
@@ -855,23 +883,23 @@ export struct SessionTools {
     }.width('100%').height('100%')
   }
 
-  @Builder previewServerRow(server: WorkspacePreviewServer) {
+  @Builder previewServerRow(binding: BoundRow<WorkspacePreviewServer>) {
     Column({ space: Tokens.gap }) {
       Row({ space: Tokens.gap }) {
-        Text(server.name).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1).maxLines(1)
-        Text(server.listening ? tr('session_tools_preview_listening') : tr('session_tools_preview_stopped'))
+        Text(binding.value.name).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1).maxLines(1)
+        Text(binding.value.listening ? tr('session_tools_preview_listening') : tr('session_tools_preview_stopped'))
           .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
       }
-      if (server.title) Text(server.title).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(2)
-      if (server.problem) Text(tr('session_tools_preview_problem') + ': ' + server.problem).fontSize(Tokens.meta)
+      if (binding.value.title) Text(binding.value.title).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(2)
+      if (binding.value.problem) Text(tr('session_tools_preview_problem') + ': ' + binding.value.problem).fontSize(Tokens.meta)
         .fontColor($r('app.color.persona_danger'))
-      if (server.command.length) Text(this.previewCommand(server)).fontSize(Tokens.meta).fontFamily('monospace').maxLines(3)
+      if (binding.value.command.length) Text(this.previewCommand(binding.value)).fontSize(Tokens.meta).fontFamily('monospace').maxLines(3)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text(server.cwd || this.workspace.cwd).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(2)
-      if (server.listening && server.port > 0) Button(tr('session_tools_preview_open')).enabled(this.workspace.canUsePreview())
-        .height(Tokens.touch).onClick(() => this.openReadyPreview(server)).width('100%')
-      else if (server.command.length) Button(tr('start')).enabled(this.workspace.canStartPreview() && !server.problem)
-        .height(Tokens.touch).onClick(() => this.confirmStartPreview(server)).width('100%')
+      Text(binding.value.cwd || this.workspace.cwd).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(2)
+      if (binding.value.listening && binding.value.port > 0) Button(tr('session_tools_preview_open')).enabled(this.workspace.canUsePreview())
+        .height(Tokens.touch).onClick(() => this.openReadyPreview(binding.value)).width('100%')
+      else if (binding.value.command.length) Button(tr('start')).enabled(this.workspace.canStartPreview() && !binding.value.problem)
+        .height(Tokens.touch).onClick(() => this.confirmStartPreview(binding.value)).width('100%')
     }.alignItems(HorizontalAlign.Start).padding(Tokens.inset).width('100%')
   }
 
@@ -908,8 +936,8 @@ export struct SessionTools {
           .onClick(() => this.openPreviewExternal()).height(Tokens.touch).width('100%')
       } else {
         List() {
-          ForEach(this.workspace.previewServers, (server: WorkspacePreviewServer) => ListItem() { this.previewServerRow(server) }
-            .id('session.preview.' + server.name), (server: WorkspacePreviewServer) => server.name)
+          ForEach(this.previewRowBindings, (binding: BoundRow<WorkspacePreviewServer>) => ListItem() { this.previewServerRow(binding) }
+            .id('session.preview.' + binding.value.name), (binding: BoundRow<WorkspacePreviewServer>) => binding.key)
           if (!this.workspace.previewServers.length && !this.workspace.previewError && this.workspace.previewState !== 'unsupported')
             ListItem() { Text(tr('session_tools_preview_none')).fontSize(Tokens.meta).padding(Tokens.page) }
         }.layoutWeight(1).width('100%')

@@ -85,20 +85,25 @@ export class KnowledgeWorkspace {
   private owner: string = '';
   private viewScope: string = '';
   private revision: number = 0;
+  private readRevision: number = 0;
   private listRows: ResourceRow[] = [];
   private searchTimer: number = -1;
   private draftWrite: Promise<void> = Promise.resolve();
   private momentTarget: string = '';
   private editorDirty: boolean = false;
   private editorRevision: number = 0;
+  private detailEditorBaseline: number = 0;
+  private detailInitialized: boolean = false;
 
   async open(client: ClientModel, row?: ResourceRow, seed: ResourceRow[] = []): Promise<void> {
-    const revision = ++this.revision;
+    const revision = ++this.revision, readRevision = ++this.readRevision;
     if (this.searchTimer !== -1) clearTimeout(this.searchTimer);
     this.searchTimer = -1;
     this.client = client; this.editorClient = undefined; this.owner = row?.manager || client.profile.manager;
     this.viewScope = JSON.stringify([client.scope(), client.profile.manager, this.owner]);
     this.loading = true; this.busy = false; this.error = ''; this.writeState = ''; this.editOpen = false; this.editorDirty = false; this.editorRevision++;
+    this.detailEditorBaseline = this.editorRevision;
+    this.detailInitialized = false;
     this.detail = {}; this.matches = []; this.agents = []; this.momentText = ''; this.momentTarget = ''; this.results = []; this.entries = [];
     this.agentDraft = ''; this.agentLauncher = ''; this.directoryTargets = []; this.targetMachines = []; this.selectedDirectory = 0;
     this.listRows = seed.slice();
@@ -110,37 +115,33 @@ export class KnowledgeWorkspace {
     } else {
       this.selected = new ResourceRow();
     }
+    let owner: KnowledgeOwner | undefined;
     try {
-      const owner = await this.capture(client, this.owner, row ? row.key() : 'list');
-      if (!this.current(owner, revision)) return;
+      owner = await this.capture(client, this.owner, row ? row.key() : 'list');
+      if (!this.current(owner, revision) || !this.currentRead(revision, readRevision)) return;
       const saved = Wire.parse(await owner.client.loadView('knowledge-workspace'));
-      if (!this.current(owner, revision)) return;
+      if (!this.current(owner, revision) || !this.currentRead(revision, readRevision)) return;
       if (!row) {
         this.kind = KNOWLEDGE_KINDS.includes(Wire.text(saved, 'kind')) ? Wire.text(saved, 'kind') : this.kind;
         this.tag = Wire.text(saved, 'tag'); this.query = Wire.text(saved, 'query');
       }
       if (row) {
-        this.editorClient = owner.client;
-        const draft = Wire.parse(await owner.client.loadView(this.draftKey(row)));
-        if (!this.current(owner, revision)) return;
-        await this.loadDetail(owner, revision, row);
-        if (!this.current(owner, revision)) return;
-        this.loadEditor(draft);
-        this.targetMachines = owner.client.machines.filter((machine: ResourceRow) => this.canUseMachine(machine, owner.manager));
-        if (row.path === 'projects') this.prepareAgentTargets(this.targetMachines);
+        await this.initializeDetail(owner, revision, row, readRevision);
+        if (!this.current(owner, revision) || !this.currentRead(revision, readRevision)) return;
       } else {
         if (seed.length) this.entries = seed.map((item: ResourceRow) => this.copyRow(item));
-        await this.load(owner, revision);
+        await this.load(owner, revision, readRevision);
       }
     } catch (failure) {
-      if (this.revision === revision) this.error = this.errorCode(failure as Error);
+      if (this.currentRead(revision, readRevision) && (owner ? this.current(owner, revision) : this.currentRoot(client, revision))) this.error = this.errorCode(failure as Error);
     } finally {
-      if (this.revision === revision) this.loading = false;
+      if (this.currentRead(revision, readRevision)) this.loading = false;
     }
   }
 
   hide(): void {
-    this.revision++; this.client = undefined; this.editorClient = undefined; this.listRows = []; this.detail = {}; this.matches = []; this.agents = [];
+    this.revision++; this.readRevision++; this.client = undefined; this.editorClient = undefined; this.listRows = []; this.detail = {}; this.matches = []; this.agents = [];
+    this.detailInitialized = false;
     if (this.searchTimer !== -1) clearTimeout(this.searchTimer);
     this.searchTimer = -1;
   }
@@ -148,25 +149,30 @@ export class KnowledgeWorkspace {
   async refresh(): Promise<void> {
     const client = this.client;
     if (!client) return;
-    const revision = this.revision, row = this.selected.id ? this.selected : undefined;
+    const revision = this.revision, readRevision = ++this.readRevision, row = this.selected.id ? this.selected : undefined;
     this.loading = true;
+    let owner: KnowledgeOwner | undefined;
     try {
-      const owner = await this.capture(client, row?.manager || this.owner, row ? row.key() : 'list');
-      if (!this.current(owner, revision)) return;
-      if (row) await this.loadDetail(owner, revision, row); else await this.load(owner, revision);
-    } catch (failure) { if (this.revision === revision) this.error = this.errorCode(failure as Error); }
-    finally { if (this.revision === revision) this.loading = false; }
+      owner = await this.capture(client, row?.manager || this.owner, row ? row.key() : 'list');
+      if (!this.current(owner, revision) || !this.currentRead(revision, readRevision)) return;
+      if (row) {
+        if (this.detailInitialized) await this.loadDetail(owner, revision, row, readRevision);
+        else await this.initializeDetail(owner, revision, row, readRevision);
+      } else await this.load(owner, revision, readRevision);
+    } catch (failure) {
+      if (this.currentRead(revision, readRevision) && (owner ? this.current(owner, revision) : this.currentRoot(client, revision))) this.error = this.errorCode(failure as Error);
+    } finally { if (this.currentRead(revision, readRevision)) this.loading = false; }
   }
 
   setKind(kind: string): void {
     if (!KNOWLEDGE_KINDS.includes(kind) || kind === this.kind) return;
-    this.kind = kind; this.tag = ''; this.saveFilters(); this.refresh().catch(() => undefined);
+    this.invalidateListRead(); this.kind = kind; this.tag = ''; this.saveFilters(); this.refresh().catch(() => undefined);
   }
 
-  setTag(tag: string): void { this.tag = tag; this.saveFilters(); this.refresh().catch(() => undefined); }
+  setTag(tag: string): void { this.invalidateListRead(); this.tag = tag; this.saveFilters(); this.refresh().catch(() => undefined); }
 
   setQuery(query: string): void {
-    this.query = query;
+    this.invalidateListRead(); this.query = query;
     if (this.searchTimer !== -1) clearTimeout(this.searchTimer);
     this.saveFilters();
     this.searchTimer = setTimeout(() => { this.searchTimer = -1; this.refresh().catch(() => undefined); }, 280);
@@ -224,8 +230,7 @@ export class KnowledgeWorkspace {
       if (!this.current(owner, revision) || this.selected.key() !== targetKey) return false;
       this.writeState = 'done';
       // An acknowledged save stays acknowledged if reading its new value back fails.
-      try { await this.loadDetail(owner, revision, row); }
-      catch (failure) { if (this.current(owner, revision)) this.error = this.errorCode(failure as Error); }
+      await this.reloadDetail(owner, revision, row);
       if (this.current(owner, revision) && editorRevision === this.editorRevision) { this.editOpen = false; this.editorDirty = false; this.clearEditorLater(owner, row); }
       return true;
     } catch (failure) {
@@ -253,6 +258,7 @@ export class KnowledgeWorkspace {
       if (owner.client.operationBlocked(path)) { this.writeState = 'pending'; this.error = 'pending_action'; return false; }
       await owner.repository.call(path, 'DELETE', {}, shortOperation());
       if (!this.current(owner, revision) || this.selected.key() !== targetKey) return false;
+      this.readRevision++; this.loading = false;
       this.writeState = 'deleted'; this.entries = this.entries.filter((item: ResourceRow) => item.key() !== targetKey);
       return true;
     } catch (failure) {
@@ -333,8 +339,7 @@ export class KnowledgeWorkspace {
       await owner.repository.call(path, 'POST', body, shortOperation());
       if (!this.current(owner, revision) || this.selected.key() !== key) return false;
       this.writeState = 'done';
-      try { await this.loadDetail(owner, revision, row); }
-      catch (failure) { if (this.current(owner, revision)) this.error = this.errorCode(failure as Error); }
+      await this.reloadDetail(owner, revision, row);
       return true;
     } catch (failure) {
       if (!owner || !this.current(owner, revision) || this.selected.key() !== key) {
@@ -381,21 +386,21 @@ export class KnowledgeWorkspace {
     }
   }
 
-  private async load(owner: KnowledgeOwner, revision: number): Promise<void> {
-    if (this.query.trim()) {
-      await this.loadSearch(owner, revision); return;
+  private async load(owner: KnowledgeOwner, revision: number, readRevision: number): Promise<void> {
+    const kind = this.kind, tag = this.tag, query = this.query.trim();
+    if (query) {
+      await this.loadSearch(owner, revision, readRevision, query); return;
     }
-    const path = '/api/v1/kb/' + segment(this.kind) + (this.tag ? '?tag=' + segment(this.tag) : '');
+    const path = '/api/v1/kb/' + segment(kind) + (tag ? '?tag=' + segment(tag) : '');
     const result = await owner.repository.call(path);
-    if (!this.current(owner, revision)) return;
-    const rows = Wire.rows(result, 'items').map((data: Record<string, Object>) => this.entryRow(data, owner.manager, this.kind));
+    if (!this.current(owner, revision) || !this.currentRead(revision, readRevision)) return;
+    const rows = Wire.rows(result, 'items').map((data: Record<string, Object>) => this.entryRow(data, owner.manager, kind));
     this.entries = rows; this.tags = Wire.strings(result, 'tags'); this.error = '';
   }
 
-  private async loadSearch(owner: KnowledgeOwner, revision: number): Promise<void> {
-    const query = this.query.trim();
+  private async loadSearch(owner: KnowledgeOwner, revision: number, readRevision: number, query: string): Promise<void> {
     const result = await owner.repository.call('/api/v1/kb-search?q=' + segment(query) + '&results=1');
-    if (!this.current(owner, revision)) return;
+    if (!this.current(owner, revision) || !this.currentRead(revision, readRevision)) return;
     const hits = Wire.rows(result, 'results').map((data: Record<string, Object>) => {
       const hit = new KnowledgeSearchHit(), entry = Wire.object(data, 'entry');
       hit.entry = this.entryRow(entry, owner.manager, Wire.text(entry, 'kind'));
@@ -406,11 +411,23 @@ export class KnowledgeWorkspace {
     this.results = hits; this.error = '';
   }
 
-  private async loadDetail(owner: KnowledgeOwner, revision: number, row: ResourceRow): Promise<void> {
+  private async initializeDetail(owner: KnowledgeOwner, revision: number, row: ResourceRow, readRevision: number): Promise<void> {
+    this.editorClient = owner.client;
+    const draft = Wire.parse(await owner.client.loadView(this.draftKey(row)));
+    if (!this.current(owner, revision) || !this.currentRead(revision, readRevision) || this.selected.key() !== row.key()) return;
+    await this.loadDetail(owner, revision, row, readRevision);
+    if (!this.current(owner, revision) || !this.currentRead(revision, readRevision) || this.selected.key() !== row.key()) return;
+    if (this.editorRevision === this.detailEditorBaseline) this.loadEditor(draft);
+    this.targetMachines = owner.client.machines.filter((machine: ResourceRow) => this.canUseMachine(machine, owner.manager));
+    if (row.path === 'projects') this.prepareAgentTargets(this.targetMachines);
+    this.detailInitialized = true;
+  }
+
+  private async loadDetail(owner: KnowledgeOwner, revision: number, row: ResourceRow, readRevision: number): Promise<void> {
     const q = Wire.text(row.data(), 'opened_from_query'), path = '/api/v1/kb/' + segment(row.path) + '/' + segment(row.id) +
       (q ? '?q=' + segment(q) : '');
     const result = await owner.repository.call(path);
-    if (!this.current(owner, revision) || this.selected.key() !== row.key()) return;
+    if (!this.current(owner, revision) || !this.currentRead(revision, readRevision) || this.selected.key() !== row.key()) return;
     const detail = Wire.object(result, 'detail');
     if (Wire.text(detail, 'id') !== row.id || Wire.text(detail, 'kind') !== row.path) throw new Error('request_updated');
     this.detail = detail;
@@ -424,6 +441,15 @@ export class KnowledgeWorkspace {
       this.editTags = Wire.strings(Wire.object(detail, 'meta'), 'tags').join(' ');
     }
     this.error = '';
+  }
+
+  private async reloadDetail(owner: KnowledgeOwner, revision: number, row: ResourceRow): Promise<void> {
+    const readRevision = ++this.readRevision;
+    this.loading = true;
+    try { await this.loadDetail(owner, revision, row, readRevision); }
+    catch (failure) {
+      if (this.current(owner, revision) && this.currentRead(revision, readRevision) && this.selected.key() === row.key()) this.error = this.errorCode(failure as Error);
+    } finally { if (this.currentRead(revision, readRevision)) this.loading = false; }
   }
 
   private async capture(client: ClientModel, manager: string, target: string): Promise<KnowledgeOwner> {
@@ -444,6 +470,20 @@ export class KnowledgeWorkspace {
       owner.root.profile.manager !== owner.rootManager || !owner.client.owns(owner.generation, owner.scope) ||
       owner.client.profile.manager !== owner.manager || !owner.client.connected) return false;
     try { return owner.client.repo() === owner.repository; } catch (_) { return false; }
+  }
+
+  private currentRoot(client: ClientModel, revision: number): boolean {
+    return this.revision === revision && this.client === client &&
+      this.viewScope === JSON.stringify([client.scope(), client.profile.manager, this.owner]);
+  }
+
+  private currentRead(revision: number, readRevision: number): boolean {
+    return this.revision === revision && this.readRevision === readRevision;
+  }
+
+  private invalidateListRead(): void {
+    this.readRevision++;
+    if (!this.selected.id) { this.loading = false; this.error = ''; }
   }
 
   private async saveFilters(): Promise<void> {
