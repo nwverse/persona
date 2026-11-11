@@ -27,6 +27,7 @@ class DeployedCommitsTest(unittest.TestCase):
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.com")
         self.git("remote", "add", "origin", "https://github.com/Owner/Repo.git")
+        self.old = self.commit("fix: written for the previous tracker (#31)", "2026-11-06T12:00:00+08:00")
         self.commit("feat: the first (#1)")
         self.git("checkout", "-q", "-b", "feature")
         self.head = self.commit("feat: the open PR's work")
@@ -41,8 +42,9 @@ class DeployedCommitsTest(unittest.TestCase):
         run = subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, check=True)
         return run.stdout.strip()
 
-    def commit(self, subject):
-        self.git("commit", "-q", "--allow-empty", "-m", subject)
+    def commit(self, subject, date=None):
+        env = dict(self.env, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date) if date else self.env
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", subject], cwd=self.repo, env=env, check=True)
         return self.git("rev-parse", "HEAD")
 
     def run_script(self, *args):
@@ -66,6 +68,16 @@ class DeployedCommitsTest(unittest.TestCase):
         self.assertIn("PRs by head: #31", run.stdout)
         self.assertFalse((self.bin / "calls").exists())
 
+    def test_commits_of_the_previous_tracker_are_left_out(self):
+        # Its "(#31)" is the previous tracker's number: listed, the hub would take it for this repository's PR #31.
+        out = self.base / "deployed-commits.txt"
+        run = self.run_script("--out", str(out), "--no-open-prs")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertNotIn(self.old, out.read_text())
+        run = self.run_script("--out", str(out), "--no-open-prs", "--since", "")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn(f"{self.old} fix: written for the previous tracker (#31)", out.read_text().splitlines())
+
     def test_open_prs_from_github_cli(self):
         self.fake_gh([{"number": 41, "headRefOid": self.head}, {"number": 42, "headRefOid": self.other},
                       {"number": 43, "headRefOid": "f" * 40}])
@@ -74,7 +86,7 @@ class DeployedCommitsTest(unittest.TestCase):
         lines = (self.base / "deployed-commits.txt").read_text().splitlines()
         self.assertEqual([x for x in lines if x.startswith("# pr:")], [f"# pr: 41 {self.head}"])
         # One commit of history asked for: the PR's head is listed after it, so the hub can check the PR line.
-        self.assertEqual(lines[3:], [f"{self.deployed} Merge branch 'feature' into local", f"{self.head} feat: the open PR's work"])
+        self.assertEqual(lines[3:], [f"{self.deployed} Merge branch 'feature' into local", f"{self.head} (head of PR 41)"])
         self.assertIn("pr list -R owner/repo --state open", (self.bin / "calls").read_text())
 
     def test_pr_branch_that_merged_the_base_since(self):

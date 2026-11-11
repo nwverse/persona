@@ -17,6 +17,7 @@ The file is written under a temporary name and renamed: run it for the commit th
 the hub's binary or in its state directory.
 """
 import argparse
+import datetime
 import json
 import os
 import re
@@ -26,6 +27,9 @@ import sys
 
 HEADER = "# persona deployed commits v1"
 NAME = "deployed-commits.txt"
+# A "(#N)" in commits written up to 2026-11-07 is the previous tracker's number (CLAUDE.md, "Old issue numbers"): the
+# hub would read it as this repository's PR #N, another PR (#4867). Those commits are left out unless --since says so.
+SINCE = "2026-11-08T00:00:00+00:00"
 
 
 def git(*args, check=True):
@@ -101,21 +105,27 @@ def main():
     ap.add_argument("--pr", action="append", default=[], help="a PR the build contains: <N> or <N>=<head sha>")
     ap.add_argument("--no-open-prs", action="store_true", help="do not ask GitHub which open PRs it contains")
     ap.add_argument("--base", default="origin/main", help="the branch PRs go into, to tell a PR's own commits")
+    ap.add_argument("--since", default=SINCE, help="leave out commits written before this time (ISO 8601; empty: keep all)")
     a = ap.parse_args()
     commit = git("rev-parse", "--verify", f"{a.commit}^{{commit}}").stdout.strip()
     repo = (a.repo or repo_of_remote()).strip().lower().removesuffix(".git")
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         sys.exit("deployed-commits: no GitHub repository: give --repo <owner>/<name>")
-    log = git("log", f"--max-count={max(1, a.max)}", "--format=%H %s", commit).stdout.splitlines()
+    since = datetime.datetime.fromisoformat(a.since).timestamp() if a.since else None
+    log = []
+    for line in git("log", f"--max-count={max(1, a.max)}", "--format=%H %at %s", commit).stdout.splitlines():
+        sha, at, subject = (line.split(" ", 2) + [""])[:3]
+        if since is None or int(at) >= since or not log:  # the deployed commit itself always comes first
+            log.append(f"{sha} {subject}")
     listed = {line.split(" ", 1)[0] for line in log}
     base = git("rev-parse", "--verify", "--quiet", f"{a.base}^{{commit}}", check=False).stdout.strip()
     heads = {}
     for n, head in sorted(pr_heads(repo, a.pr, not a.no_open_prs).items()):
         if re.fullmatch(r"[0-9a-f]{40}", head) and (sha := deployed_by(commit, head, base)):
             heads[n] = sha
-    for sha in heads.values():
-        if sha not in listed:  # older than the history listed: listed after it, so the hub can check the PR line
-            log.append(git("log", "-1", "--format=%H %s", sha).stdout.strip())
+    for n, sha in heads.items():
+        if sha not in listed:  # older than the history listed: listed after it (its subject left out, it could name a
+            log.append(f"{sha} (head of PR {n})")  # number), so the hub can check the PR line
             listed.add(sha)
     out = os.path.join(a.out, NAME) if os.path.isdir(a.out) else a.out
     text = "\n".join([HEADER, f"# repo: {repo}", *(f"# pr: {n} {sha}" for n, sha in heads.items()), *log]) + "\n"
