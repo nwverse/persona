@@ -72,6 +72,44 @@ func TestKBRPCReadsAndUpdates(t *testing.T) {
 	}
 }
 
+func TestKBRPCPeopleListSkipsIgnoredBeforePaging(t *testing.T) {
+	s := kbServiceOn(t, newFakeHub(), newKBStore(), t.TempDir(), nil)
+	e := kbEng(t, s)
+	for i, status := range []string{"ignored", "", "self", "active"} {
+		id := fmt.Sprintf("person-%d", i)
+		if err := e.Store.PutPerson(&kb.Person{ID: id, Name: id, Status: status,
+			Tagging: kb.Tagging{Relevance: 100 - i, Tags: []string{"work"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tag := range []string{"", "work"} {
+		for offset := 0; offset <= 3; offset++ {
+			raw, err := json.Marshal(assistantwire.KBListParams{Kind: kb.KindPerson, Tag: tag, Limit: 1, Offset: offset})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, handled, err := s.kbRequest(context.Background(), assistantwire.MethodKBList, raw)
+			if !handled || err != nil {
+				t.Fatalf("tag %q offset %d: handled=%v err=%v", tag, offset, handled, err)
+			}
+			page := out.(assistantwire.KBListResult)
+			if page.Total != 3 || len(page.Items) != min(1, 3-offset) {
+				t.Fatalf("tag %q offset %d: %+v", tag, offset, page)
+			}
+			if offset < 3 && page.Items[0].ID != fmt.Sprintf("person-%d", offset+1) {
+				t.Fatalf("tag %q offset %d: wrong person %+v", tag, offset, page)
+			}
+			if offset < 2 {
+				if page.NextOffset == nil || *page.NextOffset != offset+1 {
+					t.Fatalf("tag %q offset %d: wrong next offset %+v", tag, offset, page)
+				}
+			} else if page.NextOffset != nil {
+				t.Fatalf("tag %q offset %d: unexpected next offset %+v", tag, offset, page)
+			}
+		}
+	}
+}
+
 func TestKBRPCRejectsInvalidParamsBeforeWriting(t *testing.T) {
 	s := kbServiceOn(t, newFakeHub(), newKBStore(), t.TempDir(), nil)
 	for _, tc := range []struct{ method, raw string }{

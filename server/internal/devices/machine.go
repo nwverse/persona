@@ -372,6 +372,11 @@ type nodePipe struct {
 // shutdownStepTimeout bounds draining a node's pipes once its process is gone.
 const shutdownStepTimeout = 2 * time.Second
 
+// localNodeStopGrace is how long this machine's own node gets, once its stdin is closed, to stop the assistant's
+// conversations and exit before it is killed: the node's own bound for them (node.stopAndWait: 5 s for SIGTERM, 2 s
+// after SIGKILL) and a margin. A variable so tests can shorten it.
+var localNodeStopGrace = 10 * time.Second
+
 func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	if m.dialNode != nil {
 		c, err := m.dialNode(ctx)
@@ -405,6 +410,14 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	if err != nil {
 		cancel()
 		return nil, err
+	}
+	if m.cfg.Kind == "local" {
+		// This machine's node is ended the way a hub that went away ends it, by EOF on its stdin: it stops the
+		// assistant's conversations, whose processes lead their own groups, and exits (node.Serve). Killed straight
+		// away, as the default Cancel does, it left them running beside the ones the next node started for the same
+		// conversations (#4259). An ssh node's own end sees EOF when ssh is killed, so ssh keeps the default.
+		cmd.Cancel = stdin.Close
+		cmd.WaitDelay = localNodeStopGrace
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

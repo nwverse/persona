@@ -172,6 +172,13 @@ class HttpInboxAssistantTransport private constructor(
         buildJsonObject { put("prompt", ""); put("main", main) })
     override suspend fun createConversation(main: Boolean, launcher: String) = json(url("api", "v1", "assistant", "conversations"),
         buildJsonObject { put("prompt", ""); put("main", main); put("launcher", launcher) })
+    // A space's requests carry `?space=` on the URL too (as the web's do): with it the hub client names no manager, since
+    // a space is the default manager's (isAssistantPath).
+    override suspend fun assistantIn(space: String) =
+        json(url("api", "v1", "assistant").newBuilder().addQueryParameter("space", space).build())
+    override suspend fun createConversationIn(space: String) =
+        json(url("api", "v1", "assistant", "conversations").newBuilder().addQueryParameter("space", space).build(),
+            buildJsonObject { put("prompt", ""); put("space", space) })
     // `?manager=` names the manager for this request alone: the hub client sends no header over it (an empty one is
     // the default, dropped before it goes).
     override suspend fun assistantOf(manager: String?) = json(url("api", "v1", "assistant").pinned(manager))
