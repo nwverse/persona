@@ -4,8 +4,9 @@ import SwiftUI
 // platform's way. A long press (a right click on the Mac) opens their menu; the `swipe` ones are also under a swipe
 // from the trailing edge in a list; VoiceOver has them as the row's actions. Destructive ones are red and last; a full
 // swipe never runs one (a tap does); one with `confirm` asks first, with an explicit Cancel (an alert: a
-// confirmation dialog shown from a row loses its Cancel, docs/lessons/ios.md). They are shortcuts: the page the row
-// opens can do the same.
+// confirmation dialog shown from a row loses its Cancel, docs/lessons/ios.md). Under a swipe a destructive one is red
+// by its tint, not its role: the list takes that role as the row's deletion and closes the row (and the page with its
+// question). They are shortcuts: the page the row opens can do the same.
 
 extension View {
     /// The extension's extra actions on this row or tile; nothing when it has none or the page cannot use them (a card).
@@ -41,7 +42,7 @@ private struct ExtensionRowActions: ViewModifier {
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     // The first sits at the edge: the destructive one there, as Mail puts Delete.
                     ForEach(Array(ordered.filter { $0.swipe == true }.reversed().enumerated()), id: \.offset) { _, a in
-                        button(a).tint(Self.destructive(a) ? Theme.danger : Theme.Hue.gray)
+                        button(a, role: false).tint(Self.destructive(a) ? Theme.danger : Theme.Hue.gray)
                     }
                 }
                 .accessibilityActions {
@@ -58,8 +59,9 @@ private struct ExtensionRowActions: ViewModifier {
         }
     }
 
-    private func button(_ a: ExtensionRowAction) -> some View {
-        Button(role: Self.destructive(a) ? .destructive : nil) { start(a) } label: {
+    /// `role: false` under a swipe (see the top of this file).
+    private func button(_ a: ExtensionRowAction, role: Bool = true) -> some View {
+        Button(role: role && Self.destructive(a) ? .destructive : nil) { start(a) } label: {
             if let icon = a.icon, !icon.isEmpty {
                 Label(a.title, systemImage: Theme.Icon.styled(ExtensionUIStyle.icon(icon)))
             } else {
