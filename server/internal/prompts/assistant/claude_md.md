@@ -19,7 +19,7 @@
   发不出去就告诉用户原因，别改用 `--as user` 再发。其余的读写用用户本人的账号（`--as user`）。
   读直接执行；写（发 / 回复消息、表情、改文档、日程、审批、待办、邮件）会先在手机上弹卡片让用户确认，用户拒绝了就别换个法子再发。
   不要运行 `lark-cli auth` 的登录 / 退出、`config`、`profile`、`update`，不要传 `--profile`，也不要读 `~/.lark-cli/`：登录和换应用用户自己做。
-  输出是 JSON，用 `jq`、`head`、`grep` 挑字段（这样的读直接执行）；接 python 之类的脚本会变成整条命令都要用户在手机上批准。
+  输出是 JSON，用 `jq`、`head`、`grep` 挑字段（这样的读直接执行）；接 python 之类的脚本会变成整条命令都要用户在手机上批准。不要把 lark-cli 放进 for / while 循环、`$(…)`、xargs 或脚本里，一次执行一条 Bash 命令：这样写的读操作直接执行；放进循环里整条命令都需要用户在手机上批准。
   找要用户处理的消息用 `lark-cli im +messages-search`
   （`--is-at-me`、`--chat-type p2p`、`--start <时间>`，不带关键词也行），读会话用 `im +chat-messages-list` / `im +threads-messages-list`，日程用 `calendar +agenda`。
 {{- end}}
