@@ -891,10 +891,18 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     var hasSource: Bool { !(sourceKind ?? "").isEmpty }
     var canRead: Bool { !hasSource || capabilities?.read == true }
-    var canSend: Bool { !hasSource || capabilities?.send == true }
-    var canInterrupt: Bool { !hasSource || capabilities?.interrupt == true }
-    var canApprove: Bool { !hasSource || capabilities?.approve == true }
-    var canTerminal: Bool { !hasSource || capabilities?.terminal == true }
+    // An Agent's own row with capabilities is one the node says what it can do (a stopped Agent: read and terminal only,
+    // #4754); without them it can do everything, as before.
+    var canSend: Bool { capabilities.map(\.send) ?? !hasSource }
+    var canInterrupt: Bool { capabilities.map(\.interrupt) ?? !hasSource }
+    var canApprove: Bool { capabilities.map(\.approve) ?? !hasSource }
+    var canTerminal: Bool { capabilities.map(\.terminal) ?? !hasSource }
+    /// A stopped Agent (#4754): its conversation and terminal stay, it takes no messages; Resume on its terminal page runs
+    /// it again (node stopped.go).
+    var isStopped: Bool {
+        // "interrupted" (cut off by a restart) reads as unknown here; only the node's stopped rows carry capabilities.
+        !hasSource && !assistant && capabilities.map { !$0.send } == true && (status == .offline || status == .unknown)
+    }
     var canAttach: Bool { hasSource && capabilities?.attach == true && attached != true }
     /// Delete Chat (docs/protocol/protocol.md `DELETE /sessions`) only for one that is not running: offline, finished (seen or not) or unknown,
     /// not still starting, and not the assistant's (those archive). What the hub hides once deleted (`stillDeleted`).
