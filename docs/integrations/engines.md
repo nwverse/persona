@@ -102,7 +102,7 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 | Keys (Enter, Esc, arrows…), interrupt | Yes | Yes | Yes | Yes | Interrupt only |
 | Answer dialogs (permissions, options) | Yes | Yes (screen-based) | Yes (screen-based) | Yes (screen-based) | Yes (cards, also answerable in Paseo app) |
 | Close sessions from phone | Yes | Yes | Yes | Yes | Backend supports archiving in Paseo; app button currently only for terminal sessions |
-| Create / continue Not running sessions from phone | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; continue a Not running Claude session in a new terminal, #5548) | Yes | Yes (each Paseo provider is a launcher) |
+| Create sessions from phone; Resume a stopped one from its terminal page (a message does not, #4754) | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; resume a stopped Claude session, #5548) | Yes | Yes (each Paseo provider is a launcher; a message continues a Paseo session) |
 | Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | No | Yes (Orca creates it under the original workspace and owns the checkout directory) | No | No |
 | Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | No | Yes | No (backend supports session names; app button currently only for terminal sessions) |
 | Live terminal, phone takeover | Yes | No | No | No | No (no terminal) |
@@ -150,6 +150,7 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - **Not Agents, headless by design**: assistant conversations (the main chat, leader chats, scheduled tasks, channels, meetings, the Inbox AI twin, Lark `/agent`), listed in the Persona tab and not under Agents, and model calls (titles, triage, the launcher Test).
 - **No terminal, by the user's choice**: an engine that runs Agents through provider SDKs (Paseo, Cindy), Orca's native chats and runtimes (DSH, pi, Antigravity, daemons) own their sessions; Persona leaves them as they are.
 - **Stopping keeps the terminal**: Persona's own passes stop an Agent with node `session.stop`: a finished task's, an idle one, a cancelled task's, and `/exit` sent by `agent_send` (`docs/assistant/todos.md` "Stop Agents of completed tasks"). The Agent process quits and its tab stays with the shell it ran in. Nothing closes such a tab on a timer.
+- **A stopped Agent is read-only** (#4754): an Agent of a terminal engine that is not running, stopped by Persona or by the user, exited by itself or cut off by a restart, keeps its conversation and its terminal (the session's terminal opens the shell it left), and takes no messages: node `session.send` refuses it as `agent_stopped` with nothing typed, before any resume, and its row's `capabilities` have `read` and `terminal` without `send` (`server/internal/node/stopped.go`). The assistant's `agent_send` and `agent_interrupt` refuse it too, pointing the model at `agent_start`. The one way back is the user's **Resume** on its terminal page (`session.start` with `resume_session_id`): it types the session's launcher with `--resume` into the shell the Agent left when that shell is at rest in the session's directory, else it opens a new tab. Not covered: assistant conversations, Claude's desktop-app sessions, runtimes and engines that run Agents themselves, and a branch nothing has started yet (its first message starts it).
 - **Only the user closes a terminal**: **Close** on a session, **Archive and close**, force archive of an Agent blocked on a confirmation, closing a pane or tab from the terminal list. The one exception is a finished review's reviewer, an internal helper, which closes with its worktree copy.
 - **Checks**: `server/internal/assistant/terminal_guard_test.go` pins the manager functions that ask a node to close something, `server/internal/node/terminal_guard_test.go` the node functions that close a pane or tab; `TestHerdrStopKeepsTheTerminal`, `TestOrcaRetireKeepsTheTerminal` and `TestStartStartsHerdrFirst` cover the behavior.
 
@@ -346,11 +347,11 @@ Persona therefore reports its own recovery command for each Claude pane (`resume
 - Older Persona sessions / sessions predating node restart (launcher in node session records): report once on refresh if running in herdr.
 - Claude changes sessions in a pane (`/clear`): report new ID when Persona SessionStart hook arrives; herdr does not track it automatically (v0.9.5 tested).
 - Resume command omits permission / thinking settings; paths with single quotes are not reported (herdr rejects `'` arguments), falling back to built-in restore.
-- Node-started headless server has no attached client, so herdr does not resume Agents until someone opens herdr on the computer. Phone Continue on a Not running session still works.
-- **Interrupted by restart** (#1917): sessions running before restart appear `interrupted` afterward (`docs/protocol/agent-states.md`), with Continue. Node records the pane and
+- Node-started headless server has no attached client, so herdr does not resume Agents until someone opens herdr on the computer. Resume on a Not running session's terminal page still works.
+- **Interrupted by restart** (#1917): sessions running before restart appear `interrupted` afterward (`docs/protocol/agent-states.md`), read-only like any stopped Agent, with Resume on the terminal page. Node records the pane and
   launch time (session records in hub settings); if launch predates current node startup and no Agent is alive, it is interrupted. Sessions launched after this node startup do not count,
-  nor user-started terminal sessions (no recorded pane). No automatic continuation: restart may interrupt a tool call, so the user decides. Continue uses ordinary
-  `session.start {resume}`, launcher `--resume` in a new pane.
+  nor user-started terminal sessions (no recorded pane). No automatic continuation: restart may interrupt a tool call, so the user decides. Resume uses ordinary
+  `session.start {resume}`, launcher `--resume` in the shell the Agent left when it is still there, else in a new pane.
 - No "Continue all" yet (machine-wide batch start, client half).
 
 ## When an engine cannot be selected

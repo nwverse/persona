@@ -24,6 +24,14 @@ const agentStopped = "agent_stopped"
 // stoppedReason is a stopped agent's read_only_reason (the apps show their own words for it).
 const stoppedReason = "Agent 已停止：对话和终端可以看，它不再收消息；要它接着做，在终端页点「恢复」"
 
+// desktopSession: Claude's desktop app names transcript id (a session of its sidebar, archived or not, or one it went
+// on from): the app's session, which a message continues as before (claudedesktop_open.go), not a stopped agent.
+func (n *Node) desktopSession(id string) bool {
+	x := readClaudeDesktopIndex(n.home)
+	_, named := x.visible[id]
+	return named || len(x.earlier[id]) > 0
+}
+
 // stoppedRefusal refuses a send to session id's stopped agent: nothing was typed.
 func (n *Node) stoppedRefusal(id string) error {
 	log.Printf("send %s: the agent has stopped: refused, nothing typed", id)
@@ -99,8 +107,7 @@ func (n *Node) inKeptTerminal(ctx context.Context, id, cwd string) context.Conte
 	if adoptedPane(ctx) != nil {
 		return ctx
 	}
-	_ = n.refreshHosts(ctx)
-	p, ok := n.keptPane(id)
+	p, ok := n.keptPane(id) // in the hosts' last snapshots, which every change in the engine refreshes
 	if !ok {
 		return ctx
 	}

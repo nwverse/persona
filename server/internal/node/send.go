@@ -96,9 +96,15 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if r := n.notRunningRefusal(ctx, id); r != nil {
 			return r
 		}
+		// A claude outside Persona's panes that has it open (Claude's desktop app, another terminal, a background run)
+		// is no stopped agent: refused as open elsewhere, as before (openelsewhere.go).
+		if r := n.openElsewhereRefusal(id); r != nil {
+			return r
+		}
 		// A stopped agent takes no messages; its terminal page's Resume brings it back (stopped.go, #4754). Only a
-		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from.
-		if !n.freshFork(id) {
+		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from,
+		// and a session of Claude's desktop app the app could not take is resumed as before.
+		if !n.freshFork(id) && !n.desktopSession(id) {
 			return n.stoppedRefusal(id)
 		}
 		r := n.resumeWith(id, opts)
