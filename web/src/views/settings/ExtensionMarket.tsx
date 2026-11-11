@@ -673,15 +673,13 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
       </div> : <>
       {version && <Row label={t("settings-extensions.version")} mono wrapValue>{version}</Row>}
       <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-extensionmarket.uninstall_body")}</p>
-      <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-control bg-inset px-3 py-2.5 shadow-hairline">
-        <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} className="mt-0.5 size-3.5 shrink-0 accent-[var(--accent)]" />
-        <span className="min-w-0">
-          <span className="block text-[12.5px] font-medium text-ink">{t("settings-extensionmarket.keep_data")}</span>
-          <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-3">{t("settings-extensionmarket.keep_data_hint")}</span>
-        </span>
-      </label>
+      {/* The choices, one row each in one box (#4072): keep the data, and for a pack its members too. */}
+      <div className="mt-3 divide-y divide-line overflow-hidden rounded-control bg-inset shadow-hairline">
+        <UninstallChoice checked={keep} onChange={setKeep} title={t("settings-extensionmarket.keep_data")} hint={t("settings-extensionmarket.keep_data_hint")} />
+        {!!packMembers?.length && <UninstallChoice checked={members} onChange={(on) => { setMembers(on); setCascade(false); setDependents(null); }}
+          title={t("settings-extensionmarket.uninstall_members_title")} hint={t("settings-extensionmarket.uninstall_members_hint", { names: named(packMembers.map((p) => p.id)) })} />}
+      </div>
       {dependents && <label className="mt-3 flex items-start gap-2.5 text-ink-2"><input type="checkbox" checked={cascade} onChange={(e) => setCascade(e.target.checked)} />{t("settings-extensionmarket.disable_dependents", { names: dependents.map((d) => d.name).join(t("settings-extensionmarket.list_separator")) })}</label>}
-      {!!packMembers?.length && <label className="mt-3 flex items-start gap-2.5 text-ink-2"><input type="checkbox" checked={members} onChange={(e) => { setMembers(e.target.checked); setCascade(false); setDependents(null); }} />{t("settings-extensionmarket.uninstall_members", { names: named(packMembers.map((p) => p.id)) })}</label>}
       {error && <p className="mt-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12px] break-words text-red">{t("settings-extensionmarket.not_uninstalled", { error })}</p>}
       {partial && <div role="alert" data-partial-uninstall className="mt-2 rounded-[8px] bg-orange-tint px-3 py-2.5 text-[12px] leading-relaxed break-words text-orange">
         <p className="font-medium">{t("settings-extensionmarket.partial_title")}</p>
@@ -695,6 +693,19 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
       </div>}
       </>}
     </Dialog>
+  );
+}
+
+/** One of the uninstall dialog's choices: a checkbox, its title and what it means. */
+function UninstallChoice({ checked, onChange, title, hint }: { checked: boolean; onChange: (on: boolean) => void; title: string; hint: string }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="mt-0.5 size-3.5 shrink-0 accent-[var(--accent)]" />
+      <span className="min-w-0">
+        <span className="block text-[12.5px] font-medium text-ink">{title}</span>
+        <span className="mt-0.5 block text-[11.5px] leading-relaxed break-words text-ink-3">{hint}</span>
+      </span>
+    </label>
   );
 }
 

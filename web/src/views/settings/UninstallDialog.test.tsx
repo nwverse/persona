@@ -111,7 +111,7 @@ describe("uninstall warnings", () => {
       removed_members: ["member-a"], failed_members: [{ id: "member-b", error: "仍在运行" }], remaining_members: ["member-c"] } }, { body: { ok: true } }];
     await open([{ id: "member-a" }, { id: "member-b" }, { id: "member-c" }]);
     // By name; one not installed keeps its id.
-    expect(dialog()?.textContent).toContain("连合集成员一起卸载：成员甲、成员乙、member-c");
+    expect(dialog()?.textContent).toContain("连合集成员一起卸载成员甲、成员乙、member-c。不勾选时它们会保留。");
     const inputs = dialog()!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
     await act(async () => inputs[1].click());
     await click("卸载");

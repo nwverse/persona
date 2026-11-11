@@ -79,9 +79,12 @@ try {
     await page.getByRole("button", { name: "Uninstall", exact: true }).first().click();
     const dialog = page.getByRole("dialog");
     // By name; the member that isn't installed keeps its id.
-    const choice = dialog.getByText("Also uninstall pack members: Example Notes, Example UI, example-mail", { exact: true });
-    await choice.waitFor();
+    await dialog.getByText("Example Notes, Example UI, example-mail. Left unchecked, they stay installed.", { exact: true }).waitFor();
+    const choice = dialog.getByText("Also uninstall pack members", { exact: true });
     await choice.click();
+    // The two choices look alike: rows of one box.
+    const rows = await dialog.locator("label:has(input[type=checkbox])").evaluateAll((labels) => labels.map((l) => [getComputedStyle(l).padding, l.parentElement === labels[0].parentElement]));
+    assert.equal(rows.length, 2); assert.equal(rows[0][0], rows[1][0]); assert.ok(rows.every(([, same]) => same));
     const settle = () => page.evaluate(async () => {
       await document.fonts.ready;
       await Promise.all(document.getAnimations().filter((a) => Number.isFinite(a.effect?.getComputedTiming().iterations)).map((a) => a.finished.catch(() => {})));
