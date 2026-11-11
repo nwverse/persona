@@ -99,9 +99,9 @@ func TestRunHookWithoutANodePrintsNothing(t *testing.T) {
 	}
 }
 
-// A MessageDisplay hook (the Agents' plugin has it, node/doctor.go) hands its input to the node as hook.display and
-// prints nothing, whatever the node says: printed, it would replace the lines on the terminal. A node that takes long
-// holds Claude's terminal no longer than displayWait.
+// A MessageDisplay hook (the Agents' plugin has it, node/generated_config.go) hands its input to the node as
+// hook.display and prints nothing, whatever the node says: printed, it would replace the lines on the terminal. A node
+// that takes long holds Claude's terminal no longer than displayWait.
 func TestRunHookPassesDisplayOn(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "pd") // a short path: a socket's is bounded
 	if err != nil {
@@ -151,8 +151,8 @@ func TestRunHookPassesDisplayOn(t *testing.T) {
 	}
 }
 
-// The live replies hook runs without a shell, so it is told its node's directory as an argument (node/doctor.go
-// displayHooks): it reaches that node's socket whatever its environment says.
+// The live replies hook runs without a shell, so it is told its node's directory as an argument
+// (node/generated_config.go displayHooks): it reaches that node's socket whatever its environment says.
 func TestRunHookHomeFlag(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "pd") // a short path: a socket's is bounded
 	if err != nil {

@@ -31,8 +31,8 @@ const (
 const GlobalHookFlag = "--persona-global"
 
 // HomeFlag names the data directory, and so the node, of a hook in exec form (`<binary> hook --persona-home <dir>`,
-// the live replies plugin's: node/doctor.go displayHooks). Claude Code starts that one without a shell, so it cannot
-// have PERSONA_HOME in front as the shell-form hooks do.
+// the live replies plugin's: node/generated_config.go displayHooks). Claude Code starts that one without a shell, so
+// it cannot have PERSONA_HOME in front as the shell-form hooks do.
 const HomeFlag = "--persona-home"
 
 // HookPane is the pane a hook runs in, from its environment, as a stored PaneRef: herdr's HERDR_PANE_ID as it always
@@ -60,7 +60,7 @@ func HookPane(getenv func(string) string) string {
 
 // RunHook is `<binary> hook [--persona-home <dir>] [--persona-global]`: a Claude Code hook's input on stdin, what the
 // hook prints on stdout (nothing: let the TUI decide). The node writes that command into the settings of the Agents it
-// starts and, with GlobalHookFlag, into the user's own (node/doctor.go, node/globalhooks.go).
+// starts and, with GlobalHookFlag, into the user's own (node/generated_config.go, node/globalhooks.go).
 func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) {
 	if len(args) >= 2 && args[0] == HomeFlag {
 		if args[1] != "" {
