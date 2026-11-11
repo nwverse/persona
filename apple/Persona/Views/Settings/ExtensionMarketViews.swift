@@ -202,6 +202,7 @@ private struct MarketStateChip: View {
 /// new version asks for in addition), or remove when it came from this market.
 struct MarketExtensionDetailView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var page: MarketExtensionModel
     @State private var confirmRemove = false
     /// The install ended waiting for a sign-in: the extension's page opens over this one.
@@ -310,16 +311,20 @@ struct MarketExtensionDetailView: View {
 
     @ViewBuilder private func header(_ p: ExtensionCatalogItem) -> some View {
         Section {
+            // At the accessibility sizes the name and its line wrap and the state goes under them, or the chip beside them
+            // left "Ex…" (#4058).
+            let large = typeSize.isAccessibilitySize
             HStack(spacing: Theme.Space.m) {
                 Image(systemName: Theme.Icon.plugins).resizable().scaledToFit().foregroundStyle(Theme.accent)
                     .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(p.name).font(Theme.Font.heading).lineLimit(1)
+                    Text(p.name).font(Theme.Font.heading).lineLimit(large ? nil : 1)
                     Text([p.version, p.publisher, p.marketName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(large ? nil : 1)
+                    if large { MarketStateChip(item: p) }
                 }
                 Spacer(minLength: Theme.Space.s)
-                MarketStateChip(item: p)
+                if !large { MarketStateChip(item: p) }
             }
             .padding(.vertical, Theme.Space.xs)
             if let d = p.description, !d.isEmpty { Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary) }

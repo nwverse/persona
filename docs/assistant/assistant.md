@@ -947,3 +947,7 @@ Unlike iOS, Android can switch the assistant machine. Warn "Memory and chat hist
 Running them is in `docs/operations/testing.md`; the scheduler's tests are in `server/internal/assistant/schedule_test.go`
 (`TestNextRun`, `TestParseWhen`, `TestScheduleAcrossHubRestart`), the app's in `AssistantScheduleTests`, `AssistantRoutinesModelTests`
 and the UI suite `AssistantProfileTests`, and the 2026-10-26 to 2026-10-30 measurements in `docs/archive/assistant/assistant-records.md`.
+
+A user can ask main chat to cancel and archive an Agent stuck at a terminal confirmation. `agent_archive` with
+`force: true` closes that blocked Agent and rejects or cancels its pending confirmations, without approving a tool
+or plan. It preserves the transcript and refuses other busy states. Normal archive behavior is unchanged.
