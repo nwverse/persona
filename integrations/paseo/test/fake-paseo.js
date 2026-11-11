@@ -249,14 +249,18 @@ export async function startFakePaseo(t, o = {}) {
    * An agent is deleted in another client (Paseo's own app, its command line): nothing of it is left. Paseo tells
    * the removal only to the lists of the client that deleted it (session.ts handleDeleteAgentRequest): every other
    * one sees the agent closed when it ran (its last state), and nothing when it did not. told: the lists are told
-   * of the removal, as that client's are.
+   * of the removal, as that client's are. after: ms from closing the agent to its record being gone.
    */
-  f.delete = (agentId, { told = false } = {}) => {
+  f.delete = (agentId, { told = false, after = 0 } = {}) => {
     const e = f.agents.get(agentId)
     if (!e) return
-    if (e.agent.status !== 'closed') f.upsert({ ...e.agent, status: 'closed' })
-    f.agents.delete(agentId)
-    if (told) f.emit('agents', { type: 'agent_update', payload: { kind: 'remove', agentId } })
+    if (e.agent.status !== 'closed' && !e.agent.archivedAt) f.upsert({ ...e.agent, status: 'closed' })
+    const gone = () => {
+      f.agents.delete(agentId)
+      if (told) f.emit('agents', { type: 'agent_update', payload: { kind: 'remove', agentId } })
+    }
+    if (after) setTimeout(gone, after).unref()
+    else gone()
   }
   f.update = (agentId, fields) => {
     const e = f.agents.get(agentId)

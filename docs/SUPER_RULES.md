@@ -3,6 +3,9 @@
 These are the highest-priority repository rules. They take precedence over `CLAUDE.md`, `AGENTS.md`, and all other
 repository documentation; when instructions conflict, follow this file.
 
+**Product foundation: Persona is an Agent product for everyone, not only software developers.**
+Rule 4 defines the audiences of Assistant and Agents and the simplicity required of everyday-facing interfaces.
+
 ## Rules
 
 1. **Changes to this file require prior administrator approval.**
@@ -47,3 +50,14 @@ repository documentation; when instructions conflict, follow this file.
 
    These clients use Assistant and Agents as their only primary home destinations, with Settings opened from the sidebar.
    Do not retain the old layout or layout-switching controls, and neither read nor migrate saved old-layout preferences.
+
+4. **Design Persona for everyone, with the audience of each interface in mind.**
+
+   Persona is an Agent product for everyone, not a tool only for software developers. Assistant is for everyday people,
+   with no programming or Agent-tool knowledge required. Agents is for people who want to collaborate directly with
+   Claude Code and other Agents.
+
+   Before every design decision, ask who it serves. Keep Assistant and other everyday-facing interfaces simple and
+   understandable; developer terminology, engineering details and accumulating options must not make them harder to use.
+   Put specialist workflows in Agents or advanced settings, and disclose details only when needed. For example, asking
+   Assistant to organize a trip must not require choosing an Agent runtime or a repository.

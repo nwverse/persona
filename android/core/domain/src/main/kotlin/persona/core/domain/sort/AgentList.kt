@@ -130,10 +130,13 @@ fun agentRank(session: AgentSession, mutes: AgentPreferences = AgentPreferences(
     else -> 6
 }
 
-/** The list's own filter before the quick filter and the botmux switch: not the assistant, the machine, the search. */
+/**
+ * The list's own filter before the quick filter and the botmux switch: not the assistant, the machine, the search. The
+ * search reads the branch too, which a working tree headed by its workspace's title shows nowhere (#4497, as the web).
+ */
 fun AgentListSettings.admits(s: persona.core.contracts.Session): Boolean =
     !s.assistant && (machineFilter.isEmpty() || machineFilter == s.machineId) &&
-        (query.isEmpty() || s.key.path in queryAncestors || listOf(s.title, s.cwd, s.lastText, s.spaceName, s.slotName).any { it?.contains(query, ignoreCase = true) == true })
+        (query.isEmpty() || s.key.path in queryAncestors || listOf(s.title, s.cwd, s.lastText, s.spaceName, s.slotName, s.branch).any { it?.contains(query, ignoreCase = true) == true })
 
 /**
  * Whether the list of running sessions draws [row], its search, quick filter and botmux switch aside: pinned (under

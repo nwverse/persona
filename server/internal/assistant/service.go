@@ -240,6 +240,7 @@ func New(o Options) *Service {
 	s.modelProfileRoutes()
 	s.launcherRoutes()
 	s.machineLauncherRoutes()
+	s.workSessionStartRoutes()
 	s.launcherQuotaRoutes()
 	s.providerProbeRoutes()
 	s.launcherImportRoutes()

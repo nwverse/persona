@@ -46,7 +46,7 @@ async function setup(t, o = {}) {
   const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, log: (m) => logs.push(m) })
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
     { socketPath: node.path, mcpConfig: o.mcpConfig, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500,
-      listMax: o.listMax, pageSize: o.pageSize })
+      listMax: o.listMax, pageSize: o.pageSize, closedChecks: o.closedChecks, sweepMs: o.sweepMs ?? 0 })
   bridge.start()
   t.after(() => bridge.stop())
   await node.ready
@@ -570,6 +570,62 @@ test("only an archived agent of the user's own is named: not a deleted one, nor 
   assert.equal(pushed().sessions.some((r) => r.title === 'KID' || r.title === 'A'), false)
   assert.equal(fake.requestsOf('fetch_agent_request').some((r) => r.agentId === 'internal-1'), false)
   assert.equal(fake.requestsOf('fetch_agent_request').filter((r) => r.agentId === a.claude.id).length, 1, 'asked once, however often the removal is told')
+})
+
+test('an agent deleted in another client leaves the list: one that ran once Paseo no longer has it, though Paseo only says it closed', async (t) => {
+  const { fake, a, rows } = await setup(t, { closedChecks: [30, 200] })
+  const asked = (id) => fake.requestsOf('fetch_agent_request').filter((r) => r.agentId === id).length
+  const has = (agent) => rows().some((r) => r.session_id === `paseo-${agent.id}`)
+  // Paseo closes the agent, and removes its record a moment later: asked before that, it still has it.
+  fake.delete(a.codex.id, { after: 100 })
+  await until('seen closed', () => rows().find((r) => r.session_id === `paseo-${a.codex.id}`)?.status === 'offline')
+  await until('asked, and Paseo still had it', () => asked(a.codex.id) === 1)
+  assert.equal(has(a.codex), true, 'an agent Paseo still has stays')
+  await until('asked again: gone', () => !has(a.codex))
+  assert.equal(asked(a.codex.id), 2)
+  // Its last state comes once more, late (Paseo sends an agent's updates one after another, each when it is ready).
+  fake.emit('agents', { type: 'agent_update', payload: { kind: 'upsert', agent: { ...a.codex, status: 'closed' }, project: PROJECT } })
+  fake.upsert(agentSnapshot({ provider: 'my-codex', cwd: '/tmp', title: 'LATER' }), PROJECT)
+  await until('a later change listed', () => rows().some((r) => r.title === 'LATER'))
+  assert.equal(has(a.codex), false, 'an update that comes after it was deleted does not list it again')
+  // An agent only stopped is asked for too, and stays.
+  fake.update(a.claude.id, { status: 'closed' })
+  await until('asked twice', () => asked(a.claude.id) === 2)
+  assert.equal(rows().find((r) => r.session_id === SID)?.status, 'offline')
+  // A new connection reads the directory afresh: an agent that is in it is listed, whatever was said of its id before.
+  fake.agents.set(a.codex.id, { agent: { ...a.codex, status: 'idle' }, project: PROJECT })
+  fake.drop()
+  await until('listed again', () => has(a.codex))
+})
+
+test('the directory is read again now and then: an agent deleted without a word leaves the list, and an archived one is named no more', async (t) => {
+  const { fake, node, a, rows } = await setup(t, { sweepMs: 40 })
+  const pushed = () => node.last('runtime.sessions')
+  const asked = (id) => fake.requestsOf('fetch_agent_request').filter((r) => r.agentId === id).length
+  // One that was not running (Paseo says nothing at all), and one archived before: its Claude session was named.
+  fake.archive(a.claude.id)
+  await until('named', () => pushed().unlisted_transcripts?.includes(SID))
+  fake.delete(a.grok.id)
+  fake.delete(a.claude.id)
+  await until('off the list', () => !rows().some((r) => r.session_id === `paseo-${a.grok.id}`))
+  await until('named no more', () => !pushed().unlisted_transcripts?.includes(SID))
+  // An archive the list was never told of: found out the same way, and its Claude session is named.
+  const LOST = 'eeeeeeee-0000-4000-8000-000000000001'
+  const lost = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'LOST', persistence: { provider: 'my-claude', sessionId: LOST, metadata: { provider: 'claude' } } })
+  fake.upsert(lost, PROJECT)
+  await until('listed', () => rows().some((r) => r.session_id === LOST))
+  const at = new Date().toISOString()
+  fake.agents.get(lost.id).agent = { ...lost, status: 'closed', archivedAt: at, updatedAt: at }
+  await until('off the list, and named', () => !rows().some((r) => r.session_id === LOST) && pushed().unlisted_transcripts?.includes(LOST))
+  // An agent a reading of the directory missed (it moved from one page to another between the two) is asked for: it stays.
+  fake.handlers.fetch_agents_request = (msg) => {
+    if (msg.subscribe || msg.filter?.includeArchived) return undefined
+    const entries = [...fake.agents.values()].filter((e) => !e.agent.archivedAt && e.agent.id !== a.labeled.id)
+    return { payload: { subscriptionId: null, entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } } }
+  }
+  await until('asked for it', () => asked(a.labeled.id) >= 2)
+  assert.equal(rows().some((r) => r.session_id === 'paseo-e1'), true)
+  assert.equal(asked(a.codex.id), 0, 'an agent the directory lists is not asked for')
 })
 
 test('agents archived while the bridge was away are read a page at a time, newest first, as far back as their sessions are named', async (t) => {
