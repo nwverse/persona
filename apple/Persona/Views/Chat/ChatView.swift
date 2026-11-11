@@ -805,6 +805,16 @@ struct ChatView: View {
             guard entered, takeMessageJump() else { return }
             landEntry(currentLines())
         }
+        // The launcher's list behind this session's model menus (#3754): read once it can switch, kept for a while.
+        .task(id: "\(SessionModes.switchesModel(session))|\(SessionModes.launcher(session))") {
+            await RunningModelLists.shared.load(key, session)
+        }
+        // A refused send's Open Terminal: a dialog holds this session's terminal (#3752).
+        .onChange(of: model.terminalAsk) { _, ask in
+            guard let ask, ask == key else { return }
+            model.terminalAsk = nil
+            if session?.canTerminal == true { openTerminal() }
+        }
         // Going to the background is the last chance before iOS may end the app: a cold relaunch (the dev chat is
         // restored, AppModel.rememberChat) then opens at the same line, not only after leaving the chat.
         .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
@@ -888,7 +898,7 @@ struct ChatView: View {
                                        streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
-                                       supervision: openSupervision, active: shownRoundActive)
+                                       supervision: openSupervision, active: shownRoundActive, background: foldsBackground)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -910,6 +920,12 @@ struct ChatView: View {
         return lines
     }
 
+    /// The main conversation folds its background rounds while the hub's switch is on (docs/apple/ios.md "Background rounds").
+    private var foldsBackground: Bool {
+        ChatLines.foldsBackground(assistant: style == .assistant, conversation: shownKey.sessionID,
+                                  main: model.assistantMain?.sessionID, on: model.mainBackgroundFolded)
+    }
+
     /// A later turn must not make a frozen historical question look like a live one.
     private var shownRoundActive: Bool { frozen.map { $0.live != nil } ?? status.isActive }
 
@@ -917,7 +933,7 @@ struct ChatView: View {
     private var lineBuilder: ChatLines {
         ChatLines(openWork: openWork, openAll: Self.debugOpenAll, openRuns: openRuns,
                   openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
-                  foldsIntoRun: foldsIntoRun, foldSupervision: style == .assistant,
+                  foldsIntoRun: foldsIntoRun, foldSupervision: style == .assistant, foldBackground: foldsBackground,
                   openSupervision: openSupervision, openAllSupervision: Self.debugOpenSupervision, active: shownRoundActive)
     }
     private func unfoldWork(_ lines: [ChatLine]) -> [ChatLine] { lineBuilder.unfold(lines) }
@@ -1294,8 +1310,8 @@ struct ChatView: View {
 
     @ViewBuilder private func lineView(_ line: ChatLine) -> some View {
         switch line.content {
-        case .supervision(let id, _, let live):
-            SupervisionRecordLine(live: live, open: openSupervision.contains(id) != Self.debugOpenSupervision) {
+        case .supervision(let id, _, let live, let source):
+            SupervisionRecordLine(live: live, open: openSupervision.contains(id) != Self.debugOpenSupervision, source: source) {
                 Haptics.tap()
                 toggleInPlace(pin, id, animation: Theme.Motion.state) {
                     if openSupervision.contains(id) { openSupervision.remove(id) } else { openSupervision.insert(id) }
@@ -1305,7 +1321,7 @@ struct ChatView: View {
         case .supervisionInput(let item):
             SupervisionInputLine(item: item)
         case .row(let r):
-            if r.errorCandidate != nil, let card = turnErrorCard(line, raw: r.errorCandidate?.text) { card } else { rowView(r, isLatest: false, live: true, showsSource: line.showsSource) }
+            if r.errorCandidate != nil, let card = turnErrorCard(line, raw: r.errorCandidate?.text) { card } else { rowView(r, isLatest: false, live: true, showsSource: line.showsSource, hidesPrompt: line.hidesPrompt) }
         case .feed(let item): FeedLine(item: item, group: shownKey.group)
         case .quick(let result): QuickResultCard(result: result)
         case .day(let date): DayLine(date: date)
@@ -3860,11 +3876,11 @@ struct ChatView: View {
         return [s.sourceSubtitle, machine, place.isEmpty ? nil : place, s.hasSource ? nil : s.agentLabel, s.stateLabel(muted: model.isMuted(s))].compactMap { $0 }.joined(separator: " · ")
     }
 
-    @ViewBuilder private func rowView(_ row: ChatRow, isLatest: Bool, live: Bool, showsSource: Bool = true) -> some View {
+    @ViewBuilder private func rowView(_ row: ChatRow, isLatest: Bool, live: Bool, showsSource: Bool = true, hidesPrompt: Bool = false) -> some View {
         switch row {
         case .user(let i):
             if let source = MessageSource.of(i) {
-                SourceMessage(item: i, source: source, showsSource: showsSource).equatable()
+                SourceMessage(item: i, source: source, showsSource: showsSource, hidesPrompt: hidesPrompt).equatable()
             } else if let n = Injected.of(i) {
                 // Persona's message for the model: one line in its place, never its words (docs/protocol/protocol.md「Messages injected by Persona」).
                 InjectedLine(item: i, injected: n, conversation: style == .assistant ? shownKey.sessionID : nil)
@@ -4246,6 +4262,9 @@ struct Composer: View, Equatable {
     }
 
     /// Claude in a herdr pane takes `/model`; Codex and TRAEX pick theirs in a full-screen menu the phone cannot drive.
+    /// The launcher's list behind this session's model menus once read (#3754); nil: the fixed aliases.
+    private var runningModels: [AgentModel]? { RunningModelLists.shared.models(key, model.session(key)) }
+
     private var canPickModel: Bool {
         guard let s = model.session(key) else { return false }
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
@@ -4531,10 +4550,10 @@ struct Composer: View, Equatable {
                                    + (VoicePlatform.current == .phone ? [PromptItems.voice] : []),
                                mentions: mentions,
                                commands: promptCommands,
-                               models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model) : [],
-                               modelID: PromptItems.runningModelID(model.session(key)?.model),
+                               models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model, list: runningModels) : [],
+                               modelID: PromptItems.runningModelID(model.session(key)?.model, list: runningModels),
                                pickModel: { id in
-                                   switch PromptItems.modelPick(id, running: model.session(key)?.model) {
+                                   switch PromptItems.modelPick(id, running: model.session(key)?.model, list: runningModels) {
                                    case .typeID: typingModel = true // #1644: through …/modes
                                    case .keep: break
                                    case .send(let text): model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
@@ -5524,10 +5543,14 @@ struct ChatLine: Identifiable {
     let content: Content
     /// Computed after the final row ordering, not in a lazy view's appearance callbacks.
     var showsSource = true
+    /// A scheduled task's or a follow-up's input in the main conversation while background rounds fold: its source
+    /// block shows the one-line notice, never the prompt (`ChatLines.hidesPrompt`).
+    var hidesPrompt = false
 
     indirect enum Content {
-        /// One compact header for the entire quiet round; children are flattened only when it is opened.
-        case supervision(id: String, lines: [ChatLine], live: Bool)
+        /// One compact header for the entire quiet round; children are flattened only when it is opened. `source`: the
+        /// input's source for a background round (docs/apple/ios.md "Background rounds"), nil for a supervision round.
+        case supervision(id: String, lines: [ChatLine], live: Bool, source: MessageSource?)
         case supervisionInput(Item)
         case row(ChatRow)
         case work(id: String, items: [WorkItem], live: Bool, start: Date?, end: Date?)
@@ -5558,7 +5581,7 @@ struct ChatLine: Identifiable {
 
         var id: String {
             switch self {
-            case .supervision(let id, _, _): id
+            case .supervision(let id, _, _, _): id
             case .supervisionInput(let item): item.id
             case .row(let r): r.id
             case .work(let id, _, _, _, _): id
@@ -5583,7 +5606,9 @@ struct ChatLine: Identifiable {
         self.content = content
     }
 
-    static func supervision(id: String, lines: [ChatLine], live: Bool) -> Self { Self(.supervision(id: id, lines: lines, live: live)) }
+    static func supervision(id: String, lines: [ChatLine], live: Bool, source: MessageSource? = nil) -> Self {
+        Self(.supervision(id: id, lines: lines, live: live, source: source))
+    }
     static func supervisionInput(_ item: Item) -> Self { Self(.supervisionInput(item)) }
     static func row(_ row: ChatRow) -> Self { Self(.row(row)) }
     static func work(id: String, items: [WorkItem], live: Bool, start: Date?, end: Date?) -> Self {
@@ -5613,7 +5638,7 @@ struct ChatLine: Identifiable {
     func holds(_ id: String?) -> Bool {
         guard let id else { return false }
         switch content {
-        case .supervision(_, let lines, _): return lines.contains { $0.holds(id) }
+        case .supervision(_, let lines, _, _): return lines.contains { $0.holds(id) }
         case .supervisionInput(let item): return item.id == id
         case .row(let r): return r.id == id
         case .recaps(_, let items): return items.contains { $0.id == id }
@@ -6355,6 +6380,8 @@ final class ChatScratch {
         var day: Date?
         var supervision: Set<String> = []
         var active = false
+        /// Background rounds fold (`ChatLines.foldBackground`): the main conversation with the hub's switch on.
+        var background = false
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

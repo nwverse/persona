@@ -59,21 +59,21 @@ func TestSummarizeRecordingsBackOffPerRecording(t *testing.T) {
 	if n := e.SummarizeRecordings(ctx, 3); n != 0 || m.calls != 2 {
 		t.Fatalf("summarized %d with %d call(s), want 0 with 2 (both tried)", n, m.calls)
 	}
-	if len(e.recordingRetries) != 2 || len(logs) != 2 {
-		t.Fatalf("retries %v, logs %q", e.recordingRetries, logs)
+	if e.retries().recordings.len() != 2 || len(logs) != 2 {
+		t.Fatalf("%d waiting, logs %q", e.retries().recordings.len(), logs)
 	}
 	if n := e.SummarizeRecordings(ctx, 3); n != 0 || m.calls != 2 {
 		t.Fatalf("a run before the next try sent %d more", m.calls-2)
 	}
 
 	m.err = nil
-	r := e.recordingRetries[older]
+	r, _ := e.retries().recordings.get(older)
 	r.at = time.Now().Add(-time.Second) // only the older one's wait is over
-	e.recordingRetries[older] = r
+	e.retries().recordings.set(older, r)
 	if n := e.SummarizeRecordings(ctx, 3); n != 1 || m.calls != 3 {
 		t.Fatalf("summarized %d with %d call(s) in all, want 1 with 3", n, m.calls)
 	}
-	if _, ok := e.recordingRetries[older]; ok {
+	if _, ok := e.retries().recordings.get(older); ok {
 		t.Error("the success did not clear its failures")
 	}
 	if rec, _ := e.Store.Recording(older); rec.SummarizedRev != 1 {
@@ -91,8 +91,8 @@ func TestSummarizeRecordingsPausedDoesNotCount(t *testing.T) {
 	start := time.Now().Add(-2 * time.Hour)
 	completeRecording(t, e, "7c9e6679-7425-40de-944b-e07fc1f90ae7", start)
 	completeRecording(t, e, "9b2f6c1e-3d4a-4f5b-8c7d-2e1f0a9b8c6d", start.Add(time.Minute))
-	if n := e.SummarizeRecordings(context.Background(), 3); n != 0 || m.calls != 1 || len(e.recordingRetries) != 0 {
-		t.Fatalf("summarized %d, %d call(s), retries %v; want 0, 1, none", n, m.calls, e.recordingRetries)
+	if n := e.SummarizeRecordings(context.Background(), 3); n != 0 || m.calls != 1 || e.retries().recordings.len() != 0 {
+		t.Fatalf("summarized %d, %d call(s), %d waiting; want 0, 1, none", n, m.calls, e.retries().recordings.len())
 	}
 }
 
@@ -139,19 +139,16 @@ func TestTagItemsBackOffPerBatch(t *testing.T) {
 	e := testEngine(t, m)
 	untaggedItems(t, e, 50) // two batches
 	more, err := e.TagItems(ctx, 3)
-	if err != nil || more || m.calls != 2 || len(e.itemRetries) != 50 {
-		t.Fatalf("more %v, err %v, %d call(s), %d waiting; want false, nil, 2, 50", more, err, m.calls, len(e.itemRetries))
+	if err != nil || more || m.calls != 2 || e.retries().items.len() != 50 {
+		t.Fatalf("more %v, err %v, %d call(s), %d waiting; want false, nil, 2, 50", more, err, m.calls, e.retries().items.len())
 	}
 	if _, err := e.TagItems(ctx, 3); err != nil || m.calls != 2 {
 		t.Fatalf("a run before the next try sent %d more (%v)", m.calls-2, err)
 	}
 	m.err = nil
-	for k, r := range e.itemRetries {
-		r.at = time.Now().Add(-time.Second)
-		e.itemRetries[k] = r
-	}
-	if _, err := e.TagItems(ctx, 3); err != nil || m.calls != 4 || untagged(e) != 0 || len(e.itemRetries) != 0 {
-		t.Fatalf("after the wait: err %v, %d call(s), %d untagged, %d waiting", err, m.calls, untagged(e), len(e.itemRetries))
+	e.retries().items.over()
+	if _, err := e.TagItems(ctx, 3); err != nil || m.calls != 4 || untagged(e) != 0 || e.retries().items.len() != 0 {
+		t.Fatalf("after the wait: err %v, %d call(s), %d untagged, %d waiting", err, m.calls, untagged(e), e.retries().items.len())
 	}
 }
 
@@ -161,8 +158,8 @@ func TestTagItemsPausedDoesNotCount(t *testing.T) {
 	e := testEngine(t, m)
 	untaggedItems(t, e, 50)
 	more, err := e.TagItems(context.Background(), 3)
-	if !ai.IsPaused(err) || !more || m.calls != 1 || len(e.itemRetries) != 0 || untagged(e) != 50 {
-		t.Fatalf("more %v, err %v, %d call(s), %d waiting, %d untagged", more, err, m.calls, len(e.itemRetries), untagged(e))
+	if !ai.IsPaused(err) || !more || m.calls != 1 || e.retries().items.len() != 0 || untagged(e) != 50 {
+		t.Fatalf("more %v, err %v, %d call(s), %d waiting, %d untagged", more, err, m.calls, e.retries().items.len(), untagged(e))
 	}
 }
 
@@ -185,16 +182,16 @@ func TestNotConfiguredDoesNotBackOff(t *testing.T) {
 	start := time.Now().Add(-2 * time.Hour)
 	completeRecording(t, e, "7c9e6679-7425-40de-944b-e07fc1f90ae7", start)
 	completeRecording(t, e, "9b2f6c1e-3d4a-4f5b-8c7d-2e1f0a9b8c6d", start.Add(time.Minute))
-	if n := e.SummarizeRecordings(ctx, 3); n != 0 || m.calls != 1 || len(e.recordingRetries) != 0 {
-		t.Fatalf("recordings: %d, %d call(s), %d waiting; want 0, 1, 0", n, m.calls, len(e.recordingRetries))
+	if n := e.SummarizeRecordings(ctx, 3); n != 0 || m.calls != 1 || e.retries().recordings.len() != 0 {
+		t.Fatalf("recordings: %d, %d call(s), %d waiting; want 0, 1, 0", n, m.calls, e.retries().recordings.len())
 	}
 	untaggedItems(t, e, 10)
-	if more, err := e.TagItems(ctx, 3); !ai.IsNotConfigured(err) || more || len(e.itemRetries) != 0 {
-		t.Fatalf("items: more %v, err %v, %d waiting", more, err, len(e.itemRetries))
+	if more, err := e.TagItems(ctx, 3); !ai.IsNotConfigured(err) || more || e.retries().items.len() != 0 {
+		t.Fatalf("items: more %v, err %v, %d waiting", more, err, e.retries().items.len())
 	}
 	dirtyProject(t, e, "a")
-	if e.RefreshProjects(ctx, 3); len(e.projectRetries) != 0 {
-		t.Fatalf("projects: %d waiting", len(e.projectRetries))
+	if e.RefreshProjects(ctx, 3); e.retries().projects.len() != 0 {
+		t.Fatalf("projects: %d waiting", e.retries().projects.len())
 	}
 }
 

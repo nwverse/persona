@@ -486,7 +486,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 		defer cancel()
 		return model.JSONMax(cctx, system, user, 6000, out)
 	}
-	system := prompts.RenderKBMinutes(prompts.KBOwner{Owner: e.Owner})
+	system := prompts.RenderKBMinutes(prompts.KBOwner{Owner: e.ownerName()})
 	var read []minutesLine
 	var ans minutesAnswer
 	if len(chunks) == 1 {
@@ -507,7 +507,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 			merge.Parts = append(merge.Parts, notesForMerge(i+1, notes, c, r.StartedAt, zone, max(2, minutesMergeItems/len(chunks))))
 		}
 		merge.Meeting.Transcript = ""
-		err := call(prompts.RenderKBMinutesMerge(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBMinutesMergeInput(merge), &ans)
+		err := call(prompts.RenderKBMinutesMerge(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBMinutesMergeInput(merge), &ans)
 		if err != nil {
 			return fmt.Errorf("merging %d parts: %w", len(chunks), err)
 		}

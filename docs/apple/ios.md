@@ -277,7 +277,7 @@ Chat page:
     prefixes existing input with `/loop ` (existing text becomes task, cursor after command to enter interval), never sends directly (other + shortcuts still send on tap). A `/loop` draft shows shared `LoopDraftNote`
     explaining "Repeat every 10 minutes: Check CI" / "Repeat at Claude's chosen pace: …", gray usage when task absent;
     PersonaKit `LoopCommand` matches `web/src/lib/loop-command.ts`. Screenshot `-showLoopDraft "/loop 10m Check CI"`.
-  - Model: Claude Code `/model` aliases (Default / Opus / Sonnet / Haiku), selection sends `/model <alias>`; absent for Codex, internal Codex fork and headless assistant.
+  - Model: the session's launcher list, the rows New Agent offers for it (Default, the agent's models with their versions, the IDs typed before; `RunningModelLists`, #3754), an alias named by the version it stands for (Opus → Opus 5.5) so it reads apart from the versions beside it; the fixed `/model` aliases (Default / Opus / Sonnet / Haiku) only until the list is read or when it can't be. Selection sends `/model <id>`; absent for Codex, internal Codex fork and headless assistant.
     Assistant home uses launcher list (former model label moved here).
   - Dictation: `Dictation` (`SFSpeechRecognizer` Chinese + `AVAudioEngine`), live recognized text appended to draft; tap again or send stops.
   - Permission/effort above input (`SessionModeBar` / `NewSessionModePicker`) remain, not merged into toolbar; rationale PLAN PromptBar v2.
@@ -637,6 +637,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   it was moved (an offset, a render-only `transformEffect`, under a mask), made both pages' navigation controllers run a deferred transition and lay the page out twice on
   every frame: about 27 ms a frame and 140 ms of hitches a second through a switch on the simulator, against 58 ms and 2.8 ms in place (an ordinary iPhone's numbers).
   Horizontal bars keep the slide.
+- **The drawer under side bars** (2026-11-10, TestFlight, #3755: opening and closing the drawer stuttered on the outer screen): with bars on the side the page stays
+  where it is, dimmed, and the sidebar slides in over it from the leading edge (`AssistantDrawer.inPlace`), under the finger while dragged, with the page card's shadow
+  and edge line along its side; a tap beside it or a drag back closes it. The page sliding aside to uncover the sidebar was the same bug as the pages' switch above:
+  through three opens and closes on the simulator the main thread spent 35 ms a frame (p95), with 230 ms of hitches a second, against 1.1 ms and 2 ms with the page
+  still (an ordinary iPhone, where the page still slides: 8 ms and 13 ms). Horizontal bars keep the page sliding off the sidebar.
 - **Short outer screen** (about 678pt): on Persona's new-chat page, Needs you rows above the input shrink to the remaining space (see "Empty chat" under "New shell" above).
 - **Simulator verification**: iPhone Duo has only the iOS 27.1 runtime (which supports only it). Folding / unfolding / half-folding can only be switched in Xcode Device Hub,
   with no CLI. Screenshots must specify the display: `xcrun simctl io <udid> screenshot --display=1` (outer) / `--display=3` (inner, 2853×2007 in landscape);
@@ -725,7 +730,7 @@ like Claude Code's terminal bottom bar; tap to change (`SessionModeBar`, wording
 also offer selection (unset means "Follow launcher"). Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
 show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")). When the row carries `capabilities.modes`, that Boolean decides instead: `false` hides the controls for Claude outside Persona's terminals, and `true` enables them for a compatible runtime such as Orca or agy. An older hub that omits the field keeps the agent-based behavior (`Session.canChangeModes`; `docs/protocol/protocol.md` "Codex sources and capabilities").
 For Claude Code sessions in herdr, the effort menu also has a Model section (#3119, matching web #2434; `SessionModes.switchesModel`):
-Default / Opus / Sonnet / Haiku; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
+the launcher's list as above (#3754; the fixed Default / Opus / Sonnet / Haiku until it is read), ticked by the running model's exact ID or the alias that stands for it, so a version is never shown as its family; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
 While working, waiting for your answer or not running, this section is disabled and its title explains why; the title notes that the model also becomes the default for new sessions (Claude Code behavior).
 The new shell's Model · Effort menu still sends `/model <id>` as a message.
 
@@ -1351,6 +1356,35 @@ item after a turn stops. Frozen history uses its captured live turn, not a later
 page merges and cache serialization; the chat cache schema changes with these fields. Tests: `ChatSupervisionLinesTests`,
 `ChatSupervisionTests` and `SupervisionRoundUITests`. Screenshots use `MOCK_TASKS=1 MOCK_SUPERVISION=1` on a fresh test device;
 `-showSupervisionOpen YES` opens the record, and `-openAllWork YES` exposes its internal work for inspection.
+
+## Background rounds (#4314)
+
+In the assistant's **main** conversation, a round whose first input comes from another conversation (source kind
+`conversation`), a scheduled follow-up (`followup` with the task's title; not a usage-limit continuation, a wake-up or an
+untitled follow-up, which continue the user's own work) or a scheduled task (`patrol`) folds like a quiet supervision round: one muted
+line, `@<source> · Background round` (`@<source> · Running in the background` while it runs), drawn by the same
+`SupervisionRecordLine`. `<source>` is the label the source mention uses (`MessageSource.name`). The source comes from
+`MessageSource.of`: `Item.source`, then the `message-source` metadata block, then the hub's `injected` mark. The round
+lasts until the next actual input; recaps and compactions inside stay inside. A message the user queued while it runs
+joins the same transcript turn, so `ChatLines.lines` cuts the turn at each input: the user's message and what follows it
+are never folded in. Other conversations and Agent sessions are unchanged.
+
+Opening the line shows the whole round, history included (super rule 2.4). Unlike a supervision record it shows the
+input as its source block, not as raw input: a supervising conversation's message shows its text; a scheduled task's or
+a follow-up's prompt (`injected.detail`, or the raw input) is never shown while folding is on, in a folded round or a
+visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
+the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
+accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
+
+While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
+to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
+other one under its name (the direction's name, else the conversation's title, else "Another conversation") in the
+tray's header style. Rows that are not tasks belong to the conversation's own group. Rows, their order within a group
+and the count are unchanged (`ActionTrayContent.grouped`); with one group the tray is a single list as before.
+
+The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless changed; an older hub that omits it
+counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
+and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
 
 ## Source mentions in the assistant conversation (#2130)
 

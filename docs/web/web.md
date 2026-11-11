@@ -209,6 +209,10 @@ and `hub.json`'s `public_url` is set to `https://<domain>/<prefix>` (the app and
   When writing new code: build `/api/…` URLs only through the functions above (or prepend `BASE`), use `href(route)` for in-site links, and never hard-code `"/xxx"`.
 - **The bundle uses relative paths** (`base: "./"` in `vite.config.ts`): `index.html` references `./assets/…`, and icons and the manifest use relative URLs too, all relative to `<base>`;
   reloading a deep path (`/<prefix>/s/<machine>/<session>`) works. `manifest.webmanifest`'s `start_url` / `scope` / icons / shortcuts are all relative (`id` stays `/`, so existing installs are unchanged).
+- **No external script ahead of the first paint**: the build inlines `public/compatibility-bootstrap.js` (the legacy theme copy) into both
+  `index.html` and `admin/index.html` (`compat-bootstrap.ts`, #2673). As a file it was a parser-blocking request the service worker passes on and
+  the hub has checked again on every load (a 304 at best), so every load waited a round trip to the hub, even when the worker served the kept shell
+  because the hub was slow or offline. Keep new `<head>` scripts inline.
 - **No service worker under a subpath** (`lib/pwa.ts`): its rules and cache are written for the root path. The PWA can still be added to the home screen, just without the offline shell.
 - **The admin UI (`/admin`) is root-only**: it does not read the prefix and cannot be opened through a subpath. The admin UI restricts access by source address ([admin.md](../operations/admin.md)) and should not be exposed through a public proxy anyway;
   access the hub's port directly on the hub machine or the LAN.
@@ -890,6 +894,16 @@ neutral source block with an `@` title, never a user bubble. Consecutive message
 a reply, user input or different source resets it. Long content folds to three lines with an accessible Expand / Collapse
 control. No group-chat header, member list or per-source avatar is added. Quiet supervision rounds retain their existing
 folded trace, now labeled with their source mention.
+
+**Background rounds** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation, while
+`main_background_folded` is on (Settings › Assistant › **Fold background rounds**, `settings/AssistantSettings.tsx`), a round
+whose first input's source is `conversation`, `followup` or `patrol` folds into the same line as a quiet supervision round,
+`@<source> · Background round` (`chatLines`' `background` option, `lib/turns.ts`; `SupervisionLine` in `views/chat/Lines.tsx`).
+Opened, its inputs are source blocks, not raw model input; a scheduled task's or follow-up's input shows only its line,
+never the prompt (`promptHidden`), folded or not. The supervision visibility rule (`supervisionVisible`) keeps rounds that
+asked or told the user shown. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
+`lib/assistant-entries.ts`) when more than one has rows. `e2e/background-rounds.mjs` checks it in a real browser with
+synthetic data and takes the screenshots; with the switch off the chat is pixel-identical to a build without the feature.
 
 The cache retains the source metadata. Unknown nonempty source kinds still use the source presentation. Old hubs fall back
 to injected metadata and complete canonical relay contexts; genuine app inputs and protected quoted templates are never

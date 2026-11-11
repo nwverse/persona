@@ -94,8 +94,13 @@ func (p ModelPurpose) launch() string {
 
 var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate"}
 
-// The catalog also includes an opt-in override; category-default assignment must not write it.
-var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeLarkAgent)
+// The catalog also includes the opt-in overrides of Agents (agentsOverride), in the order of Agents' uses;
+// category-default assignment must not write them.
+var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent)
+
+// agentsOverride: a use of Agents the user may set apart, the AI twin (#4232) or Lark /agent. With nothing saved it
+// follows Agents; every other use follows its category only.
+func agentsOverride(id string) bool { return id == purposeAgent || id == purposeLarkAgent }
 
 // modelPurposes are the uses; Name, Group and Uses hold catalog names (assistant-models), read in a language by
 // localized.
@@ -182,19 +187,19 @@ var errModelConflict = i18n.Err("assistant-models.err_conflict")
 
 func modelKey(id string) string { return "model_config." + id }
 
-// Lark /agent and a task's own use were retired with category-only settings. A fresh namespace keeps dormant records
-// (model_config.lark.agent, model_config.task.<id>) inert, including their revisions. Only a new user save creates
-// such a record.
+// The AI twin, Lark /agent and a task's own use were retired with category-only settings. A fresh namespace keeps
+// dormant records (model_config.inbox.agent, model_config.lark.agent, model_config.task.<id>) inert, including their
+// revisions. Only a new user save creates such a record.
 func modelRecordKey(id string) string {
-	if id == purposeLarkAgent || isTaskPurpose(id) {
+	if agentsOverride(id) || isTaskPurpose(id) {
 		return "model_config.overrides.v1." + id
 	}
 	return modelKey(id)
 }
 
 func modelRecordID(p ModelPurpose) string {
-	// Lark /agent, an extension's purpose and a task's own use have records of their own.
-	if p.CategoryID != "" && p.ID != purposeLarkAgent && !isExtensionPurpose(p.ID) && !isTaskPurpose(p.ID) {
+	// The AI twin, Lark /agent, an extension's purpose and a task's own use have records of their own.
+	if p.CategoryID != "" && !agentsOverride(p.ID) && !isExtensionPurpose(p.ID) && !isTaskPurpose(p.ID) {
 		return p.CategoryID
 	}
 	return p.ID

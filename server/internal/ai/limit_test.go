@@ -60,16 +60,19 @@ type upstream struct {
 	mu       sync.Mutex
 	reply    func(w http.ResponseWriter)
 	hold     time.Duration
+	arrived  chan struct{} // closed when the first request comes in
+	once     sync.Once
 }
 
 func newUpstream(t *testing.T, reply func(w http.ResponseWriter)) *upstream {
-	u := &upstream{reply: reply}
+	u := &upstream{reply: reply, arrived: make(chan struct{})}
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
 		u.sent.Add(1)
+		u.once.Do(func() { close(u.arrived) })
 		n := u.inflight.Add(1)
 		defer u.inflight.Add(-1)
 		for m := u.most.Load(); n > m && !u.most.CompareAndSwap(m, n); m = u.most.Load() {
@@ -312,8 +315,10 @@ func TestSlotWaitIsBoundedForBackground(t *testing.T) {
 	g.mu.Unlock()
 	first := make(chan error, 1)
 	go func() { first <- call(c) }()
-	for u.sent.Load() == 0 { // the first one holds the only slot
-		time.Sleep(5 * time.Millisecond)
+	select { // the first one holds the only slot
+	case <-u.arrived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first call never reached the upstream")
 	}
 	var out struct{ OK bool }
 

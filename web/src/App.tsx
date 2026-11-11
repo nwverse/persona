@@ -348,7 +348,7 @@ function Shell() {
       main = <History origin={route.origin} onToggleSidebar={toggle} />;
       break;
     case "health":
-      main = <Health key={route.sid ?? ""} sid={route.sid} onToggleSidebar={toggle} />;
+      main = <Health key={route.sid ?? (route.fresh ? "new" : "")} sid={route.sid} fresh={route.fresh} onToggleSidebar={toggle} />;
       break;
     case "profile":
       main = <Profile onToggleSidebar={toggle} />;
