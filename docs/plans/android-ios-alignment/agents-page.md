@@ -108,7 +108,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 
 ### A3, A4
 
-- The grouping pill: `AgentHomeComponents.kt` takes the grouping's icon; the picker is a `JMenu` with the groupings only.
+- The grouping pill: `AgentHomeComponents.kt` takes the grouping's icon; the picker is a `JMenu` with the groupings only. Done (11-11) in `AgentsScreen.kt`: the pill shows the grouping's own icon and name with a chevron and opens a Group By sheet with the groupings only; with the home chrome the rest of the list's settings sit behind a ⋯ button until they move under the Agents switch (A4's second half). By Status has no generated glyph for iOS's two dots and shows a board of columns.
 - Computers, hub, range and sort move to a menu under the Agents switch, as `AgentsMenus.swift` does; display options into ⋯ › Display.
 - The "Only <computer>" chip clears `machineFilter`. Done (11-11): with the home chrome, a chosen computer shows as a selected "Only <computer>" chip above the grouping pill (`AgentsHomeAffordancesTest`); the computers and range menu (A4) is still to move.
 
