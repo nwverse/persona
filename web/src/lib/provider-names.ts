@@ -6,7 +6,8 @@
 // the model configuration's providers (GET /model-config, whose `name` the hub sets to the display name), read once a
 // minute at most and shared by every place on the page.
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { modelConfiguration } from "./model-config";
+import { api } from "./api";
+import { MANAGER_HEADER } from "./manager-choice";
 
 /** Anything with a startup ID and maybe a display name: a `Launcher` (GET /machines/{mid}/launchers), a `ProviderView`
  *  (GET /launchers), a preset's add result. */
@@ -66,7 +67,8 @@ const namesCache = new Map<string, { at: number; list: Promise<Named[]> }>();
 export function loadProviderNames(manager = ""): Promise<Named[]> {
   const hit = namesCache.get(manager);
   if (hit && Date.now() - hit.at < NAMES_TTL_MS) return hit.list;
-  const list = modelConfiguration(manager)
+  // the request itself, not model-config's helper: that module stays off the first screen, which plan cards are on
+  const list = api<{ providers?: { id: string; name?: string }[] }>("/model-config", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined })
     .then((r) => namesFromProviders(r.providers))
     .catch(() => {
       namesCache.delete(manager);
