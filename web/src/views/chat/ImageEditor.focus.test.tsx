@@ -94,13 +94,14 @@ describe("the markup editor", () => {
     expect(document.activeElement).toBe(editor);
 
     const cancel = button(t("common.cancel"))!;
-    const pen = button(t("chat-imageeditor.pen"))!;
+    const crop = button(t("chat-imageeditor.crop"))!;
     expect(button(t("chat-imageeditor.done"))!.disabled).toBe(false);
-    // from the dialog itself Tab lands on the first control, Shift+Tab on the last (undo / clear are disabled: nothing drawn)
+    // from the dialog itself Tab lands on the first control, Shift+Tab on the last (undo / redo / clear are disabled:
+    // nothing drawn)
     press("Tab");
     expect(document.activeElement).toBe(cancel);
     press("Tab", true);
-    expect(document.activeElement).toBe(pen);
+    expect(document.activeElement).toBe(crop);
     press("Tab");
     expect(document.activeElement).toBe(cancel);
 
