@@ -36,6 +36,7 @@ import persona.core.designsystem.*
 import persona.core.domain.answer.askingLine
 import persona.core.domain.answer.firstBySession
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.slotLabel
 import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.TodoDecisionsSource
@@ -262,6 +263,9 @@ fun TodoDetailScreen(
                             )
                         }
 
+                        // Dictated notes (#4636, iOS): the phone's own voice input, what was heard at the end of the notes.
+                        val dictate = persona.feature.chat.rememberDictation({ notesText = persona.feature.chat.withDictation(notesText, it) },
+                            onError, stringResource(R.string.agents_todo_notes_dictation_prompt))
                         if (editingNotes) {
                             JTextField(
                                 notesText,
@@ -269,7 +273,10 @@ fun TodoDetailScreen(
                                 label = stringResource(R.string.agents_todo_notes_label),
                                 placeholder = stringResource(R.string.agents_todo_notes_edit_placeholder),
                                 minLines = 3,
-                                maxLines = 8
+                                maxLines = 8,
+                                trailing = dictate?.let { d -> {
+                                    JIconButton(PersonaIcons.dictate, stringResource(R.string.agents_todo_notes_dictate), d, enabled = !saving)
+                                } },
                             )
                             Row(
                                 Modifier.fillMaxWidth(),
