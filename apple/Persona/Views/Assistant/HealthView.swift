@@ -43,6 +43,29 @@ import SwiftUI
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
     }
 
+    /// Where entering Health lands (#4329, docs/assistant/health.md "Entering Health"): like Codex, back in the latest
+    /// health conversation with its context; a space with none opens this page, the new conversation page.
+    nonisolated enum Entry: Equatable {
+        case open(SessionKey)
+        case new
+    }
+
+    /// The newest open conversation by last activity (`updatedAt`, the order the page lists them), else `.new`.
+    nonisolated static func entry(_ fetched: [Session], live: [Session]) -> Entry {
+        merge(fetched, live: live).first.map { .open($0.key) } ?? .new
+    }
+
+    /// Reads the space's list, with what the pushes say over it: one that can't be read leaves the pushed ones,
+    /// and with none of those the new conversation page (which says why the list is missing).
+    static func entry(deps: AssistantDeps, live: [Session]) async -> Entry {
+        let fetched = (try? await deps.api()?.healthConversations()) ?? []
+        return entry(fetched, live: live)
+    }
+
+    /// New Chat from the open conversation: a health one's opens this page, a new health conversation with the space's
+    /// past ones listed; any other the assistant's new conversation.
+    nonisolated static func newOpensHealth(_ open: Session?) -> Bool { open?.isHealth == true }
+
     /// One-tap questions (the web's): each starts a health conversation with it.
     static let suggestions = [String(localized: "How did I sleep this week?"), String(localized: "How do my steps over the last 7 days compare with last week?"), String(localized: "Log my weight today: 62.5 kg [Health View 1a24cb]"), String(localized: "Log my weight today: 62.5 kg [Health View c5fdcd]")]
 }

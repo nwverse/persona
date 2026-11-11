@@ -166,10 +166,11 @@ waiting: <for status="blocked": who or what it waits for>
 - **Reading it** (`server/internal/closeout`): the last block in the final reply counts. The attribute names, the line keys and the status values are fixed; the text after each colon is in the user's language. A block with no status, or one that is not `done`, `not_done` or `blocked`, is no closeout. Bounds: three `did` lines of 200 characters, five artifacts, 300 characters for `verified` and `missing`, 120 for `waiting`. `n/a` and an unsaid `merged` / `deployed` are left empty.
 - **Asking for it** (the `closeout` switch, off by default): when an Agent's Stop hook fires, the node holds the stop once (`decision: block`, `server/internal/node/closeout_stop.go`) if all of these hold: the session has Persona's own hooks (sessions the user started in a terminal only report and are never held); it is not an assistant conversation, a subagent or a review's reviewer; the stop is not already a held one (`stop_hook_active`); the last reply is not empty, not a model API error and has no closeout; and the turn changed files or ran commands (a `tool_use` of `Edit`, `Write`, `MultiEdit`, `NotebookEdit` or `Bash` since the turn's prompt, read from the last 2 MiB of the transcript). The node then asks the manager (`agents.closeout.check`, 5 seconds), which answers with the reason only while the main switch and `closeout` are on (`server/internal/assistant/agents_closeout.go`, prompt `prompts/agents/closeout_required.md`). The Agent is told to repeat its conclusion with a closeout and to start nothing new. A turn that cannot be read, a manager that does not answer, and an Agent that ignores the request all end as before: at most one held stop per turn. The work event `closeout_asked` records each one.
 - **Telling it up front** (the same switch; `server/internal/assistant/agents_closeout_brief.go`, prompt `prompts/agents/closeout_brief.md`, which shares its filling rules with the held stop's through `prompts/agents/closeout_rules.md`): a held stop costs the Agent one more turn, so an Agent is told the form before it works, in two places.
-  - *With its task.* The prompts of `task_plan`, `agent_start` and `dispatch_start` end with the form and with when to write it: at the very end of the final reply of every turn that changed files or ran commands. This is part of the prompt, so it reaches every runtime, Codex included. When the delivery standard is asked for too (`docs/assistant/todos.md` "Delivery"), the two are one instruction: the delivery line first, the closeout block after it, both saying the same of merging and deploying. `deliveryMark` reads the line wherever it stands in the reply, so a block after it changes nothing for the code that reads it.
+  - *With its task.* The prompts of `task_plan`, `agent_start` and `dispatch_start` end with the form and with when to write it: at the very end of the final reply of every turn that changed files or ran commands. A turn that only answered needs none, except one that ends with a question that is only conversation or an offer: it writes `status="done"` with no `missing`, so the turn is not read as awaiting the user's reply (#4110, "Awaiting your reply" below). The held stop and the status question still cover only turns that did work. This is part of the prompt, so it reaches every runtime, Codex included. When the delivery standard is asked for too (`docs/assistant/todos.md` "Delivery"), the two are one instruction: the delivery line first, the closeout block after it, both saying the same of merging and deploying. `deliveryMark` reads the line wherever it stands in the reply, so a block after it changes nothing for the code that reads it.
   - *As a session starts.* A Claude Code session with Persona's own hooks is given the form as the SessionStart hook's `additionalContext` (`server/internal/node/closeout_start.go`): an Agent opened from an app with no task prompt, a resumed one, and one whose context was compacted or cleared. The node asks the manager once per session (`agents.closeout.brief`, 1.5 seconds) and keeps the answer, so later starts of that session ask nothing; a manager that does not answer in time tells nothing, and the session then learns the form only if a stop of its is held. Nothing is asked for a session that only reports (its hook is async and cannot answer), one outside an engine pane, a subagent, or an assistant conversation; the manager answers nothing while a switch is off and for a review's reviewer (by its session once linked, by the review's worktree before). A task's Agent on Claude Code is therefore told twice, in the same words; the session's copy does not mention the delivery line.
   - Sessions the user started in a terminal, and Codex sessions started without a task prompt, are told nothing up front: the first only report, and Persona neither holds a Codex stop nor adds starting context through Codex hooks (`docs/integrations/codex.md`, "Closeout").
 - **Triage** reads the closeout from the final reply before it asks the model. `status="done"` is `done` by rule (`by: "rule"`, no model call), with the first `did` line as the list line. With `not_done` or `blocked` the model is still asked what the turn waits for, and the closeout is kept on the result; when the Agent says `not_done` and the model reads the reply as done, the Agent's word wins and the turn is not finished (below), as any turn nobody can call finished.
+- **Awaiting your reply** (#4110): a final reply whose closeout says `done` with no `missing` and no `waiting` line asks the user nothing (`closeout.WaitsOnNobody`, read by `closeout.AskOf`), however it ends, so the session is not `awaits_reply` even before triage runs or with triage off; triage already calls the same turn done by rule. Any other closeout, or none, leaves the reply's words to decide as before (`../protocol/agent-states.md` "Awaiting your reply").
 - **Not finished** is the list state of a turn that has a closeout and that nobody can call finished: the Agent says `not_done` (or `blocked`) and the model does not name a wait, or the hub disproved its merged / deployed claim ("Checked by the hub"). Its work state is published with an empty `phase`, the closeout, and a line in the user's language (`closeoutLine`): "Not finished: …" with what the closeout says is missing, else what it waits for, else its first `did` line; for a disproved claim, which claim is not so ("Says merged, but the pull request is not merged"). The session's `state` stays Unread. Why an empty phase and not a fourth value: every client already draws a `work` with a line and a phase that is neither `working` nor `done` as that plain line, with no check mark and no wait (web `workLine`, Android `Session.workLine`, Apple `Session.workLine`), and counts as waiting only a `blocked` phase; a new value would reach apps that type `phase` as `working | blocked | done`, and `done` or `blocked` would move the row out of Unread or start a wait nobody ends. A turn without a closeout that the model cannot read is still not published. Stats count both as `unsure`.
 - **Asking afterwards** (the `closeout_ask` switch, off by default, #3616): the held stop does not reach every turn (a runtime whose hook cannot hold a stop, a session without Persona's hooks, an Agent that ignored the request). When triage finishes for such a turn, the manager schedules one status question (`server/internal/assistant/agents_closeout_ask.go`, prompt `prompts/agents/closeout_ask.md`) if all of these hold: the main switch and `closeout_ask` are on; the final reply has no closeout; the result is unsure, or `done` on the model's word with no artifact; the turn did work (an edit, a command or a subagent, as `turnDidWork` reads the turn's items) and the user did not stop it; the turn has no wakeup or card of its own; and the session is an Agent's own that nobody follows: not an assistant conversation, a review's reviewer, a session owned by a source, an archived or read-only one, not on a to-do with a supervisor (the supervisor follows it), and not on a completed to-do without an open one. The question asks where the work already done stands, in the closeout form, and tells the Agent to start nothing new and not to push, merge, deploy or message anyone. The tick sends it after the rechecks every automatic action gets ("Avoid conflicting with manual user actions"), and checks again that nobody supervises the Agent; a turn older than a day is not asked. It is asked once per turn: the turn's `session_work` row holds `closeout_ask` (`pending`, then `sent`, written before the message goes), so a manager restart neither loses a scheduled question nor repeats a sent one. The turn that answers is triaged as any turn, so its closeout becomes the list line; it is never asked again, even when it has no closeout either (a transient error that cuts the answer off passes this on to the turn that continues it). Work events: `closeout_ask_sent`, then `closeout_ask_answered` when the next turn carried a closeout or `closeout_ask_ignored` when it did not. Only an Agent Persona started is asked: nothing is typed unasked into a session the user started by hand in a terminal.
 - **Where it goes**: `work.closeout` on the session ("Protocol" below). The session lists carry only where it stands (`status`, `merged`, `deployed`, `waiting`, `missing`); `did` and `verified` come with the session itself.
@@ -177,7 +178,7 @@ waiting: <for status="blocked": who or what it waits for>
 - **Checked by the hub** (`checkCloseout`): when the closeout names a GitHub pull request by its link, triage looks at it with the deploy check that deliveries use (`deploy_check.go`: the pull request's merge, and whether the running hub contains the merge commit) and keeps the result beside the claim as `closeout.checked {merged, deployed}`, each `yes`, `no` or absent when it could not tell. `deployed` is about the running hub, so it is known only for the hub's own repository; for another repository only `merged` is. A closeout that says merged or deployed when the check says it is not is never `done`: the turn is "Not finished" (above), Unread with the closeout and the finding kept and a line naming the claim. Supervision messages show the finding under the closeout.
 - **Snapshot**: in the main chat's live snapshot an Agent's line ends with what its closeout claims of merging and deploying, marked as its own account, and with the hub's finding where that differs from the claim (`prompts/assistant/snapshot_closeout.md`, `snapshotCloseout`); nothing is added when the closeout says neither. A turn that is not finished is under "Unread" with its line.
 - **Delivery**: a reply with a closeout and no delivery line of its own (`docs/assistant/todos.md` "Delivery") states its delivery through the closeout: deployed `yes` is live, merged `yes` is merged and not live, merged `no` with a pull request is held at the PR, and a done closeout that says neither is "nothing to ship". A delivery line in the same reply wins.
-- **Not done yet** (follow-ups of #3612): only the web draws the closeout and has the switch (`docs/web/web.md`, "Pages": **Closeout**), and no client gives a turn that is not finished a mark of its own (it shows as the plain line of an Unread row); Codex has no held stop and no starting context, so a Codex session started without a task prompt writes a closeout only if it is asked to (one it writes is read all the same); a session already running when the switch is turned on learns the form at its next start or held stop; the form reaches a task's Agent on Claude Code twice (prompt and starting context).
+- **Not done yet** (follow-ups of #3612): the web and Android draw the closeout and have the switch (`docs/web/web.md`, "Pages": **Closeout**; `docs/android/android.md`, "Closeout, decisions and tasks nobody works on"), iOS and Mac do not yet; only Android gives a turn that is not finished a mark of its own (elsewhere it shows as the plain line of an Unread row); Codex has no held stop and no starting context, so a Codex session started without a task prompt writes a closeout only if it is asked to (one it writes is read all the same); a session already running when the switch is turned on learns the form at its next start or held stop; the form reaches a task's Agent on Claude Code twice (prompt and starting context).
 
 ## Automatic actions
 
@@ -185,7 +186,7 @@ An Agent still linked to a completed to-do, with no open to-do linked to it, rec
 wakeup or triage card. Triage can record its work state, but checks the current to-do links before acting; pending
 wakes are checked again before sending. Released and dismissed links do not count. A later manual message is allowed;
 to resume follow-ups while keeping the completed link, reopen the to-do or link the Agent to an open to-do (see
-`docs/assistant/todos.md`, "Close Agents for completed tasks"). If the to-do state cannot be read, triage and wakes retry
+`docs/assistant/todos.md`, "Stop Agents of completed tasks"). If the to-do state cannot be read, triage and wakes retry
 later without sending.
 
 ### Transient errors: automatic continuation
@@ -247,7 +248,7 @@ A subscription's 5-hour or weekly usage limit (#1710) is no failure to report an
 
 ## Safety boundary
 
-Persona **sends to Agents on its own** only six kinds of message, none introducing new intent:
+Persona **sends to Agents on its own** the following kinds of message, none introducing new intent:
 
 1. Continuation after a transient error: like "Retry" on the App's error card, it resumes the interrupted task; likewise the continuation once a subscription's usage limit reset (`prompts/agents/limit_continue.md`: go on with what you were doing, without redoing what is done);
 2. A wakeup after a registered wait: asks only whether the awaited event is ready, and explicitly says `接下来要推代码、部署、给别人发消息、合并或改别人的 MR 时先停下来问用户，不要自己做` ("Before pushing code, deploying, messaging others, or merging / modifying someone else's MR, stop and ask the user; do not do it yourself");
@@ -270,6 +271,68 @@ Any next step involving **pushing code, deploying / releasing, messaging others,
 - Merging, releasing, deploying (`合入`, `发布`, `上线`, `部署`, merge, release…): only when the to-do text contains the same word and no negation (`不要`, `别`, `禁止`, don't…) precedes it in the same clause.
 
 With no open to-do, or with a step its to-do does not authorize, the hub neither wakes it nor opens a card of its own: a card only carries a question the Agent actually wrote (#3290). With the wake switch off nothing is woken either, and a card the Agent wrote still goes up. With more than one question or an authorization link, the task does not auto-approve the step.
+
+### Standing authorization answers
+
+Before supervisor routing, `announce` checks a hook-waited question or plan against the persisted
+[standing authorizations](unified-entry.md#standing-authorizations). A matching answer says “Already authorized,
+continue,” with the grant ID, original words and source, without showing a pending card or notifying the supervisor
+or user. The current task must be open, and both its bound directory and the node's current session directory must match the computer and scope;
+the card's own `cwd` is not trusted. Explicit task prohibitions and read-only launches block this path.
+
+Simple single-action confirmations use a deterministic fast path. Natural questions (including PR numbers and
+free-form choice descriptions) and multi-step plans use the existing `agent.delegate` model purpose to classify the
+complete action set and choose exact affirmative labels. The manager checks every action against one grant; local
+read/edit/verification steps may accompany an authorized external action. A merge grant cannot approve a plan that
+also pushes, deploys or deletes. Failed, incomplete or ambiguous classification keeps the original route. Selected
+wait/cancel/defer or runtime-action options are rejected; an unselected defer option does not block a valid answer.
+Forms, passwords, assistant `ask_user`, runtime-local dialogs and extra tool-input fields keep their existing route.
+The judge uses the model configuration for `agent.delegate`, including its selected managed provider and model;
+it never starts an unconfigured CLI. The synchronous authorization attempt has a five-second classification and evidence-read context budget
+(including classification and scope/evidence reads), reduced from sixty seconds so a slow model promptly falls back
+to the normal card route. This favors manual confirmation over waiting for a slow automatic answer; it does not
+introduce background approval or change resolution persistence. If that model is unavailable, the card follows the existing supervisor/user
+route, and counts as a user confirmation only when that route actually notifies the user.
+A conservative code scan adds sensitive effects even if classification misses them; unspecified deployments remain
+production-sensitive. Every explicit card path is independently resolved and checked against repository scope, including relative paths
+(`../other`, `./server`, `server/internal`), `~`, `$HOME` and `$PWD` (including braced forms). Relative paths use the
+node's session directory; home expansion and physical Git identity come from that node. Unknown session variables,
+shell substitutions, globs, quoted variable/home expansions, ambiguous quoting and failed identity reads keep confirmation manual. Paths are kept literally, including trailing dots and parent segments;
+sentence punctuation on an unquoted path may therefore require manual confirmation. A node must advertise
+`path_resolved: true`, proving it resolves symlinks before parent segments; older nodes keep path cards manual.
+Resolution persistence has its own timeout and is outside the five-second classification budget. The judge's
+`within_task` can veto a card but cannot prove that a path is authorized. The model's output never grants tool permissions or replaces condition evidence.
+
+Tool `permission` cards are never approved by standing authorization. Production deployment, external sending,
+deletion (including force-pushing or replacing remote history) and spending each require their own explicit action and `reversible: true`; task notes alone still cannot
+authorize the `userOnlyWords` actions described above. A plan answer explicitly uses runtime mode `default`, so it
+does not grant bypass permissions. Existing per-session tool grants are separate and unchanged.
+
+`ci_green` and `no_conflicts` gate every action in the grant: the manager reads the current branch through `git.pr`, requires an
+open, non-draft PR with a head commit, and binds explicit PR URLs or numbers to the returned PR. Multiple distinct PR targets remain manual. CI requires a complete,
+nonempty list of fewer than 100 checks, all passing; pending, failed or skipped checks do not pass. No conflicts
+requires `mergeable: MERGEABLE`. A condition written in other words is saved and injected but remains manual until
+there is an independent verifier for it. A card's claim that checks passed is never evidence. Conditions are checked
+at answer time. Push and test deployment with these conditions also require the node's current local HEAD to match
+the checked PR head, so old remote CI cannot approve new unpushed commits. This does not replace the repository's merge-time quality gates or protect against a later head change.
+
+The registry is re-read after those checks. A database transaction locks the grant against revocation, verifies the
+task is still open and unchanged since the checks started (including its decisions), and commits the interaction resolution, `source: agent` task decision with authority, and automatic
+count together before the waiting hook receives its answer. Failed audit writes leave the card pending. This path
+neither changes a risky wait's existing wake rules nor invents a new task or permission.
+
+### Daily confirmation counts
+
+Morning and evening briefing facts, cards, text fallback and feed include the current local day's confirmation counts,
+from the user's calendar-day start to the briefing snapshot. Counts group by computer, Agent session, task and card
+kind (`question`, `permission`, `plan`, and any other recorded kind). Each interaction counts once when `tellUser`
+first dispatches it to the user layer; cards held by a supervisor or shown only on apps are excluded. Several cards
+sharing one push each count as a card. Muting may suppress the push while channels still receive the card: these
+numbers measure dispatch to the user layer, not APNs delivery receipts. Automatic standing card answers count separately; existing task-note risky waits that never create a card are outside this card count.
+
+The interaction table keeps the first notification and automatic-answer timestamps and grant/task IDs across
+restarts. A card created yesterday and first notified today counts today. History from versions without these markers
+is not guessed or backfilled. A failed lookup is displayed as unknown, never as zero.
 
 ## Avoid conflicting with manual user actions
 
@@ -386,7 +449,7 @@ A process can be redeployed and cleared at any time, so triage results, retry co
 The main chat's live snapshot (`prompts/assistant/snapshot*.md`):
 
 - Each Agent under "Needs you" includes what it is waiting for;
-- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent) and "Done (within 24 hours)": name + conclusion;
+- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent). "Done (within 24 hours)" and "Muted" carry only counts; `agents_list state=done` / `state=muted` returns their names, session ids and conclusions when the assistant needs them;
 - "Unread" contains only sessions not yet successfully triaged, and those whose closeout says the turn is not finished, with that line ("Closeout");
 - An Agent's line ends with what its closeout claims of merging and deploying, and the hub's finding where it differs.
 
@@ -423,7 +486,11 @@ For tasks dispatched from the main chat (`internal/assistant/tasks_follow.go`), 
 - Automatic continuation: number sent and proportion followed by normal completion; wakeups: count and proportion completed after waking;
 - Cards: created, answered, wait before answer, and removed (because you replied directly);
 - Closeouts, in `actions`: `closeout_asked` (stops held for one), `closeout_ask_sent` (status questions sent), and for the turns that followed a question `closeout_ask_answered` (carried a closeout) and `closeout_ask_ignored` (did not);
-- Decisions the owner could not answer (#3804): `owner_cannot_answer` is `{"<supervisor conversation>": {"decide_yourself": n, "not_what_i_asked": n, "explain_first": n}}`, one count per fixed answer the owner gave a supervised task's decision instead of an option (work event `owner_cannot_answer`), so a conversation that keeps asking what the owner cannot answer shows (`docs/assistant/todos.md`, "Decisions the owner can answer").
+- Decisions the owner could not answer (#3804): `owner_cannot_answer` is `{"<supervisor conversation>": {"decide_yourself": n, "not_what_i_asked": n, "explain_first": n}}`, one count per fixed answer the owner gave a supervised task's decision instead of an option (work event `owner_cannot_answer`), so a conversation that keeps asking what the owner cannot answer shows (`docs/assistant/todos.md`, "Decisions the owner can answer");
+- A wrong "done" (#2586), in `wrong_done: {"reopened": N, "rework": N}`: two cheap labels for the done judge (`docs/assistant/todos.md`, "Automatic completion") closing work too early, each to-do counted once in the window.
+  - `reopened`: to-dos the judge closed that were reopened within 24 hours of the close (24 hours exactly still counts). Closed by the judge means `done_by = auto`, or a supervised task the judge accepted for its supervisor (`docs/assistant/todos.md`, "Spot-check reviews"). Any reopen counts: by hand, a change asked for on the "Please verify" card, or the task's Agent set to work again. A to-do closed by hand or accepted by a supervisor never counts.
+  - `rework`: supervised tasks the judge found done (waiting for review) that `task_review` sent back with `rework`, including one past the last round that goes to the user instead. A rework sent while the task was not waiting for review does not count.
+  - Both are work events without a session in `session_work_events` (kept 30 days, no migration, `assistant/agents_work_wrong_done.go`): `todo_reopened` on every reopen of a done to-do (`todo`, `done_by` as it was, `judge`, `after` in seconds since the close), `review_rework` on every `task_review` rework (`todo`, `judged_done`). Added in 2026-11; older hubs omit `wrong_done`, and a client that does not know it ignores it.
 
 Pre-launch baseline (evening of 2026-11-04, non-assistant sessions on the hub): 5 unread (4 within 24 hours), with a median wait already around 10 minutes.
 
@@ -435,6 +502,7 @@ Pre-launch baseline (evening of 2026-11-04, non-assistant sessions on the hub): 
   A subscription usage limit (`turn_error_kind` `usage_limit`) is not shown as Interrupted: task cards, agent rows and the chat say "Usage limit · resumes <time>" when the CLI or the hub will continue it, and "Usage limit · resets <time>" when nothing will (the user's time zone; the date as well when that is another day). An older hub that does not send the fields keeps the interrupted text. Screenshots use `MOCK_USAGE_LIMIT=1`.
 - Android (#1837): the Agents list and knowledge-base "Agents working on this project" rows use the same preview (`Session.workLine`, `WorkLine.kt` in `core:domain`). Sessions the hub waits for go into "Waiting";
   **Settings › AI › Session triage** has the main switch, triage model (link to model settings), and three action switches.
+  Closeout (#3612, `docs/android/android.md` "Closeout, decisions and tasks nobody works on"): a stopped Agent's page has the closeout card above its transcript, with the hub's finding beside merged and deployed, and the reply is drawn without the block the card shows; a list row keeps its line and says "merged ✓", "not deployed" as facts under it, with a mark beside the title for a claim the hub found untrue and for a turn that is not finished; **Session triage** has the **Ask for a closeout** switch on a hub that sends it (nothing for `closeout_ask`).
 - iOS / Mac (#2895): Agents-list and space-page card previews (`Session.listPreview`) switch to the same line when the session is stopped and the hub has triaged it (`Session.workLine`, `apple/Shared/Models.swift`).
   Host-provided reasons for needing the user (botmux) and failure notices still take precedence. Sessions the hub waits for go into "Waiting", not collapsed into idle (`WorkState.hubWaits`, `Session.isWaiting`). Unit tests: `SessionWorkTests`.
   **Settings › Session Triage** (below the assistant, `TriageSettingsView` / `TriageSettingsModel`) has the main switch, triage model (opens `agent.triage` in Model Settings), and three action switches (disabled when the main switch is off). Failed changes revert to the old value with an explanation; old hubs (404) report unsupported. Unit tests: `TriageSettingsTests`; DEBUG `-tab settings -openTriageSettings YES`.

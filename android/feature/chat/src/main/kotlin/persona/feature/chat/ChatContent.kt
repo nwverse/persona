@@ -18,7 +18,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
@@ -136,7 +135,7 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     // Inline code a tap copies, in the body's color on its well; inside a path's link it stays the link's (#2984).
     val copy = rememberCopy()
     val codeSpan = inlineCodeStyle(color)
-    val annotator = remember(codeSpan, copy) { copyingCode(codeSpan, copy) }
+    val annotator = remember(codeSpan, copy) { copyingCode(codeSpan) { copy(it, null) } }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
         if (parsed == null) ChatLinkText(text, Modifier.fillMaxWidth(), bodyStyle.copy(color = color))
         else Markdown(parsed!!, modifier = Modifier.fillMaxWidth(), imageTransformer = rememberMathImages(color, bodyStyle),
@@ -189,11 +188,11 @@ internal fun CodeText(text: String, language: String = "", syntax: Boolean = fal
     val palette = PersonaTheme.palette
     val colour = syntax && language.isNotBlank()
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (bar) CodeBody(preview, language, colour) { CodeBar(language) { copy(text) } }
+        if (bar) CodeBody(preview, language, colour) { CodeBar(language) { copy(text, null) } }
         else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(language, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                JTextButton(stringResource(R.string.chat_content_copy), { copy(text) }, icon = PhIcons.Copy)
+                JTextButton(stringResource(R.string.chat_content_copy), { copy(text, null) }, icon = PhIcons.Copy)
             }
             CodeBody(preview, language, colour)
         }
@@ -281,6 +280,10 @@ internal fun ChatLineContent(
     plan: LinePlan? = null,
     showSourceLabel: Boolean = true,
     waiting: Boolean = false,
+    /** The reply whose closeout block the card above the transcript shows (#3612, [closeoutReplyId]); null: none. */
+    closeoutReply: String? = null,
+    /** The main conversation folds its background rounds (#4314): a scheduled task's or follow-up's prompt is never shown. */
+    hideTaskPrompts: Boolean = false,
 ) {
     val res = LocalResources.current
     when (line) {
@@ -289,22 +292,32 @@ internal fun ChatLineContent(
                 val source = persona.core.domain.sourceOf(item)
                 when {
                     source != null -> SourceMessage(item, source, showSourceLabel, textUpdates[item.id],
-                        images = userPictures(userImages, session, loader))
-                    line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!)
+                        images = userPictures(userImages, session, loader), hidePrompt = hideTaskPrompts)
+                    line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!, showDetail = !hideTaskPrompts)
                     else -> MergedUserBubble(listOf(item), textUpdates, onLastLine.takeIf { line.row.id == lastUserId },
                         images = userPictures(userImages, session, loader))
                 }
             }
-            "reply" -> line.row.item?.item?.let { MessageContent(it, false, textUpdates[it.id], boxed = true) }
+            "reply" -> line.row.item?.item?.let {
+                val hideCloseout = closeoutReply == line.row.id && textUpdates[it.id]?.streaming != true
+                // only the block goes; a reply that said nothing else is not drawn at all
+                if (!hideCloseout || !onlyCloseout(textUpdates[it.id]?.text ?: it.text, cut = it.fullSize != null)) {
+                    MessageContent(it, false, textUpdates[it.id], boxed = true, hideCloseout = hideCloseout)
+                }
+            }
             "thinking" -> if (!style.hideThoughts) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
             "image" -> line.row.item?.item?.let { ChatPicture(session, it, loader) }
             "recap" -> line.row.item?.item?.let { RecapLine(listOf(it)) }
-            else -> line.row.item?.compaction?.let { TimelineMark(it.label.text()) }
+            else -> line.row.item?.item?.refusal?.let { RefusalNotice(it) }
+                ?: line.row.item?.compaction?.let { TimelineMark(it.label.text()) }
                 ?: line.row.item?.takeIf { it.task != null }?.let { TaskNoteLine(it, last = true, onFullText = onFullText) }
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
-        is ChatLine.Extra -> AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
+        is ChatLine.Extra -> {
+            val round = line.payload as? persona.core.domain.tasks.BackgroundRound
+            if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
+        }
         is ChatLine.ApiError -> ApiErrorLine(line)
         is ChatLine.UserImages -> if (!imagesInUserBubble) UserBubbleFrame {
             line.images.forEach { ChatPicture(session, it.item, loader, alignEnd = true) }
@@ -330,14 +343,19 @@ internal fun ChatLineContent(
 
 @Composable
 private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
-    val state = stringResource(if (line.open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
-    val label = pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools)
+    AssistantFoldLine(pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools), line.open) { onToggle(line.id) }
+}
+
+/** One muted line that opens and closes what it stands for: the work summary, a folded background round (#4314). */
+@Composable
+internal fun AssistantFoldLine(label: String, open: Boolean, modifier: Modifier = Modifier, onToggle: () -> Unit) {
+    val state = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
     val spoken = stringResource(persona.core.designsystem.R.string.designsystem_with_state, label, state)
-    Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { onToggle(line.id) }
+    Row(modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onToggle)
         .then(Modifier.semantics { stateDescription = state; contentDescription = spoken })
         .padding(vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-        JIcon(if (line.open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true,
+        JIcon(if (open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true,
             size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
         Text(label,
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
