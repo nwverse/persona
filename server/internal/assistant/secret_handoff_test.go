@@ -274,7 +274,8 @@ func TestHandoffApprovedOnTheCardStartsWithATicket(t *testing.T) {
 	}
 	var in proto.SecretHandoffInput
 	if err := json.Unmarshal(ix.ToolInput, &in); err != nil || len(in.Variables) != 2 || in.Variables[0].Name != "GITHUB_TOKEN" ||
-		in.Variables[0].Provider != "example-vault" || in.Variables[0].Title != "GitHub token › credential" {
+		in.Variables[0].Provider != "example-vault" || in.Variables[0].ProviderName != "Example Vault" ||
+		in.Variables[0].Title != "GitHub token › credential" || in.MachineName != "Box" || in.Cwd != "/code/app" {
 		t.Fatalf("tool input %s", ix.ToolInput)
 	}
 	card, _ := json.Marshal(ix)
