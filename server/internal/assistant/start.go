@@ -782,7 +782,10 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 			return params, nil
 		}
 	}
-	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params); err != nil {
+	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params, s.appLang(ctx, p.Lang)); err != nil {
+		if storedPickRefused(err) {
+			return nil, err // the conversation's pick is out of scope or gone: its code goes to the app (model_pick.go)
+		}
 		return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
 	if text, ok := params["text"].(string); ok {
@@ -806,7 +809,11 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 // A model picked for this message may be one the launcher's list does not have (typed in the chip, #1644): it has to
 // be a model id, and it is kept. Only a model carried over from what the conversation ran is held to the list (and the
 // ids typed for that launcher before), so a model the gateway dropped does not fail every later turn.
-func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any) error {
+//
+// A message that picks neither a launcher nor a model runs on the conversation's own pick when it has one (PUT
+// …/conversations/{id}/model, model_pick.go), its effort under the message's own: that is the user's choice for the
+// conversation, so it is never replaced; a pick that can't run here refuses the message, saying why in lang.
+func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any, lang i18n.Lang) error {
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
@@ -823,6 +830,11 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	}
 	l, _ := p["launcher"].(string)
 	asked := l != "" // picked in the chat's menu for this message
+	if !asked && !picked {
+		if pick, ok := s.modelPickOf(ctx, machine, sid); ok {
+			return s.sendOnPick(ctx, machine, p, pick, lang)
+		}
+	}
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
 			l = c.Launcher // no launcher picked: the one this conversation runs
@@ -863,6 +875,22 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		return err
 	}
 	return s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
+}
+
+// sendOnPick puts the conversation's pick into p (sendModel): its launcher, model and effort (an effort sent with the
+// message wins), checked and fingerprinted like a message's pick. One that can't run on machine refuses the message.
+func (s *Service) sendOnPick(ctx context.Context, machine string, p map[string]any, pick modelPick, lang i18n.Lang) error {
+	if err := s.modelPickRefusal(ctx, machine, pick.Launcher, lang, true); err != nil {
+		return err
+	}
+	p["launcher"] = pick.Launcher
+	if pick.Model != "" {
+		p["model"] = pick.Model
+	}
+	if e, _ := p["effort"].(string); e == "" && pick.Effort != "" {
+		p["effort"] = pick.Effort
+	}
+	return s.applyPickedModel(ctx, p)
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.

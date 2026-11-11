@@ -460,7 +460,7 @@ func (s *Service) deliverViewAction(parent context.Context, conversation, key st
 		status, reason = "pending", i18n.T(s.lang(ctx), "assistant-view_actions.waiting_machine")
 	} else {
 		params := map[string]any{"session_id": a.Conversation, "client_msg_id": a.MessageID, "text": a.Text, "resume_only": true}
-		err = s.sendModel(ctx, a.MachineID, a.Conversation, params)
+		err = s.sendModel(ctx, a.MachineID, a.Conversation, params, s.lang(ctx))
 		if err == nil {
 			s.UserSpoke(ctx, SessionRef{MachineID: a.MachineID, SessionID: a.Conversation})
 			err = s.sendOnce(ctx, a.MachineID, params)
