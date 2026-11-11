@@ -39,5 +39,15 @@
   "agent_stopped": "这个 Agent 已经停了。对话和终端还在，它不再收消息，这次没有发送。要它接着做，在它的终端页点「恢复」。",
   "shell_waiting": "新开的终端标签停在一个提问上，Agent 没能启动。什么都没运行；这个标签会再留几分钟，可以去回答它。",
   "start_line_rejected": "新开的终端标签两次都没接住启动命令。什么都没运行；看看那个 shell 启动时做了什么，再重试。",
-  "directory_untypable": "这个目录的名字里有控制字符（比如制表符或换行），没法从这里在它里面启动 Agent。请给目录改个名，或者换一个目录。"
+  "directory_untypable": "这个目录的名字里有控制字符（比如制表符或换行），没法从这里在它里面启动 Agent。请给目录改个名，或者换一个目录。",
+  "switch_unsupported": "只有在终端里运行的 Claude Code Agent 能换到另一个模型供应商。要用那个供应商，请新开一个对话。",
+  "switch_launcher_missing": "这台电脑上没有这个模型供应商，请换一个。",
+  "switch_other_agent": "这个模型供应商运行的是另一种 Agent，不是 Claude Code。要用它，请新开一个对话。",
+  "switch_model_locked": "这个模型供应商总是用它自己的模型，你选的模型不会生效。请不选模型直接换，或者换一个供应商。",
+  "switch_config_dir": "这个模型供应商把 Claude Code 的数据和登录放在另一个目录，那里没有这个对话。要用它，请新开一个对话。",
+  "switch_busy": "Agent 正在工作或在等你处理。等它空闲后发的消息会先把它换到另一个模型供应商。这次没有发送。",
+  "switch_background": "Agent 还有后台工作在跑（命令、子 Agent、工作流或循环），换供应商会把它们停掉。这次没有发送。等它们结束后再发，或者继续用现在的供应商。",
+  "switch_not_stopped": "Agent 没有退出，仍然用现在的模型供应商。这次没有发送。",
+  "switch_failed": "Agent 没能在另一个模型供应商上启动，已经回到原来的供应商。你的消息没有发送。",
+  "switch_failed_stopped": "Agent 没能在另一个模型供应商上启动，已经停了。你的消息没有发送。请看看它的终端，或者在它的终端页点「恢复」。"
 }

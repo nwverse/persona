@@ -187,8 +187,10 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	// its outcome is what the retry gets. Resuming an offline session can take a while (shell + claude startup).
 	// One sent while the session still starts waits for claude to be ready (node/starting.go); one to a session that is
 	// not running resumes it first. Either can wait minutes on a busy machine (node's claudeStartWait, #1396).
+	// A switch to another launcher waiting for this message quits the agent and starts it again first, and brings it
+	// back on its own launcher when that fails (node/launcher_switch.go): as long as a start.
 	wait := 90 * time.Second
-	if s, ok := m.session(sid); ok && (s.Starting || s.Status == proto.StatusOffline) {
+	if s, ok := m.session(sid); ok && (s.Starting || s.Status == proto.StatusOffline || s.PendingSwitch != nil) {
 		wait = 5 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), wait)

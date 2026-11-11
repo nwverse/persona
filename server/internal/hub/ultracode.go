@@ -7,10 +7,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -70,6 +72,19 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 			delete(p, field.http)
 		}
 	}
+	// A switch to another launcher (#5035), carried out by the next message (node/launcher_switch.go): an older node
+	// would drop launcher and switch the model on the launcher the Agent runs on.
+	if v, exists := p["launcher"]; exists {
+		launcher, ok := v.(string)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, errors.New("launcher must be a string"))
+			return
+		}
+		if strings.TrimSpace(launcher) != "" && !m.nodeSwitchesLaunchers() {
+			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-machine.node_no_launcher_switch"), nil)
+			return
+		}
+	}
 	p["session_id"] = r.PathValue("sid")
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
@@ -79,10 +94,10 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 			callErr(w, err)
 			return
 		}
-		if model, _ := p["model"].(string); strings.TrimSpace(model) != "" { // switched (the node read it back)
+		if model, _ := p["model"].(string); strings.TrimSpace(model) != "" { // switched (the node read it back), or picked with a launcher
 			sid := r.PathValue("sid")
 			s, _ := m.session(sid)
-			h.modelUsed(h.sessionOwner(m.cfg.ID, sid), m.cfg.ID, cmp.Or(s.Launcher, "claude"), model)
+			h.modelUsed(h.sessionOwner(m.cfg.ID, sid), m.cfg.ID, modesLauncher(p, s), model)
 		}
 	}
 	if len(ultra) > 1 {
@@ -101,4 +116,22 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(out)
+}
+
+// modesLauncher is the launcher a model in a POST …/modes body p runs on: the launcher it names (a switch, #5035),
+// else the session's own.
+func modesLauncher(p map[string]any, s proto.Session) string {
+	if l, _ := p["launcher"].(string); strings.TrimSpace(l) != "" {
+		return strings.TrimSpace(l)
+	}
+	return cmp.Or(s.Launcher, "claude")
+}
+
+// nodeSwitchesLaunchers: the machine's node takes launcher in session.modes (capability launcher_switch); a node of a
+// test or a dev build that says nothing is taken to.
+func (m *Machine) nodeSwitchesLaunchers() bool {
+	m.mu.Lock()
+	info := m.info
+	m.mu.Unlock()
+	return slices.Contains(info.Capabilities, nodeproto.LauncherSwitch) || (info.Protocol == 0 && info.Version == "")
 }
