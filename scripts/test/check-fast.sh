@@ -619,6 +619,7 @@ else
         arr_has "$_p" "${INTEG[@]:-}" || INTEG+=("$_p") ;;
       sdk/ts/*) SDKTS=1 ;;
       spec/fixtures/*) ;;  # read by server tests: the reader packages are collected in a pass below
+      spec/tokens/*) ;;  # test_gen_tokens.py, added with the scripts/ unittests below
       server/*)
         _rest=${f#server/}
         case "$_rest" in
@@ -769,6 +770,11 @@ else
         script_test_add scripts/test/test_doc_sections.py ;;
     esac
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
+    # test_gen_tokens.py checks the token sources against the iOS values and the committed Android Tokens.kt (#4209).
+    case "$f" in
+      spec/tokens/*|apple/Shared/Design/*|android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt)
+        script_test_add scripts/assets/test_gen_tokens.py ;;
+    esac
     # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp
     # repositories and runs the hooks there; check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py
     # copies privacy_check.py into its temp repositories, where merge-pr.sh runs it.
