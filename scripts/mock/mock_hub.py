@@ -1550,15 +1550,30 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
-# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
-# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
+# sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+MOCK_DIRECTION_NAMES = {}
 if os.environ.get("MOCK_LEADERS") == "1":
-    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+    for i, (title, name, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles and names
+        ("1110 | 探索 | 你是「Persona 产品」方向的主管", "Persona 产品", 60 * 30, "本周两个实验都在跑。"),
+        ("1110 | 探索 | 你是「基础设施」方向的主管", "基础设施", 60 * 45, "部署脚本的改动已派出。"),
+        ("1109 | 探索 | 你是「增长」方向的主管", "增长", 60 * 50, "注册转化的对比看完了。"),
+        ("1108 | 探索 | 你是「支付对账」方向的主管", "支付对账", 60 * 55, "对账任务已派出。"),
+    ]):
         c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
         c["origin"] = "user"
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
+        MOCK_DIRECTION_NAMES[c["session_id"]] = name
+
+
+def mock_leaders_list():
+    """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
+    titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
+    return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
+                         "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -16138,6 +16153,7 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))

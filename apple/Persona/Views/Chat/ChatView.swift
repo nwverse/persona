@@ -4710,6 +4710,7 @@ struct Composer: View, Equatable {
         .mediaPicker(isPresented: $showPhotos, selection: $picks)
         #if os(iOS)
         .modifier(attachHost)
+        .task { if attachOpener != nil { AttachLibrary.prewarm() } }
         #endif
         .fileUploadPicker(isPresented: $showFiles) { urls in
             uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
