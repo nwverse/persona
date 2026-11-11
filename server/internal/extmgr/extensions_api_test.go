@@ -62,6 +62,7 @@ type extensionStore struct {
 	rows       map[string]extension.Record
 	secrets    map[string]map[string]string
 	audit      []string
+	auditRows  []storeAudit // the same rows, with their details
 	markets    map[string]extension.MarketRecord
 	failDelete string // only this extension's delete fails
 	failPut    bool   // every PutExtension fails (a database that cannot be written)
@@ -134,11 +135,23 @@ func (s *extensionStore) DeleteExtensionSecret(_ context.Context, id, name strin
 	delete(s.secrets[id], name)
 	return nil
 }
-func (s *extensionStore) AddExtensionAudit(_ context.Context, id, action, actor string, _ json.RawMessage) error {
+func (s *extensionStore) AddExtensionAudit(_ context.Context, id, action, actor string, detail json.RawMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.audit = append(s.audit, id+" "+action+" "+actor)
+	s.auditRows = append(s.auditRows, storeAudit{plugin: id, action: action, actor: actor, detail: detail})
 	return nil
+}
+
+type storeAudit struct {
+	plugin, action, actor string
+	detail                json.RawMessage
+}
+
+func (s *extensionStore) audits() []storeAudit {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]storeAudit(nil), s.auditRows...)
 }
 
 // notesPackage writes a plugin package whose program is this test binary serving notesConnector.
