@@ -155,8 +155,10 @@ nonisolated enum CodeReview {
     private(set) var ids: Set<String>
 
     init(saved: [String]? = StateCache.load(CodeViewedMarks.name, as: [String].self)) {
-        order = saved ?? []
-        ids = Set(order)
+        // From the argument, not `order`: an @Observable class can't read a property before all are set.
+        let saved = saved ?? []
+        order = saved
+        ids = Set(saved)
     }
 
     func set(_ id: String, viewed: Bool) {

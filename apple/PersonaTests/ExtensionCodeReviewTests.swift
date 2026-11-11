@@ -230,7 +230,7 @@ extension ExtensionCodeReviewTests {
         #expect(cache.has(33, nil) && !cache.has(1, 4))
         let last = CodeReview.Gap(at: 2, from: 33, to: nil, delta: -1)
         let r = CodeReview.rows(last, shown: .init(top: 20, bottom: 0), cache: cache)
-        #expect(r.top.map(\.new) == Array(33...40) && r.top.first?.old == 32 && r.top.allSatisfy { $0.kind == .context })
+        #expect(r.top.map(\.new) == (33...40).map(Optional.some) && r.top.first?.old == 32 && r.top.allSatisfy { $0.kind == .context })
         #expect(r.hidden == 0 && r.bottom.isEmpty)
         let middle = CodeReview.Gap(at: 1, from: 9, to: 29, delta: 0)
         #expect(CodeReview.rows(middle, shown: .init(top: 0, bottom: 2), cache: cache).bottom.map(\.new) == [], "lines that did not come are not drawn")

@@ -249,7 +249,11 @@ struct CodeGapBar: View {
     var show: (CodeReview.Reveal) -> Void
 
     private var ways: [CodeReview.Reveal] {
-        hidden <= CodeReview.step ? [.all] : (first ? [] : [.down]) + (last ? [] : [.up]) + [.all]
+        if hidden <= CodeReview.step { return [.all] }
+        var ways: [CodeReview.Reveal] = []
+        if !first { ways.append(.down) }
+        if !last { ways.append(.up) }
+        return ways + [.all]
     }
 
     var body: some View {
