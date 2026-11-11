@@ -141,8 +141,10 @@ struct ManagerSwitchTests {
         await waitUntil { reads("m-2") == 2 }
         #expect(reads("m-2") == 2, "back online: its page is read again")
 
+        // The default's settings read while m-2 was current show at once: wait for its page's own read too.
+        let settled = reads(nil)
         model.selectAssistantManager(nil)
-        await waitUntil { model.assistantConfig?.launcher == "claude" }
+        await waitUntil { model.assistantConfig?.launcher == "claude" && reads(nil) == settled + 1 }
         hub.on("GET", "/api/v1/managers", json: #"""
         {"default":"m-1","managers":[{"id":"assistant","name":"助手","online":true,"builtin":true},
           {"id":"m-1","name":"工作","online":true,"default":true},{"id":"m-2","name":"家里","online":true}]}
