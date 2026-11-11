@@ -192,7 +192,7 @@ test("/dl/<version>/ comes from the kept release, never a slot", async () => {
 
 // A signed index like the official market's: the payload is a JSON string.
 function index(extensions, extra = {}) {
-  return { payload: JSON.stringify({ name: "Official", extensions, generation: { source_commit: "abc" }, ...extra }), signatures: [] };
+  return { payload: JSON.stringify({ name: "Official", extensions, generation: { repository: "nwverse/persona-extensions", source_commit: "abc" }, ...extra }), signatures: [] };
 }
 const entry = (id, name, more = {}, manifest = {}) => ({ manifest: { id, name, version: "0.1.0", description: name + " does things", publisher: "nwverse", homepage: `https://github.com/nwverse/persona-extensions/tree/main/extensions/${id}`, ...manifest }, tags: ["阅读"], packages: [], ...more });
 
@@ -238,6 +238,31 @@ test("/extensions/catalog.json is the slim catalog, most downloaded first", asyn
   assert.deepEqual(mk.categories, ["Finance"]);
   assert.deepEqual(gh.tags, ["阅读"]);
   assert.equal(d.extensions[0].packages, undefined, "package URLs are not part of the page's data");
+  assert.equal(gh.source, "https://github.com/nwverse/persona-extensions/tree/main/extensions/github", "the homepage, inside the market");
+});
+
+test("every extension links to its source in the market repository, and nowhere else", async () => {
+  edge();
+  upstream(() => Response.json(index([
+    entry("weather", "天气", {}, { homepage: undefined }),
+    entry("github", "GitHub", {}, { homepage: "https://github.com/nwverse/persona-extensions/blob/main/extensions/github/README.md" }),
+    entry("evil", "Elsewhere", {}, { homepage: "https://example.com/extensions/evil" }),
+  ])));
+  const d = await (await catalog()).json();
+  const source = Object.fromEntries(d.extensions.map((e) => [e.id, e.source]));
+  assert.deepEqual(source, {
+    weather: "https://github.com/nwverse/persona-extensions/tree/main/extensions/weather",
+    github: "https://github.com/nwverse/persona-extensions/blob/main/extensions/github/README.md",
+    evil: "https://github.com/nwverse/persona-extensions/tree/main/extensions/evil",
+  });
+});
+
+test("a catalog generated from another repository is not shown", async () => {
+  edge();
+  for (const generation of [{ repository: "someone/else" }, {}, undefined]) {
+    upstream(() => Response.json({ payload: JSON.stringify({ extensions: [entry("github", "GitHub")], generation }), signatures: [] }));
+    assert.equal((await catalog()).status, 503, JSON.stringify(generation));
+  }
 });
 
 test("without download counts the catalog is in name order", async () => {
