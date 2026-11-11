@@ -238,5 +238,31 @@
       },
       "$description": "Theme.Watch.bubblePadding"
     }
+  },
+  "size": {
+    "iconXS": {
+      "$type": "dimension",
+      "$value": {
+        "value": 20,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.iconXS"
+    },
+    "iconS": {
+      "$type": "dimension",
+      "$value": {
+        "value": 22,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.iconS"
+    },
+    "icon": {
+      "$type": "dimension",
+      "$value": {
+        "value": 24,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.icon"
+    }
   }
 }
