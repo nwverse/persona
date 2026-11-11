@@ -8,6 +8,17 @@ and it can also be started from the phone ("Starting from the phone"). Supported
 
 ## Recognition
 
+- App-server threads without terminal placement can join a uniquely matching Herdr workspace (#2965). Explicit
+  host placement wins. A matching directory takes precedence over a shared repository root; equally good matches
+  in different spaces remain unresolved. An exact directory match works without Git; a match based only on
+  subdirectory containment requires a shared, nonempty repository root. A non-Git workspace does not claim threads merely because their
+  directories are below it, which prevents a broad workspace such as the home directory from absorbing unrelated
+  conversations. This assigns space metadata only, never a pane, tab or terminal capability. A thread that is not
+  running (offline history, or one whose terminal's Codex exited, "Sessions on the daemon") is never associated.
+  Child threads inherit the root's space after association. Workspace directories and explicitly placed terminal
+  sessions provide the evidence; names alone do not. Git metadata uses the existing nonblocking cache, so a cold
+  repository-only match can appear on the next inventory pass.
+
 - herdr reports Codex panes as `agent: "codex"`. With herdr's Codex integration installed (`~/.codex/herdr-agent-state.sh`, registered on
   SessionStart in `~/.codex/hooks.json`), `agent_session.value` is the Codex session id.
 - Panes without a session id (started before the integration was installed, or herdr recorded the id only at startup and `/resume` later switched threads in Codex):
@@ -15,6 +26,20 @@ and it can also be started from the phone ("Starting from the phone"). Supported
   among duplicates, prefer the id recorded by herdr / at startup, otherwise the most recently written. Resolve panes identifiable by title first; only then guess panes without a thread name (new threads) from
   "the newest unclaimed rollout in the same working directory" (`codexSession`). Before 2026-10-31, recognition relied only on guessing: 4 of 5 Codex sessions in the same directory on one machine were misidentified,
   the active one showed another session with a gray dot and none of the new turn's messages (9 of 26 Codex panes on that machine were misidentified overall).
+- A Codex that appeared in its pane after node started is guessed only among rollouts written since it appeared (#2965). A new thread has no
+  rollout until its first message, so the newest unclaimed rollout in the directory was the conversation just closed there: a new Codex
+  opened by hand in Herdr App (which names no thread) showed that conversation on the phone until its first message. Until it writes, the pane
+  has no session and is not listed, as a fresh Claude pane. Panes seen within 30 seconds of node starting have no known age and are guessed as
+  before. A pane missing from the list is forgotten at once (the list keeps a host's last answer when its refresh fails, so a missing pane
+  is gone), so Codex started again in the same terminal, however quickly, counts from then (`noteCodexPanes`). The age is when the node
+  noticed the pane, up to one refresh after Codex started: a first turn that finished before that leaves the pane unlisted until its next
+  message writes the rollout again.
+- A pane binding (a phone start or resume, a hook) holds only while the pane runs the Codex it was made for: the node notes the pane's age
+  when it binds (a resume binds before its Codex shows, so it takes the first age the pane gets) and drops the binding once the age changes,
+  since another Codex runs there now (`codexBinding`). Bindings kept in the hub state from before node started belong to panes of unknown age.
+- A thread only the guess (`codexSession`) put in a pane is marked as guessed: the guess runs again on every refresh and can move to another
+  thread of the directory, so a guessed pane is never joined on the app-server (it stays on the terminal route, "Connection" says why) and its
+  thread is never released as exited on the guess's word ("When the TUI exits" below).
 - **Sub-Agent rollouts are not sessions**: Codex thread_spawn sub-Agents (and an internal Codex fork's tool-review guardian, below) each write their own rollout,
   in the same directory and cwd as the main chat, with newer writes. Identify them from `session_meta` only: `thread_source` is `subagent`, or `source` is `{"subagent": …}`.
   Their parent chat is `session_id` (fall back to `parent_thread_id`). Skip them when guessing sessions; if herdr reports a sub-Agent id, replace it with the main chat's
@@ -88,6 +113,17 @@ not screen reading or typing into the terminal. Panes it cannot join retain the 
   - Disable the terminal route for these panes: do not inspect their screens for approvals or recognize blocking questions from their rollout. One question must not produce two cards or two answers.
 - **Panes that cannot join**: launches with `-c` / `--profile` and similar arguments (0.163 runs in its own process rather than the daemon in this case), already-running non-daemon sessions, 0.153 (auto-connects only
   if the socket already exists), and the internal Codex fork retain the terminal route.
+- **When the TUI exits** (#2965): the thread stays loaded on the daemon, and Persona's subscription kept it there for good (the daemon
+  unloads a thread only when it has no subscribers and is idle), so the list showed it as a finished live conversation in its workspace.
+  Only threads a pane named (herdr's id, a binding still valid, the title) are followed; a guessed one never is, though one already followed
+  stays followed while any pane has it. Once the pane has had no Codex for that thread for 10 seconds, the node marks it exited and forgets a remembered join (`Joined`), so no
+  reconnect or restart subscribes it again; while it is idle it sends `thread/unsubscribe {threadId}` and drops its cards. The unsubscribe
+  runs in the background with a 15-second limit, so an app-server that stops answering never holds up the card loop.
+  While idle the thread lists as not running (`status: offline`, still `codex_app_server`). A phone message is still a turn on the daemon:
+  it joins without remembering the join, lists as working while the turn runs, and is let go again once the thread is idle (a 30-second
+  hold covers the gap before the turn shows as running). Resumed in a pane it is live again. The mark goes when the thread's app-server,
+  connected, no longer has it loaded (it is ordinary history then); while that app-server reconnects the mark stays (`node/codex_exit.go`).
+  Not covered: a thread whose TUI exited while no node was running is not known as exited; it lists as finished until the daemon unloads it.
 - **Daemon restart, disconnect, or version change**: disconnect clears join state, and these panes immediately fall back to the terminal route (screen cards, typing), with existing cards removed. The TUI displays
   "Reconnecting to server…", reconnects when the new daemon starts, and reloads the thread. The node reconnects to the new daemon every 2–5 seconds and rejoins; pending requests replay as new cards.
   Persona does not block the TUI: requests also go to it, so users can answer on the computer at any time.

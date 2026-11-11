@@ -387,7 +387,9 @@ func dirStamp(dir string) int64 {
 }
 
 // codexSession picks the rollout of a Codex pane herdr could not identify: the newest conversation in its directory
-// not taken (a subagent's rollout there is newer than its conversation's, but never what the pane runs).
+// not taken (a subagent's rollout there is newer than its conversation's, but never what the pane runs). A Codex that
+// appeared in its pane after node started runs nothing written before it appeared (codexPaneSince): a new thread has
+// no rollout until its first message, and the newest one in the directory then is the conversation just closed there.
 func (n *Node) codexSession(a host.Agent, taken map[string]host.Agent) string {
 	if strings.LastIndex(a.Title, " | ") > 0 {
 		return "" // a named thread could not be identified: never substitute another conversation from its directory
@@ -397,7 +399,11 @@ func (n *Node) codexSession(a host.Agent, taken map[string]host.Agent) string {
 		cwd = a.Cwd
 	}
 	home := n.codexPaneHome(a.PaneID)
+	since := n.codexPaneSince(a.PaneID)
 	for _, r := range rollouts(home) {
+		if !since.IsZero() && r.mtime.Before(since) {
+			break // newest first: the rest are older still
+		}
 		id := n.codexPublicID(home, r.id)
 		if _, used := taken[id]; !used && !r.sub && r.cwd != "" && (r.cwd == cwd || r.cwd == a.Cwd) {
 			return id
@@ -490,4 +496,90 @@ func threadTitles(home string) map[string]string {
 		c.titles, c.titlesAt = titles, st.ModTime()
 	}
 	return c.titles
+}
+
+// codexPaneStartup: panes that show up this soon after node started were there before it (a slow host answers late).
+var codexPaneStartup = 30 * time.Second
+
+type codexPaneSeen struct{ at time.Time }
+
+// noteCodexPanes remembers when each Codex pane's Codex appeared, as notePanes does for claude: panes seen within
+// codexPaneStartup of the first call were there before node started (zero: their age is unknown). A pane not in the
+// list is forgotten at once, so a Codex started again in the same terminal, however quickly, counts from then. The list
+// is every host's last answer (a host whose refresh failed keeps its previous one, refreshHostInventory), so a pane
+// missing from it is gone, not a missed refresh. Callers hold n.mu.
+func (n *Node) noteCodexPanes(panes []host.Agent) {
+	now, here := time.Now(), make(map[string]bool, len(panes))
+	if n.codexSeen == nil {
+		n.codexSeen, n.codexFrom = map[string]codexPaneSeen{}, now
+	}
+	for _, a := range panes {
+		here[a.PaneID] = true
+		if _, ok := n.codexSeen[a.PaneID]; !ok {
+			s := codexPaneSeen{}
+			if now.Sub(n.codexFrom) >= codexPaneStartup {
+				s.at = now
+			}
+			n.codexSeen[a.PaneID] = s
+		}
+	}
+	for p := range n.codexSeen {
+		if !here[p] {
+			delete(n.codexSeen, p)
+		}
+	}
+}
+
+// codexPaneSince is when pane's Codex appeared; zero when not known (there since before node started).
+func (n *Node) codexPaneSince(pane string) time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.codexSeen[pane].at
+}
+
+// paneBindAge is the age (codexPaneSeen.at) of the Codex a pane binding was made for; set false: not known yet, the
+// first age the pane gets is taken (a resume binds before its Codex shows).
+type paneBindAge struct {
+	at  time.Time
+	set bool
+}
+
+// stampBinding notes the age pane's binding was made for. Callers hold n.mu.
+func (n *Node) stampBinding(pane string, age paneBindAge) {
+	if n.bindAge == nil {
+		n.bindAge = map[string]paneBindAge{}
+	}
+	n.bindAge[pane] = age
+}
+
+// codexBinding is the thread a start, a resume or a hook bound to Codex pane, while the pane still runs the Codex it
+// was bound for. Once another Codex runs there (its age changed: Codex quit and was started again in the terminal) the
+// binding names a closed thread, and it is dropped (#2965). Bindings kept from before node started belong to panes of
+// unknown age (zero). Call it after noteCodexPanes.
+func (n *Node) codexBinding(pane string) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	id := n.panes[pane]
+	if id == "" {
+		return ""
+	}
+	seen := n.codexSeen[pane]
+	b, ok := n.bindAge[pane]
+	if !ok || !b.set {
+		n.stampBinding(pane, paneBindAge{at: seen.at, set: true})
+		return id
+	}
+	if !b.at.Equal(seen.at) {
+		delete(n.panes, pane)
+		delete(n.bindAge, pane)
+		return ""
+	}
+	return id
+}
+
+// codexGuessedPane: id's pane got it only from a guess (codexSession), so nothing says that Codex runs this thread.
+func (n *Node) codexGuessedPane(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.codexGuessed[id]
 }

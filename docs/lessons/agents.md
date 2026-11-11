@@ -2,6 +2,18 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+- A Codex app-server thread can have a repository root without a Herdr pane or space (#2965). Resolve unique workspace
+  matches after Git metadata enrichment and repeat child inheritance afterward. Never infer terminal routing or choose
+  arbitrarily between equally matching spaces.
+- A Codex TUI on the shared daemon that exits leaves its thread loaded, and an observer's subscription keeps it loaded for
+  good (#2965): Persona joined every daemon pane and never unsubscribed, so exited conversations stayed "finished" in their
+  workspace. Release a thread (`thread/unsubscribe`, forget the remembered join) once its pane is gone, and list it as not
+  running meanwhile; "loaded on an app-server" is not "running".
+- Guessing a Codex pane's thread as "the newest unclaimed rollout in its directory" picks the conversation just closed there when a new
+  Codex has not written its rollout yet (before its first message, #2965). Only consider rollouts written since the pane's Codex appeared.
+  A pane binding must end with the Codex it was made for, and nothing that acts on a thread (joining it, letting it go) may rely on a guess:
+  the guess moves between a directory's threads from one refresh to the next.
+
 - Task placement must preserve locality (#1175): a failed launcher check is not permission to move an explicitly targeted task to another computer with the original absolute directory. Persist fixed placement by default through preview, card edits and retries; require an explicit flexible policy for portable work. Returning from background dispatch only proves the work was queued, not that a native Agent received its first prompt.
 
 - A successful session deletion must survive a node reclassifying an unchanged offline transcript as `interrupted`. Apply persisted deletion notes to that status too, using machine/session ID and last-use time; neither a shared project name nor a missing worktree means another conversation was deleted (#5933).
