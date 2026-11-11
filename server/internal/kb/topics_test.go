@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -14,17 +15,21 @@ import (
 // topicModel answers with replies in turn and keeps what it was asked; during runs before answering (a forget racing
 // the call).
 type topicModel struct {
+	mu      sync.Mutex // a run's calls go out topicWorkers at a time
 	replies []string
 	asked   []string // user prompts
 	during  func()
 }
 
 func (m *topicModel) JSONMax(_ context.Context, _, user string, _ int, out any) error {
+	m.mu.Lock()
 	m.asked = append(m.asked, user)
-	if m.during != nil {
-		m.during()
-	}
 	r := m.replies[min(len(m.asked)-1, len(m.replies)-1)]
+	during := m.during
+	m.mu.Unlock()
+	if during != nil {
+		during()
+	}
 	return json.Unmarshal([]byte(r), out)
 }
 

@@ -26,6 +26,18 @@ func endingQueue(f *fakeHub, ix proto.Interaction, ended *atomic.Bool, status st
 	})
 }
 
+// heldAnswer keeps a fake answer out until the test lets it go: hold blocks until let is called, so a press outlasts
+// cardAnswerWait for as long as the test needs, with no fixed sleep. The fake hub runs answers under its lock, so the
+// test lets the answer go before it touches the hub again. let is also a cleanup: a test that fails first leaves
+// nothing blocked.
+func heldAnswer(t *testing.T) (hold, let func()) {
+	out := make(chan struct{})
+	var once sync.Once
+	let = func() { once.Do(func() { close(out) }) }
+	t.Cleanup(let)
+	return func() { <-out }, let
+}
+
 // ixPress is a press of option v on the first question of card id.
 func ixPress(id, v string) *feishubot.CardAction {
 	var a feishubot.CardAction
@@ -57,11 +69,12 @@ func TestFailedAnswerRestoresOnlyAPendingCard(t *testing.T) {
 			if c.late {
 				cardAnswerWait = 10 * time.Millisecond
 			}
+			hold, let := heldAnswer(t)
 			ix := qCard("ix_q", false, "北京", "上海")
 			var ended atomic.Bool
 			s, f, _, notes, _ := textAnswerBot(t, func(json.RawMessage) (any, error) {
 				if c.late {
-					time.Sleep(100 * time.Millisecond)
+					hold() // out until the press has answered with its toast
 				}
 				if c.endsMid {
 					ended.Store(true) // its interaction.ended came while the answer was out
@@ -86,11 +99,14 @@ func TestFailedAnswerRestoresOnlyAPendingCard(t *testing.T) {
 				return ok
 			}
 			if c.late {
-				deadline := time.Now().Add(2 * time.Second)
-				for c.restored && !waits() && time.Now().Before(deadline) {
-					time.Sleep(5 * time.Millisecond)
-				}
-				time.Sleep(200 * time.Millisecond) // the late answer has landed either way
+				// The late answer has landed either way once it posts its note: that comes last, after the card was put
+				// back or left closed. The note handler runs under the fake's lock, so the notes are read under it too.
+				let()
+				waitUntil(t, func() bool {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					return strings.Contains(noteText(notes), "没交上去")
+				})
 			}
 			if got := waits(); got != c.restored {
 				t.Fatalf("card waits %v, want %v", got, c.restored)
@@ -112,36 +128,38 @@ func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
 		return ok
 	}
 	// record replaces the fake hub's handler of app/method with one that keeps what it was called with: the answer is
-	// posted from a goroutine after the callback returned, so the test reads it under mu, never as it is written.
+	// posted from a goroutine after the callback returned, so the test reads it under mu, never as it is written. read
+	// waits up to 2 seconds for the first call.
 	record := func(f *fakeHub, app, method string) (read func() []map[string]any) {
 		var mu sync.Mutex
 		var calls []map[string]any
+		first := make(chan struct{})
 		f.answerApp(app, method, func(p json.RawMessage) (any, error) {
 			var m map[string]any
 			_ = json.Unmarshal(p, &m)
 			mu.Lock()
-			calls = append(calls, m)
+			if calls = append(calls, m); len(calls) == 1 {
+				close(first)
+			}
 			mu.Unlock()
 			return map[string]any{}, nil
 		})
 		return func() []map[string]any {
-			deadline := time.Now().Add(2 * time.Second)
-			for {
-				mu.Lock()
-				got := append([]map[string]any(nil), calls...)
-				mu.Unlock()
-				if len(got) > 0 || time.Now().After(deadline) {
-					return got
-				}
-				time.Sleep(5 * time.Millisecond)
+			select {
+			case <-first:
+			case <-time.After(2 * time.Second):
 			}
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]map[string]any(nil), calls...)
 		}
 	}
 
 	t.Run("fails", func(t *testing.T) {
+		hold, let := heldAnswer(t)
 		ix := qCard("ix_q", false, "北京", "上海")
 		s, f, _, _, _ := textAnswerBot(t, func(json.RawMessage) (any, error) {
-			time.Sleep(100 * time.Millisecond)
+			hold() // out until the press has said "Working on it…"
 			return nil, errors.New("hub restarted")
 		}, ix)
 		endingQueue(f, ix, new(atomic.Bool), "resolved")
@@ -151,6 +169,7 @@ func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
 		if r == nil || r.Toast == nil || r.Toast.Content != "正在处理…" {
 			t.Fatalf("toast %+v", r)
 		}
+		let()
 		var text string
 		for _, n := range notes() {
 			text += n["text"].(string)
@@ -164,11 +183,13 @@ func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
 	})
 
 	t.Run("already handled", func(t *testing.T) {
+		hold, let := heldAnswer(t)
 		ix := qCard("ix_q", false, "北京", "上海")
 		var ended atomic.Bool
 		s, f, _, _, _ := textAnswerBot(t, func(json.RawMessage) (any, error) {
-			time.Sleep(100 * time.Millisecond)
-			ended.Store(true) // another surface answered it while this press was out
+			// Out until the press has said "Working on it…"; another surface answered it meanwhile.
+			hold()
+			ended.Store(true)
 			return map[string]any{"ok": false}, nil
 		}, ix)
 		endingQueue(f, ix, &ended, "resolved")
@@ -178,6 +199,7 @@ func TestLatePressOutcomeIsSaidInTheChat(t *testing.T) {
 		if r == nil || r.Toast == nil || r.Toast.Content != "正在处理…" {
 			t.Fatalf("toast %+v", r)
 		}
+		let()
 		got := closed()
 		if len(got) != 1 {
 			t.Fatalf("the card was not closed: %v", got)
