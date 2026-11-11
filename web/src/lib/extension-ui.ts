@@ -613,7 +613,8 @@ function drawable(it: unknown): it is UIItem {
 export function readView(raw: unknown, opts: { html?: boolean } = {}): UIView {
   if (!isObject(raw) || !Array.isArray(raw.sections)) throw new Error(t("lib-extension-ui.unreadable_view"));
   const sections: UISection[] = [];
-  const keeps = (it: unknown): it is UIItem => drawable(it) || (!!opts.html && isObject(it) && it.type === "html" && typeof it.html === "string");
+  // an html component's own checks are the card's (ui/HtmlCard.tsx)
+  const keeps = (it: unknown): it is UIItem => drawable(it) || (!!opts.html && (it as UIItem)?.type === "html");
   for (const s of raw.sections) {
     if (!isObject(s)) continue;
     const items = Array.isArray(s.items) ? s.items : [];

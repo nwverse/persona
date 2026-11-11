@@ -474,6 +474,15 @@ The web Recordings retention setting (#3780 / #3862) reuses the settings select 
 returning to Forever sends `0`. Only the hub-confirmed value is shown after a save, and transcript days stay separate.
 This is a requested default and interaction change, not a new style or component.
 
+The web Agent naming settings (#4812) reuse Settings › Assistant's Agents group, `Row`, `Switch`, the numeric
+settings input and `SettingsHint`. The default corrects only recognizable placeholder or instruction-template
+names, once per Agent; periodic updates default off. The per-Agent limit counts successful name changes, including
+periodic refreshes. The periodic switch reveals hours (24 when first enabled) and a plain note that refresh needs
+new output and remains subject to that limit; a limit of one shows why another refresh cannot happen. Turning off
+automatic naming hides the advanced controls without losing their values. Saves use the selected assistant and
+show only confirmed values. Native custom titles and manual renames are protected; task names and tab labels are
+separate objects and unchanged. This is a requested feature, with no new visual style, component or motion.
+
 ### 3.8 Chips, badges, avatars, marks
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
