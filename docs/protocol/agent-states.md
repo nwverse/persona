@@ -28,7 +28,7 @@ iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs
 forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; older apps still show Seen):
 
 - **What it asks** (`asks`): the node takes the question to the user from the turn's whole last reply (`last_text` is only its
-  first 200 runes, and the question is usually at the end) with `transcript.AskOf`, rules only, no model: one of the last three
+  first 200 runes, and the question is usually at the end) with `closeout.AskOf` (the words through `transcript.AskOf`), rules only, no model: one of the last three
   sentences ending in a question mark, or carrying a phrase that hands a decision over (要不要 / 要我 / 是否需要 / 请确认 / 选哪个 /
   告诉我 / 跟我说一声 / 选定后…, "Should I / Do you want / Let me know…", ますか / でしょうか…). Code blocks don't count, nor a
   phrase when the close says there is nothing to decide (没有需要你拍板的问题; a real question mark before it still counts), nor a reply a newer message came after (the user already
