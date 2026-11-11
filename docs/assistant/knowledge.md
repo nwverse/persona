@@ -173,7 +173,11 @@ so no two write the same files at once:
   the store's topic lock, a merge applied only while its topic is as it was asked about).
 - **minutes**: meeting minutes from recordings ([meeting-minutes.md](meeting-minutes.md)), whose calls can take many minutes.
 
-Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
+Before starting lanes a round only checks, quickly, that the knowledge base is writable and the user's zone readable;
+moving the archive into the user's zone ("Time zones") is the archive lane's first step, so the loop never waits behind a
+lane's writes. The steps' backoffs (a failed source put off, `retryWait`) live with the manager's knowledge base, not the
+engine, so they carry over when the hub's settings change and a new engine is built; a lane already running finishes
+its run with the engine it started with. Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
 <n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). While the
 assistant is not connected, the knowledge base closes once no lane runs; a lane started goes on to the end of its run, as a round did.
 
