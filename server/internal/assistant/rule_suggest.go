@@ -33,7 +33,8 @@ import (
 //     suggestion names the agents.delegate setting.
 //
 // Nothing is counted in a table of its own: the plans the owner started (task_plans, PlanTask.OwnerStarted), the
-// decisions kept on to-dos (todo_decisions) and the ask_escalated work events are read when a card is made. The tap
+// decisions kept on to-dos (todo_decisions) and the ask_escalated and owner_decided work events are read when a card
+// is made. The tap
 // on Always is the owner's own approval, as Start is: only the two routes below make a rule, they take a full
 // device's request only, and no tool of a model or an agent reaches them.
 const (
@@ -54,6 +55,11 @@ const (
 	ruleKindDelegate  = "delegate"
 
 	ruleDelegateSetting = "agents.delegate"
+
+	// ruleDecidedEvent is the work event written when the owner chose an option of a task's decision (chooseOption,
+	// takeRecommendation): {todo, decision, why_owner}. The decision's row does not keep why the owner was asked, and
+	// only a decision with this event, asked for a reason a rule may cover, is counted.
+	ruleDecidedEvent = "owner_decided"
 )
 
 var errRuleSuggestionGone = errors.New("no such rule suggestion")
@@ -85,7 +91,7 @@ type ruleCandidate struct {
 	quiet    bool // answered Not now (or Always) within ruleQuietFor
 	// plan_start: the kind tasks.trust would remember (trustKey of task).
 	task PlanTask
-	// standing_authorization: the grant's scope, and the owner's latest answer as its quote.
+	// standing_authorization: the grant's scope, and the owner's latest answer as its quote (ruleQuote).
 	machineID, directory, action, quote string
 }
 
@@ -229,27 +235,65 @@ func ruleEscalations(events []db.WorkEvent) map[string]ruleEscalation {
 	return out
 }
 
+// ruleOwnerDecisions reads the owner_decided events: why the owner was asked each decision they chose an option of, by
+// the decision's id.
+func ruleOwnerDecisions(events []db.WorkEvent) map[string]string {
+	out := map[string]string{}
+	for _, e := range events {
+		if id, _ := e.Detail["decision"].(string); e.Kind == ruleDecidedEvent && id != "" {
+			out[id], _ = e.Detail["why_owner"].(string)
+		}
+	}
+	return out
+}
+
+// ownerDecided keeps that the owner chose an option of task todo's decision, kept as decision, and why they were the
+// one asked (ruleDecidedEvent).
+func (s *Service) ownerDecided(todo, decision, whyOwner string) {
+	s.workEvent("", "", ruleDecidedEvent, map[string]any{"todo": todo, "decision": decision, "why_owner": whyOwner})
+}
+
+// ruleQuote is what a suggested grant keeps as the owner's words: the option they chose, after the question only when
+// that is a plain confirmation of the action ("Merge the PR now? → Yes"). Both are held to a fixed pattern
+// (standingRequest, ruleActionLabel): the free text an agent or a supervisor wrote around a decision is never quoted,
+// since a grant's quote is read to later agents as what the owner said.
+func ruleQuote(question, choice string) string {
+	question, choice = strings.TrimSpace(question), clip(oneLine(choice), 120)
+	if standingRequest.MatchString(question) {
+		return clip(oneLine(question), 300) + " → " + choice
+	}
+	return choice
+}
+
 // ruleStandingRun is the go-aheads the owner gave in a row for one action in one directory of one computer.
 type ruleStandingRun struct {
 	n                            int
 	machineID, directory, action string
-	quote                        string // the latest: the question and the owner's answer
+	quote                        string // the latest answer, as ruleQuote words it
 }
 
 // ruleDecisionRuns counts the decisions kept on to-dos (rows, oldest first). Only the owner's own count: a card they
-// answered, or a decision's option they chose (kept as manual); never the answer to an approval or a plan card.
+// answered, or a decision's option they chose (kept as manual, and named in decided with why they were asked); never
+// the answer to an approval or a plan card, a decision typed in by hand, or one the owner was asked because it cannot
+// be undone or others will see it.
 // runs: the go-aheads for one action in one directory in a row, by ruleStandingScope (a No to the same confirmation
 // starts the count again); scopeOf says where a to-do works (false: nowhere a rule may name). recommended: how many
 // passed-up question cards in a row, up to the latest, were answered with what their supervisor recommended (a card
 // answered another way starts the count again; one nobody answered, or passed up with no recommendation, counts
 // neither way).
-func ruleDecisionRuns(rows []db.TodoDecisionRow, passed map[string]ruleEscalation,
+func ruleDecisionRuns(rows []db.TodoDecisionRow, passed map[string]ruleEscalation, decided map[string]string,
 	scopeOf func(todo string) (machineID, directory string, ok bool)) (runs map[string]*ruleStandingRun, recommended int) {
 	runs = map[string]*ruleStandingRun{}
 	byCard := map[string][]db.TodoDecisionRow{}
 	var cards []string // in the order they were answered
 	for _, row := range rows {
-		if row.Source != db.DecisionCard && row.Source != db.DecisionManual {
+		switch row.Source {
+		case db.DecisionCard:
+		case db.DecisionManual:
+			if why, chosen := decided[row.ID]; !chosen || neverDefault(why) {
+				continue
+			}
+		default:
 			continue
 		}
 		if e, up := passed[row.SourceMessage]; up && row.Source == db.DecisionCard {
@@ -280,7 +324,7 @@ func ruleDecisionRuns(rows []db.TodoDecisionRow, passed map[string]ruleEscalatio
 			continue
 		}
 		runs[k].n++
-		runs[k].quote = clip(oneLine(row.Question), 300) + " → " + clip(oneLine(row.Choice), 120)
+		runs[k].quote = ruleQuote(row.Question, row.Choice)
 	}
 	for _, card := range cards {
 		if answers := byCard[card]; len(answers) == 1 && ruleSameAnswer(answers[0].Choice, passed[card].recommend) {
@@ -361,12 +405,17 @@ func (s *Service) ruleCount(ctx context.Context, now time.Time) (map[string]*rul
 	if err != nil || len(decisions) == 0 {
 		return out, err
 	}
-	events, err := ev.WorkEventsBetween(ctx, since, now, []string{"ask_escalated"})
+	events, err := ev.WorkEventsBetween(ctx, since, now, []string{"ask_escalated", ruleDecidedEvent})
 	if err != nil {
 		return nil, err
 	}
+	// The scope of a decision is its to-do's: after a restart they may not have been read yet, and a count without
+	// them would find no go-ahead anywhere (and be kept for ruleCacheFor).
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return nil, err
+	}
 	seen := map[string]*TaskPlan{}
-	runs, recommended := ruleDecisionRuns(decisions, ruleEscalations(events), func(todo string) (string, string, bool) {
+	runs, recommended := ruleDecisionRuns(decisions, ruleEscalations(events), ruleOwnerDecisions(events), func(todo string) (string, string, bool) {
 		t, found := s.todoNow(todo)
 		if !found {
 			return "", "", false
@@ -380,9 +429,7 @@ func (s *Service) ruleCount(ctx context.Context, now time.Time) (map[string]*rul
 		}
 	}
 	for k, r := range runs {
-		if r.n < ruleSuggestAfter || slices.ContainsFunc(grants.Authorizations, func(g StandingAuthorization) bool {
-			return g.MachineID == r.machineID && slices.Contains(g.Actions, r.action) && standingDirectoryContains(g.Directory, r.directory)
-		}) {
+		if r.n < ruleSuggestAfter || ruleCovered(grants, r.machineID, r.directory, r.action) {
 			continue
 		}
 		id := ruleSuggestionID(ruleKindStanding, k)
@@ -444,7 +491,7 @@ func (s *Service) ruleSuggestion(ctx context.Context, c *ruleCandidate, l i18n.L
 	case ruleKindStanding:
 		out.Creates = ruleKindStanding
 		out.Scope = proto.RuleScope{MachineID: c.machineID, Machine: s.machineName(c.machineID), Directory: c.directory,
-			Action: c.action, Conditions: ruleStandingConditions(c.action)}
+			Action: c.action, Conditions: ruleStandingConditions(c.action), Quote: c.quote}
 		out.Text = i18n.T(l, "assistant-rule_suggest."+strings.ReplaceAll(c.action, "-", "_"),
 			i18n.Args{"n": c.count, "directory": c.directory, "machine": out.Scope.Machine})
 	case ruleKindDelegate:
@@ -562,6 +609,37 @@ func (s *Service) suggestOnCard(ix proto.Interaction) proto.Interaction {
 	return ix
 }
 
+// ruleCardsChanged takes a suggestion that no longer holds (answered with Always or Not now, or covered by a rule
+// since) off the pending cards that carry it, and shows them again: a card keeps its copy from when it was rung, unlike
+// a plan or a to-do's decision, which are worded each time they are read.
+func (s *Service) ruleCardsChanged(ctx context.Context) {
+	s.fleet.mu.Lock()
+	var cards []proto.Interaction
+	for _, p := range s.fleet.interactions {
+		if p.ix.Suggestion != nil {
+			cards = append(cards, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	l := s.lang(ctx)
+	for _, ix := range cards {
+		sg := s.cardSuggestion(ctx, ix, l)
+		if sg != nil && sg.ID == ix.Suggestion.ID {
+			continue
+		}
+		s.fleet.mu.Lock()
+		p := s.fleet.interactions[ix.ID]
+		if p == nil || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
+			s.fleet.mu.Unlock()
+			continue // answered meanwhile
+		}
+		p.ix.Suggestion = sg
+		ix = p.ix
+		s.fleet.mu.Unlock()
+		s.show(ix)
+	}
+}
+
 // ---- Always and Not now ----
 
 // ruleQuiet keeps that suggestion id was answered now, and drops the answers older than ruleQuietFor.
@@ -612,21 +690,7 @@ func (s *Service) ruleAlways(ctx context.Context, id string, l i18n.Lang) (map[s
 		}
 		out["creates"], out["key"] = trustSetting, key
 	case ruleKindStanding:
-		grant := StandingAuthorization{MachineID: c.machineID, Directory: c.directory, Actions: []string{c.action},
-			Conditions: ruleStandingConditions(c.action), Quote: c.quote,
-			Source: i18n.T(l, "assistant-rule_suggest.source", i18n.Args{"n": c.count}), Reversible: true}
-		s.standingMu.Lock()
-		before, err := s.standingAuthorizations(ctx)
-		if err != nil {
-			s.standingMu.Unlock()
-			return nil, err
-		}
-		in := StandingAuthorizations{Revision: before.Revision, Authorizations: append(slices.Clone(before.Authorizations), grant)}
-		after, err := prepareStandingChange(before, in, time.Now())
-		if err == nil {
-			err = s.saveStandingAuthorizations(ctx, before.Revision, after)
-		}
-		s.standingMu.Unlock()
+		after, err := s.ruleGrant(ctx, c, l)
 		if err != nil {
 			return nil, err
 		}
@@ -638,8 +702,40 @@ func (s *Service) ruleAlways(ctx context.Context, id string, l i18n.Lang) (map[s
 		s.logf("rule suggestions: %s: %v", id, err) // the rule stands; at worst the line shows once more
 		s.rules.forget()
 	}
+	s.ruleCardsChanged(ctx)
 	s.askChanged(ctx) // the cards read again without the line
 	return out, nil
+}
+
+// ruleGrant stores the standing authorization candidate c stands for and returns the registry after it. The check
+// that no grant covers it yet is made again here, under the lock every change of the registry takes: two taps on
+// Always at once make one grant, and the second is errRuleSuggestionGone.
+func (s *Service) ruleGrant(ctx context.Context, c *ruleCandidate, l i18n.Lang) (StandingAuthorizations, error) {
+	grant := StandingAuthorization{MachineID: c.machineID, Directory: c.directory, Actions: []string{c.action},
+		Conditions: ruleStandingConditions(c.action), Quote: c.quote,
+		Source: i18n.T(l, "assistant-rule_suggest.source", i18n.Args{"n": c.count}), Reversible: true}
+	s.standingMu.Lock()
+	defer s.standingMu.Unlock()
+	before, err := s.standingAuthorizations(ctx)
+	if err != nil {
+		return StandingAuthorizations{}, err
+	}
+	if ruleCovered(before, c.machineID, c.directory, c.action) {
+		return StandingAuthorizations{}, errRuleSuggestionGone
+	}
+	in := StandingAuthorizations{Revision: before.Revision, Authorizations: append(slices.Clone(before.Authorizations), grant)}
+	after, err := prepareStandingChange(before, in, time.Now())
+	if err != nil {
+		return StandingAuthorizations{}, err
+	}
+	return after, s.saveStandingAuthorizations(ctx, before.Revision, after)
+}
+
+// ruleCovered: a standing authorization in grants already allows action in directory on the machine.
+func ruleCovered(grants StandingAuthorizations, machineID, directory, action string) bool {
+	return slices.ContainsFunc(grants.Authorizations, func(g StandingAuthorization) bool {
+		return g.MachineID == machineID && slices.Contains(g.Actions, action) && standingDirectoryContains(g.Directory, directory)
+	})
 }
 
 // ruleNotNow silences suggestion id for ruleQuietFor. errRuleSuggestionGone: the answers never earned it.
@@ -657,6 +753,7 @@ func (s *Service) ruleNotNow(ctx context.Context, id string) error {
 	if err := s.ruleQuiet(ctx, id); err != nil {
 		return err
 	}
+	s.ruleCardsChanged(ctx)
 	s.askChanged(ctx)
 	return nil
 }

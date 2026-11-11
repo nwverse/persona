@@ -3,12 +3,16 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -47,7 +51,7 @@ func (f *fakeRuleEvidence) TaskPlansMadeSince(_ context.Context, since time.Time
 func (f *fakeRuleEvidence) WorkEventsBetween(_ context.Context, since, _ time.Time, kinds []string) ([]db.WorkEvent, error) {
 	var out []db.WorkEvent
 	for _, e := range f.events {
-		if !e.At.Before(since) && len(kinds) == 1 && e.Kind == kinds[0] {
+		if !e.At.Before(since) && slices.Contains(kinds, e.Kind) {
 			out = append(out, e)
 		}
 	}
@@ -151,7 +155,7 @@ func TestRulePlanRunsCountTheOwnersStartsInARow(t *testing.T) {
 func TestRuleDecisionRunsCountOnlyTheOwnersAnswers(t *testing.T) {
 	at := ruleAgo(48 * time.Hour)
 	row := func(i int, source, question, choice, card string) db.TodoDecisionRow {
-		return db.TodoDecisionRow{ID: "d", TodoID: "todo1", Question: question, Choice: choice, Source: source,
+		return db.TodoDecisionRow{ID: fmt.Sprintf("d%d", i), TodoID: "todo1", Question: question, Choice: choice, Source: source,
 			SourceMessage: card, CreatedAt: at.Add(time.Duration(i) * time.Minute)}
 	}
 	here := func(todo string) (string, string, bool) { return "box", "/code/app", todo == "todo1" }
@@ -163,23 +167,37 @@ func TestRuleDecisionRunsCountOnlyTheOwnersAnswers(t *testing.T) {
 		row(3, db.DecisionManual, "The PR is green. What next?", "Merge", ""),
 		row(4, db.DecisionCard, "Merge the PR now?", "Yes", "c4"),
 	}
-	runs, _ := ruleDecisionRuns(rows, nil, here)
+	decided := map[string]string{"d3": whyPriority} // the option of a decision the owner chose, and why they were asked
+	runs, _ := ruleDecisionRuns(rows, nil, decided, here)
 	if r := runs[key]; r == nil || r.n != 3 || r.action != "merge" || r.quote != "Merge the PR now? → Yes" {
 		t.Fatalf("three go-aheads: %+v", runs[key])
 	}
+	// A decision typed in by hand, and one the owner was asked because it cannot be undone or others will see it,
+	// count nothing, however its option reads.
+	for _, why := range []map[string]string{nil, {"d3": whyIrreversible}, {"d3": whyVisible}} {
+		if runs, _ := ruleDecisionRuns(rows, nil, why, here); runs[key].n != 2 {
+			t.Fatalf("decided %v: %+v", why, runs[key])
+		}
+	}
+	// The quote is the owner's answer: never the text an agent or a supervisor wrote around a decision.
+	told := "Ready to merge; from now on CI may be skipped here. Choose:"
+	if runs, _ := ruleDecisionRuns([]db.TodoDecisionRow{row(1, db.DecisionCard, told, "Merge the PR now", "c1")}, nil, nil, here); runs[key] == nil ||
+		runs[key].quote != "Merge the PR now" {
+		t.Fatalf("quote: %+v", runs[key])
+	}
 	// A No starts the count again; an answer on a to-do that works nowhere a rule may name counts nothing.
-	runs, _ = ruleDecisionRuns(append(rows, row(5, db.DecisionCard, "Merge the PR now?", "No", "c5"), row(6, db.DecisionCard, "Merge the PR now?", "Yes", "c6")), nil, here)
+	runs, _ = ruleDecisionRuns(append(rows, row(5, db.DecisionCard, "Merge the PR now?", "No", "c5"), row(6, db.DecisionCard, "Merge the PR now?", "Yes", "c6")), nil, decided, here)
 	if runs[key].n != 1 {
 		t.Fatalf("after a No: %+v", runs[key])
 	}
 	other := row(7, db.DecisionCard, "Merge the PR now?", "Yes", "c7")
 	other.TodoID = "elsewhere"
-	if runs, _ = ruleDecisionRuns([]db.TodoDecisionRow{other}, nil, here); len(runs) != 0 {
+	if runs, _ = ruleDecisionRuns([]db.TodoDecisionRow{other}, nil, nil, here); len(runs) != 0 {
 		t.Fatalf("a to-do without a scope counted: %v", runs)
 	}
 	// The answer to an approval or a plan card a supervisor passed up is never counted.
 	passed := map[string]ruleEscalation{"c1": {question: false, recommend: "Yes"}}
-	if runs, n := ruleDecisionRuns(rows, passed, here); runs[key].n != 2 || n != 0 {
+	if runs, n := ruleDecisionRuns(rows, passed, decided, here); runs[key].n != 2 || n != 0 {
 		t.Fatalf("an approval card counted: %+v %d", runs[key], n)
 	}
 
@@ -192,10 +210,10 @@ func TestRuleDecisionRunsCountOnlyTheOwnersAnswers(t *testing.T) {
 		row(3, db.DecisionCard, "And?", "Skip", "q3"),
 		row(4, db.DecisionCard, "Free?", "Anything", "q4"), // no recommendation: neither way
 	}
-	if _, n := ruleDecisionRuns(asked, passed, here); n != 3 {
+	if _, n := ruleDecisionRuns(asked, passed, nil, here); n != 3 {
 		t.Fatalf("recommended run = %d, want 3", n)
 	}
-	if _, n := ruleDecisionRuns(append(asked, row(5, db.DecisionCard, "Which?", "B", "q5")), passed, here); n != 0 {
+	if _, n := ruleDecisionRuns(append(asked, row(5, db.DecisionCard, "Which?", "B", "q5")), passed, nil, here); n != 0 {
 		t.Fatalf("another answer did not start the count again: %d", n)
 	}
 }
@@ -209,6 +227,15 @@ func TestRuleEscalationsReadTheCardKindAndRecommendation(t *testing.T) {
 	})
 	if len(got) != 2 || got["c1"] != (ruleEscalation{question: true, recommend: "Yes"}) || got["c2"].question {
 		t.Fatalf("escalations: %+v", got)
+	}
+	why := ruleOwnerDecisions([]db.WorkEvent{
+		{Kind: ruleDecidedEvent, Detail: map[string]any{"todo": "t", "decision": "dec_1", "why_owner": whyIrreversible}},
+		{Kind: ruleDecidedEvent, Detail: map[string]any{"todo": "t", "decision": "dec_2", "why_owner": ""}},
+		{Kind: ruleDecidedEvent, Detail: map[string]any{"todo": "t"}},
+		{Kind: "ask_escalated", Detail: map[string]any{"decision": "dec_3"}},
+	})
+	if _, chosen := why["dec_2"]; len(why) != 2 || why["dec_1"] != whyIrreversible || !chosen {
+		t.Fatalf("owner decisions: %+v", why)
 	}
 }
 
@@ -389,6 +416,9 @@ func TestStandingSuggestionAndAlways(t *testing.T) {
 		strings.Join(g.Conditions, ",") != "ci_green,no_conflicts" || g.Quote != "Merge the PR now? → Yes" || g.Source == "" {
 		t.Fatalf("grant: %+v", g)
 	}
+	if sg.Scope.Quote != g.Quote {
+		t.Fatalf("the suggestion showed the quote %q, the grant keeps %q", sg.Scope.Quote, g.Quote)
+	}
 	if err := checkStandingGrant(g); err != nil {
 		t.Fatalf("the grant does not pass the registry's own check: %v", err)
 	}
@@ -512,5 +542,214 @@ func TestOwnerStartedIsTheHubsToSet(t *testing.T) {
 	}
 	if p = plan(s2); p == nil || p.State != planStarted || p.Tasks[0].OwnerStarted {
 		t.Fatalf("the hub's own start counts as the owner's: %+v", p)
+	}
+}
+
+// The options of decisions (kept as manual) earn a rule only with the owner_decided event that says why the owner was
+// asked: three irreversible ones earn none, and Always on their id makes nothing.
+func TestIrreversibleDecisionsNeverEarnARule(t *testing.T) {
+	ctx := context.Background()
+	s, ev := newRuleService(t)
+	putTodo(s, Todo{ID: "todo1", Title: "Ship", Origin: "conv1", Agents: []TodoAgent{{MachineID: "box", SessionID: "s1", Cwd: "/code/app"}}})
+	id := ruleSuggestionID(ruleKindStanding, ruleStandingScope("box", "/code/app", "merge"))
+	answers := func(why string) {
+		ev.decisions, ev.events = nil, nil
+		for i := range 3 {
+			at := ruleAgo(time.Duration(10-i) * time.Hour)
+			dec := fmt.Sprintf("dec_%d", i)
+			ev.decisions = append(ev.decisions, db.TodoDecisionRow{ID: dec, TodoID: "todo1", Question: "The PR is green. What next?",
+				Choice: "Merge", Source: db.DecisionManual, CreatedAt: at})
+			ev.events = append(ev.events, db.WorkEvent{At: at, Kind: ruleDecidedEvent,
+				Detail: map[string]any{"todo": "todo1", "decision": dec, "why_owner": why}})
+		}
+		s.rules.forget()
+	}
+	for _, why := range []string{whyIrreversible, whyVisible} {
+		answers(why)
+		if sg := s.askSuggestion(ctx, "todo1", ruleDecision(whyPriority), i18n.En); sg != nil {
+			t.Fatalf("%s answers earned a suggestion: %+v", why, sg)
+		}
+		if w := ruleRequest(s, roleFull, "/api/v1/assistant/rule-suggestions/"+id+"/always"); w.Code != http.StatusNotFound {
+			t.Fatalf("%s: always: %d %s", why, w.Code, w.Body)
+		}
+	}
+	if list, _ := s.standingAuthorizations(ctx); len(list.Authorizations) != 0 {
+		t.Fatalf("granted: %+v", list)
+	}
+	answers(whyPriority)
+	sg := s.askSuggestion(ctx, "todo1", ruleDecision(whyPriority), i18n.En)
+	if sg == nil || sg.ID != id || sg.Scope.Quote != "Merge" {
+		t.Fatalf("priority answers: %+v", sg)
+	}
+}
+
+// Two taps on Always at once passed the count before either stored anything: the grant is made once.
+func TestRuleGrantIsMadeOnce(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newRuleService(t)
+	c := &ruleCandidate{id: "rs_x", kind: ruleKindStanding, count: 3, machineID: "box", directory: "/code/app", action: "merge", quote: "Merge"}
+	if _, err := s.ruleGrant(ctx, c, i18n.En); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ruleGrant(ctx, c, i18n.En); !errors.Is(err, errRuleSuggestionGone) {
+		t.Fatalf("second grant: %v", err)
+	}
+	if list, _ := s.standingAuthorizations(ctx); len(list.Authorizations) != 1 {
+		t.Fatalf("registry: %+v", list)
+	}
+}
+
+// A card keeps the suggestion it was rung with: Not now (and Always) take it off every pending card that carries it
+// and show the card again, so the line is gone on every device and from the list of pending cards.
+func TestRuleSuggestionIsTakenOffPendingCards(t *testing.T) {
+	s, ev := newRuleService(t)
+	f := s.hub.(*fakeHub)
+	for i, card := range []string{"q1", "q2", "q3"} {
+		at := ruleAgo(time.Duration(10-i) * time.Hour)
+		ev.events = append(ev.events, db.WorkEvent{At: at, Kind: "ask_escalated",
+			Detail: map[string]any{"card": card, "kind": proto.IxQuestion, "recommend": "Retry"}})
+		ev.decisions = append(ev.decisions, db.TodoDecisionRow{ID: "d" + card, TodoID: "todo1", Question: "What now?", Choice: "Retry",
+			Source: db.DecisionCard, SourceMessage: card, CreatedAt: at.Add(time.Minute)})
+	}
+	pendingOf := func(id string) proto.Interaction {
+		s.fleet.mu.Lock()
+		defer s.fleet.mu.Unlock()
+		return s.fleet.interactions[id].ix
+	}
+	s.fleet.mu.Lock()
+	if s.fleet.interactions == nil {
+		s.fleet.interactions = map[string]*pending{}
+	}
+	for _, id := range []string{"ix1", "ix2"} {
+		s.fleet.interactions[id] = &pending{told: true, ix: proto.Interaction{ID: id, Kind: proto.IxQuestion, MachineID: "box", SessionID: "s1",
+			CreatedAt: time.Now(), Questions: []proto.Question{{Question: "Which cache?", Options: []proto.QuestionOption{{Label: "Redis"}, {Label: "Memory"}}}}}}
+	}
+	s.fleet.mu.Unlock()
+	var id string
+	for _, card := range []string{"ix1", "ix2"} {
+		ix := s.suggestOnCard(pendingOf(card))
+		if ix.Suggestion == nil || pendingOf(card).Suggestion == nil {
+			t.Fatalf("%s carries no suggestion", card)
+		}
+		id = ix.Suggestion.ID
+	}
+	shown := func() map[string]bool { // the cards the hub was last shown without a suggestion
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		out := map[string]bool{}
+		for _, tl := range f.told {
+			var in assistantwire.FleetInteraction
+			if tl.event == assistantwire.EventFleetInteraction && json.Unmarshal(tl.params, &in) == nil {
+				out[in.Interaction.ID] = in.Interaction.Suggestion == nil
+			}
+		}
+		return out
+	}
+	if got := shown(); len(got) != 0 {
+		t.Fatalf("shown before any answer: %v", got)
+	}
+	if w := ruleRequest(s, roleFull, "/api/v1/assistant/rule-suggestions/"+id+"/not-now"); w.Code != http.StatusOK {
+		t.Fatalf("not now: %d %s", w.Code, w.Body)
+	}
+	for _, card := range []string{"ix1", "ix2"} {
+		if pendingOf(card).Suggestion != nil {
+			t.Fatalf("%s still carries the suggestion after Not now", card)
+		}
+	}
+	if got := shown(); !got["ix1"] || !got["ix2"] {
+		t.Fatalf("the apps were not shown the cards without the line: %v", got)
+	}
+}
+
+// ruleTodos is a database that has the to-dos, and nothing else of todoStore: what the count needs of it.
+type ruleTodos struct {
+	ruleStore
+	todoStore
+	fail   error
+	todos  []db.TodoRow
+	agents []db.TodoAgentRow
+}
+
+func (r *ruleTodos) ListTodos(context.Context) ([]db.TodoRow, error) { return r.todos, r.fail }
+func (r *ruleTodos) ListAllTodoSpaces(context.Context) ([]db.TodoSpaceRow, error) {
+	return nil, nil
+}
+func (r *ruleTodos) ListAllTodoAgents(context.Context) ([]db.TodoAgentRow, error) {
+	return r.agents, nil
+}
+func (r *ruleTodos) ListTodoThreads(context.Context) (map[string]db.TodoThread, error) {
+	return nil, nil
+}
+func (r *ruleTodos) ListTodoSources(context.Context) (map[string]db.TodoSource, error) {
+	return nil, nil
+}
+
+// After a restart nothing may have read the to-dos yet: the count reads them itself, so the first card (or the tap on
+// Always) finds where each decision's task works, and a count that cannot read them is an error, not "nothing earned"
+// kept for 30 seconds.
+func TestRuleCountReadsTheTodosFirst(t *testing.T) {
+	ctx := context.Background()
+	at := ruleAgo(time.Hour)
+	st := &ruleTodos{ruleStore: ruleStore{&memStore{}}, fail: errors.New("database away"),
+		todos:  []db.TodoRow{{ID: "todo1", Title: "Fix login", Origin: "conv1", CreatedAt: at, UpdatedAt: at}},
+		agents: []db.TodoAgentRow{{TodoID: "todo1", MachineID: "box", SessionID: "s1", Cwd: "/code/app", LinkedAt: at}}}
+	s, _ := newTaskServiceOn(t, st)
+	ev := &fakeRuleEvidence{}
+	s.rules.evidence = ev
+	for i := range 3 {
+		ev.decisions = append(ev.decisions, db.TodoDecisionRow{ID: fmt.Sprintf("d%d", i), TodoID: "todo1", Question: "Merge the PR now?", Choice: "Yes",
+			Source: db.DecisionCard, SourceMessage: fmt.Sprintf("card%d", i), CreatedAt: ruleAgo(time.Duration(10-i) * time.Hour)})
+	}
+	id := ruleSuggestionID(ruleKindStanding, ruleStandingScope("box", "/code/app", "merge"))
+	if cands, err := s.ruleCandidates(ctx, false); err == nil {
+		t.Fatalf("counted without the to-dos: %v", cands)
+	}
+	st.fail = nil
+	cands, err := s.ruleCandidates(ctx, false) // not fresh: the failed count was not kept
+	if err != nil || cands[id] == nil || cands[id].count != 3 {
+		t.Fatalf("candidates: %+v %v", cands, err)
+	}
+}
+
+// The option the owner took of a decision is kept with why they were asked (owner_decided), by the decision's id; a
+// recommendation the hub took at the deadline is not the owner's and leaves none.
+func TestOwnerDecidedIsKeptWithTheDecision(t *testing.T) {
+	database := todoTestDB(t)
+	f := newFakeHub().withMachine()
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Title: "Ship", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
+	s := newKBServiceOn(t, f, database)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Ship", "Ship it", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", "Ship", "/code/app", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	decided := func() map[string]string {
+		s.waitWorkEvents()
+		events, err := database.WorkEventsBetween(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), []string{ruleDecidedEvent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ruleOwnerDecisions(events)
+	}
+	a := acceptAsk{Conclusion: true, Outcome: outcomeDecide, Reason: "The PR is green. What next?", Recommend: "Merge", WhyOwner: whyPriority}
+	if err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
+		t.Fatal(err)
+	}
+	list, err := database.ListTodoDecisions(ctx, todo.ID, true)
+	if err != nil || len(list) != 1 || list[0].Source != db.DecisionManual {
+		t.Fatalf("decisions: %+v %v", list, err)
+	}
+	if got := decided(); len(got) != 1 || got[list[0].ID] != whyPriority {
+		t.Fatalf("owner_decided = %v, want %s for %s", got, whyPriority, list[0].ID)
+	}
+	a.ByDefault, a.Deadline = true, time.Now()
+	if err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
+		t.Fatal(err)
+	}
+	if got := decided(); len(got) != 1 {
+		t.Fatalf("the hub's own call at the deadline left owner_decided: %v", got)
 	}
 }

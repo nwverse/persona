@@ -30,4 +30,6 @@ type RuleScope struct {
 	// Action and Conditions: a standing authorization's action and the conditions it would be granted under.
 	Action     string   `json:"action,omitempty"`
 	Conditions []string `json:"conditions,omitempty"`
+	// Quote is what the standing authorization would keep as the owner's words: their latest answer.
+	Quote string `json:"quote,omitempty"`
 }

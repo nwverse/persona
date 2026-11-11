@@ -594,16 +594,19 @@ call; nothing is turned on for the owner without the tap.
 
 | Repeated answer | Counted from | Shown on | Always creates |
 | --- | --- | --- | --- |
-| **Start** on plan cards for tasks that change files in one directory of one computer (the kind "Start These Directly" remembers) | Started plans whose tasks carry `owner_started`; a dismissed plan starts the count again, and a plan the hub started without asking counts neither way | The next open plan with a task of that kind (`TaskPlan.suggestion`) | The `tasks.trust` entry, as "Start These Directly" does |
-| The go-ahead to `merge`, `push` or `deploy-test` in one directory of one computer: Yes to a plain confirmation ("Merge the PR now?"), or a decision's option that is the action itself ("Merge") | The to-do's decisions of source `card` and `manual` (the owner's own; a decision's chosen option is kept as `manual`); a No to the same confirmation starts the count again | The next `needs_user` decision that offers that go-ahead (`ask.suggestion` on `GET /api/v1/todos`), or the next such question a supervisor passes up (`interaction.suggestion`) | A standing authorization for that computer, directory and action, with the question and the owner's answer as its `quote`; a merge carries `ci_green` and `no_conflicts` |
+| **Start** on plan cards for tasks that change files in one directory of one computer (the kind "Start These Directly" remembers) | Started plans made within the 14 days whose tasks carry `owner_started`; a dismissed plan starts the count again, and a plan the hub started without asking counts neither way | The next open plan with a task of that kind (`TaskPlan.suggestion`) | The `tasks.trust` entry, as "Start These Directly" does |
+| The go-ahead to `merge`, `push` or `deploy-test` in one directory of one computer: Yes to a plain confirmation ("Merge the PR now?"), or a decision's option that is the action itself ("Merge") | The to-do's decisions of source `card` (a question card the owner answered) and those of source `manual` that have an `owner_decided` work event (the option of a `needs_user` decision the owner chose; the event keeps the decision's `why_owner`); a No to the same confirmation starts the count again | The next `needs_user` decision that offers that go-ahead (`ask.suggestion` on `GET /api/v1/todos`), or the next such question a supervisor passes up (`interaction.suggestion`) | A standing authorization for that computer, directory and action, with the owner's answer as its `quote` (shown as `scope.quote`): the option they chose, after the question only when that is a plain confirmation ("Merge the PR now? → Yes"), never the free text an Agent or a supervisor wrote around a decision; a merge carries `ci_green` and `no_conflicts` |
 | A question a supervisor passed up (`ask_escalate` with a recommendation), answered with what it recommended | The card's decision and the `ask_escalated` work event, which keeps the card, its kind and the recommendation | The next question a supervisor passes up, while `agents.delegate` is off | Nothing: the suggestion names the setting `agents.delegate` for the app to open |
 
 - **Whose answers count**: only the owner's. A supervisor's answer, a standing authorization's, the delegate's and a
   default taken at a deadline are decisions of source `agent` and count nothing. `owner_started` is set by the plan's
   Start route alone; `task_plan` arguments cannot set it.
 - **Never suggested**: `deploy-production`, `send`, `delete` and `spend`; a decision whose `why_owner` is
-  `irreversible` or `visible_to_others`; a question whose text mentions force, production, release, deleting, sending
-  or paying; tool permission cards and plan approvals (their answers are not counted either); the health space.
+  `irreversible` or `visible_to_others` (the line is not shown on one, and the answer to one is not counted); a
+  question whose text mentions force, production, release, deleting, sending or paying; tool permission cards and plan
+  approvals (their answers are not counted either); the health space. A decision typed into a to-do by hand
+  (`POST /api/v1/todos/{id}/decisions`) is not an answer to a card and counts nothing. An Agent's question card has no
+  `why_owner`: for it the list of actions and the words above are the whole check.
 - **The scope** of a go-ahead is the directory the task's plan named (the repository, whichever worktree its agent
   got), else its agent's directory; a directory an existing standing authorization covers, or a kind already in
   `tasks.trust`, is not suggested.
@@ -616,6 +619,11 @@ call; nothing is turned on for the owner without the tap.
   so removing the rule does not bring it straight back.
 - **Stored**: when each suggestion was last answered, in the setting `assistant.rule_suggestions`; no table of its own.
   The count is read at most every 30 seconds.
+- **A card already rung** keeps the suggestion it went out with (a plan and a to-do's decision are worded each time
+  they are read). When a suggestion is answered, the manager takes it off every pending card that carries it and
+  sends those cards again, so the line is gone on every device.
+- **Two taps on Always at once** make one rule: the grant is stored only if no standing authorization covers the
+  directory and action yet, checked under the lock every change of the list takes; the second tap gets 404.
 
 App API (full-access role; 403 otherwise):
 
