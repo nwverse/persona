@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,7 +207,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	a, err := n.waitReady(ctx, pane, probe)
 	if rejected := (*startLineRejected)(nil); errors.As(err, &rejected) {
 		// Nothing of it ran: typed once more as it was, once the shell is at rest again. A second refusal ends the start.
-		log.Printf("start %s: %v; typing it again", id, err)
+		n.logf("start %s: %v; typing it again", id, err)
 		err = n.retypeStart(ctx, pane, typed)
 		if err == nil {
 			a, err = n.waitReady(ctx, pane, probe)
@@ -231,7 +230,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			if rpcCode(err) == screen.DialogOpen {
 				why = lostDialog
 			}
-			log.Printf("start %s: first message held back after ultracode: %v", id, err)
+			n.logf("start %s: first message held back after ultracode: %v", id, err)
 			n.lostFirst.set(id, why, time.Now())
 			prompt = ""
 		}
