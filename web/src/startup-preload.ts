@@ -127,13 +127,21 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * the providers' names and the hook that reads them again after a rename). And 448 B for clearing the main chat's context
  * (#5095 added 405 B to ja, 593,185 B to 593,590 B: /clear in the main chat's command list, its ⋯ row, the cleared page's
  * state in lib/main-clear.ts and their words); main was already 595 B over its budget at 286d88fb2 (ja 593,185 B against
- * 592,590 B), and that overage is kept here, not new room. And 2,304 B for child sessions folded into their parent
- * (#5120 added 2,350 B to ja, 593,323 B to 595,673 B: every list's folding and the parent row's folded state and running
- * line, a child's request counted and opened under its parent, the paged list's roots, the parent chat's placement of its
- * children's cards, the hook that reads and holds their rows and the old child links' redirect; the child card and what
- * it reads when opened load with the card). Raise it on purpose, in the change that needs it.
+ * 592,590 B), and that overage is kept here, not new room. And 672 B for the main chat's hand-off cards (#5096 added 1,166
+ * B to ja, 593,124 B at 7ff35f2e9 to 594,290 B, 509 B of it in the room left: a card for each dispatched Agent, a task's
+ * or an Agent's page opened from the chat with the chat's place kept, their words; the task side panel and the
+ * dispatched line they replace go, and the way-back strip on the Agent's page loads on its own; #5136: measured first
+ * against 9d3f343d3, which came 17 B short). Then 1,939 B less for the image editor's geometry leaving the first screen
+ * (#5142: ja 594,290 B at 5d97a6e77 to 592,351 B, the 15 B of room kept): the image viewer imported fitRect from
+ * lib/image-edit.ts, which put that whole module, otherwise only the lazy editor's, on the first screen; fitIn and
+ * fitRect now live in lib/image-zoom.ts. And 2,624 B for child sessions folded into their parent (#5120 added 2,757 B
+ * to ja, 592,153 B at 76b9cf3b4 to 594,910 B, 133 B of it in the room left: every list's folding and the parent row's
+ * folded state and running line, a child's request counted, opened and answerable under its parent (the store's lookup
+ * of its row), the paged list's roots, the parent chat's placement of its children's cards, the hook that reads and
+ * holds their rows and the old child links' redirect; the child card and what it reads when opened load with the card).
+ * Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 595_937;
+export const FIRST_SCREEN_BUDGET = 594_990;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
