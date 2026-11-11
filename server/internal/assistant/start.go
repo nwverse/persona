@@ -522,54 +522,66 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 }
 
 // clearMain clears the main conversation's context in place (the apps' "Clear context" and /clear, as Cindy's /clear
-// does): a turn it is on stops with its process, which is closed whether it works or not (nothing it ran in the
-// background starts another turn there), a question it waits on is taken back, and it is put away as newMain puts it,
-// with nothing carried over. What an earlier newMain left for the next conversation is dropped too, so the next message
-// to the main conversation starts a new one with a fresh context (startMain): no --resume, no handoff. Nothing is
-// deleted. It answers the old conversation's id ("" when there was none).
+// does): it is put away as newMain puts it, with nothing carried over, then its process is closed whether it works or
+// not (a turn stops, and nothing it ran in the background starts another turn there) and a question it waits on is
+// taken back. What an earlier newMain left for the next conversation is dropped too, so the next message to the main
+// conversation starts a new one with a fresh context (startMain): no --resume, no handoff. Nothing is deleted, and the
+// work it handed out (tasks, their Agents) goes on. It answers the old conversation's id ("" when there was none).
 func (s *Service) clearMain(ctx context.Context, expect string) (string, error) {
-	s.main.mu.Lock()
-	defer s.main.mu.Unlock()
-	cfg := s.settings(ctx)
-	old := cfg.Main
-	if expect != "" && expect != old {
-		return "", &rpc.Error{Code: "main_changed", Message: i18n.T(s.lang(ctx), "assistant-start.main_changed")}
+	// past the checks it goes through as one change, even when the app stops waiting for the answer
+	ctx = context.WithoutCancel(ctx)
+	old, machine, c, found, err := s.clearMainLocked(ctx, expect)
+	if err != nil || old == "" {
+		return old, err
 	}
-	if err := s.saveHandoff(ctx, mainHandoff{}); err != nil {
-		return "", err
-	}
-	if old == "" {
-		return "", nil
-	}
-	machine, c, found := s.findSession(ctx, old, cfg.mainRouteMachine())
+	// after the lock: the node may be slow, and every message to the main conversation waits on that lock
 	if found {
 		s.closeMain(ctx, machine, c)
-	} else {
-		machine = cfg.mainRouteMachine()
-	}
-	if err := s.putAwayMain(ctx, machine, old, time.Now().UTC()); err != nil {
-		return "", err
 	}
 	s.logf("assistant: main conversation %s cleared", short(old))
 	return old, nil
 }
 
-// closeMain ends the main conversation's process for clearMain: its turn stops as with the Stop button (a Feishu
-// request it reports on is stopped with it), and a question it waits on is taken back. Only Persona's own headless
-// process is closed: one the user resumed in a terminal (a pane) is theirs, and the node's session.close would close
-// that terminal. A failure is only logged: the conversation is put away all the same, and an offline machine runs no
-// turn of it.
+// clearMainLocked is clearMain's change under s.main.mu: the check, the handoff dropped and the conversation put away.
+func (s *Service) clearMainLocked(ctx context.Context, expect string) (old, machine string, c proto.Session, found bool, err error) {
+	s.main.mu.Lock()
+	defer s.main.mu.Unlock()
+	cfg := s.settings(ctx)
+	old = cfg.Main
+	if expect != "" && expect != old {
+		return "", "", c, false, &rpc.Error{Code: "main_changed", Message: i18n.T(s.lang(ctx), "assistant-start.main_changed")}
+	}
+	if err := s.saveHandoff(ctx, mainHandoff{}); err != nil {
+		return "", "", c, false, err
+	}
+	if old == "" {
+		return "", "", c, false, nil
+	}
+	machine, c, found = s.findSession(ctx, old, cfg.mainRouteMachine())
+	if !found {
+		machine = cfg.mainRouteMachine()
+	}
+	if err := s.putAwayMain(ctx, machine, old, time.Now().UTC()); err != nil {
+		return "", "", c, false, err
+	}
+	return old, machine, c, found, nil
+}
+
+// closeMain ends the main conversation's process once clearMain has put it away: its turn stops as with the Stop
+// button, and a question it waits on is taken back. Only Persona's own headless process is closed: one the user resumed
+// in a terminal (a pane) is theirs, and the node's session.close would close that terminal. Unlike the Stop button it
+// does not stop a Feishu request the conversation reports on (UserStopped): that would interrupt the Agents working on
+// the tasks it handed out, which a clear leaves running. A failure is only logged: an offline machine runs no turn.
 func (s *Service) closeMain(ctx context.Context, machine string, c proto.Session) {
 	s.withdrawAskUser(c.SessionID)
-	if c.PaneID == "" {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := s.call(cctx, machine, "session.close", map[string]any{"session_id": c.SessionID}, nil)
-		cancel()
-		if err != nil {
-			s.logf("assistant: close the main conversation %s: %v", short(c.SessionID), err)
-		}
+	if c.PaneID != "" {
+		return
 	}
-	s.UserStopped(ctx, SessionRef{MachineID: machine, SessionID: c.SessionID})
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := s.call(cctx, machine, "session.close", map[string]any{"session_id": c.SessionID}, nil); err != nil {
+		s.logf("assistant: close the main conversation %s: %v", short(c.SessionID), err)
+	}
 }
 
 // putAwayMain makes old no longer the main conversation: first among the former ones (its machine keeps listing it),
