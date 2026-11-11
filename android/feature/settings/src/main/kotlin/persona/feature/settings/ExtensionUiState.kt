@@ -145,8 +145,11 @@ internal object ExtensionViewText {
         java.time.LocalTime.parse((value ?: return null).substringAfter('T').take(5))
     }.getOrNull()
 
-    /** A date, time or datetime field's value as it reads in the page's language; the value itself when it cannot be read. */
-    fun whenText(kind: String?, value: String, locale: java.util.Locale = java.util.Locale.getDefault()): String {
+    /**
+     * A date, time or datetime field's value as it reads in the page's language ([locale]: `currentLocale`, not the
+     * system's, #4105); the value itself when it cannot be read.
+     */
+    fun whenText(kind: String?, value: String, locale: java.util.Locale): String {
         if (value.isBlank()) return ""
         val dateFormat = java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM).withLocale(locale)
         return when (kind) {
