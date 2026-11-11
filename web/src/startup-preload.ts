@@ -134,9 +134,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * against 9d3f343d3, which came 17 B short). Then 1,939 B less for the image editor's geometry leaving the first screen
  * (#5142: ja 594,290 B at 5d97a6e77 to 592,351 B, the 15 B of room kept): the image viewer imported fitRect from
  * lib/image-edit.ts, which put that whole module, otherwise only the lazy editor's, on the first screen; fitIn and
- * fitRect now live in lib/image-zoom.ts. Raise it on purpose, in the change that needs it.
+ * fitRect now live in lib/image-zoom.ts. And 1,024 B for a launcher switch that waits (#5035 added 491 B to ja, 592,351
+ * B to 592,842 B: the pill's waiting state, the Agent chat sending the switch with the user's message and keeping the
+ * words in the box when it is refused; the panel's switch code and words load with the panel). Raise it on purpose, in
+ * the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 592_366;
+export const FIRST_SCREEN_BUDGET = 593_390;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
