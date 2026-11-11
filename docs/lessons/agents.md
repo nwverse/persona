@@ -813,6 +813,11 @@ refused as `dialog_open` with nothing on the phone to answer.
   decide the state.
 - Measure a hook's effect on a real pty with a throwaway `--settings` hook and an empty config directory, answering both ways: the
   same check that ignored allow honoured deny.
+- `--setting-sources project` does not keep a `--settings` file out: flag settings always load, hooks, plugins and output
+  style included. A launcher alias's `--settings` is a user settings file, so a process that must carry none of the user's
+  setup (a meeting's room, `node/assistant_guest.go` `meetingRoomKeys`) copies only what it needs from it (env, login, model).
+- A node's session state is stored by the hub's manager (`db.NodeSession`): a field it does not keep is gone after the next node
+  restart. Persist what decides how a process runs (a guest's tools and kind), and fail closed when it is missing.
 
 ## A headless Claude's queue is on its stdout, not in its transcript (#4342)
 

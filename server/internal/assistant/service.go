@@ -139,6 +139,10 @@ type Service struct {
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
 	attend     attendState       // meeting_feed.go: feeding the meetings Persona attends, and their turns
+	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
+	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording
+	justMe     justMeBook        // meeting_justme.go: the Just me turns
+	meetLocks  meetingLocks      // meeting_followup.go: one creation at a time per recording
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
