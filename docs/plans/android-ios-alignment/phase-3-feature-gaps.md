@@ -22,11 +22,11 @@ What people do on an iPhone they can also do on Android, most-used first. Whatev
 
 **F6. To-dos.** iOS edits the due date, the reminder and the priority in the detail, shows the stage bar, and dictates notes. Android edits the title and notes only. Requirement: as on iOS.
 
-**F7. Agents list.** iOS groups By Repository, By Project, By To-do, By Status, By Machine, By App and Recently Used; Android has By repository, By computer and space, By status and By to-do. iOS also has git and worktree actions (pull, push, fetch, new worktree, rename, cleanup when an Agent closes) and Orca workspaces. Requirement: the missing groupings, the actions and workspaces.
+**F7. Agents list.** iOS groups By Repository, By Project, By To-do, By Status, By Machine, By App and Recently Used; Android has By repository, By computer and space, By status and By to-do; its By computer and space has iOS's By Project shape, so the [Agents page](agents-page.md) (A5) renames it. iOS also has git and worktree actions (pull, push, fetch, new worktree, rename, cleanup when an Agent closes) and Orca workspaces. Requirement: the missing groupings (By Machine, By App, Recently Used), the actions and workspaces. How the shared groupings look is the Agents page's.
 
 **F8. Voice.** On iOS the composer turns into a voice bar tied to the current chat. Android opens a separate page whose work always goes to the main chat. Requirement: the voice bar; the page stays for captions.
 
-**F9. Larger areas, each decided in its own issue.** Health; meeting recording (Android shows the minutes in Knowledge but can't record); an archived-chats browser; and the Machines extras (live view, usage chart, clipboard, computer use).
+**F9. Larger areas, each decided in its own issue.** Health; meeting recording (Android shows the minutes in Knowledge but can't record); and the Machines extras (live view, usage chart, clipboard, computer use). The archived-chats browser moved to [chats](chats.md) (C12), with the rest of the conversation history.
 
 **F10. Settings Android lacks.** Saved Places; Knowledge Selection; meeting settings (with recording); Claude Code Live Replies; GitHub connector sign-in and Inbox settings; offering the clipboard when you come back to the app; the in-app tunnel page; Appearance (text size, which is open question 6, layout, glow while replying); workout reports; source subscriptions (#2041). The Live Activity, Dynamic Island, Watch sync and background push are platform features, not gaps.
 
@@ -104,7 +104,7 @@ Each gets an iOS issue: answering questions and terminal choices from notificati
 
 ### F7. Agents list (M to L)
 
-- Groupings (S each): By App (from `agent_surface` and `agent_name`, which Android already parses), Recently Used and By Project, in `android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentList.kt`.
+- Groupings (S each): By App (from `agent_surface` and `agent_name`, which Android already parses), Recently Used and the flat By Machine, in `android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentList.kt`.
 - Node actions (M): git pull, push and fetch, split pane, close tab, run an Agent in a pane, new and renamed worktrees, and cleanup when an Agent closes, as a service plus dialogs next to the existing Agent operation dialogs.
 - Workspaces (M): the same catalog as F2.
 
@@ -119,7 +119,6 @@ Each gets an iOS issue: answering questions and terminal choices from notificati
 | --- | --- | --- | --- |
 | Health | health chats and memory, health reports (`docs/assistant/health.md`) | none | L |
 | Meeting recording | recordings, minutes, live, ask | minutes in Knowledge; recording itself is an open question (long audio on Android) | L |
-| Archived chats | unarchive a conversation | archiving only; copy `AgentArchivesScreen.kt` | S |
 | Live view | VNC over a forwarded port | `android/core/hub/src/main/kotlin/persona/core/hub/PortForwarder.kt` already connects ports | L |
 | Usage chart | per-computer usage | reuse the metric charts | M |
 | Clipboard | clipboard and its settings | none | S to M |
@@ -144,7 +143,7 @@ Each gets an iOS issue: answering questions and terminal choices from notificati
 
 1. F1.
 2. F2: ultracode and blocked launchers first, then worktree, attachments and workspaces.
-3. F6, the HTML card check (F4), and archived chats (F9).
+3. F6 and the HTML card check (F4).
 4. F5, file edits (F3) and the groupings (F7).
 5. Review (F3), the voice bar (F8) and the node actions (F7).
 6. The rest of F9 and F10, each after its own decision.

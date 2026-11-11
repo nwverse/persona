@@ -1,6 +1,6 @@
 # Plan: align the Android app with iOS (#4194)
 
-Status: plan, written 2026-11-11 against `main` at 309b3fe76. The owner settled six of the eight phase 0 questions; two are open (below). Each phase has its own issue and its own document, with the requirements first and the technical design second. When a phase is done, its rules move into `docs/design/DESIGN_SYSTEM.md` and `docs/android/android-design.md` and its document is deleted; when every phase is done, this folder goes.
+Status: plan, written 2026-11-11 against `main` at 309b3fe76; the two area documents against c57caeddc. The owner settled six of the phase 0 questions, the spec settles a seventh, and four are open (below). Each phase and each area has its own issue and its own document, with the requirements first and the technical design second. When a phase is done, its rules move into `docs/design/DESIGN_SYSTEM.md` and `docs/android/android-design.md` and its document is deleted; when every phase is done, this folder goes.
 
 ## Goal
 
@@ -26,8 +26,11 @@ Someone who uses Persona on an iPhone and on an Android phone gets the same app:
 | 6 | An in-app text size on Android | Open | Proposal: Small, Standard and Large, as on iOS. |
 | 7 | Feedback | One layer, modeled on the iOS toast | Snackbars, per-page hosts and in-app system toasts all go through one component. |
 | 8 | Styles | Glass only | See the ground rules. |
+| 9 | Which assistant's computers the Agents page shows | Settled by `docs/assistant/managers.md` ("Clients"): the current assistant's | Nothing: Android does this already. iOS shows every assistant's, and gets an iOS issue. |
+| 10 | Android's assistant home page | Open | Proposal: drop it, as on iOS; New Chat is the only blank page ([chats](chats.md), C11). |
+| 11 | The Agent chat header's terminal and permission-mode buttons | Open | Proposal: follow iOS; the terminal opens from ⋯ and the work line, the mode from the composer's model menu ([chats](chats.md), C3 and C7). |
 
-Questions 4 and 6 are tracked in #4208.
+Questions 4, 6, 10 and 11 are tracked in #4208.
 
 ## Phases
 
@@ -39,7 +42,16 @@ Questions 4 and 6 are tracked in #4208.
 | 3 | #4211 | [Feature gaps](phase-3-feature-gaps.md) | The features Android lacks, most-used first |
 | 4 | #4212 | [Staying aligned](phase-4-staying-aligned.md) | Paired screenshots, iOS reading the shared fixtures, a self-check line, the intentional-differences section |
 
-Phase 0 and the token pipeline in phase 1 come first. The paired screenshots from phase 4 should exist before the large changes in phases 2 and 3, because reviewing those depends on them. Phases 2 and 3 can run side by side.
+## Areas
+
+The phases compare the platforms by kind of work. Two primary screens differ in so many places that each also gets a document of its own, comparing the screen as a whole; they run alongside phases 2 and 3.
+
+| Area | Issue | Document | What it delivers |
+| --- | --- | --- | --- |
+| The Agents page | (to come) | [Agents page](agents-page.md) | Needs You by session, the groupings in the iOS shapes, kept folds, the iOS rows and headers, search |
+| The Agent chat and the assistant chat | (to come) | [Chats](chats.md) | Tool names, subagents, the header, the work summary, the composer's model button, the assistant conversation's requests, records and history |
+
+Phase 0 and the token pipeline in phase 1 come first. The paired screenshots from phase 4 should exist before the large changes in phases 2 and 3 and in the areas, because reviewing those depends on them. Phases 2 and 3 and the two areas can run side by side.
 
 ## Intentional differences so far
 

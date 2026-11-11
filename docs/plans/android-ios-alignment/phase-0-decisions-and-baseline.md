@@ -13,11 +13,13 @@ Before phases 1 to 3 change code, everyone works from the same decisions and the
 - Each owner decision of 2026-11-11 (the table in the [README](README.md)) gets an entry in `docs/design/DECISIONS.md`.
 - The entry lands in the PR that writes its rule into `docs/design/DESIGN_SYSTEM.md`: DECISIONS.md holds no rules, and every entry names the section its rule landed in. Until then, the README's table is the record.
 
-### R2. The two open questions get answers
+### R2. The open questions get answers
 
 - Question 4, where pending requests sit in a chat. Proposal: as the iOS code does, the request cards stack above the composer, which stays usable, and each folds to a one-line preview. `DESIGN_SYSTEM.md` section 4.8 describes paging instead and is corrected with the change ([phase 2](phase-2-interactions.md), Q4).
 - Question 6, an in-app text size on Android. Proposal: Small, Standard and Large, as on iOS, one step below or above the system's size.
-- The owner answers in #4208. The answers join the README's table and are recorded as in R1. Phase 2 builds neither before the answer.
+- Question 10, Android's assistant home page. Proposal: drop it, as on iOS ([chats](chats.md), C11).
+- Question 11, the Agent chat header's terminal and permission-mode buttons. Proposal: follow iOS ([chats](chats.md), C3 and C7).
+- The owner answers in #4208. The answers join the README's table and are recorded as in R1. Nothing that depends on a question is built before its answer.
 
 ### R3. A living parity list
 
@@ -39,7 +41,7 @@ Before phases 1 to 3 change code, everyone works from the same decisions and the
 ### Acceptance criteria
 
 - Every owner decision has an entry in `docs/design/DECISIONS.md` with its date and what it replaced.
-- Questions 4 and 6 are answered and recorded.
+- Questions 4, 6, 10 and 11 are answered and recorded.
 - The parity list covers every primary screen and every item in #4194; each row has a status and an issue or a reason (principle 4).
 - The audit lists findings by severity with file and line, and every P1 finding has an issue (principle 6).
 
@@ -99,7 +101,7 @@ Which PR lands each entry:
 ### Order of work
 
 1. This document and the README (this branch).
-2. The owner answers questions 4 and 6 in #4208.
+2. The owner answers questions 4, 6, 10 and 11 in #4208.
 3. The parity list PR.
 4. The audit PR; its P1 findings become issues.
 5. The decision entries, each with the PR named above.
