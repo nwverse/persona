@@ -24,7 +24,6 @@
   "server/internal/assistant/conclusion_test.go": 4,
   "server/internal/assistant/fake_test.go": 1,
   "server/internal/assistant/feishu_agent_done_test.go": 4,
-  "server/internal/assistant/feishu_answer_ended_test.go": 3,
   "server/internal/assistant/feishu_board_test.go": 2,
   "server/internal/assistant/feishu_card_back_test.go": 1,
   "server/internal/assistant/feishu_cards_test.go": 5,

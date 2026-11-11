@@ -88,5 +88,7 @@
   "agent_tasks_hint": "Agents started outside the main chat also get a quiet task with a supervisor, which checks the result and closes them when done. Uses extra model calls",
   "archive_closed": "Archive closed sessions after",
   "archive_closed_hint": "A closed session with no open task leaves the lists after this many idle days and stays under Archived. 0 turns it off",
-  "archive_closed_unit": "days"
+  "archive_closed_unit": "days",
+  "background_folded": "Fold background rounds",
+  "background_folded_footer": "Rounds that another conversation, a scheduled task or a follow-up started in the main chat show as one line you can open. Rounds that ask or tell you something stay shown."
 }
