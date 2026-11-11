@@ -4,7 +4,6 @@ import type { Machine, Session } from "./types";
 
 import { buildDirectionAgentTree } from "./direction-agent-tree";
 import {
-  directionCountsText,
   directionStateName,
   directionTitle,
   directionTreeGroups,
@@ -70,7 +69,6 @@ describe("direction tree", () => {
   });
 
   it("says the words of the contract", () => {
-    expect(directionCountsText(counts(3, 2))).toBe("在做 3 · 等你 2");
     expect(directionStateName("needs_you")).toBe("等你");
     expect(directionStateName("review")).toBe("待验收");
     expect(directionStateName("stuck")).toBe("卡住");
@@ -201,5 +199,38 @@ describe("direction tree", () => {
     answer(new Response(JSON.stringify(TREE), { status: 200, headers: { "Content-Type": "application/json" } }));
     await first;
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the newer tree when two reads out at once answer in reverse order", async () => {
+    const answers: ((r: Response) => void)[] = [];
+    const fetch = vi.fn(() => new Promise<Response>((r) => answers.push(r)));
+    vi.stubGlobal("fetch", fetch);
+    const json = (tree: DirectionTree) => new Response(JSON.stringify(tree), { status: 200, headers: { "Content-Type": "application/json" } });
+    const older = readDirectionTreeOnce(); // sent before the socket opened
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    const newer = readDirectionTreeOnce(Date.now() + 1000); // the hello's, sent after
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    const renamed: DirectionTree = { directions: [{ ...TREE.directions[0], name: "Newer" }, ...TREE.directions.slice(1)] };
+    answers[1](json(renamed));
+    await newer;
+    expect(directionTreeNow()?.directions[0].name).toBe("Newer");
+    answers[0](json(TREE));
+    // the stale answer is not applied; its caller gets the current tree
+    expect((await older)?.directions[0].name).toBe("Newer");
+    expect(directionTreeNow()?.directions[0].name).toBe("Newer");
+  });
+
+  it("keeps the newer tree when an older read fails after it", async () => {
+    const answers: ((r: Response) => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => answers.push(r))));
+    const older = readDirectionTreeOnce();
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
+    const newer = readDirectionTreeOnce(Date.now() + 1000);
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[1](new Response(JSON.stringify(TREE), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await newer;
+    answers[0](new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json" } }));
+    await older;
+    expect(directionTreeGroups()).toBe(true);
   });
 });

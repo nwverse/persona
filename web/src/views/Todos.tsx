@@ -307,6 +307,13 @@ export function TodosView({
       .filter((g) => g.todos.length > 0)
       .map(({ d, todos }) => ({ d, todos, title: directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title) }));
   }, [grouping, byDirection, directionTree, filteredUncompleted, leaderTitles]);
+  // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it
+  // (server/internal/assistant/direction_tree.go), so the page says how many and where to see them rather than hide them
+  const directionUnlisted = useMemo(() => {
+    if (grouping !== "direction" || !byDirection) return 0;
+    const listed = new Set(directionSections.flatMap((g) => g.todos.map((td) => td.id)));
+    return filteredUncompleted.filter((td) => !listed.has(td.id)).length;
+  }, [grouping, byDirection, directionSections, filteredUncompleted]);
   const [restored, restoreTodo] = useRestoredTodos();
   // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
   // leaves the finished one out must not put it back in Needs you
@@ -629,7 +636,7 @@ export function TodosView({
               >
                 {todosError}
               </Empty>
-            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0)) && filteredCompleted.length === 0 ? (
+            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0 && directionUnlisted === 0)) && filteredCompleted.length === 0 ? (
               offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : search.trim() ? (
@@ -690,19 +697,28 @@ export function TodosView({
               </div>
               ) : (
               <div className="flex flex-col gap-1">
-                {grouping === "direction" ? directionSections.map((g) => (
-                  <TodoDirectionSection
-                    key={g.d.id}
-                    direction={g.d}
-                    title={g.title}
-                    todos={g.todos}
-                    views={views}
-                    selectedId={activeTodo?.id}
-                    onSelect={openFromList}
-                    onToggleDone={toggleDone}
-                    onMenu={openRowMenu}
-                  />
-                )) : projectGroups.map((g) => (
+                {grouping === "direction" ? (
+                  <>
+                    {directionSections.map((g) => (
+                      <TodoDirectionSection
+                        key={g.d.id}
+                        direction={g.d}
+                        title={g.title}
+                        todos={g.todos}
+                        views={views}
+                        selectedId={activeTodo?.id}
+                        onSelect={openFromList}
+                        onToggleDone={toggleDone}
+                        onMenu={openRowMenu}
+                      />
+                    ))}
+                    {directionUnlisted > 0 && (
+                      <p data-testid="todos-direction-unlisted" className="px-2 pt-1 text-[12px] text-ink-3">
+                        {t("todos.direction_unlisted", { count: directionUnlisted })}
+                      </p>
+                    )}
+                  </>
+                ) : projectGroups.map((g) => (
                   <TodoProjectSection
                     key={g.key}
                     group={g}

@@ -23,8 +23,5 @@
   "mark_all_seen_count": "全部标为已看（{count}）",
   "direction_working": "在做",
   "direction_needs_you": "等你",
-  "direction_stuck": "卡住",
-  "direction_counts": "在做 {working} · 等你 {needs_you}",
-  "direction_working_n": "在做 {count}",
-  "direction_needs_you_n": "等你 {count}"
+  "direction_stuck": "卡住"
 }

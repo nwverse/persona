@@ -24,8 +24,5 @@
   "mark_all_seen_count": "Mark all as seen ({count})",
   "direction_working": "Doing",
   "direction_needs_you": "Needs you",
-  "direction_stuck": "Stuck",
-  "direction_counts": "Doing {working} · Needs you {needs_you}",
-  "direction_working_n": "Doing {count}",
-  "direction_needs_you_n": "Needs you {count}"
+  "direction_stuck": "Stuck"
 }

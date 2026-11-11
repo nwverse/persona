@@ -126,11 +126,6 @@ export function directionStateName(s: DirectionTaskState): string {
 /** A task state's text color: needs-you, working, and caution for stuck and review (Tailwind token classes). */
 export const DIRECTION_STATE_TONE: Record<DirectionTaskState, string> = { needs_you: "text-attention", working: "text-orange", stuck: "text-orange", review: "text-orange" };
 
-/** What a direction row says under or beside its name: "在做 N · 等你 N". */
-export function directionCountsText(c: DirectionCounts): string {
-  return t("lib-state-labels.direction_counts", { working: c.working, needs_you: c.needs_you });
-}
-
 /** Every agent of a task, its children included, depth first. */
 export function taskAgents(td: DirectionTask): DirectionAgent[] {
   const out: DirectionAgent[] = [];
@@ -158,6 +153,10 @@ let readingSince = 0;
 let lastRead: { at: number; tree: DirectionTree } | null = null;
 let queued: Promise<DirectionTree | null> | null = null;
 let generation = 0;
+/** Reads are numbered as they are sent; an answer older than one already applied is not applied (two reads can be out
+ *  at once, a hello's beside one sent before the socket opened, and they can come back in any order). */
+let readSeq = 0;
+let appliedSeq = 0;
 
 function set(next: Snapshot) {
   if (next === tree) return;
@@ -171,11 +170,15 @@ class NoTree extends Error {}
 function read(): Promise<DirectionTree | null> {
   const n = generation;
   const at = Date.now();
+  const seq = ++readSeq;
   const p: Promise<DirectionTree | null> = api<unknown>(DIRECTION_TREE_PATH)
     .then((res) => {
       if (!Array.isArray((res as { directions?: unknown } | null)?.directions)) throw new NoTree();
       const next = normalizeTree(res);
       if (n !== generation) return null;
+      // a newer read already answered: this one is stale, and its caller gets the tree that read gave
+      if (seq < appliedSeq) return tree ?? null;
+      appliedSeq = seq;
       lastRead = { at, tree: next };
       set(next);
       return next;
@@ -183,7 +186,7 @@ function read(): Promise<DirectionTree | null> {
     // an older hub: no tree, and the screens stay as they were. Any other failure keeps the last tree; with none yet
     // it counts as no tree too, so no screen waits on a read that failed (the next hello or push asks again)
     .catch((e: unknown) => {
-      if (n === generation && (e instanceof NoTree || (e instanceof ApiError && e.status === 404) || tree === undefined)) set(null);
+      if (n === generation && seq > appliedSeq && (e instanceof NoTree || (e instanceof ApiError && e.status === 404) || tree === undefined)) set(null);
       return null;
     })
     .finally(() => {
@@ -245,6 +248,8 @@ export function resetDirectionTree() {
   queued = null;
   lastRead = null;
   helloWait = null;
+  readSeq = 0;
+  appliedSeq = 0;
   tree = undefined;
 }
 

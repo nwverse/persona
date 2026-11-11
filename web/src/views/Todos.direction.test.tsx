@@ -7,6 +7,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../i18n";
+import { countsLabel } from "../lib/direction-names";
 import type { DirectionTree } from "../lib/direction-tree";
 import type { Todo } from "../lib/todos";
 
@@ -83,11 +84,14 @@ describe("To-dos grouped by 常驻", () => {
     expect(infra.querySelector("button")!.textContent).toContain("Infrastructure");
     expect(secretary.querySelector("button")!.textContent).toContain(t("lib-todo-tree.secretary"));
     // the hub's counts on the title, and its rows in the tree's order (needs you first), not the page's own
-    expect(product.querySelector("button")!.textContent).toContain(t("lib-state-labels.direction_counts", { working: 1, needs_you: 1 }));
+    expect(product.querySelector("button")!.textContent).toContain(countsLabel({ working: 1, needs_you: 1 }, t));
+    // the sidebar's shape: only the parts above zero
+    expect(infra.querySelector("[data-direction-counts]")!.getAttribute("title")).toBe(t("sidebar.leader_working", { count: 1 }));
     const text = product.textContent ?? "";
     expect(text.indexOf("Ask")).toBeGreaterThan(-1);
     expect(text.indexOf("Ask")).toBeLessThan(text.indexOf("Card"));
     expect(host.textContent).toContain(t("todos.done_section", { count: 1 }));
+    expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
     // a closed to-do the tree still lists is in no section, only in the Completed fold
     expect(sections().some((s) => s.textContent?.includes("Shipped"))).toBe(false);
     expect(infra.textContent).toContain("Infra");
@@ -119,12 +123,28 @@ describe("To-dos grouped by 常驻", () => {
     expect(sections()).toHaveLength(3);
   });
 
-  it("shows the empty state when no open to-do is in the tree", async () => {
+  it("says how many open to-dos no section lists (a worker's, nested under its leader's Agent) instead of hiding them", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    seed({ todos: [...TODOS, todo("t-worker", "Worker")] });
+    await render();
+    expect(sections()).toHaveLength(3);
+    expect(host.textContent).not.toContain("Worker");
+    expect(host.querySelector('[data-testid="todos-direction-unlisted"]')?.textContent).toBe(t("todos.direction_unlisted", { count: 1 }));
+  });
+
+  it("says so rather than the empty state when no open to-do is in the tree, and shows no note when every one is", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     seed({ todos: [todo("t-loose", "Loose")] });
     await render();
     expect(sections()).toHaveLength(0);
+    expect(host.textContent).not.toContain(t("todos.empty_title"));
+    expect(host.querySelector('[data-testid="todos-direction-unlisted"]')?.textContent).toBe(t("todos.direction_unlisted", { count: 1 }));
+    await act(async () => root.unmount());
+    seed({ todos: [] });
+    root = createRoot(host);
+    await render();
     expect(host.textContent).toContain(t("todos.empty_title"));
+    expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
   });
 
   it("is not offered with no leader, and a saved choice shows by status", async () => {

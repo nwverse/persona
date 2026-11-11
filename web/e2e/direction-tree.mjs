@@ -1,5 +1,5 @@
 // End-to-end check of the direction tree on the web's pages (#4352, docs/web/web.md "Persona chats"): the To-dos page
-// groups by 常驻 with each direction's "在做 N · 等你 N", the secretary's group 书记官 last; the Agents list groups by 常驻
+// groups by 常驻 with each direction's counts in the sidebar's words, the secretary's group 书记官 last; the Agents list groups by 常驻
 // from the same tree, a direction opening to its tasks (state words) and a task to its agents; the default 状态 grouping
 // and the sidebar stay as they were.
 //
@@ -43,7 +43,8 @@ const hub = (path) => fetch(`${base}/api/v1${path}`, { headers: { Authorization:
 const tree = (await hub("/assistant/directions/tree")).directions ?? [];
 const leaders = tree.filter((d) => !d.secretary);
 if (leaders.length < 2) fail("the fake hub has no leaders (start it with MOCK_LEADERS=1)");
-const countsText = (c) => `在做 ${c.working} · 等你 ${c.needs_you}`;
+// the sidebar's 常驻 rows' words (sidebar.leader_*): only the parts above zero
+const countsText = (c) => [c.working > 0 ? `在做 ${c.working}` : "", c.needs_you > 0 ? `等你 ${c.needs_you}` : ""].filter(Boolean).join(" · ");
 
 async function open(browser, theme, width, prefs = {}, path = "/overview") {
   const ctx = await browser.newContext({ viewport: { width, height: width > 600 ? 900 : 844 }, deviceScaleFactor: 2, colorScheme: theme, locale: "zh-CN", hasTouch: width <= 600 });
@@ -75,7 +76,11 @@ try {
     const expected = tree.filter((d) => d.tasks.length > 0).map((d) => `direction:${d.secretary ? "secretary" : d.id}`);
     if (JSON.stringify(shown) !== JSON.stringify(expected)) fail(`${theme}: To-dos groups ${shown.join(",")} != ${expected.join(",")}`);
     if (!(await page.getByRole("radio", { name: "常驻" }).count()) && !(await page.getByText("常驻", { exact: true }).count())) fail(`${theme}: no 常驻 grouping option`);
-    ok(`${theme}: To-dos grouped by 常驻 in the tree's order (${shown.length} groups)`);
+    // each section's counts in the sidebar's words: the non-zero parts, nothing when both are zero
+    const said = await groups.evaluateAll((gs) => gs.map((g) => g.querySelector("[data-direction-counts]")?.getAttribute("title") ?? ""));
+    const want = tree.filter((d) => d.tasks.length > 0).map((d) => countsText(d.counts));
+    if (JSON.stringify(said) !== JSON.stringify(want)) fail(`${theme}: To-dos counts ${JSON.stringify(said)} != ${JSON.stringify(want)}`);
+    ok(`${theme}: To-dos grouped by 常驻 in the tree's order (${shown.length} groups), counts as the sidebar says them`);
     if (shots) await page.screenshot({ path: join(shots, `web-direction-todos-${theme}.png`) });
     await ctx.close();
   }
@@ -98,7 +103,7 @@ try {
     const choice = page.locator("main").getByRole("radio", { name: "按常驻" }).first();
     await choice.waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(`${where}: no 常驻 grouping on the Agents page`));
     if ((await choice.getAttribute("aria-checked")) !== "true") fail(`${where}: the Agents page is not grouped by 常驻`);
-    await page.locator("main").getByText(/在做 \d+ · 等你 \d+/).first().waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${where}: no direction section on the Agents page`));
+    await page.locator("main [data-direction-counts]").first().waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${where}: no direction section on the Agents page`));
     await page.waitForTimeout(400); // the sections finish opening
     // a direction shows when the Agents list holds one of its tasks' agents: each shown one with its counts and a task
     const text = await page.locator("main").innerText();

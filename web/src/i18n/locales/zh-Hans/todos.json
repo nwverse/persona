@@ -225,6 +225,7 @@
   "grouping_status": "状态",
   "grouping_folder": "目录",
   "grouping_direction": "常驻",
+  "direction_unlisted_other": "另有 {count} 个没完成的待办不在常驻分组里，比如主管 Agent 带着的子任务。按状态分组可以看到全部待办。",
   "section_just_done": "刚做完待看",
   "section_pr": "PR 待合并",
   "section_other": "其余没完成",
