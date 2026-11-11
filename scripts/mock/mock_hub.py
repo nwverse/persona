@@ -3517,6 +3517,7 @@ def room_ready(rid):
     conv_start(rid, "room", "meeting", [conv_item("user", room_header(rec, r.get("attendance")), client_msg_id="meeting-" + rid)])
     r.update(state="ready", started=True)
     meeting_changed(rid, ["room"])
+    photos_queued(rid)
     with MEETING_LOCK:
         st = meeting_live(rid)
         room_feed(st, st["segments"], so_far=True)  # a room that comes up late first gets the meeting so far
@@ -3704,7 +3705,7 @@ def followup_seed(rid, text):
     minutes = (KB_DETAIL.get(("recordings", rid)) or {}).get("minutes")
     parts = [f"Meeting: {meeting_name(rec)}", f"Started: {rec.get('started_at', '')}", f"Recording: {rid}", f"Private: {private}"]
     if minutes: parts.append("\nMinutes:\n" + "\n".join(f"- {x['text']}" for x in minutes.get("points", [])))
-    if (photos := photos_seed(rid)): parts.append("\nPhotos:\n" + "\n".join(photos))
+    if rid not in RECORDINGS_TRIMMED and (photos := photos_seed(rid)): parts.append("\nPhotos:\n" + "\n".join(photos))  # trimmed: minutes only
     asks = [a for a in (MEETING_LIVE.get(rid) or {}).get("asks", []) if a["state"] == "answered"]
     if asks: parts.append("\nAsked in the room:\n" + "\n".join(f"Q: {a['question'] or (a.get('heard') or [{'text': ''}])[-1]['text']}\nA: {a['answer']}" for a in asks))
     if rid in RECORDINGS_TRIMMED: parts.append("\nIts transcript is past the retention: only the minutes are kept.")
@@ -3890,7 +3891,8 @@ def photo_size(mime, raw):
     """(width, height) of a PNG or JPEG whose bytes are that image, as Go's image.DecodeConfig reads the header; None
     when they are not."""
     if mime == "image/png":
-        if raw[:8] != b"\x89PNG\r\n\x1a\n" or len(raw) < 24 or raw[12:16] != b"IHDR": return None
+        if raw[:8] != b"\x89PNG\r\n\x1a\n" or len(raw) < 33 or raw[8:16] != b"\x00\x00\x00\x0dIHDR" \
+                or zlib.crc32(raw[12:29]) != int.from_bytes(raw[29:33], "big"): return None
         w, h = int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big")
         return (w, h) if w and h else None
     if mime != "image/jpeg" or raw[:2] != b"\xff\xd8": return None
@@ -3932,13 +3934,20 @@ def photo_view(rid, x, cited=None):
     return {**{k: v for k, v in x.items() if not k.startswith("_")}, "cited": x["n"] in cited}
 
 
+def recording_time(v):
+    """An upload's RFC 3339 time (a time without a zone read as UTC); None when it is not one."""
+    if not isinstance(v, str): return None
+    try: t = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError: return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
 def recording_span(rec):
     """How long the recording is so far, in seconds: to ended_at, else to now (a photo taken after the last upload is
     still inside it); None when started_at can't be read."""
-    try: start = datetime.fromisoformat(rec.get("started_at", "").replace("Z", "+00:00"))
-    except ValueError: return None
-    try: end = datetime.fromisoformat(rec["ended_at"].replace("Z", "+00:00")) if rec.get("ended_at") else datetime.now(timezone.utc)
-    except ValueError: end = datetime.now(timezone.utc)
+    start = recording_time(rec.get("started_at"))
+    if start is None: return None
+    end = recording_time(rec.get("ended_at")) or datetime.now(timezone.utc)
     return max(0.0, (end - start).total_seconds())
 
 
@@ -3948,10 +3957,11 @@ def photo_parse(body):
     pid = body.get("id")
     if not isinstance(pid, str) or not re.fullmatch(UUID_RE, pid.strip().lower()): return None, "id 必须是 UUID"
     at = body.get("at")
-    if not isinstance(at, (int, float)) or isinstance(at, bool) or at != at or at in (float("inf"), float("-inf")):
-        return None, "at 必须是秒数"
+    try: at = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None
+    except OverflowError: at = None
+    if at is None or at != at or at in (float("inf"), float("-inf")): return None, "at 必须是秒数"
     mime = body.get("mime")
-    if mime not in PHOTO_MIMES: return None, "mime 只能是 image/jpeg 或 image/png"
+    if not isinstance(mime, str) or mime not in PHOTO_MIMES: return None, "mime 只能是 image/jpeg 或 image/png"
     data = body.get("data")
     try: raw = base64.b64decode(data if isinstance(data, str) else "", validate=True)
     except (ValueError, TypeError): return None, "data 不是 base64"
@@ -3965,11 +3975,13 @@ def photo_parse(body):
         v = body.get(key)
         if v is None: continue
         if not isinstance(v, str): return None, f"{key} 不对"
+        try: v.encode("utf-8")
+        except UnicodeEncodeError: return None, f"{key} 不是 UTF-8"  # a lone surrogate from \ud800
         v = v.strip()
         if len(v) > limit: return None, f"{key} 最多 {limit} 个字"
         if v: out[key] = v
     digest = hashlib.sha256(json.dumps([at, mime, data, body.get("text"), body.get("caption")], sort_keys=True).encode()).hexdigest()
-    return {"id": pid.strip().lower(), "at": float(at), "mime": mime, "raw": raw, "size": size, "digest": digest, **out}, None
+    return {"id": pid.strip().lower(), "at": at, "mime": mime, "raw": raw, "size": size, "digest": digest, **out}, None
 
 
 def photo_room_text(rec, x):
@@ -3992,11 +4004,16 @@ def photo_note_text(rec, x):
 
 
 def photo_forward(rid, x):
-    """A new photo into the room, while it is ready, attends and the meeting has not ended; its note comes later."""
+    """A new photo into the room, while it attends and the meeting has not ended; its note comes later. A room not up
+    yet (none, starting, unavailable) gets it once it is ready (photos_queued). The caller holds PHOTO_LOCK."""
     m = MEETING_CONV.get(rid)
     r = m and m.get("room")
     st = MEETING_LIVE.get(rid) or {}
-    if not r or r.get("state") != "ready" or not r.get("attendance") or m.get("ended") or st.get("role", "off") == "off": return
+    if not r or not r.get("attendance") or m.get("ended") or st.get("role", "off") == "off": return
+    if r.get("state") != "ready" or not r.get("session_id"):
+        x["_queued"] = True
+        return
+    x.pop("_queued", None)
     rec = RECORDINGS.get(rid) or {}
     src = {"kind": "meeting", "title": meeting_name(rec)}
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -4005,34 +4022,45 @@ def photo_forward(rid, x):
         conv_item("user", photo_room_text(rec, x), client_msg_id="photo-" + x["id"], source=src)])
     x["forwarded"] = True
     if PHOTO_MODE["note"] != "ok": return
-    timer = threading.Timer(max(0.0, float(PHOTO_MODE["note_seconds"])), photo_note, args=(rid, x["id"]))
+    timer = threading.Timer(max(0.0, float(PHOTO_MODE["note_seconds"])), photo_note, args=(rid, x))
     timer.daemon = True
     timer.start()
 
 
-def photo_note(rid, pid):
-    """The room calls meeting_photo_note: the note goes on the photo (if it is still there) and photos move."""
-    with PHOTO_LOCK:
-        x = next((y for y in (photos_of(rid) or {"photos": []})["photos"] if y["id"] == pid), None)
+def photo_note(rid, x):
+    """The room calls meeting_photo_note: the note goes on the photo if it is still there (this very photo: a reset
+    since, and the same id uploaded again, is another one) and photos move."""
+    with PHOTO_LOCK:  # the room is deleted under it too (trim, recording delete): never a note into a room that went
         r = room_of(rid) or {}
-        if x is None or r.get("state") != "ready": return
+        # The photo's turn ran before the end batch's: its note lands in a room that ended since.
+        if not any(y is x for y in (photos_of(rid) or {"photos": []})["photos"]) or r.get("state") not in ("ready", "ended") \
+                or not r.get("session_id"): return
         note = photo_note_text(RECORDINGS.get(rid) or {}, x)[:PHOTO_NOTE_MAX]
         x["note"] = note
-    conv_append(r["machine_id"], r["session_id"], tool("mcp__persona__meeting_photo_note", {"photo": x["n"], "text": note}, "Noted.", 0))
+        conv_append(r["machine_id"], r["session_id"], tool("mcp__persona__meeting_photo_note", {"photo": x["n"], "text": note}, "Noted.", 0))
     meeting_changed(rid, ["photos"])
 
 
+def photos_queued(rid):
+    """The room came up: the photos taken while it was coming up go to it, oldest first."""
+    with PHOTO_LOCK:
+        for x in (photos_of(rid) or {"photos": []})["photos"]:
+            if x.get("_queued"): photo_forward(rid, x)
+
+
 def photo_withdraw(rid, x):
-    """A deleted photo that went into the room: a line telling the room not to use it again (while it is ready)."""
+    """A deleted photo that went into the room: a line telling the room not to use it again (while it is ready). The
+    caller holds PHOTO_LOCK."""
     r = room_of(rid) or {}
-    if not x.get("forwarded") or r.get("state") != "ready": return
+    if not x.get("forwarded") or r.get("state") != "ready" or not r.get("session_id"): return
     rec = RECORDINGS.get(rid) or {}
     conv_append(r["machine_id"], r["session_id"], [conv_item("user", meeting_source_text(rec,
         f"Photo {x['n']} was withdrawn: do not describe or use it again. Write nothing in reply."), source={"kind": "meeting", "title": meeting_name(rec)})])
 
 
 def photos_minutes_again(rid):
-    """Minutes already written are made again when a photo comes or goes (no second push), never on a trimmed recording."""
+    """Minutes already written are made again when a photo comes or goes (no second push), never on a trimmed recording.
+    The caller holds PHOTO_LOCK."""
     detail = KB_DETAIL.get(("recordings", rid))
     if rid in RECORDINGS_TRIMMED or not detail or not detail.get("minutes") or rid not in RECORDINGS: return
     detail["minutes"] = recording_minutes(RECORDINGS[rid], rid)
@@ -4087,23 +4115,26 @@ def photos_route(h, method, p):
             return h.send_json({"photos": [photo_view(rid, x, cited) for x in photos_listed(rid)]}) or True
     if method == "POST": return photo_post(h, rid, raw)
     n = int(num) if num.isdigit() and len(num) < 9 else 0
+    if method == "GET":
+        with PHOTO_LOCK:
+            x = next((y for y in (photos_of(rid) or {"photos": []})["photos"] if y["n"] == n), None)
+            if x is None: return h.send_json({"error": "没有这张照片", "code": "photo_not_found"}, 404) or True
+            mime, data = x["mime"], x["_data"]
+        h.send_response(200)  # written after the lock: a slow client holds up no other meeting
+        h.send_header("Content-Type", mime); h.send_header("Content-Length", str(len(data)))
+        h.end_headers(); h.wfile.write(data)
+        return True
     with PHOTO_LOCK:
         ph = photos_of(rid) or {"photos": [], "deleted": []}
         x = next((y for y in ph["photos"] if y["n"] == n), None)
         if x is None and n not in ph["deleted"]:
             return h.send_json({"error": "没有这张照片", "code": "photo_not_found"}, 404) or True
-        if method == "GET":
-            if x is None: return h.send_json({"error": "没有这张照片", "code": "photo_not_found"}, 404) or True
-            h.send_response(200)
-            h.send_header("Content-Type", x["mime"]); h.send_header("Content-Length", str(len(x["_data"])))
-            h.end_headers(); h.wfile.write(x["_data"])
-            return True
         if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
         if x is None: return h.send_json({"deleted": False}) or True  # deleted before: a repeat of a lost answer
         ph["photos"].remove(x)
         ph["deleted"].append(n)
-    photo_withdraw(rid, x)
-    photos_minutes_again(rid)
+        photos_minutes_again(rid)  # under the lock: minutes made from these photos are never overwritten by older ones
+        photo_withdraw(rid, x)
     meeting_changed(rid, ["photos"])
     return h.send_json({"deleted": True}) or True
 
@@ -4115,8 +4146,10 @@ def photo_post(h, rid, raw):
     except ValueError: body = None
     got, why = photo_parse(body)
     if got is None: return h.send_json({"error": why}, 400) or True
-    rec = RECORDINGS[rid]
     with PHOTO_LOCK:
+        if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
+        rec = RECORDINGS.get(rid)
+        if rec is None: return h.send_json({"error": "还没有上传这条录音", "code": "recording_not_found"}, 404) or True
         ph = photos_of(rid, True)
         same = next((y for y in ph["photos"] if y["id"] == got["id"]), None)
         if same is not None:
@@ -4136,7 +4169,7 @@ def photo_post(h, rid, raw):
         ph["next"] += 1
         ph["photos"].append(x)
         photo_forward(rid, x)
-    photos_minutes_again(rid)
+        photos_minutes_again(rid)
     meeting_changed(rid, ["photos"])
     return h.send_json({"photo": photo_view(rid, x)}) or True
 
@@ -4180,8 +4213,9 @@ def recordings_route(h, method, p):
         detail["meta"].update(trimmed_at=at, minutes_state="ready")
         detail["meta"].pop("attendance", None); detail["meta"].pop("attending_session", None)
         detail.pop("segments", None); detail["summary"] = ""  # "" over the entry's one line, as the hub's has no summary.md
-        room_delete(rid)  # the room goes at the transcript cut; the private mark and the follow-up stay
-        with PHOTO_LOCK: photos_trim(rid)  # and the photos the minutes do not cite
+        with PHOTO_LOCK:  # what goes into the room (a photo's note, a withdrawn line) never lands in one deleted
+            room_delete(rid)  # the room goes at the transcript cut; the private mark and the follow-up stay
+            photos_trim(rid)  # and the photos the minutes do not cite
         return h.send_json({"id": rid, "trimmed_at": at}) or True
     if not (p == "/api/v1/recordings" or p.startswith("/api/v1/recordings/")): return False
     if os.environ.get("MOCK_RECORDINGS_DOWN") == "1":
@@ -4211,8 +4245,9 @@ def recordings_route(h, method, p):
         RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
-        room_delete(rid); MEETING_CONV.pop(rid, None)  # and meeting.json; the follow-up stays a conversation of its own
-        with PHOTO_LOCK: PHOTO_STORE.pop(rid, None)  # and the photos
+        with PHOTO_LOCK:  # as at the trim
+            room_delete(rid); MEETING_CONV.pop(rid, None)  # and meeting.json; the follow-up stays a conversation of its own
+            PHOTO_STORE.pop(rid, None)  # and the photos
         return h.send_json({"deleted": existed}) or True
     if method != "PUT": return h.send_json({"error": "method"}, 405) or True
     RECORDING_PUTS[0] += 1
@@ -4251,7 +4286,7 @@ def recordings_route(h, method, p):
     if kind == "meeting" and not silent:
         ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
         detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
-        if ready: detail["minutes"] = recording_minutes(body, rid)
+        if ready: detail["minutes"] = None  # made from the photos as they are when the detail is stored, below
     out = {"id": rid, "revision": body["revision"], "status": "stored"}
     room = None
     if MEETING_ATTENDANCE:
@@ -4268,7 +4303,9 @@ def recordings_route(h, method, p):
         if session: detail["meta"]["attending_session"] = session
         out["attendance"] = role
         if problem: out["attendance_problem"] = problem
-    KB_DETAIL[("recordings", rid)] = detail
+    with PHOTO_LOCK:  # a photo added or deleted meanwhile is in these minutes, or makes them again after
+        if "minutes" in detail: detail["minutes"] = recording_minutes(body, rid)
+        KB_DETAIL[("recordings", rid)] = detail
     if room is not None:
         room_after_put(rid, body)
         out["room"] = room_view(MEETING_CONV[rid])

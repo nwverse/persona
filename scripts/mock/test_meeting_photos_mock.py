@@ -139,10 +139,16 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
         bad = [dict(photo(), id="not-a-uuid"), dict(photo(), at="12"), dict(photo(), at=True), {k: v for k, v in photo().items() if k != "at"},
                photo(mime="image/gif"), dict(photo(), data="%%%"), photo(mime="image/jpeg", data=png()), photo(data=jpeg()),
                photo(data=png(4097, 2)), photo(mime="image/jpeg", data=jpeg(2, 4097)), photo(mime="image/jpeg", data=jpeg(pad=(1 << 20) + 1)),
-               photo(text="x" * 8001), photo(caption="x" * 201), photo(caption=7), "a photo", photo(data=b"")]
+               photo(text="x" * 8001), photo(caption="x" * 201), photo(caption=7), "a photo", photo(data=b""),
+               dict(photo(), mime=[]), dict(photo(), mime={}), dict(photo(), at=None), photo(data=png()[:24]), photo(data=png()[:32])]
         for body in bad:
             status, out = self.post(rid, body)
             self.assertEqual(status, 400, (body if isinstance(body, str) else {k: str(v)[:40] for k, v in body.items()}, out))
+        # Raw bodies JSON can carry but Python would choke on: a number past a float, a lone surrogate.
+        good = photo()
+        for raw in (json.dumps(good).replace('"at": 1834.2', '"at": 1' + "0" * 400), json.dumps(dict(good, caption="\ud800"))):
+            status, out = self.post(rid, raw.encode())
+            self.assertEqual(status, 400, (raw[:80], out))
         ok = self.post(rid, photo(mime="image/jpeg", data=jpeg(4096, 3072, pad=(1 << 20) - 200), text="x" * 8000, caption="y" * 200))
         self.assertEqual((ok[0], ok[1]["photo"]["width"], ok[1]["photo"]["height"]), (200, 4096, 3072))
         status, out = self.post(rid, photo(mime="image/jpeg", data=jpeg(pad=(2 << 20))))
@@ -188,6 +194,22 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
         self.upload(rid, ended_at="2026-11-10T15:00:00+08:00")
         self.assertEqual(self.post(rid, photo(at=-5))[1]["photo"]["at"], 0)
         self.assertEqual(self.post(rid, photo(at=99999))[1]["photo"]["at"], 3600)
+        naive = str(uuid.uuid4())  # a time without a zone, or none the mock can read: not clamped above, never a crash
+        self.upload(naive, started_at="2026-11-10T06:00:00", ended_at=7)
+        self.assertEqual(self.post(naive, photo(at=99999))[1]["photo"]["at"], 99999)
+
+    def test_a_note_due_before_a_reset_never_lands_on_a_new_photo(self):
+        rid = str(uuid.uuid4())
+        self.ready_room(rid)
+        self.call("POST", "/mock/meeting_photos", {"note_seconds": 1})
+        body = photo(text="board")
+        self.assertEqual(self.post(rid, body)[0], 200)
+        self.call("POST", "/mock/recording_minutes", {"mode": "ready"})  # a fresh start before the note is due
+        self.call("POST", "/mock/meeting_photos", {"note": "none"})
+        self.ready_room(rid)
+        self.assertEqual(self.post(rid, body)[1]["photo"]["n"], 1)
+        time.sleep(1.5)
+        self.assertNotIn("note", self.photos(rid)[0])
 
     def test_reading_and_deleting(self):
         rid = str(uuid.uuid4())
@@ -208,6 +230,18 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
         last = self.items(room["session_id"])[-1]
         self.assertEqual(last["source"]["kind"], "meeting")
         self.assertIn("Photo 1 was withdrawn", last["text"])
+
+    def test_a_photo_taken_while_the_room_comes_up_goes_once_it_is_ready(self):
+        self.call("POST", "/mock/meeting_conversation", {"room": "slow", "room_seconds": 1})
+        rid = str(uuid.uuid4())
+        status, out = self.upload(rid, room={"attendance": "listener"})
+        self.assertEqual((status, out["room"]["state"]), (200, "none"))
+        p = self.post(rid, photo(text="board"))[1]["photo"]
+        self.assertFalse(p["forwarded"])
+        room = self.wait(lambda: (r := self.live(rid).get("room")) and r["state"] == "ready" and r, "the room")
+        self.wait(lambda: self.photos(rid)[0]["forwarded"] and self.photos(rid)[0].get("note"), "the photo in the room and its note")
+        kinds = [x["kind"] for x in self.items(room["session_id"]) if x.get("client_msg_id") == "photo-" + p["id"]]
+        self.assertEqual(kinds, ["image", "text"])
 
     def test_not_forwarded_without_a_ready_room(self):
         off = str(uuid.uuid4())
@@ -254,6 +288,19 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
 
     def meta_minutes(self, rid):
         return self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["minutes"]
+
+    def test_a_trimmed_recordings_seed_has_its_minutes_only(self):
+        rid = str(uuid.uuid4())
+        lines = [{"start": 5, "end": 9, "text": "Ada: Today we look at the export flow."}]
+        self.upload(rid, segments=lines)
+        self.post(rid, photo(at=120, text="Export: 4 MB cap"))
+        self.upload(rid, segments=lines, ended_at="2026-11-10T15:00:00+08:00", complete=True)
+        self.call("POST", "/mock/recording_trim", {"id": rid})
+        self.assertEqual(len(self.photos(rid)), 1)  # cited: kept
+        status, out = self.call("POST", f"/api/v1/recordings/{rid}/followup", {"id": str(uuid.uuid4()), "text": "Draft it."})
+        self.assertEqual(status, 200, out)
+        seed = next(x["text"] for x in self.items(out["followup"]["session_id"]) if x["kind"] == "text" and x["role"] == "user")
+        self.assertNotIn("Photos:", seed)
 
     def test_the_followups_seed_lists_the_photos(self):
         rid = str(uuid.uuid4())
