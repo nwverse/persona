@@ -54,11 +54,18 @@ func TestAskUserNoWaitTakesNoDefaultAfterTheUserWroteInTheChat(t *testing.T) {
 		{"no deadline", askLaterArgs},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			presenceTimes(t, 200*time.Millisecond, time.Hour)
 			e := newAskTodoEnv(t, nil)
+			stopHolds(t, e.s)
 			ix, _ := e.askLater(c.args)
 			e.s.UserSpoke(context.Background(), SessionRef{MachineID: "server", SessionID: "c1x1x1"})
 			e.mustEnd(ix.ID, expiredAnswer)
 			_ = e.end(ix.ID, expiredAnswer) // handed over again: gone
+			// The owner is talking there: the system's word that the card ran out waits for them (#4925).
+			if q, sent := e.s.queuedFor("c1x1x1"), len(e.told("c1x1x1")); q != 1 || sent != 0 {
+				t.Fatalf("while the owner talks: %d queued, %d sent", q, sent)
+			}
+			waitFor(t, "told once the owner is quiet", func() bool { return len(e.told("c1x1x1")) >= 1 })
 			got := e.told("c1x1x1")
 			if len(got) != 1 {
 				t.Fatalf("%d messages, want 1: %q", len(got), got)
@@ -94,15 +101,18 @@ func TestAskUserNoWaitWritingElsewhereChangesNothing(t *testing.T) {
 
 // That the owner wrote is kept with the question's record: a manager restarted in between still takes no default.
 func TestAskUserNoWaitRemembersTheUserWroteAcrossARestart(t *testing.T) {
+	presenceTimes(t, 200*time.Millisecond, time.Hour)
 	st := &memStore{}
 	e := newAskTodoEnv(t, st)
 	ix, _ := e.askLater(askLaterArgs)
 	e.s.UserSpoke(context.Background(), SessionRef{MachineID: "server", SessionID: "c1x1x1"})
 	again := newAskTodoEnv(t, st)
+	stopHolds(t, again.s)
 	if qs := again.s.pendingQuestions(); len(qs) != 1 {
 		t.Fatalf("the restarted manager reports %+v", qs)
 	}
 	again.mustEnd(ix.ID, expiredAnswer)
+	waitFor(t, "told once the owner is quiet", func() bool { return len(again.told("c1x1x1")) >= 1 }) // held for them meanwhile (#4925)
 	if got := again.told("c1x1x1"); len(got) != 1 || !strings.Contains(got[0], "没有转成待办") {
 		t.Fatalf("told %q", got)
 	}
@@ -275,5 +285,46 @@ func TestAskUserNoWaitCardClosesAsRepliedInChatAfterTheUserWrote(t *testing.T) {
 	waitFor(t, "the question gone", func() bool { return len(a.s.pendingQuestions()) == 0 })
 	if status, _, _ := a.mem.InteractionOutcome(ctx, ix.ID); status != "expired" {
 		t.Errorf("history status = %q, want expired", status)
+	}
+}
+
+// The owner's answer on a no-wait card is the owner speaking, not the system (#4925, #4928): it goes into the
+// conversation at once though they wrote there a moment ago, ahead of what the system has waiting for them, which
+// stays held. A card that was closed unanswered is the system's to tell and waits as any late answer does.
+func TestAskUserNoWaitAnswerIsNotHeldForTheOwnersPresence(t *testing.T) {
+	presenceTimes(t, time.Hour, time.Hour)
+	e := newAskTodoEnv(t, nil)
+	stopHolds(t, e.s)
+	ctx := context.Background()
+	answered, _ := e.askLater(askLaterArgs)
+	closed, _ := e.askLater(strings.Replace(askLaterArgs, "Merge the release PR now?", "Tag it as well?", 1))
+	e.s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "c1x1x1"})
+	e.s.relayOrQueue(ctx, "c1x1x1", relayMsg{From: "c2", FromTitle: "Research", Tool: "conversation_send", Text: "from another chat", At: time.Now().UTC()})
+	if q, sent := e.s.queuedFor("c1x1x1"), len(e.told("c1x1x1")); q != 1 || sent != 0 {
+		t.Fatalf("the system's message while the owner talks: %d queued, %d sent", q, sent)
+	}
+	e.mustEnd(answered.ID, `{"answers":{"Merge the release PR now?":"Wait"}}`)
+	waitFor(t, "the owner's answer delivered", func() bool { return len(e.told("c1x1x1")) == 1 })
+	if got := e.told("c1x1x1"); !strings.Contains(got[0], "Merge the release PR now? → Wait") {
+		t.Fatalf("delivered %q", got)
+	}
+	e.mustEnd(closed.ID, `{"dismiss":true}`)
+	time.Sleep(50 * time.Millisecond)
+	if q, sent := e.s.queuedFor("c1x1x1"), len(e.told("c1x1x1")); q != 2 || sent != 1 {
+		t.Fatalf("after the answer: %d queued (want the other chat's message and the closed card), %d sent", q, sent)
+	}
+	// Among what waits, the answer is first by rank, and only it is free of the hold.
+	b := &e.s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	own := relayMsg{Tool: askAnswerTool, Owner: true, At: now, QueuedAt: now}
+	if own.rank() != relayRankAnswer || b.holdLocked("c1x1x1", own, now) != 0 {
+		t.Fatalf("the owner's answer: rank %d, held %s", own.rank(), b.holdLocked("c1x1x1", own, now))
+	}
+	for _, m := range b.st.Queue["c1x1x1"] {
+		if m.Owner || b.holdLocked("c1x1x1", m, now) == 0 {
+			t.Fatalf("a message of the system is not held: %+v", m)
+		}
 	}
 }

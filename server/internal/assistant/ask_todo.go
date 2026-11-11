@@ -386,17 +386,18 @@ func (s *Service) askTarget(ctx context.Context, a askTodo) (machine, to string,
 // tellAsker puts text into the conversation a came from: now, or queued behind its turn (the queue conversation_send
 // uses, kept across a restart).
 func (s *Service) tellAsker(ctx context.Context, a askTodo, title, text string) error {
-	return s.relayToAsker(ctx, a, "待办「"+title+"」", text) // i18n-ignore: a label of the relay queue, as a task notice's
+	return s.relayToAsker(ctx, a, "待办「"+title+"」", text, false) // i18n-ignore: a label of the relay queue, as a task notice's
 }
 
 // relayToAsker is tellAsker with the queue's label for the message given (from): a question asked without waiting has
-// no to-do to name (ask_later.go; a.TodoID is then its card's id).
-func (s *Service) relayToAsker(ctx context.Context, a askTodo, from, text string) error {
+// no to-do to name (ask_later.go; a.TodoID is then its card's id). owner: text is the answer the owner just gave on
+// that card, which their presence in the conversation does not hold (relayMsg.Owner).
+func (s *Service) relayToAsker(ctx context.Context, a askTodo, from, text string, owner bool) error {
 	machine, to, err := s.askTarget(ctx, a)
 	if err != nil {
 		return err
 	}
-	msg := relayMsg{From: a.TodoID, FromTitle: from, Tool: askAnswerTool, Text: text, At: time.Now().UTC()}
+	msg := relayMsg{From: a.TodoID, FromTitle: from, Tool: askAnswerTool, Text: text, At: time.Now().UTC(), Owner: owner}
 	c, ok := s.session(ctx, machine, to)
 	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
 		if s.queueRelay(to, msg) == 0 {

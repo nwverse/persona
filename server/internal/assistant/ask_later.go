@@ -210,7 +210,10 @@ func (s *Service) askLaterEnded(ctx context.Context, q *question, r proto.Resolu
 	}
 	a := askTodo{TodoID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID}
 	title := "提问「" + clip(oneLine(questionLine(ix)), 40) + "」" // i18n-ignore: a label of the relay queue, as a task notice's
-	if err := s.relayToAsker(ctx, a, title, text); err != nil {
+	// The owner's answer goes in though they are talking in the conversation (relayMsg.Owner); a card that closed or
+	// ran out is the system's to tell and waits for them as any late answer does (relay_presence.go).
+	answered := !r.Cancel && !r.Dismiss && len(r.Answers) > 0
+	if err := s.relayToAsker(ctx, a, title, text, answered); err != nil {
 		if time.Since(ix.ExpiresAt) < askLaterKeep {
 			return err
 		}
