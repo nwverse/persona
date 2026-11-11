@@ -8,6 +8,9 @@ import type { AgentStatus } from "./work-groups";
 import { launchedTaskID } from "./task-association";
 export { attachedAgentNotices } from "./task-association";
 
+/** The id a nested subagent's card stands under among an exchange's steps (`withNestedSubagents`). */
+const NESTED = "subagent:";
+
 /** Background tasks and the calls that started them. A notice names its call by tool_use_id, or only by the task id
  *  the call's result announced ("running in background with ID: …", "Monitor started (task …"). */
 export interface TaskIndex {
@@ -241,8 +244,9 @@ const LAUNCH_RECEIPT = /^\s*(?:Async agent launched|This is an internal ID for y
 /** The "agentId: …" line Claude Code appends to a subagent's report. */
 const AGENT_ID_LINE = /^\s*agentId:.*$/gm;
 
-/** The subagent an Agent / Task call launched, by the call's tool_use_id. */
+/** The subagent an Agent / Task call launched, by the call's tool_use_id; a nested subagent's card by its own id. */
 export function subagentFor(all: Subagent[], use: Item): Subagent | undefined {
+  if (use.id.startsWith(NESTED)) return all.find((a) => a.id === use.id.slice(NESTED.length));
   return use.tool_use_id ? all.find((a) => a.tool_use_id === use.tool_use_id) : undefined;
 }
 
@@ -378,8 +382,6 @@ export function nestedSubagents(all: Subagent[] | undefined, id: string): Subage
   return out;
 }
 
-/** The id a nested subagent's card stands under among an exchange's steps (`withNestedSubagents`). */
-const NESTED = "subagent:";
 
 /** A card for a subagent another subagent launched: its call is in that subagent's transcript, not in the chat's. */
 export const isNestedSubagentStep = (s: Step): boolean => s.kind === "tool" && s.use.id.startsWith(NESTED);
@@ -399,7 +401,7 @@ export function withNestedSubagents(steps: Step[], all: Subagent[]): Step[] {
     const root = subagentFor(all, s.use);
     if (!root) continue;
     for (const { agent: a } of nestedSubagents(all, root.id)) {
-      if (seen.has(a.id) || !a.tool_use_id) continue;
+      if (seen.has(a.id)) continue;
       seen.add(a.id);
       const from = out.findIndex((x) => x === s);
       const at = Date.parse(a.started_at ?? "");
@@ -407,7 +409,7 @@ export function withNestedSubagents(steps: Step[], all: Subagent[]): Step[] {
       while (i < out.length && (Date.parse(stepTs(out[i]) ?? "") || Infinity) <= at) i++;
       const before = out[i - 1];
       const seq = before.kind === "tool" ? before.use.seq : before.item.seq;
-      const use: Item = { id: `${NESTED}${a.id}`, seq, ts: a.started_at, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: a.tool_use_id, tool_input: { description: a.description ?? "", ...(a.type ? { subagent_type: a.type } : {}) } };
+      const use: Item = { id: `${NESTED}${a.id}`, seq, ts: a.started_at, role: "assistant", kind: "tool_use", tool_name: "Agent", tool_use_id: subagentCall(a), tool_input: { description: a.description ?? "", ...(a.type ? { subagent_type: a.type } : {}) } };
       out.splice(i, 0, { kind: "tool", id: use.id, use, images: [] });
     }
   }
@@ -415,6 +417,9 @@ export function withNestedSubagents(steps: Step[], all: Subagent[]): Step[] {
 }
 
 const stepTs = (s: Step) => (s.kind === "tool" ? s.use.ts : s.item.ts);
+/** The call a subagent's card is known by (its key, `data-tool-use`): the call that launched it, or for a fork the node
+ *  names no call of, one of its own. */
+export const subagentCall = (a: Subagent): string => a.tool_use_id || `${NESTED}${a.id}`;
 
 export interface SubagentRow {
   agent: Subagent;

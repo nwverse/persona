@@ -20,7 +20,7 @@ import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotic
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentParent, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -1144,7 +1144,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (!linkedAgent || !session || tr.loading || detail.loading) return;
     doneSubagentLink(mid, sid);
     const agent = subagents?.find((a) => a.id === linkedAgent);
-    const call = agent?.tool_use_id ?? workflowAgentFor(session, `${sid}@${linkedAgent}`)?.run.tool_use_id;
+    const call = agent ? subagentCall(agent) : workflowAgentFor(session, `${sid}@${linkedAgent}`)?.run.tool_use_id;
     if (!call) return;
     if (agent) openExpanded([subagentCardKey(`${mid}/${sid}:`, call)]);
     jump(call);
