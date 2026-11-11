@@ -58,6 +58,9 @@ internal suspend fun handOffDefaults(store: AgentCreationStore?, scope: String, 
 internal fun handOffTarget(running: List<Session>, picked: SessionKey?): SessionKey? =
     running.firstOrNull { it.key == picked }?.key ?: running.firstOrNull()?.key
 
+/** The pick kept after [shown] is drawn: an empty list for a moment (a refresh, a reconnect) keeps the old one. */
+internal fun handOffPick(picked: SessionKey?, shown: SessionKey?): SessionKey? = shown ?: picked
+
 /**
  * [store] and [scope] are New Agent's memory on this hub: a new Agent starts from it (the last machine, its folder,
  * launcher and mode) rather than from `~`, claude and the default mode each time.
@@ -117,7 +120,7 @@ internal fun TodoHandOffSheet(
     // pick back on the top row).
     var pickedTarget by remember { mutableStateOf<SessionKey?>(null) }
     val selectedTarget = handOffTarget(runningAgents, pickedTarget)
-    SideEffect { pickedTarget = selectedTarget }
+    SideEffect { pickedTarget = handOffPick(pickedTarget, selectedTarget) }
 
     JSheet(onDismiss = onDismiss, title = stringResource(R.string.agents_todo_hand_to_agent)) {
         Column(
