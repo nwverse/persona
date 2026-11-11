@@ -19645,6 +19645,28 @@
       },
       "extractionState": "manual"
     },
+    "Answer Question %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answer Question %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問 %lld に回答"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答第 %lld 题"
+          }
+        }
+      }
+    },
     "Answer for You": {
       "localizations": {
         "en": {
@@ -67145,6 +67167,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Leave Allow Everything?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave Allow Everything?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて許可をやめますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "离开全部放行？"
+          }
+        }
+      }
     },
     "Leave Worktree": {
       "localizations": {
@@ -130962,6 +131006,29 @@
       },
       "extractionState": "manual"
     },
+    "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「閉じる」の隣の「ピクチャ・イン・ピクチャ」ボタンで画面を小さなウインドウにして、ほかのAppやホーム画面の上に表示し続けます。タップするとここに戻ります。表示のみで、閉じると切断されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭按钮旁边的「小窗」把画面放进画中画，切到别的 App 或回到桌面也浮着；点小窗回到这里。小窗只能看，关掉小窗就断开。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "The pinned list is incomplete. Reload it.": {
       "localizations": {
         "en": {
@@ -133697,6 +133764,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "This agent wasn't started with Allow Everything, so it can't be switched back to it from here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This agent wasn't started with Allow Everything, so it can't be switched back to it from here."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このエージェントはすべて許可で起動していないため、切り替えるとここからは戻せません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 Agent 不是以全部放行启动的，切走后在这里切不回来。"
+          }
+        }
+      }
     },
     "This agent can't be stopped and closed from the phone": {
       "localizations": {
@@ -152205,6 +152294,29 @@
         }
       }
     },
+    "Couldn't read this iPhone's clipboard: tap Allow Paste when asked, or allow Paste from Other Apps for this app in Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read this iPhone's clipboard: tap Allow Paste when asked, or allow Paste from Other Apps for this app in Settings"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneのクリップボードを読み取れませんでした。確認が出たら「ペーストを許可」をタップするか、設定でこのAppの「ほかのAppからペースト」を許可してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读不到这台 iPhone 的剪贴板：弹出提示时点「允许粘贴」，或在设置里允许本 App「从其他 App 粘贴」"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Works In": {
       "localizations": {
         "en": {
@@ -161859,6 +161971,259 @@
           "stringUnit": {
             "state": "translated",
             "value": "这台设备过去一小时发送的内容太多了，请稍后再试。"
+          }
+        }
+      }
+    },
+    "Add All": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add All"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部加入"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて追加"
+          }
+        }
+      }
+    },
+    "Add to To-Dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to To-Dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "加入待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加"
+          }
+        }
+      }
+    },
+    "Add to To-Dos: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to To-Dos: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "加入待办：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加：%1$@"
+          }
+        }
+      }
+    },
+    "Added %lld to To-Dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added %lld to To-Dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加入 %lld 条待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件をToDoに追加しました"
+          }
+        }
+      }
+    },
+    "Added [Recording Minutes a4062d]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加入"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "追加済み"
+          }
+        }
+      }
+    },
+    "Added to To-Dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added to To-Dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加入待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加しました"
+          }
+        }
+      }
+    },
+    "Couldn't add to To-Dos: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't add to To-Dos: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能加入待办：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加できませんでした：%1$@"
+          }
+        }
+      }
+    },
+    "The minutes changed. Showing the latest version; review the action items before adding them.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The minutes changed. Showing the latest version; review the action items before adding them."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "纪要已更新，下面是最新版本；请确认行动项后再加入待办。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議事録が変更されました。最新版を表示しています。追加する前にアクション項目を確認してください。"
+          }
+        }
+      }
+    },
+    "The new minutes couldn't be written. These are the earlier ones.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The new minutes couldn't be written. These are the earlier ones."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新纪要没整理成功，下面是之前的这份。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しい議事録を作成できませんでした。以前のものを表示しています。"
+          }
+        }
+      }
+    },
+    "The transcript has expired. Only these minutes are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transcript has expired. Only these minutes are kept."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "转写已过保留期，只留下了这份纪要。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字起こしは保存期間を過ぎました。この議事録だけが残っています。"
+          }
+        }
+      }
+    },
+    "Updating the minutes…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating the minutes…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在更新纪要…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議事録を更新中…"
           }
         }
       }

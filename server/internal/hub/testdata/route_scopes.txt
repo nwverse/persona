@@ -60,6 +60,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/connectors/{id}/data
 -                    DELETE /api/v1/extensions/-/operations/{op}
 -                    DELETE /api/v1/extensions/{id}/-/dev
+-                    DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}
 -                    DELETE /api/v1/extensions/{id}/-/secrets/{name}
 -                    DELETE /api/v1/extensions/{id}/-/{$}
 -                    DELETE /api/v1/imessage/data
