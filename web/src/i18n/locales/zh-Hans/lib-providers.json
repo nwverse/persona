@@ -6,7 +6,7 @@
   "env_line": "环境变量第 {line} 行要写成「名字=值」，名字只用字母、数字和下划线",
   "env_limit": "环境变量最多 50 个",
   "proxy_scheme": "代理要是 http(s):// 或 socks5:// 开头",
-  "name_required": "要填名称",
+  "name_required": "要填启动 ID",
   "key_required": "要填 API Key",
   "model_no_id": "有没填 ID 的模型",
   "model_duplicate": "模型 {id} 重复了",

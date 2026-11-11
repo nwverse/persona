@@ -111,6 +111,32 @@ import Testing
         } catch { #expect((error as? URLError)?.code == .cannotParseResponse) }
     }
 
+    /// Settings › Devices revoked the watch's credential (#1871): the hub that issued it forgets it, so the next sync
+    /// issues a new one, and until then the group is missing (the watch drops the revoked one, Sync says it failed).
+    @Test func aRevokedWatchCredentialIsForgottenAndIssuedAgain() async throws {
+        var issued = Self.registry
+        issued.hubs[0].watchDeviceID = "watch-a-id"
+        issued.hubs[2].watchDeviceID = "watch-c-id"
+        #expect(DeviceCredentialTrade.forgettingWatch(issued, id: "watch-a-id", group: "g2") == nil) // another group's
+        #expect(DeviceCredentialTrade.forgettingWatch(issued, id: "phone-a-id", group: "") == nil) // not a watch's
+        #expect(DeviceCredentialTrade.forgettingWatch(issued, id: "", group: "") == nil)
+        let revoked = try #require(DeviceCredentialTrade.forgettingWatch(issued, id: "watch-a-id", group: ""))
+        let a = try #require(revoked.primary(""))
+        #expect(a.watch == nil && a.watchDeviceID == nil)
+        #expect(a.config == issued.hubs[0].config)
+        #expect(revoked.hubs[2] == issued.hubs[2]) // the other group's watch credential stays
+        let (configs, missing) = revoked.watchCredentials()
+        #expect(configs[""] == nil)
+        #expect(missing.contains(""))
+        let full = FakeHub()
+        full.on("POST", "/api/v1/auth/tokens", json: #"{"id":"watch-a-new","token":"fixture-watch-a-new","role":"answer"}"#)
+        #expect(try await DeviceCredentialTrade.issueWatchToken(for: try #require(issued.primary("")), api: full.client) == nil)
+        let token = try #require(try await DeviceCredentialTrade.issueWatchToken(for: a, api: full.client))
+        let reissued = try #require(DeviceCredentialTrade.watchRegistry(revoked, expected: a, token: token))
+        #expect(reissued.primary("")?.watch?.token == "fixture-watch-a-new")
+        #expect(reissued.primary("")?.watchDeviceID == "watch-a-new")
+    }
+
     @Test func complicationExportContainsOnlyTheWatchsOwnGroupsAndIds() throws {
         let (configs, _) = Self.registry.watchCredentials()
         let all = WatchConfigs(configs: configs, names: ["": "Example", "g2": "Unavailable"],
