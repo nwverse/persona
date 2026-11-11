@@ -1905,3 +1905,18 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   minute is then the same machine for all of them, and the head's CPU time over the base's in the same minute came
   out at 0.943 with every one of the 20 minutes below 1, the unchanged hub's at 0.983 (`pairedCPU`). Measure a noisy
   quantity against a reference that sees the same noise at the same moment.
+
+## `http.DefaultTransport` drops a push connection after 90 s idle (2026-11-11, #4800)
+
+- The hub's relay client and `apns.Client` were `&http.Client{Timeout: …}` with no transport, so they ran on
+  `http.DefaultTransport`, whose `IdleConnTimeout` is 90 s. Two thirds of one hub's pushes came more than 90 s after the
+  previous one and paid a new TCP + TLS handshake (0.2-0.3 s to the relay; APNs wants one long-lived HTTP/2 connection).
+  Both now use `apns.NewTransport`: their own clone of the default transport with a one-hour idle timeout and HTTP/2
+  health pings (`http.HTTP2Config.SendPingTimeout` / `PingTimeout`).
+- A client that talks to one service often gets its own transport with the idle timeout chosen for that service. The
+  default one is shared with every other client in the process, and its 90 s fits none of them in particular.
+- Test connection reuse with `testing/synctest`: serve TLS on an in-memory `net.Pipe` listener (loopback sockets do not
+  let the bubble go idle), dial it from a clone of the client's real transport, count `http.StateNew` in the server's
+  `ConnState`, and move the gaps with `synctest.Sleep`. The transport's idle timer and pings then run on the fake clock
+  (`TestRelayPushesKeepOneConnection`, `TestSendsKeepOneConnection`). Register the server's and transport's shutdown
+  with `t.Cleanup`, or a failed assertion ends in a synctest deadlock panic.
