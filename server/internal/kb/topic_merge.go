@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -39,8 +40,9 @@ type mergeDigest struct {
 	Ops  []mergeOp `json:"ops"`
 }
 
-// RefreshTopics merges the candidates of at most max topics, those waiting longest first. A topic whose merge failed
-// waits (retryWait) like a project whose rewrite failed. Only the knowledge base loop calls it.
+// RefreshTopics merges the candidates of at most max topics, those waiting longest first, topicWorkers at a time; how
+// many merges it tried, failed ones included. A topic whose merge failed (or panicked) waits (retryWait) like a project
+// whose rewrite failed; a paused connection or no model starts no more. Only the knowledge base loop calls it.
 func (e *Engine) RefreshTopics(ctx context.Context, max int) int {
 	if e.Model == nil || !e.topicsOn() || e.Store.ReadOnly() {
 		return 0
@@ -48,29 +50,30 @@ func (e *Engine) RefreshTopics(ctx context.Context, max int) int {
 	now := time.Now()
 	var dirty []*Topic
 	for _, t := range e.Store.Topics() {
-		if t.Dirty && !now.Before(e.topicRetries[KindTopic+"/"+t.Slug].at) {
+		if t.Dirty && !e.retries().topics.waits(KindTopic+"/"+t.Slug, "", now) {
 			dirty = append(dirty, t)
 		}
 	}
 	sort.SliceStable(dirty, func(i, j int) bool { return dirty[i].Updated.Before(dirty[j].Updated) })
-	n := 0
-	for _, t := range dirty {
-		if n >= max || ctx.Err() != nil {
-			break
-		}
-		key := KindTopic + "/" + t.Slug
-		if err := e.mergeTopic(ctx, t.Slug); err != nil {
+	dirty = dirty[:min(len(dirty), max)]
+	var tried atomic.Int32
+	e.bounded(ctx, len(dirty), topicWorkers, func(i int) bool {
+		key := KindTopic + "/" + dirty[i].Slug
+		if err := e.mergeTopic(ctx, dirty[i].Slug); err != nil {
 			if deferred(ctx, err) {
-				break
+				return false
 			}
 			e.topicRetryLater(key, err, "merge")
-			n++
-			continue
+			tried.Add(1)
+			return true
 		}
-		delete(e.topicRetries, key)
-		n++
-	}
-	return n
+		e.retries().topics.clear(key)
+		tried.Add(1)
+		return true
+	}, func(i int, p any) {
+		e.topicRetryLater(KindTopic+"/"+dirty[i].Slug, fmt.Errorf("panic: %v", p), "merge")
+	})
+	return int(tried.Load())
 }
 
 // topicFingerprint is what a merge was asked about: the points and the batch of candidates. The answer is applied only
@@ -108,7 +111,7 @@ func (e *Engine) mergeTopic(ctx context.Context, slug string) error {
 	var d mergeDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	system := prompts.RenderKBTopicMerge(prompts.KBTopicMerge{Owner: e.Owner, MaxPoints: maxTopicPoints})
+	system := prompts.RenderKBTopicMerge(prompts.KBTopicMerge{Owner: e.ownerName(), MaxPoints: maxTopicPoints})
 	if err := e.modelFor("kb.topics").JSONMax(cctx, system, prompts.RenderKBTopicMergeInput(in), 12000, &d); err != nil {
 		return err
 	}

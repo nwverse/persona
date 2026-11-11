@@ -13,9 +13,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -159,39 +163,89 @@ func (e *Engine) dueForDistill(now time.Time) []distillSource {
 	return out
 }
 
-// DistillTopics distills at most max sources. A source whose call failed waits like a project whose rewrite failed
-// (retryWait), in the engine's memory. Only the knowledge base loop calls it.
+// topicWorkers is how many calls of a knowledge points step (distill, merge) run at once (#4247): the sources and
+// topics of one run are independent, and the writes go through topicMu with the merge's fingerprint check. The
+// connection gate (ai/limit.go) still caps what reaches the upstream.
+const topicWorkers = 2
+
+// DistillTopics distills at most max sources, topicWorkers at a time; how many calls it made, failed ones included. A
+// source whose call failed (or panicked) waits like a project whose rewrite failed (retryWait); a paused connection or
+// no model starts no more. Only the knowledge base loop calls it.
 func (e *Engine) DistillTopics(ctx context.Context, max int) int {
 	if e.Model == nil || !e.topicsOn() || e.Store.ReadOnly() {
 		return 0
 	}
 	now := time.Now()
-	n := 0
+	var todo []distillSource
 	for _, src := range e.dueForDistill(now) {
-		if n >= max || ctx.Err() != nil {
+		if len(todo) >= max {
 			break
 		}
-		key := src.kind + "/" + src.id
-		if now.Before(e.topicRetries[key].at) {
-			continue
+		if !e.retries().topics.waits(src.kind+"/"+src.id, "", now) {
+			todo = append(todo, src)
 		}
-		if err := e.distill(ctx, src, now); err != nil {
+	}
+	var calls atomic.Int32
+	e.bounded(ctx, len(todo), topicWorkers, func(i int) bool {
+		key := todo[i].kind + "/" + todo[i].id
+		if err := e.distill(ctx, todo[i], now); err != nil {
 			if deferred(ctx, err) {
-				break
+				return false
 			}
 			e.topicRetryLater(key, err, "distill")
-			n++ // a failed call is a call
-			continue
+			calls.Add(1) // a failed call is a call
+			return true
 		}
-		delete(e.topicRetries, key)
-		n++
-	}
-	return n
+		e.retries().topics.clear(key)
+		calls.Add(1)
+		return true
+	}, func(i int, p any) {
+		e.topicRetryLater(todo[i].kind+"/"+todo[i].id, fmt.Errorf("panic: %v", p), "distill")
+	})
+	return int(calls.Load())
 }
 
 func (e *Engine) topicRetryLater(key string, err error, step string) {
-	r := retryLater(&e.topicRetries, key, "")
+	r := e.retries().topics.fail(key, "")
 	e.logf("topics: %s %s: %v (failed %d time(s) in a row, next try in %s)", step, key, err, r.failures, retryWait(r.failures))
+}
+
+// bounded runs job(i) for every i below n, at most workers at once, and starts no more once a job returns false (the
+// connection is paused, no model, the run ended) or ctx ends. A job that panics is logged with its stack, handed to
+// panicked (to put that source off: the same panic would otherwise come first every run) and stops the rest like a
+// false, so one bad source cannot end the process (the loop's own recovery is in another goroutine).
+func (e *Engine) bounded(ctx context.Context, n, workers int, job func(i int) bool, panicked func(i int, p any)) {
+	var (
+		wg   sync.WaitGroup
+		stop atomic.Bool
+		sem  = make(chan struct{}, max(1, workers))
+	)
+	for i := range n {
+		if stop.Load() || ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		if stop.Load() || ctx.Err() != nil { // it may have changed while waiting for a slot
+			<-sem
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if p := recover(); p != nil {
+					e.logf("panic: %v\n%s", p, debug.Stack())
+					stop.Store(true)
+					panicked(i, p)
+				}
+			}()
+			if !job(i) {
+				stop.Store(true)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // errSourceGone: the source went (forgotten, merged) while it was being distilled.
@@ -237,7 +291,7 @@ func (e *Engine) distill(ctx context.Context, src distillSource, now time.Time) 
 	var d distillDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.topics").JSONMax(cctx, prompts.RenderKBTopicDistill(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBTopicDistillInput(in), 12000, &d); err != nil {
+	if err := e.modelFor("kb.topics").JSONMax(cctx, prompts.RenderKBTopicDistill(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBTopicDistillInput(in), 12000, &d); err != nil {
 		return err
 	}
 	return e.fileCandidates(src, d.Points, mark, now)

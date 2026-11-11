@@ -57,7 +57,7 @@ type Engine struct {
 	Sources      []Source
 	Model        Model
 	ModelFor     func(string) Model
-	Owner        string // how the owner is called (the AI writes the Chinese "I" for them)
+	Owner        string // how the owner is called (the AI writes the Chinese "I" for them); SetOwner changes it later
 	Logf         func(string, ...any)
 	// ExtraDirs are directories outside the data dir that Search also reads (Markdown files, read only): notes the
 	// user keeps elsewhere, e.g. a git repository of facts. Absolute paths.
@@ -110,13 +110,40 @@ type Engine struct {
 
 	find findCache // what Find read last time, kept while the files are unchanged (find_cache.go)
 
-	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
-	// topicRetries: sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>").
-	topicRetries map[string]projectRetry
-	// recordingRetries: recordings whose summary failed, by id (SummarizeRecordings).
-	recordingRetries map[string]projectRetry
-	// itemRetries: documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems).
-	itemRetries map[string]projectRetry
+	// Retries are the steps' backoffs, shared by the engines a caller builds over the same store one after another (the
+	// hub's settings changed), so they carry over (#4247); nil: the engine's own.
+	Retries    *Retries
+	ownRetries Retries
+
+	// ownerNow is how the owner is called as the knowledge base loop last read it (SetOwner); its lanes read it while
+	// it is set (#4247), so it is not the Owner field. Nil: Owner.
+	ownerNow atomic.Pointer[string]
+}
+
+// Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
+type Retries struct {
+	projects   retrySet // projects whose rewrite failed, by slug (RefreshProjects)
+	topics     retrySet // sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>")
+	recordings retrySet // recordings whose summary failed, by id (SummarizeRecordings)
+	items      retrySet // documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems)
+}
+
+func (e *Engine) retries() *Retries {
+	if e.Retries != nil {
+		return e.Retries
+	}
+	return &e.ownRetries
+}
+
+// SetOwner sets how the owner is called in the models' prompts from now on; safe while the lanes run.
+func (e *Engine) SetOwner(owner string) { e.ownerNow.Store(&owner) }
+
+// ownerName is how the owner is called: what SetOwner set last, else Owner.
+func (e *Engine) ownerName() string {
+	if o := e.ownerNow.Load(); o != nil {
+		return *o
+	}
+	return e.Owner
 }
 
 func (e *Engine) modelFor(id string) Model {

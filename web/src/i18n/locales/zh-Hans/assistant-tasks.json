@@ -195,5 +195,6 @@
   "interrupt_batch_title_other": "{cause}，{count} 个任务被打断",
   "interrupt_batch_title_on_other": "{machine} {cause}，{count} 个任务被打断",
   "interrupt_batch_counts": "→ 已处理 {resolved} / 待处理 {pending}",
-  "interrupt_batch_all": "→ 都处理了"
+  "interrupt_batch_all": "→ 都处理了",
+  "needs_group_another": "其他对话"
 }
