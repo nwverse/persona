@@ -73,7 +73,9 @@ func TestRestoreProjectPutsItAndItsLinksBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	var indexed []string
-	e.Index = func(kind, id, name string, _ Tagging, one string, updated time.Time) { indexed = append(indexed, kind+"/"+id) }
+	e.Index = func(kind, id, name string, _ Tagging, one string, updated time.Time) {
+		indexed = append(indexed, kind+"/"+id)
+	}
 	if _, err := e.RestoreProject(entry.ID); err != nil {
 		t.Fatal(err)
 	}
