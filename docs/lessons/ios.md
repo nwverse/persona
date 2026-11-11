@@ -1473,9 +1473,24 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
   it ran `released()`, which ends any anchor and decides by "within 100 pt of the newest": every tap on a row near the bottom switched the chat
   back to following. Only `interacting` / `decelerating` → `idle` is a scroll; `tracking` → `idle` is `tapped()`, which decides nothing. And the
   row's action runs while the finger is still down (`touching`), so a rule that waits for no finger never applies to a tapped row.
-- **The list's height is part of "holding still"**: the pin corrects by the content alone, but the upside-down list is drawn from its bottom edge,
-  so when the footer under it changes (the queue strip leaving as its message is taken) everything moves by that much. Watch the scroll
-  geometry's container height and put the held row back (`ChatPin.resized`), except for the keyboard.
+- **The list's bottom edge is part of "holding still"**: the pin corrects by the content alone, but the upside-down list is drawn from its bottom edge,
+  so when the footer under it changes (the queue strip leaving as its message is taken, the plan pill coming back as a work line folds) everything
+  moves by that much. Watch where that edge is on screen (`onGeometryChange` of the list's global frame, its `maxY`) and put the held row back
+  (`ChatPin.resized`), except for the keyboard. Not the scroll geometry's container height: its top edge moving (the chrome) moves nothing on the
+  list, and corrected by the height the pin moved a work line's header 40 pt by itself.
+- **UIKit's animated scroll and SwiftUI share the offset**: `setContentOffset(_:animated:)` started from where SwiftUI had moved the offset in the
+  same pass (about the height just folded) and ran its whole way from there: a header folded at the newest end went 209 → 619 → 1013 → 591 pt.
+  The pin's glide sets the offset itself every display frame (`CADisplayLink`) and puts back any other move at once (KVO on `contentOffset`).
+- **What moves the list's edge mid-glide moves the glide too**: a fold is reported a pass before the footer settles, so the glide started from where
+  the header was over the old edge; the plan pill came in, the edge went 40 pt up, and the header showed 40 pt up for a frame before it glided down.
+  `resized` shifts the glide's way by as much as it shifts the hold.
+- **SwiftUI's global frame can stay stale after the pin moves the list**: the pin sets the offset inside the header's geometry callback. Opening
+  a work line just above the newest end, the screen showed the header still (UIKit's layers, the simulator's screenshot) while its
+  `frame(in: .global)` said 40 pt up, for as long as it stayed open: a later part of that move never reached SwiftUI's geometry. Measure what
+  the screen shows from the layers: `DrawnProbe` in the header's background, read from the presentation layers on the display link
+  (`UnfoldTrace.Result.drawn`). Read from the views during the pass, it caught the new offset with the old layout, a state never drawn.
+- **XCUITest scrolls an element into view before tapping it**: the "middle" tap of `UnfoldTests` dragged the header just off the screen, so the tap
+  scrolled it back first and ran 61 pt from the newest end, following. To test a row in the middle, tap a coordinate on one already there.
 - **Test it with a mock that pushes one step at a time** (`MOCK_TOOL_TURN=1`, `/mock/tool_turn?step=…`, `ToolFoldTests`): a step, the answer and the
   next turn each as its own push, and `UnfoldTrace`'s per-frame `heights` to tell "gone in this frame" from "gone after a fade".
 

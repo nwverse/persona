@@ -1133,7 +1133,8 @@ struct ChatView: View {
         Haptics.tap()
         let wasOpen = run ? isRunOpen(id) : isOpen(id)
         #if DEBUG
-        UnfoldTrace.shared.begin("\(run ? "run" : "work") \(wasOpen ? "fold" : "open")", height: { [pin] in pin.contentHeight }) { [pin] in
+        UnfoldTrace.shared.begin("\(run ? "run" : "work") \(wasOpen ? "fold" : "open")", height: { [pin] in pin.contentHeight },
+                                 drawn: { Self.drawnTop(id) }) { [pin] in
             pin.screenY(id)
         }
         #endif
@@ -1153,7 +1154,8 @@ struct ChatView: View {
         let line = id.components(separatedBy: "/run-")[0] // a run's id is "<work line>/run-<first call>"
         let wasOpen = isRunOpen(id)
         #if DEBUG
-        UnfoldTrace.shared.begin("run \(wasOpen ? "fold" : "open")", height: { [pin] in pin.contentHeight }) { [pin] in pin.screenY(id) }
+        UnfoldTrace.shared.begin("run \(wasOpen ? "fold" : "open")", height: { [pin] in pin.contentHeight },
+                                 drawn: { Self.drawnTop(id) }) { [pin] in pin.screenY(id) }
         #endif
         Haptics.tap()
         if !wasOpen { revealUntil[line] = max(revealUntil[line] ?? .distantPast, .now.addingTimeInterval(Theme.Motion.revealTime)) }
@@ -1198,6 +1200,17 @@ struct ChatView: View {
         guard scratch.atNewest, let y = scratch.workHeadY[id], scratch.listFrame.height > 0 else { return 0 }
         return y - (scratch.listFrame.minY + headerRoom + Theme.Space.l)
     }
+
+    #if DEBUG
+    /// Where the work line header `id` is drawn (`DrawnProbe`); the Mac has no probe.
+    private static func drawnTop(_ id: String) -> CGFloat? {
+        #if os(iOS)
+        return DrawnProbe.top(id)
+        #else
+        return nil
+        #endif
+    }
+    #endif
 
     /// A step of the work line `group` as it opens: steps appearing just after it opened fade in.
     private func stepUnfolding(_ group: String) -> Unfolding {
@@ -5941,6 +5954,9 @@ private struct WorkHeadReport: ViewModifier {
             content
         } else {
             content.onGeometryChange(for: ChatPin.Spot.self, of: ChatView.headSpot) { moved(id, $0) }
+                #if DEBUG && os(iOS)
+                .background { if UnfoldTrace.enabled { DrawnProbe(key: id) } }
+                #endif
         }
     }
 }

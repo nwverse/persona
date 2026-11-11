@@ -133,12 +133,22 @@ import SwiftUI
     /// is put back where it was. The queued message taken as the next turn started moved the rows the user had open
     /// 60 pt down (#3005).
     func resized(by d: CGFloat) {
+        #if DEBUG
+        if abs(d) >= 0.5 { resizes += 1; lastResize = d }
+        #endif
         guard var h = held, Date.now <= h.until, abs(d) >= 0.5, let list, !list.isTracking, !list.isDecelerating,
               let spot = last[h.key] else { return }
         h.base -= d
         held = h
         want = wanted(h, grown: spot.content - h.at.content)
-        if glideTicker == nil { put(list) } // gliding: it goes there once the glide ends
+        guard glideTicker != nil, let want, var path = glidePath else { return put(list) }
+        // Gliding, the glide's way moves with the edge, from this frame on. A work line folded at the newest end brings
+        // its plan back as the pill over the composer, the list's bottom edge 40 pt up a pass after the fold started the
+        // glide: the glide kept its way, and the header showed 40 pt up for a frame before it glided down.
+        path.from -= d
+        path.to = Self.within(list, want, content: reach)
+        glidePath = path
+        glideTo(list, at: CACurrentMediaTime())
     }
 
     /// The kept hold is no longer kept (the line folded, another one opened): it lasts the usual time from now, so what
@@ -168,9 +178,11 @@ import SwiftUI
     /// held, the offset it was held at and the one wanted; held no more, where the last one held is.
     var traceHeld: String {
         func spot(_ s: Spot?) -> String { s.map { "\(Int($0.y.rounded()))/\(Int($0.content.rounded()))" } ?? "-" }
-        guard let h = held else { return "- last \(traced.map { spot(last[$0]) } ?? "-")" }
-        return "\(h.key.suffix(6))\(h.until == .distantFuture ? "+kept" : "") at \(spot(last[h.key])) from \(spot(h.at)) base \(Int(h.base.rounded()))"
-            + " want \(want.map { "\(Int($0.rounded()))" } ?? "-")\(gliding != nil ? " glide" : "")"
+        let drawn = traced.flatMap { DrawnProbe.top($0) }.map { " drawn \(Int($0.rounded()))" } ?? ""
+        let rs = resizes > 0 ? " rs \(resizes)/\(Int(lastResize.rounded()))" : ""
+        guard let h = held else { return "- last \(traced.map { spot(last[$0]) } ?? "-")\(drawn)\(rs)" }
+        return "\(h.key.suffix(6))\(h.until == .distantFuture ? "+kept" : "") at \(spot(last[h.key]))\(drawn) from \(spot(h.at)) base \(Int(h.base.rounded()))"
+            + " want \(want.map { "\(Int($0.rounded()))" } ?? "-")\(gliding != nil ? " glide" : "")\(rs)"
     }
     private var traced: String? { held?.key ?? lastHeld }
     /// Where the scroll view itself is in the window, and its height: the frame SwiftUI reports for the list is the
@@ -180,6 +192,9 @@ import SwiftUI
         let f = list.convert(list.bounds, to: nil)
         return "\(Int(f.minY.rounded()))-\(Int(f.maxY.rounded())) h \(Int(list.bounds.height.rounded()))"
     }
+    /// How many times the list's bottom edge moved (`resized`), and by how much the last time (`traceHeld`).
+    private var resizes = 0
+    private var lastResize: CGFloat = 0
     #endif
     /// The key last held (`traceHeld`).
     private var lastHeld: String?
@@ -271,8 +286,8 @@ import SwiftUI
     /// goes and off the screen, and the header came back up in one frame at the end: 209 → 619 → 1013 → 591 pt (#3005).
     private func glide(_ list: UIScrollView, from: CGFloat, to: CGFloat) {
         stopGlide()
-        let start = CACurrentMediaTime()
         gliding = .now.addingTimeInterval(Self.glideTime)
+        glidePath = (from, to, CACurrentMediaTime())
         glideSet = from
         list.contentOffset.y = from
         // Anything else moving the list meanwhile (but the user's finger) is put back at once, in the same pass.
@@ -281,14 +296,25 @@ import SwiftUI
         }
         glideTicker = FrameTicker { [weak self] now in
             guard let self, let list = self.list, !list.isTracking, !list.isDecelerating else { self?.endGlide(); return false }
-            let u = min(max((now - start) / Self.glideTime, 0), 1)
-            let y = from + (to - from) * CGFloat(1 - pow(1 - u, 3)) // ease out
-            self.glideSet = y
-            if abs(list.contentOffset.y - y) >= 0.25 { list.contentOffset.y = y }
-            if u >= 1 { self.endGlide(); return false }
-            return true
+            if self.glideTo(list, at: now) { return true }
+            self.endGlide()
+            return false
         }
     }
+
+    /// Puts the list where the glide has it at `now`; false once it is there.
+    @discardableResult
+    private func glideTo(_ list: UIScrollView, at now: CFTimeInterval) -> Bool {
+        guard let path = glidePath else { return false }
+        let u = min(max((now - path.start) / Self.glideTime, 0), 1)
+        let y = path.from + (path.to - path.from) * CGFloat(1 - pow(1 - u, 3)) // ease out
+        glideSet = y
+        if abs(list.contentOffset.y - y) >= 0.25 { list.contentOffset.y = y }
+        return u < 1
+    }
+
+    /// The glide's way: from where, to where, from when (`glide`); the list's bottom edge moving shifts it (`resized`).
+    private var glidePath: (from: CGFloat, to: CGFloat, start: CFTimeInterval)?
 
     /// Where the glide has the list now, and what keeps it there (`glide`).
     private var glideSet: CGFloat?
@@ -307,6 +333,7 @@ import SwiftUI
         glideTicker?.stop()
         glideTicker = nil
         glideSet = nil
+        glidePath = nil
     }
 
     /// The glide is over: the list goes where the header is wanted now (what came meanwhile).
@@ -405,6 +432,51 @@ import SwiftUI
         }
     }
 }
+
+#if DEBUG
+/// Where a work line's header is drawn (`UnfoldTrace`, `-unfoldTrace YES` only): a view in its background, read in the
+/// window's presentation layers, apart from what SwiftUI reports (`ChatPin.Spot`). Opening one near the newest end, the
+/// pin kept it still and the screen showed it still, while SwiftUI reported it 40 pt up for as long as it stayed open
+/// (#3005): the tests go by what is drawn.
+struct DrawnProbe: UIViewRepresentable {
+    let key: String
+
+    func makeUIView(context: Context) -> Probe {
+        let v = Probe()
+        v.isUserInteractionEnabled = false
+        v.key = key
+        return v
+    }
+
+    func updateUIView(_ v: Probe, context: Context) { v.key = key }
+
+    final class Probe: UIView {
+        var key = "" {
+            didSet { if oldValue != key { register() } }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            register()
+        }
+
+        private func register() {
+            if window != nil { DrawnProbe.views[key] = Weak(view: self) }
+        }
+    }
+
+    struct Weak { weak var view: UIView? }
+    @MainActor static var views: [String: Weak] = [:]
+
+    /// The top of `key`'s header on screen (window y), as last drawn: the layers as rendered, not the views as they are
+    /// in this pass (the pin may just have moved the list, its rows not laid out for it yet); nil when it is not in a window.
+    @MainActor static func top(_ key: String) -> CGFloat? {
+        guard let v = views[key]?.view, let w = v.window else { return nil }
+        if let p = v.layer.presentation(), let wp = w.layer.presentation() { return p.convert(p.bounds, to: wp).minY }
+        return v.convert(v.bounds, to: w).minY
+    }
+}
+#endif
 
 /// Calls `tick` with the time of each display frame until it returns false, or `stop()` (`ChatPin`'s glide).
 private final class FrameTicker: NSObject {

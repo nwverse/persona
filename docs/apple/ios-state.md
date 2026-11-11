@@ -359,9 +359,11 @@ Why it works this way:
   until ↓, sending or the user's own scroll. Reading further up nothing comes in anyway, so nothing changes there.
   The tap itself is no scroll (`tapped()`): SwiftUI reports a tap in the list as `tracking` → `idle`, and taken for the end of a scroll it ended
   every anchor and let "near the newest" decide, so after any tap on a row within 100 pt of the newest end the next push took the list there.
-  And the list's own height: drawn upside down from its bottom edge, everything on it moves when what sits under it (the queue strip, a card, the
-  mode bar) comes or goes. Taking the queued message as the next turn started moved the open rows 60 pt down. A held row is put back
-  (`ChatPin.resized`); not for the keyboard, above which the newest stays as before.
+  And the list's bottom edge: drawn upside down from it, everything on the list moves when what sits under it (the queue strip, a card, the
+  mode bar, the plan pill) comes or goes. Taking the queued message as the next turn started moved the open rows 60 pt down. A held row is put
+  back by how far that edge moved on screen (`ChatPin.resized`), a glide under way with it; not for the keyboard, above which the newest stays
+  as before. Folded at the newest end, the list glides to the newest end with the offset set every display frame (`ChatPin.glide`), not UIKit's
+  animated scroll, which ran from wherever SwiftUI had put the offset in the same pass.
 - **Withhold while the finger is down (including inertia after release), then decide by position** (`holdsBack` includes `touching`): in an inverted list, growth at latest pushes content under the finger upward,
   causing 23 pt and 39 pt movement during a light drag while streaming. Release within tolerance resumes following, so a short look upward doesn't stop the stream, bringing held content in together. Leaving tolerance separately records `draggedAway` to control ↓.
 

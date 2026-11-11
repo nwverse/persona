@@ -7,8 +7,9 @@ import AppKit
 
 /// `-unfoldTrace YES`: every row opened or folded in the chat (`toggleInPlace`, a work line's `toggleWork`) is
 /// measured for `window` from the tap (#1123): the frames drawn, the late ones (over 1.5 frames), the longest, and how far
-/// the tapped row moved on screen, frame by frame, by its own report (`ChatPin`: a row's own geometry is current, a
-/// wrapper's can lag, docs/lessons/ios.md), with `-perfCounts YES` the view bodies drawn meanwhile. The results go out
+/// the tapped row moved on screen, frame by frame: as drawn where the app can tell (`DrawnProbe`: work line headers),
+/// else by its own report (`ChatPin`: a row's own geometry is current, a wrapper's can lag, docs/lessons/ios.md), with
+/// `-perfCounts YES` the view bodies drawn meanwhile. The results go out
 /// as `probe.unfold` (`-probes YES`) for the UI tests (`UnfoldTests`) and to the console as `UNFOLD …` lines.
 @MainActor @Observable
 final class UnfoldTrace: NSObject {
@@ -36,6 +37,13 @@ final class UnfoldTrace: NSObject {
         var heights: [Int?] = []
         /// View bodies evaluated meanwhile, the most first (`-perfCounts YES`).
         var bodies: [String] = []
+        /// Where the row was at the tap (window y).
+        var from: Int?
+        /// Its top as drawn on screen, frame by frame (`DrawnProbe`: work line headers), beside what SwiftUI reports
+        /// (`ys`). `moved`, `end`, `step` and `from` go by it where there is one: once the pin had moved the list from
+        /// inside a geometry callback, SwiftUI went on reporting the header 40 pt off for seconds while the screen showed
+        /// it still (#3005).
+        var drawn: [Int?] = []
     }
 
     /// The last ten, newest last.
@@ -55,6 +63,8 @@ final class UnfoldTrace: NSObject {
     @ObservationIgnored private var link: CADisplayLink?
     @ObservationIgnored private var bodiesAtStart: [String: Int] = [:]
     @ObservationIgnored private var idled = false
+    @ObservationIgnored private var drawnTop: () -> CGFloat? = { nil }
+    @ObservationIgnored private var drawn: [CGFloat?] = []
 
     /// Once, `seconds` from now: the same measurement with nothing tapped, what the chat costs at rest.
     func idle(after seconds: Double) {
@@ -68,13 +78,16 @@ final class UnfoldTrace: NSObject {
 
     /// A row was tapped to open or fold: `what` names it ("work open", "thought fold"), `y` says where it is now,
     /// `height` how tall the list's content is.
-    func begin(_ what: String, height: @escaping () -> CGFloat? = { nil }, y: @escaping () -> CGFloat?) {
+    func begin(_ what: String, height: @escaping () -> CGFloat? = { nil }, drawn: @escaping () -> CGFloat? = { nil },
+               y: @escaping () -> CGFloat?) {
         guard Self.enabled else { return }
         finish()
         self.what = what
         self.y = y
+        drawnTop = drawn
+        self.drawn = []
         self.height = height
-        y0 = y()
+        y0 = drawn() ?? y()
         deltas = []
         ys = []
         heights = [height()]
@@ -97,6 +110,7 @@ final class UnfoldTrace: NSObject {
         last = link.timestamp
         ys.append(y())
         heights.append(height())
+        drawn.append(drawnTop())
         if CACurrentMediaTime() - start > Self.window { finish() }
     }
 
@@ -104,16 +118,18 @@ final class UnfoldTrace: NSObject {
         guard let link else { return }
         link.invalidate()
         self.link = nil
-        let off = ys.map { v in v.flatMap { v in y0.map { v - $0 } } }
+        let path = drawn.contains { $0 != nil } ? drawn : ys
+        let off = path.map { v in v.flatMap { v in y0.map { v - $0 } } }
         let moved = off.compactMap { $0 }.map(abs).max() ?? 0
-        let known = ys.compactMap { $0 }
+        let known = path.compactMap { $0 }
         let step = zip(known, known.dropFirst()).map { abs($1 - $0) }.max() ?? 0
         let r = Result(what: what, at: tapped.timeIntervalSince1970, frames: deltas.count, hitches: deltas.filter { $0 > expected * 1.5 }.count,
                        worstMS: Int(((deltas.max() ?? 0) * 1000).rounded()), moved: Int(moved.rounded()),
                        end: Int((off.last.flatMap { $0 } ?? 0).rounded()), step: Int(step.rounded()), ys: ys.map { $0.map { Int($0.rounded()) } },
                        heights: heights.map { $0.map { Int($0.rounded()) } },
                        bodies: PerfCount.bodies.map { ($0.key, $0.value - (bodiesAtStart[$0.key] ?? 0)) }.filter { $0.1 > 0 }
-                           .sorted { $0.1 > $1.1 }.prefix(8).map { "\($0.0) \($0.1)" })
+                           .sorted { $0.1 > $1.1 }.prefix(8).map { "\($0.0) \($0.1)" },
+                       from: y0.map { Int($0.rounded()) }, drawn: drawn.map { $0.map { Int($0.rounded()) } })
         print("UNFOLD \(r.what): frames \(r.frames) hitches \(r.hitches) worst \(r.worstMS) ms moved \(r.moved) end \(r.end) ys "
               + r.ys.map { $0.map(String.init) ?? "-" }.joined(separator: " "))
         results = Array((results + [r]).suffix(10))
