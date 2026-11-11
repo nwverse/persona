@@ -1227,11 +1227,25 @@ final class AppModel {
             // still reported, by the read of the transcript itself.
             guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else { return }
             guard self.api(key.group)?.config.url == api.config.url else { return }
-            let list = (sessionsByMachine[key.machineRef] ?? []).filter { $0.key != key } + [full]
-            applySessions([key.machineRef: list])
+            // In its place: the same row again must leave the list equal, or every reader of the sessions redraws
+            // for nothing (#4683).
+            applySessions([key.machineRef: Self.replacing(full, in: sessionsByMachine[key.machineRef] ?? [])])
         } catch {
             if isSubscribed(key), !error.isQuiet { chat(key).error = error.localizedDescription }
         }
+    }
+
+    /// `row` where the list has its session (any other copy of it dropped), or at the end when it has none: an unchanged
+    /// row leaves the list equal.
+    nonisolated static func replacing(_ row: Session, in list: [Session]) -> [Session] {
+        let key = row.key
+        guard let first = list.firstIndex(where: { $0.key == key }) else { return list + [row] }
+        var out = list
+        out[first] = row
+        if out[(first + 1)...].contains(where: { $0.key == key }) {
+            out = out.enumerated().filter { $0.offset <= first || $0.element.key != key }.map(\.element)
+        }
+        return out
     }
 
     func subscribe(_ key: SessionKey, by owner: UUID) {
@@ -1726,7 +1740,8 @@ final class AppModel {
         var olds: [(old: [Session], new: [Session])] = []
         for (machineID, list) in byMachine {
             let old = lists[machineID] ?? []
-            if old != list { lists[machineID] = list }
+            guard old != list else { continue } // the same rows again: no transition, nothing new for AgentSync (#4683)
+            lists[machineID] = list
             olds.append((old, list))
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
