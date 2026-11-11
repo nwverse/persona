@@ -127,6 +127,9 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
   (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`; the small model goes to haiku / small fast; the sub-Agent model to `CLAUDE_CODE_SUBAGENT_MODEL`, following the primary model if empty;
   custom model options go to `ANTHROPIC_CUSTOM_MODEL_OPTION` and its name / description), then execs claude.
   Keys never enter the terminal or command line. You can also type `personad launch <name>` directly in a terminal.
+  With `--ticket <ticket>` (`personad launch --ticket <ticket> <name> …`, or `personad launch --ticket <ticket> -- claude …` for plain
+  claude) it also fetches the values a hand-off card approved for that one start (node.sock `secret.env`, with the launch key and the
+  one-time ticket) and puts them in claude's environment; `docs/extensions/secret-providers.md` "The hand-off to one Agent run".
 - **Only `personad launch` gets the settings** (#5588). Every agent's hooks and MCP servers have to reach node.sock, so being able to connect proves nothing.
   `launcher.env` answers only a request that carries the machine's launch key, a random value the node keeps in `launch.key` beside node.sock
   (0600, written when the node starts listening, kept across restarts). `personad launch` reads the file and sends the key, so every start works as before:
@@ -384,4 +387,3 @@ and node-side `node/launcherquota.go`.
 - App: `LauncherQuotaSection`, above “Availability” (same on web, `web/src/views/settings/LauncherQuota.tsx`; Android places it on the launcher page reached from Machines, passing that computer as `machine=`, see `docs/android/android.md`, “Extension UI and marketplace”). Title: “Quota · <gateway name>,” using the report's `gateway_name` (fallback to `gateway` for old hubs). The app hardcodes no gateway names.
   Usage ≥ 70% is orange, ≥ 90% or exhausted is red; refresh at the top right. DEBUG `-openLauncherPage <name>` opens it directly.
   Fake hub's `cc_main` and `cc_team` carry quota from two example gateways (`示例网关`, “Example gateway,” and `示例中转`, “Example relay”) for screenshots.
-

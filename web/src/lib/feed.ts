@@ -9,6 +9,7 @@ import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./stor
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
+import type { TaskBrief } from "./brief";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
@@ -17,11 +18,16 @@ import type { ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
+export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
+export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
+
 export interface PlanTask {
   title: string;
   prompt: string;
   machine: string;
   cwd: string;
+  workspace?: TaskWorkspace;
+  workspace_resolved?: TaskWorkspaceResolved;
   launcher?: string;
   model?: string;
   /** An Agent preset (#2225): a tier of the model profile in use, resolved when the task starts. */
@@ -36,6 +42,9 @@ export interface PlanTask {
   /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
   error_code?: string;
   error_args?: Record<string, string>;
+  /** The brief the task will be held to (#3822, lib/brief.ts): the card shows it, and "Start" confirms it. Absent from
+   *  a hub before briefs and on a plan made before them. */
+  brief?: TaskBrief;
 }
 
 export interface TaskPlan {
@@ -517,7 +526,7 @@ onHubEvent("task_plan", (m) => {
 // ── actions ──
 
 /** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
-export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
+export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt" | "workspace"> & { ultracode: boolean };
 
 export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] as const;
 
@@ -532,12 +541,13 @@ export function planEditsOf(plan: TaskPlan, ultracode?: readonly boolean[]): Pla
     permission: t.permission || "default",
     prompt: t.prompt,
     ultracode: ultracode?.[i] ?? t.ultracode === true,
+    ...(t.workspace !== undefined ? { workspace: t.workspace } : {}),
   }));
 }
 
 /** Whether "Edit" changed anything since it opened with `before` (closing it then asks before throwing the changes away). */
 export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]): boolean {
-  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
+  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => JSON.stringify(e[k] ?? "") !== JSON.stringify(before[i]?.[k] ?? "")));
 }
 
 /** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it

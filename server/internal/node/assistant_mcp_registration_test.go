@@ -59,12 +59,13 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 				}
 
 				var servers map[string]any
-				var allowed []string
+				var allowed, builtin []string
 				if engine == "sdk" {
 					var start struct {
 						Options struct {
 							Servers map[string]any `json:"mcpServers"`
 							Allowed []string       `json:"allowedTools"`
+							Tools   []string       `json:"tools"`
 							Resume  string         `json:"resume"`
 							Session string         `json:"sessionId"`
 						} `json:"options"`
@@ -72,7 +73,7 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 					if err := json.Unmarshal([]byte(f.file("start.json")), &start); err != nil {
 						t.Fatal(err)
 					}
-					servers, allowed = start.Options.Servers, start.Options.Allowed
+					servers, allowed, builtin = start.Options.Servers, start.Options.Allowed, start.Options.Tools
 					if _, err := os.Stat(cache); !os.IsNotExist(err) {
 						t.Fatalf("SDK created a CLI MCP cache: %v", err)
 					}
@@ -100,6 +101,9 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 						t.Fatal(err)
 					}
 					servers, allowed = config.Servers, strings.Split(mcpFlag(t, flags, "--allowedTools"), ",")
+					if engine != "guest" {
+						builtin = strings.Split(mcpFlag(t, flags, "--tools"), ",")
+					}
 					sessionFlag := "--session-id"
 					if tc.resume {
 						sessionFlag = "--resume"
@@ -111,7 +115,7 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 						t.Fatalf("guest restrictions lost: %v", flags)
 					}
 				}
-				legacy := tc.resume || !tc.persona
+				legacy := !tc.persona
 				wantCount := 1
 				if legacy {
 					wantCount++
@@ -125,6 +129,36 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 					}
 				} else if !slices.Contains(allowed, "mcp__persona") || slices.Contains(allowed, "mcp__"+compat.MCPServer) != legacy || !slices.Contains(allowed, officeRule(n.assistantOfficeScript())) {
 					t.Fatalf("allowed = %v, legacy = %v", allowed, legacy)
+				}
+				wantBuiltin := []string{"Bash", "Read", "Write", "Edit", "Monitor", "Skill", "Agent", "ListAgents", "SendMessage", "TaskStop", "WebFetch", "WebSearch"}
+				if engine != "guest" && !slices.Equal(builtin, wantBuiltin) {
+					t.Fatalf("built-in tools = %v, want %v", builtin, wantBuiltin)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexAssistantMCPRegistrationAtStart(t *testing.T) {
+	n, _ := testNode(t)
+	for _, tc := range []struct {
+		name    string
+		persona bool
+	}{
+		{name: "unknown-or-old-hub"},
+		{name: "negotiated", persona: true},
+	} {
+		for _, start := range []string{"new", "resume"} {
+			t.Run(tc.name+"/"+start, func(t *testing.T) {
+				n.hubPersonaContracts.Store(tc.persona)
+				args, started := n.codexAssistantArgs("proc-test", n.dir)
+				// A hub switch after this start's one decision must not split the args from the spare's recorded policy.
+				n.hubPersonaContracts.Store(!tc.persona)
+				joined := strings.Join(args, " ")
+				persona := strings.Contains(joined, "mcp_servers.persona.command")
+				legacy := strings.Contains(joined, "mcp_servers."+compat.MCPServer+".command")
+				if started != tc.persona || !persona || legacy != !tc.persona {
+					t.Fatalf("started=%v persona=%v legacy=%v, negotiated=%v: %s", started, persona, legacy, tc.persona, joined)
 				}
 			})
 		}

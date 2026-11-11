@@ -37,6 +37,12 @@ import Observation
 
     var isLarkAgent: Bool { purpose?.id == "lark.agent" }
 
+    /// A use of Agents the hub lets the user set apart (Lark /agent, the Inbox's AI twin): fields of its own, following
+    /// Agents while they are empty. An older hub sends no fields for it, and it stays a read-only use of Agents.
+    static func followsAgents(_ p: ModelPurpose) -> Bool { p.parent == "agent.new" && p.hasWritableFields }
+
+    var isAgentsOverride: Bool { purpose.map(Self.followsAgents) ?? false }
+
     func inheritanceStatus(_ p: ModelPurpose) -> String {
         p.override.isEmpty ? String(localized: "Follow Agents") : String(localized: "Separately configured")
     }
