@@ -1106,6 +1106,15 @@ if os.environ.get("MOCK_ORCA_CHILDREN"):
              "legacy-provider", 8, "codex", 1, 60, "Saved workspace history", space_kind="codex_app", space_id="provider-project",
              pane_id=None, workspace_id=None, capabilities={"read": True, "send": False}),
     ]
+# MOCK_STOPPED_AGENTS=1 (with MOCK_TERMINAL_PANES): a stopped Agent (#4754: read-only, its terminal stays) on the server,
+# whose tab is still open in the notes workspace (agent_session on its pane), and the plain panes name what runs in front.
+STOPPED_AGENT = "5d000000-0000-4000-8000-000000004754"
+if os.environ.get("MOCK_STOPPED_AGENTS"):
+    SESSIONS += [
+        sess("server", STOPPED_AGENT, "Fix the notes index", "/home/me/notes", "offline", "offline", "notes", 2, "fix-notes", 2, 45,
+             "Rebuilt the index and pushed the branch.", pane_id=None,
+             capabilities={"read": True, "terminal": True}, read_only_reason="Agent stopped"),
+    ]
 # MOCK_MANUAL_HERDR=1: two agents opened by hand in herdr (started_by_persona false) on no todo: Agents' "By to-do" lists them
 # in "Opened manually" (#2608 web, #2917 iOS / Mac).
 if os.environ.get("MOCK_MANUAL_HERDR"):
@@ -2007,6 +2016,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
+                    "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
@@ -2033,7 +2044,7 @@ def assistant_state(space="", archived=False):
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
-                   kb_topics=cfg["kb_topics"])
+                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -6964,6 +6975,13 @@ def mock_panes(mid):
             tabs.append({"id": extra["tab_id"], "workspace_id": wid, "label": "shell-2", "number": 3})
     for pane in SPLIT_PANES.get(mid, []):
         panes.append(pane)
+    if os.environ.get("MOCK_STOPPED_AGENTS") and mid == "server":
+        for p in panes:
+            if not p.get("agent"):
+                p["foreground"] = "npm" if "npm" in (p.get("title") or "") else "zsh"
+        tabs.append({"id": "w2:t2", "workspace_id": "w2", "label": "fix-notes", "number": 2})
+        panes.append({"pane": "w2:p4", "terminal": "pane:w2:p4", "tab_id": "w2:t2", "workspace_id": "w2", "title": "zsh",
+                      "cwd": "/home/me/notes", "foreground": "zsh", "agent_session": STOPPED_AGENT})
     panes = [p for p in panes if p["pane"] not in CLOSED_PANES and p["tab_id"] not in CLOSED_TABS]
     tabs = [dict(t, label=TAB_NAMES.get(t["id"], t["label"])) for t in tabs if t["id"] not in CLOSED_TABS]
     if MARKS_AGENTS and mid == "server":  # MOCK_AGENT_MARKS: a workspace of its own, one tab per agent
@@ -7028,6 +7046,16 @@ def node_action(h, p, body):
     """POST /api/v1/machines/{mid}/{panes,tabs}/{close,split,agent,git,rename}: what the menus ask of a computer."""
     mid, area, verb = p.split("/")[4], p.split("/")[5], p.split("/")[6]
     NODE_ACTIONS.append({"machine": mid, "route": area + "/" + verb, **body})
+    if area == "panes" and verb == "close_finished":  # #4754: the stopped Agents' terminals, those confirmed
+        hosts = mock_panes(mid).get("hosts") or []
+        done = [{"pane": x["pane"], "session_id": x["agent_session"], "tab_id": x["tab_id"], "workspace_id": x["workspace_id"]}
+                for x in (hosts[0]["panes"] if hosts else []) if x.get("agent_session")]
+        want = [x for x in str(body.get("panes") or "").split(",") if x]
+        if want:
+            done = [x for x in done if x["pane"] in want]
+        if not body.get("preview"):
+            CLOSED_PANES.update(x["pane"] for x in done)
+        return h.send_json({"closed": done, "kept": [], "preview": bool(body.get("preview"))})
     if area == "panes" and verb == "close":
         CLOSED_PANES.add(body.get("pane"))
     elif area == "tabs" and verb == "close":
@@ -18402,7 +18430,7 @@ class H(BaseHTTPRequestHandler):
         if doctor_route(self, p, "POST"): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
         if plugins_route(self, p, self.last_body): return
-        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|split|agent|git)|tabs/(close|rename))", p):
+        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
             return node_action(self, p, json.loads(self.last_body or b"{}"))
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
             return worktree_route(self, p, json.loads(self.last_body or b"{}"))
@@ -19510,6 +19538,11 @@ class H(BaseHTTPRequestHandler):
             for key, (low, high) in RETENTION_BOUNDS.items():
                 if key in body and (type(body[key]) is not int or not low <= body[key] <= high):
                     return self.send_json({"error": "%s must be %d–%d" % (key, low, high), "code": "bad_request"}, 400)
+            if "idle_close_hours" in body:  # 0–8760, as the hub checks it (#4754)
+                hours = body["idle_close_hours"]
+                if not isinstance(hours, int) or isinstance(hours, bool) or not 0 <= hours <= 8760:
+                    return self.send_json({"error": "idle_close_hours must be 0–8760"}, 400)
+                ASSISTANT_CONFIG["idle_close_hours"] = hours
             if "archive_closed_days" in body:  # 0–3650, as the hub checks it (#3618)
                 days = body["archive_closed_days"]
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:

@@ -310,6 +310,8 @@ function businessFailureText(e: ApiError): string | undefined {
   if (e.code === "assistant_offline") return t("lib-api.manager_offline");
   if (e.code === "node_unreachable") return t(e.body.delivered === "none" ? "lib-api.computer_offline" : "lib-api.computer_dropped");
   if (e.code === "timeout") return t("lib-api.computer_timeout");
+  // a stopped Agent takes no messages (#4754): Resume on its terminal page runs it again
+  if (e.code === "agent_stopped") return t("lib-api.agent_stopped");
   return undefined;
 }
 
