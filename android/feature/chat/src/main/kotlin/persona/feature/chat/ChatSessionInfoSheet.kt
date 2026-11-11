@@ -19,19 +19,13 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.lines.tokenCount
 import persona.core.domain.sort.resumeCommand
 import java.time.ZoneId
-import java.util.Locale
 import kotlinx.coroutines.CancellationException
 
 /**
  * A token count in the language of [resources], as the compaction divider counts them ([tokenCount]): 950, 48.2K and
- * 1.20M in English, 4.8 万 in Chinese, 4.8万 in Japanese. English's compact unit is a thousand and has no word for a
- * million, so a million and more keeps the M rather than reading 1200K.
+ * 1.2M in English, 4.8 万 in Chinese, 4.8万 in Japanese.
  */
-internal fun formatTokens(count: Long, resources: Resources): String {
-    val unit = resources.getString(persona.core.designsystem.R.string.designsystem_core_compact_unit).toLong()
-    return if (count >= 1_000_000 && unit < 10_000) String.format(Locale.ROOT, "%.2fM", count / 1_000_000.0)
-    else tokenCount(count).resolve(resources)
-}
+internal fun formatTokens(count: Long, resources: Resources): String = tokenCount(count).resolve(resources)
 
 /** One fact of "Session info"; a null value reads as —. [copy] names what tapping it copies. */
 internal data class SessionInfoRow(val label: String, val value: String?, val copy: String? = null, val onClick: (() -> Unit)? = null)
