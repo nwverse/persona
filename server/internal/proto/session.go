@@ -198,17 +198,18 @@ type Session struct {
 	// sleep, loop on a check or watch something, using next to no CPU; no subagent or workflow runs. Clients show
 	// "Waiting in the background" apart from Working (lighter, not in the Working count); State stays working, so an
 	// older app shows Working. The node says whether its background commands wait; the manager keeps it only so.
-	BackgroundWaiting bool      `json:"background_waiting,omitempty"`
-	SeenAt            time.Time `json:"seen_at,omitempty"`
+	BackgroundWaiting bool `json:"background_waiting,omitempty"`
+	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
+	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
+	// show them but take back, delete, move and send now only the others (#4342). A uint16 here sits in the padding
+	// before SeenAt, so a Session stays the size the allocation budgets measured.
+	QueuedRelayed uint16    `json:"queued_relayed,omitempty"`
+	SeenAt        time.Time `json:"seen_at,omitempty"`
 	// StateSince is when the agent entered its current state, as the hub saw it (the hub restarting resets it):
 	// lists sort "Working" by it, since updated_at moves on every step.
 	StateSince time.Time `json:"state_since,omitempty"`
 	// Queued is input typed while the agent works, waiting to be taken (shown above the composer, not in the chat).
 	Queued []string `json:"queued,omitempty"`
-	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
-	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
-	// show them but take back, delete, move and send now only the others (#4342).
-	QueuedRelayed int `json:"queued_relayed,omitempty"`
 	// Background lists commands / agents Claude started in the background that have not reported back yet
 	// (the TUI's "2 shells still running").
 	Background []BackgroundTask `json:"background,omitempty"`

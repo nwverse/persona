@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
+	"math"
 	"slices"
 	"time"
 
@@ -299,7 +300,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			// turn ends, and the queue's actions are claude's (#4342).
 			if q := shown[list[i].SessionID].Queued; len(q) > 0 {
 				list[i].Queued = append(slices.Clip(list[i].Queued), q...) // the node's slice is shared: never write into it
-				list[i].QueuedRelayed = len(q)
+				list[i].QueuedRelayed = uint16(min(len(q), math.MaxUint16))
 			}
 		}
 		list[i].SeenAt = seen[list[i].SessionID]

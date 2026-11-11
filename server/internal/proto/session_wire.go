@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x5bc21b3d4a8c486
+const sessionWireLayout = 0x8cdcdc9c346bcbdc
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout
 
@@ -150,10 +150,10 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"state":`, s.State, false)
 	w.boolean(`"background_working":`, s.BackgroundWorking, true)
 	w.boolean(`"background_waiting":`, s.BackgroundWaiting, true)
+	w.integer(`"queued_relayed":`, int64(s.QueuedRelayed), true)
 	w.time(`"seen_at":`, s.SeenAt) // time.Time is a struct, never empty, so omitempty keeps it
 	w.time(`"state_since":`, s.StateSince)
 	w.strs(`"queued":`, s.Queued)
-	w.integer(`"queued_relayed":`, int64(s.QueuedRelayed), true)
 	if len(s.Background) > 0 {
 		if backgroundWireCurrent {
 			w.key(`"background":`)

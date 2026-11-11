@@ -1760,3 +1760,11 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - The manager ran the hub machine's node (`node --stdio`) with `exec.CommandContext` and the default `Cancel`, a SIGKILL. The node puts each assistant process in its own group (`Setpgid`, so `stop()` can end its background tasks), and nothing ties that group to the node: a SIGKILLed node leaves its conversations running. Before blue-green switching, the systemd restart's cgroup kill hid this; a switch keeps the unit, so the old Claude processes went on beside the ones the next node resumed for the same conversations, and the next node rightly refused them the assistant's tools.
 - A child that must not outlive its parent needs the parent to stop it, and the parent needs time to: end such a process the way its peer going away ends it (EOF on stdin) with a bounded grace before the kill (`cmd.Cancel`, `cmd.WaitDelay`), and have it stop its own children and wait for them before it exits. Stopping them in a goroutine is not enough: `Serve` returned and the process exited before the goroutine's SIGKILL fallback ran (`stopAndWait`).
 - A test that kills the parent and looks for the child catches both halves; one that only checks the parent's exit status does not.
+
+## A field in `proto.Session` is paid on every copy (#4342)
+
+The hub copies sessions by value (decorated lists, readers that keep rows), and its allocation budgets
+(`internal/assistant` `TestSessionReadersCopyNoList`, `TestAssistantViewCopiesOnlyItsConversations`) measure bytes per call.
+One `int` took a 1,528-byte `Session` to 1,536, and those readers went 5 to 12% over. Small fields fit in the padding instead
+(between the bools and the next 8-byte field): check the layout with `reflect` field offsets and keep the size unchanged.
+A new field type also needs wire samples in `session_wire_test.go`.
