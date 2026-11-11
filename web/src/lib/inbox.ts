@@ -537,9 +537,10 @@ export function mailAccounts(accounts: MailAccount[], items: InboxItem[]): MailA
 // ── agents waiting on the user (they head "Needs you") ────────
 
 /** Muted: the agent itself, or its space unless the agent was turned back on there (the hub's rule). A child session's
- *  card is muted with its parent too (#5120): the child has no row of its own to mute it from. */
+ *  card goes by its parent's (#5120): the child has no row of its own to mute it from, and the switcher's count
+ *  (lib/manager-attention.ts) mutes it the same way. */
 export function interactionMuted(ix: Interaction, sessions: Record<string, Session[]>, mutes: AgentMutes): boolean {
-  if (ix.folded_under && interactionMuted({ ...ix, session_id: ix.folded_under, folded_under: undefined }, sessions, mutes)) return true;
+  if (ix.folded_under) return interactionMuted({ ...ix, session_id: ix.folded_under, folded_under: undefined }, sessions, mutes);
   const key = `${ix.machine_id}/${ix.session_id}`;
   if (mutes.sessions.includes(key)) return true;
   if (mutes.allowed?.includes(key)) return false;

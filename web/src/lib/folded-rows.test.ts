@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { childCards, foldedRow, foldRows, homeKey } from "./folded-rows";
+import { childCards, foldedRow, foldRows, homeKey, sessionCard } from "./folded-rows";
 import type { Interaction, Session } from "./types";
 
 const row = (sid: string, extra: Partial<Session> = {}): Session => ({ machine_id: "m", session_id: sid, title: sid, cwd: "/w", status: "idle", state: "idle", ...extra });
@@ -53,5 +53,14 @@ describe("folded rows (#5120)", () => {
     const elsewhere = { id: "3", machine_id: "n", session_id: "c", folded_under: "p" } as Interaction;
     expect([card, own].map(homeKey)).toEqual(["m/p", "m/p"]);
     expect(childCards([card, own, elsewhere], "m", "p").map((ix) => ix.id)).toEqual(["1"]);
+  });
+});
+
+describe("sessionCard", () => {
+  const card = (id: string, sid: string, folded_under?: string): Interaction => ({ id, machine_id: "m", session_id: sid, kind: "question", ...(folded_under ? { folded_under } : {}) });
+  it("is the session's own card first, else one of its children's", () => {
+    expect(sessionCard([card("c", "kid", "p"), card("o", "p")], "m", "p")?.id).toBe("o");
+    expect(sessionCard([card("c", "kid", "p")], "m", "p")?.id).toBe("c");
+    expect(sessionCard([card("c", "kid", "q")], "m", "p")).toBeUndefined();
   });
 });

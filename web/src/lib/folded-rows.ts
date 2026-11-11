@@ -59,3 +59,8 @@ export function homeKey(ix: Pick<Interaction, "machine_id" | "session_id" | "fol
 export function childCards(interactions: readonly Interaction[], mid: string, sid: string): Interaction[] {
   return interactions.filter((ix) => ix.machine_id === mid && ix.folded_under === sid && ix.session_id !== sid);
 }
+
+/** The card a session's row or task speaks for: its own, else one its child sessions wait on (their home is its page). */
+export function sessionCard(interactions: readonly Interaction[], mid: string, sid: string): Interaction | undefined {
+  return interactions.find((ix) => ix.machine_id === mid && ix.session_id === sid) ?? childCards(interactions, mid, sid)[0];
+}
