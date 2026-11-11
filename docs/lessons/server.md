@@ -1,5 +1,17 @@
 # Lessons: hub / node and networking
 
+## Public sharing ingress needs a fixed authority (#4358)
+
+An independent browser port does not constrain an HTTP client's Host header. A
+plain TCP forward or unrestricted reverse proxy can turn the sharing listener
+into an application entry point when a client sends the application's Host.
+Reject nonpublic paths before proxying and pin the upstream sharing authority;
+strip credentials in both directions and protect local gateway errors too.
+Changing `sharing.public_origin` on disk does not hot-reload the running hub.
+Use its normal release/configuration lifecycle, not an unrelated reload endpoint.
+A loopback proxy also shares the upstream's aggregate IP budget unless a separately
+reviewed trusted-address protocol is in place; do not silently trust X-Forwarded-For.
+
 ## Shared web fixtures belong in the Docker build context (2026-11-11, #4260)
 
 The web production build typechecks test files. A JSON fixture imported from `spec/fixtures/` needs both a

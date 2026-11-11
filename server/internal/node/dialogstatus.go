@@ -87,6 +87,7 @@ func (n *Node) forgetDialog(pane string) {
 	n.dialogs.mu.Lock()
 	delete(n.dialogs.m, pane)
 	n.dialogs.mu.Unlock()
+	n.forgetAllowDialog(pane)
 }
 
 // forgetDialogs drops the panes no longer live.
