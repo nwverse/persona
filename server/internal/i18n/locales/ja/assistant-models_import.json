@@ -7,5 +7,6 @@
   "err_no_machine": "そのマシンはありません",
   "use_task": "定期タスク「{name}」",
   "use_profile": "モデルプロファイル「{name}」",
-  "use_tier": "モデルプロファイル「{profile}」の Agent プリセット「{tier}」"
+  "use_tier": "モデルプロファイル「{profile}」の Agent プリセット「{tier}」",
+  "err_not_hidden": "プロバイダーは読み込みましたが、エイリアスを非表示にできませんでした。一覧から非表示にするか、もう一度読み込んでください。"
 }

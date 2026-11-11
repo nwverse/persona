@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // An imported alias's environment (docs/assistant/model-config.md "Importing providers from shell aliases"): the
@@ -51,11 +53,27 @@ var importComputerEnv = []string{"PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER
 var importCredentialWords = []string{"KEY", "KEYS", "APIKEY", "TOKEN", "SECRET", "SECRETS", "PASSWORD", "PASSWD",
 	"CREDENTIAL", "CREDENTIALS", "COOKIE", "COOKIES"}
 
-// urlWithUser: v is a URL with a user (and maybe a password) in it.
+// urlWithUser: v carries a user (and maybe a password): its authority (after an optional scheme:// or a leading //, up
+// to the first /, ? or #) has an @, or v is no URL Go parses and has an @ anywhere. A parse alone proves nothing: Go
+// refuses ^ { } | < > and blanks in a password that Node (Claude Code) takes and percent-encodes, and a value without
+// a scheme (user:pass@host:8080) parses as a path. An e-mail address counts too: left out is the safe side.
 func urlWithUser(v string) bool {
-	u, err := url.Parse(strings.TrimSpace(v))
-	return err == nil && u.Scheme != "" && u.User != nil
+	v = strings.TrimSpace(v)
+	authority := urlScheme.ReplaceAllString(v, "")
+	if authority == v {
+		authority = strings.TrimPrefix(v, "//")
+	}
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	if strings.Contains(authority, "@") {
+		return true
+	}
+	_, err := url.Parse(v)
+	return err != nil && strings.Contains(v, "@")
 }
+
+var urlScheme = lazyre.New(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 
 // importProxy is the provider's proxy (the first proxy variable set; none when it carries a user, as the proxy is
 // stored and shown in the clear) and bypass list.

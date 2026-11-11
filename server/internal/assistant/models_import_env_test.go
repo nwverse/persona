@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -47,12 +48,15 @@ func TestImportEnvRules(t *testing.T) {
 				{"VAULT_SECRETS", "credential"}, {"X_PASSWD", "credential"}, {"gh_token", "credential"}},
 		},
 		{
-			name: "a URL with a user is a credential, a proxy one too",
+			name: "a value with a user is a credential, a proxy one too, whether Go parses it or not",
 			env: map[string]string{"MIRROR": "https://me:pw@mirror.example.com", "http_proxy": "http://me:pw@proxy.example.com:1",
-				"ALL_PROXY": "socks5://me@proxy.example.com:1", "PLAIN": "https://mirror.example.com", "MAIL": "me@example.com"},
-			lines:   "MAIL=me@example.com\nPLAIN=https://mirror.example.com",
-			names:   []string{"MAIL", "PLAIN"},
-			skipped: []skippedEnv{{"ALL_PROXY", "credential"}, {"MIRROR", "credential"}, {"http_proxy", "credential"}},
+				"ALL_PROXY": "socks5://me@proxy.example.com:1", "PLAIN": "https://mirror.example.com", "MAIL": "me@example.com",
+				"ODD": "https://me:p^w{x@mirror.example.com", "BARE": "me:pw@mirror.example.com:8080", "RELATIVE": "//me:pw@mirror.example.com",
+				"AT_IN_PATH": "https://mirror.example.com/@team?x=a@b"},
+			lines: "AT_IN_PATH=https://mirror.example.com/@team?x=a@b\nPLAIN=https://mirror.example.com",
+			names: []string{"AT_IN_PATH", "PLAIN"},
+			skipped: []skippedEnv{{"ALL_PROXY", "credential"}, {"BARE", "credential"}, {"MAIL", "credential"}, {"MIRROR", "credential"},
+				{"ODD", "credential"}, {"RELATIVE", "credential"}, {"http_proxy", "credential"}},
 		},
 		{
 			name: "what the shell would expand, or no line holds",
@@ -129,5 +133,33 @@ func TestImportEnvLine(t *testing.T) {
 		if line, ok := importEnvLine(c[0], c[1]); ok {
 			t.Errorf("%s=%q written as %q", c[0], c[1], line)
 		}
+	}
+}
+
+// A proxy whose user and password Go's URL parser refuses (Node takes them), one without a scheme and one starting
+// with // still carry a password: in every spelling the proxy is left empty and the variable named as a credential,
+// and no part of the password reaches the preview. A plain proxy is imported.
+func TestImportProxyCredentialsGoCannotParse(t *testing.T) {
+	for i, c := range []struct{ value, password string }{
+		{"http://user:Ab^9{x@proxy.example:8080", "Ab^9{x"},
+		{"user:Sch3m3less-pw@proxy.example:8080", "Sch3m3less-pw"},
+		{"//user:Rel4tive-pw@proxy.example:8080", "Rel4tive-pw"},
+	} {
+		spelling := importProxyEnv[i%len(importProxyEnv)]
+		alias := zshrcAlias{Alias: "pcc", Command: "claude", Env: map[string]string{"ANTHROPIC_BASE_URL": "https://gw.example.com",
+			"ANTHROPIC_API_KEY": importKeyA, "ANTHROPIC_MODEL": "m", spelling: c.value}}
+		g := newImportGroup("m1", alias, "https://gw.example.com")
+		if g.Proxy != "" || g.env != "" || !reflect.DeepEqual(g.SkippedEnv, []skippedEnv{{spelling, "credential"}}) {
+			t.Fatalf("%s=%s: proxy %q env %q skipped %+v", spelling, c.value, g.Proxy, g.env, g.SkippedEnv)
+		}
+		_, mux := importTestHub(t, []zshrcAlias{alias}, nil)
+		r := importRequest(mux, "GET", "")
+		if r.Code != 200 || strings.Contains(r.Body.String(), c.password) || !strings.Contains(r.Body.String(), `"name":"`+spelling+`","reason":"credential"`) {
+			t.Fatalf("%s: %d %s", c.value, r.Code, r.Body.String())
+		}
+	}
+	plain := zshrcAlias{Alias: "pcc", Command: "claude", Env: map[string]string{"HTTPS_PROXY": "http://proxy.example:8080"}}
+	if g := newImportGroup("m1", plain, "https://gw.example.com"); g.Proxy != "http://proxy.example:8080" || g.SkippedEnv != nil {
+		t.Fatalf("plain proxy: %q %+v", g.Proxy, g.SkippedEnv)
 	}
 }

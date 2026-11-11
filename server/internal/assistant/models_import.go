@@ -149,10 +149,7 @@ func mergeZshrcAliases(machine string, aliases []zshrcAlias, known []knownProvid
 // variables Persona has no field for as its env (importEnv).
 func newImportGroup(machine string, a zshrcAlias, base string) importGroup {
 	env := a.Env
-	key, auth := strings.TrimSpace(env["ANTHROPIC_API_KEY"]), "api_key"
-	if token := strings.TrimSpace(env["ANTHROPIC_AUTH_TOKEN"]); token != "" {
-		key, auth = strings.TrimSpace(strings.TrimPrefix(token, "Bearer ")), "bearer"
-	}
+	key, auth := importKey(env)
 	tier := func(k string) string { id, _ := strip1M(env[k]); return id }
 	model, window := strip1M(env["ANTHROPIC_MODEL"])
 	proxy, noProxy := importProxy(env)
@@ -181,6 +178,15 @@ func newImportGroup(machine string, a zshrcAlias, base string) importGroup {
 	g.HasKey, g.HasEnv, g.Aliases = key != "", g.env != "", []string{a.Alias}
 	g.Sources = []importSource{{Alias: a.Alias, File: cmp.Or(a.File, defaultRCFile)}}
 	return g
+}
+
+// importKey is an alias's key and how it is sent: ANTHROPIC_AUTH_TOKEN (without "Bearer ") as bearer, else
+// ANTHROPIC_API_KEY.
+func importKey(env map[string]string) (key, auth string) {
+	if token := strings.TrimSpace(env["ANTHROPIC_AUTH_TOKEN"]); token != "" {
+		return strings.TrimSpace(strings.TrimPrefix(token, "Bearer ")), "bearer"
+	}
+	return strings.TrimSpace(env["ANTHROPIC_API_KEY"]), "api_key"
 }
 
 // existingFor is the stored provider an import lands in: the same base URL and key, and for one alias's own
@@ -429,7 +435,7 @@ func importTarget(g importGroup, stored []storedLauncher) storedLauncher {
 func (s *Service) withImportSources(ctx context.Context, f importHideFacts, g *importGroup) error {
 	target := importTarget(*g, f.stored)
 	for i, src := range g.Sources {
-		checked, err := s.aliasHide(ctx, f, src.Alias, target)
+		checked, err := s.aliasHide(ctx, f, src.Alias, target, g.key)
 		if err != nil {
 			return err
 		}
@@ -443,6 +449,89 @@ func (s *Service) withImportSources(ctx context.Context, f importHideFacts, g *i
 	}
 	return nil
 }
+
+// withoutHide answers every alias of g and its variants hide none: the preview could not tell.
+func withoutHide(g *importGroup) {
+	for i := range g.Sources {
+		g.Sources[i] = importSource{Alias: g.Sources[i].Alias, File: g.Sources[i].File, Hide: hideNone}
+	}
+	for i := range g.variants {
+		withoutHide(&g.variants[i])
+	}
+}
+
+// importPreviewSources fills the preview's hide checks. Only when Persona lists one of the aliases are the facts read
+// at all; when they cannot be read, or a check fails, the preview still answers, every alias none (logged): the
+// preview never fails over hiding, the import refuses to hide what it cannot check.
+func (s *Service) importPreviewSources(ctx context.Context, machine string, rc []zshrcLaunchers, stored []storedLauncher, groups []importGroup) {
+	listed := importHideFacts{rc: rc, stored: stored}
+	if slices.ContainsFunc(groups, func(g importGroup) bool { return slices.ContainsFunc(g.Aliases, listed.listed) }) {
+		f, err := s.importHideFacts(ctx, machine, rc, stored)
+		for i := 0; err == nil && i < len(groups); i++ {
+			err = s.withImportSources(ctx, f, &groups[i])
+		}
+		if err == nil {
+			return
+		}
+		s.logf("launchers import: %s: hide check: %v", machine, err)
+	}
+	for i := range groups {
+		withoutHide(&groups[i])
+	}
+}
+
+// importPicks are the groups in.Providers names, in that order and each once, a group in.Split names as its variants
+// (one provider per alias); a name that is no group, or a split one that is not picked, is an error.
+func importPicks(groups []importGroup, in importBody) ([]importGroup, error) {
+	for _, name := range in.Split {
+		if !slices.Contains(in.Providers, name) {
+			return nil, i18n.Err("assistant-models_import.err_nothing_named", i18n.Args{"name": name})
+		}
+	}
+	var out []importGroup
+	for k, name := range in.Providers {
+		i := slices.IndexFunc(groups, func(g importGroup) bool { return g.Name == name })
+		if i < 0 {
+			return nil, i18n.Err("assistant-models_import.err_nothing_named", i18n.Args{"name": name})
+		}
+		if slices.Contains(in.Providers[:k], name) {
+			continue // named twice: imported once
+		}
+		if slices.Contains(in.Split, name) && len(groups[i].variants) > 0 {
+			out = append(out, groups[i].variants...)
+		} else {
+			out = append(out, groups[i])
+		}
+	}
+	return out, nil
+}
+
+// importRemoteAliases asks, before the import takes the lock, the other computers its hide check will ask: the same
+// check (aliasHide) on what it would import as things are now, its answers kept. Under the lock the check reads only
+// these. Nothing when it is not hiding, or what the check reads cannot be read (the import then refuses anyway).
+func (s *Service) importRemoteAliases(ctx context.Context, groups []importGroup, in importBody, rc []zshrcLaunchers, stored []storedLauncher) map[string]remoteAliases {
+	picks, err := importPicks(groups, in)
+	if !in.HideAliases || err != nil {
+		return nil
+	}
+	ctx = withSettingsMemo(ctx) // read-only
+	f, err := s.importHideFacts(ctx, in.Machine, rc, stored)
+	if err != nil {
+		return nil
+	}
+	for _, g := range picks {
+		target := importTarget(g, stored)
+		for _, alias := range g.Aliases {
+			if _, err := s.aliasHide(ctx, f, alias, target, g.key); err != nil {
+				return f.remote
+			}
+		}
+	}
+	return f.remote
+}
+
+// errImportNotHidden: the providers were saved but launchers.hidden was not (a store that writes one setting at a time).
+var errImportNotHidden = i18n.Err("assistant-models_import.err_not_hidden")
 
 // importBody is POST /api/v1/launchers/import's body: the groups to import (by name), the ones of them to import
 // as one provider per alias, and whether to hide the aliases where that is safe. A body without split or
@@ -466,12 +555,12 @@ type importResult struct {
 // importLaunchers saves the picked groups: new ones created, ones already stored get the new models only; a split
 // group the same way for each of its aliases. With hide, under the same lock, each imported alias whose hide check
 // against the providers as saved is ok joins launchers.hidden.
-func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in importBody) (importResult, error) {
+// rc (s.zshrcLaunchers) and remote (other computers' aliases, importRemoteAliases) are read before the lock: under
+// it no node is asked, and a computer not asked before counts as elsewhere.
+func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in importBody, rc []zshrcLaunchers, remote map[string]remoteAliases) (importResult, error) {
 	res := importResult{Created: []string{}, Updated: []string{}, Hidden: []string{}, Kept: []importSource{}}
-	for _, name := range in.Split {
-		if !slices.Contains(in.Providers, name) {
-			return res, i18n.Err("assistant-models_import.err_nothing_named", i18n.Args{"name": name})
-		}
+	if _, err := importPicks(groups, in); err != nil {
+		return res, err
 	}
 	s.models.mu.Lock()
 	defer s.models.mu.Unlock()
@@ -486,48 +575,35 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 	// The preview may precede another mutation: where each lands and the names it takes are worked out again against
 	// today's checked snapshot, by the preview's rules.
 	landExisting(groups, known)
-	rc := s.zshrcLaunchers(ctx, false)
 	importNames(groups, s.importTaken(ctx, rc, list))
 	now := time.Now().UTC()
-	var landed [][2]string // alias, the provider it landed in
-	for k, name := range in.Providers {
-		i := slices.IndexFunc(groups, func(g importGroup) bool { return g.Name == name })
-		if i < 0 {
-			return res, i18n.Err("assistant-models_import.err_nothing_named", i18n.Args{"name": name})
-		}
-		if slices.Contains(in.Providers[:k], name) {
-			continue // named twice: imported once
-		}
-		items, split := []importGroup{groups[i]}, slices.Contains(in.Split, name) && len(groups[i].variants) > 0
-		if split {
-			items = groups[i].variants
-		}
-		for _, g := range items {
-			target := g.Existing
-			if target != "" {
-				j := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == g.Existing })
-				if j >= 0 && mergeImportedModels(&list[j].Models, g.Models) {
-					list[j].Updated = now
-				}
-				if !slices.Contains(res.Updated, target) {
-					res.Updated = append(res.Updated, target)
-				}
-			} else {
-				g.Name = cmp.Or(g.CreateAs, g.Name)
-				l, err := s.sealImported(g, now)
-				if err != nil {
-					return res, err
-				}
-				list = append(list, l)
-				res.Created = append(res.Created, l.Name)
-				target = l.Name
+	type landing struct{ alias, provider, key string }
+	var landed []landing
+	picks, _ := importPicks(groups, in) // the names were checked above; the groups now as landExisting and importNames left them
+	for _, g := range picks {
+		target := g.Existing
+		if target != "" {
+			j := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == g.Existing })
+			if j >= 0 && mergeImportedModels(&list[j].Models, g.Models) {
+				list[j].Updated = now
 			}
-			for _, a := range g.Aliases {
-				landed = append(landed, [2]string{a, target})
+			if !slices.Contains(res.Updated, target) {
+				res.Updated = append(res.Updated, target)
 			}
+		} else {
+			g.Name = cmp.Or(g.CreateAs, g.Name)
+			l, err := s.sealImported(g, now)
+			if err != nil {
+				return res, err
+			}
+			list = append(list, l)
+			res.Created = append(res.Created, l.Name)
+			target = l.Name
+		}
+		for _, a := range g.Aliases {
+			landed = append(landed, landing{a, target, g.key})
 		}
 	}
-	var hidden []string
 	if in.HideAliases {
 		// Checked against the list as it is saved, before it is: a failed check leaves everything as it was. Nothing is
 		// written until the checks are done, so they share one read of each setting.
@@ -536,34 +612,53 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 		if err != nil {
 			return res, err
 		}
+		f.ask, f.remote = false, maps.Clone(remote) // no node is asked under the lock
+		if f.remote == nil {
+			f.remote = map[string]remoteAliases{}
+		}
 		for _, a := range landed {
-			j := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == a[1] })
+			j := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == a.provider })
 			if j < 0 {
 				continue
 			}
-			src, err := s.aliasHide(hctx, f, a[0], list[j])
+			src, err := s.aliasHide(hctx, f, a.alias, list[j], a.key)
 			if err != nil {
 				return res, err
 			}
 			switch src.Hide {
 			case hideOK:
-				res.Hidden = append(res.Hidden, a[0])
+				res.Hidden = append(res.Hidden, a.alias)
 			case hideInUse, hideElsewhere:
 				res.Kept = append(res.Kept, src)
 			}
 		}
-		hidden = append(slices.Clone(f.hidden), res.Hidden...)
 	}
-	if err := s.storeManagedLaunchers(ctx, list); err != nil {
+	if len(res.Hidden) == 0 {
+		return res, s.storeManagedLaunchers(ctx, list)
+	}
+	// launchers.hidden only: the shell files stay as they are, and Hidden restores an alias. Read again here, not
+	// from the checks' memo: under the lock, so no other hide or restore is lost.
+	hidden, err := s.readHiddenLaunchers(ctx)
+	if err != nil {
 		return res, err
 	}
-	if len(res.Hidden) > 0 {
-		// launchers.hidden only: the shell files stay as they are, and Hidden restores an alias
-		if err := s.putSetting(ctx, launchersHiddenKey, hidden); err != nil {
-			return res, err
+	for _, a := range res.Hidden {
+		if !slices.Contains(hidden, a) {
+			hidden = append(hidden, a)
 		}
 	}
-	return res, nil
+	err = s.storeManagedAnd(ctx, list, map[string]any{launchersHiddenKey: hidden}) // one transaction
+	if errors.Is(err, errNoSettingsBatch) {
+		if err := s.storeManagedLaunchers(ctx, list); err != nil {
+			return res, err
+		}
+		if err := s.putSetting(ctx, launchersHiddenKey, hidden); err != nil {
+			s.logf("launchers import: providers saved, aliases not hidden: %v", err)
+			return res, errImportNotHidden
+		}
+		return res, nil
+	}
+	return res, err
 }
 
 func (s *Service) launcherImportRoutes() {
@@ -582,18 +677,10 @@ func (s *Service) launcherImportRoutes() {
 		}
 		ctx = withSettingsMemo(ctx) // read-only from here: every alias's check resolves the same purposes
 		rc := s.zshrcLaunchers(ctx, false)
-		f, err := s.importHideFacts(ctx, machine, rc, stored)
-		if err != nil {
-			apierr.Write(w, http.StatusInternalServerError, err)
-			return
-		}
 		importNames(groups, s.importTaken(ctx, rc, stored))
+		s.importPreviewSources(ctx, machine, rc, stored, groups)
 		providers := make([]importedProvider, 0, len(groups))
 		for _, g := range groups {
-			if err := s.withImportSources(ctx, f, &g); err != nil {
-				apierr.Write(w, http.StatusInternalServerError, err)
-				return
-			}
 			providers = append(providers, g.preview()) // the key, headers and env stay in g
 		}
 		apierr.WriteJSON(w, map[string]any{"machine": machine, "providers": providers})
@@ -610,15 +697,18 @@ func (s *Service) launcherImportRoutes() {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		groups, _, err := s.importGroups(ctx, in.Machine)
+		groups, stored, err := s.importGroups(ctx, in.Machine)
 		if err != nil {
 			importErr(w, err)
 			return
 		}
-		res, err := s.importLaunchers(ctx, groups, in)
+		// What the nodes say is asked first, without the configuration lock.
+		rc := s.zshrcLaunchers(ctx, false)
+		remote := s.importRemoteAliases(ctx, groups, in, rc, stored)
+		res, err := s.importLaunchers(ctx, groups, in, rc, remote)
 		if err != nil {
 			status := http.StatusBadRequest
-			if errors.Is(err, errManagedLaunchersRead) {
+			if errors.Is(err, errManagedLaunchersRead) || errors.Is(err, errImportNotHidden) {
 				status = http.StatusInternalServerError
 			}
 			apierr.Write(w, status, err)
