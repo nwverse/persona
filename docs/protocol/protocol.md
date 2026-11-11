@@ -630,6 +630,9 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 "auto_review":{"id":"rv_…","state":"running|clean|blocking|failed|cancelled","round":0,"count":2,"blocking":1,
                                "findings":"the reviewer's report","error":"why it failed","session_id":"<reviewer>","worktree":"<its copy>",
                                "started_at":"...","ended_at":"..."},
+                // the done judge found the latest stretch of work stopped on a decision only the owner can make (#1277,
+                // docs/assistant/unified-entry.md "Supervision"); absent when that does not hold. While it is there the task is not accepted.
+                "waits":{"work":"... (when the stretch began)","at":"...","reason":"the judge's reason"},
                 "updated_at":"..."},
  // The task's brief (#3822, docs/assistant/unified-entry.md "Briefs"): what was asked when the work was handed out, never rewritten; absent on a to-do with none.
  // Clients that don't know it show the to-do as usual.
