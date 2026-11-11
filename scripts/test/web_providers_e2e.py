@@ -189,7 +189,7 @@ def zshrc_import(r):
     page = r.page
     page.get_by_role("button", name="导入", exact=True).click()
     d = r.dialog("从电脑上的 alias 导入")
-    expect(d.get_by_text("~/.zshrc 和 ~/.bashrc", exact=False)).to_be_visible()
+    expect(d.get_by_text("~/.zshrc、~/.bashrc 和 ~/.bash_aliases", exact=False)).to_be_visible()
     d.get_by_label("电脑", exact=True).select_option("macbook")
     rows = d.get_by_role("list", name="可以导入的供应商").get_by_role("checkbox")
     expect(rows).to_have_count(4)

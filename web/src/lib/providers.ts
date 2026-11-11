@@ -584,6 +584,11 @@ const pickedOutcomes = (list: ImportedProvider[], picked: Set<string>, split: Se
 export const importSources = (list: ImportedProvider[], picked: Set<string>, split: Set<string>): ImportSource[] =>
   pickedOutcomes(list, picked, split).flatMap((x) => x.sources ?? []);
 
+/** Whether the import really merges into a provider that is there: a picked group that lands in one, or a variant of a
+ *  split one that does. */
+export const importMerges = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) =>
+  pickedOutcomes(list, picked, split).some((x) => !!x.existing);
+
 /** How many providers the import makes or merges into: a split group counts each alias. */
 export const importCount = (list: ImportedProvider[], picked: Set<string>, split: Set<string>) => pickedOutcomes(list, picked, split).length;
 

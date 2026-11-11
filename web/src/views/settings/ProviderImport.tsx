@@ -1,5 +1,5 @@
 // Settings › Model providers › Import (#2455, #5024): pick a computer, preview the providers its claude aliases add up to
-// (~/.zshrc, ~/.bashrc; GET /api/v1/launchers/import), tick some, choose for a group whose aliases differ in more than the
+// (~/.zshrc, ~/.bashrc, ~/.bash_aliases; GET /api/v1/launchers/import), tick some, choose for a group whose aliases differ in more than the
 // model whether each alias becomes a provider of its own, and import them (POST), optionally hiding the imported aliases in
 // Persona. The keys never come to the browser: the hub reads them again from that computer and keeps them sealed.
 import { useEffect, useId, useState } from "react";
@@ -12,6 +12,7 @@ import {
   importErrorText,
   importFrom,
   importLeftOut,
+  importMerges,
   importOutcome,
   importRow,
   importSources,
@@ -75,7 +76,8 @@ export function ProviderImport({ open, onClose, onImported }: { open: boolean; o
   const sources = importSources(items, picked, split).filter((s) => s.hide !== "none");
   const hiding = sources.filter((s) => s.hide === "ok").map((s) => s.alias);
   const staying = sources.filter((s) => s.hide !== "ok");
-  const merges = items.some((p) => p.existing || p.variants?.some((v) => v.existing));
+  // the note on merging only when this import will merge something, as picked and chosen
+  const merges = importMerges(items, picked, split);
 
   const confirm = async () => {
     if (busy || count === 0) return;

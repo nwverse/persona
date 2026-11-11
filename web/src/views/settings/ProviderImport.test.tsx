@@ -167,6 +167,21 @@ describe("provider import", () => {
     expect(toast).toHaveBeenCalledWith(t("lib-providers.import_summary", { created: 2, updated: 0 }), "ok");
   });
 
+  it("says merging only adds models only when the import will merge something", async () => {
+    const note = () => text().includes(t("settings-providerimport.merge_note"));
+    await draw();
+    // split by default: cc_team_small's provider merges into team_gw
+    expect(note()).toBe(true);
+    // one provider: cc_team is created, so nothing merges
+    await click(radio("cc_team", false));
+    expect(note()).toBe(false);
+    await click(radio("cc_team", true));
+    expect(note()).toBe(true);
+    // the group that would merge is not picked
+    await click(q('[data-import="cc_team"]'));
+    expect(note()).toBe(false);
+  });
+
   it("moves between the two choices with the arrow keys", async () => {
     await draw();
     const group = q(`[role="radiogroup"][aria-label="${t("settings-providerimport.choice_label", { name: "cc_team" })}"]`);

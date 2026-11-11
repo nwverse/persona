@@ -9,6 +9,7 @@ import {
   importCanSplit,
   importCount,
   importCreates,
+  importMerges,
   importDiffers,
   importErrorText,
   importFrom,
@@ -257,6 +258,17 @@ describe("import preview", () => {
     expect(importCount([group, single], new Set(["cc_glm"]), new Set(["cc_kimi"]))).toBe(1);
     // a group without the choice never counts as split
     expect(importCount([single], new Set(["cc_glm"]), new Set(["cc_glm"]))).toBe(1);
+  });
+  it("merges only when a picked group, as chosen, lands in a provider that is there", () => {
+    const both = new Set(["cc_kimi", "cc_glm"]);
+    // split: cc_kimi_fast's variant merges into kimi_gw
+    expect(importMerges([group, single], both, new Set(["cc_kimi"]))).toBe(true);
+    // one provider: the group itself has nowhere to merge
+    expect(importMerges([group, single], both, new Set())).toBe(false);
+    // the group that would merge is not picked
+    expect(importMerges([group, single], new Set(["cc_glm"]), new Set(["cc_kimi"]))).toBe(false);
+    expect(importMerges([{ ...single, existing: "glm" }], new Set(["cc_glm"]), new Set())).toBe(true);
+    expect(importMerges([{ ...single, existing: "glm" }], new Set(), new Set())).toBe(false);
   });
   it("says where the aliases came from, what they bring and what they leave out", () => {
     expect(importFrom(group)).toEqual(["来自 ~/.zshrc 里的 cc_kimi、cc_kimi_fast"]);
