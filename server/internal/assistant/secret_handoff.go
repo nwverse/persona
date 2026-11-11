@@ -326,14 +326,28 @@ type humanSend struct {
 // contextTagRe is a context block's opening tag in a message, with its attributes.
 var contextTagRe = lazyre.New(`<` + compat.ContextPattern() + `\b([^>]*)>`)
 
+// kindAttrRe is a context tag's own kind="…" attribute (not data-kind="…" and the like).
+var kindAttrRe = lazyre.New(`(?:^|\s)kind="([^"]*)"`)
+
 // ownWords: text, a message a person's own app sent, holds only their own words. A context block the app put in it
 // carries someone else's (a mail or a Lark message handed on from the Inbox, a page's selection used as context or for
-// an AI edit, another conversation's message, a document): such a message is not the user's asking, whoever sent it
-// (the decision on #3962: what the inbox, mail or channels bring gets the card). Only a workspace block, which the
-// manager fills in from the user's own settings (workspace_mention.go), is theirs.
-func ownWords(text string) bool {
+// an AI edit, another conversation's message, a document, what the old main conversation left): such a message is not
+// the user's asking, whoever sent it (the decision on #3962: what the inbox, mail or channels bring gets the card). Only
+// a workspace mention the manager resolves is theirs: every kind it names is "workspace", and its computer and folder
+// are known, so the manager puts its own words in its place (workspace_mention.go), the app's body never reaching the
+// model.
+func (s *Service) ownWords(ctx context.Context, text string) bool {
 	for _, m := range contextTagRe.FindAllStringSubmatch(text, -1) {
-		if contextAttrs(m[1])["kind"] != "workspace" {
+		kinds := kindAttrRe.FindAllStringSubmatch(m[1], -1)
+		if len(kinds) == 0 {
+			return false
+		}
+		for _, k := range kinds {
+			if k[1] != "workspace" {
+				return false
+			}
+		}
+		if _, _, ok := s.workspaceDevice(ctx, contextAttrs(m[1])); !ok {
 			return false
 		}
 	}
@@ -387,14 +401,14 @@ func (h *humanSends) note(session, id, text string) {
 		}
 		return
 	}
-	h.makeRoomLocked(ids)
+	makeRoomLocked(ids, true)
 	ids[id] = humanSend{words: words, at: time.Now()}
 }
 
 // voidSend: a send into session carried id, and it is not one that counts (the hub did not vouch for it, or it carries
 // someone else's words). Were id one a person's app sent, it no longer counts (another author's line may carry it
-// now); in a conversation with vouched sends, one not known yet is kept void, so a later vouched send of it does not
-// count either. A conversation with none keeps nothing.
+// now); in a conversation with vouched sends, one not known yet is kept void while there is room, so a later vouched
+// send of it does not count either. A conversation with none keeps nothing, and void ids never push out vouched ones.
 func (h *humanSends) voidSend(session, id string) {
 	if session == "" || id == "" {
 		return
@@ -407,7 +421,9 @@ func (h *humanSends) voidSend(session, id string) {
 	ids := h.sessionLocked(session)
 	sent, ok := ids[id]
 	if !ok {
-		h.makeRoomLocked(ids)
+		if len(ids) == 0 || !makeRoomLocked(ids, false) {
+			return
+		}
 		sent.at = time.Now()
 	}
 	sent.void = true
@@ -446,18 +462,31 @@ func (h *humanSends) sessionLocked(session string) map[string]humanSend {
 	return ids
 }
 
-// makeRoomLocked drops the oldest of ids when it holds humanSendsMost. h.mu held.
-func (h *humanSends) makeRoomLocked(ids map[string]humanSend) {
+// makeRoomLocked makes room for one more in ids, which holds at most humanSendsMost: the oldest void id goes first,
+// then, when vouched ones may (vouched), the oldest of all; false when there is no room. h.mu held.
+func makeRoomLocked(ids map[string]humanSend, vouched bool) bool {
 	if len(ids) < humanSendsMost {
-		return
+		return true
 	}
-	oldest, oldestAt := "", time.Now()
-	for k, sent := range ids {
-		if !sent.at.After(oldestAt) {
-			oldest, oldestAt = k, sent.at
+	oldest, oldestAt := "", time.Time{}
+	for _, voidOnly := range []bool{true, false} {
+		if !voidOnly && !vouched {
+			break
+		}
+		for k, sent := range ids {
+			if voidOnly && !sent.void {
+				continue
+			}
+			if oldest == "" || sent.at.Before(oldestAt) {
+				oldest, oldestAt = k, sent.at
+			}
+		}
+		if oldest != "" {
+			delete(ids, oldest)
+			return true
 		}
 	}
-	delete(ids, oldest)
+	return false
 }
 
 // has: id is a send the hub vouched for into session, text (the line the node tied to it) holds its words, and line is

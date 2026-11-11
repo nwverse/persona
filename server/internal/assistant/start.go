@@ -267,7 +267,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	// Its first message's (node/node.go assistant.send). One the manager gave a person's own start is not given to the
 	// node when the message carries someone else's words after all (what the old main conversation left, startMain):
 	// then no line counts as theirs (secret_handoff.go ownWords).
-	if p.ClientMsgID != "" && (!strings.HasPrefix(p.ClientMsgID, assistantwire.FirstMessageIDPrefix) || ownWords(p.Text)) {
+	if p.ClientMsgID != "" && (!strings.HasPrefix(p.ClientMsgID, assistantwire.FirstMessageIDPrefix) || s.ownWords(ctx, p.Text)) {
 		params["client_msg_id"] = p.ClientMsgID
 	}
 	purpose := p.Purpose
@@ -387,7 +387,7 @@ func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, erro
 	if p.Origin == "" || p.Origin == OriginUser {
 		p.Text = prompts.ProtectUserMessage(p.Text)
 	}
-	human := humanStart(&p)
+	human := s.humanStart(ctx, &p)
 	sess, err := s.start(ctx, p)
 	if err != nil {
 		return proto.Session{}, err
@@ -405,9 +405,9 @@ func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, erro
 // client_msg_id of its own, which the node ties to the conversation's first line, so that message counts as theirs as
 // a send the hub vouched for does; the id ("" for any other start, and for one that names its session or its first
 // message's id already: a meeting's, Just me's).
-func humanStart(p *StartParams) string {
+func (s *Service) humanStart(ctx context.Context, p *StartParams) string {
 	if !p.Human || p.Origin != "" && p.Origin != OriginUser || p.OpenedBy != "" || p.GuestTools != nil ||
-		p.NewSessionID != "" || p.ClientMsgID != "" || !ownWords(p.Text) {
+		p.NewSessionID != "" || p.ClientMsgID != "" || !s.ownWords(ctx, p.Text) {
 		return ""
 	}
 	p.ClientMsgID = assistantwire.FirstMessageIDPrefix + randomHex(16)
@@ -800,7 +800,7 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	params, err := s.sendParams(ctx, p)
 	going, _ := params["text"].(string) // as it goes: the first to a new main conversation with what the old one left
 	switch {
-	case !p.Human || !ownWords(sent) || !ownWords(going): // anyone else's id, or a person's carrying another's words (a
+	case !p.Human || !s.ownWords(ctx, sent) || !s.ownWords(ctx, going): // anyone else's id, or a person's carrying another's words (a
 		// mail handed on, the old main conversation's), never counts, nor does a person's id once another sent it
 		// (secret_handoff.go)
 		s.humanSent.voidSend(p.SessionID, id)

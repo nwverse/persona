@@ -145,11 +145,14 @@ token, an extension's, a computer link's or the watch's), for two requests: a me
 (`assistant.send_params` marked `human`) and a new conversation's start with its first message (`POST
 /api/v1/assistant/conversations`, the relayed request's own `human` field, never a header). The manager keeps those messages'
 `client_msg_id`s, with the start of their words, for a day, in memory; a start's first message gets an id from the manager
-(`humanStart`, beginning `start-`, which the hub refuses on any app's send), which the node ties to the new conversation's
+(`humanStart`, beginning `start:`, which the hub refuses on any app's send), which the node ties to the new conversation's
 first line (`assistant.send` with `client_msg_id` and no `new_session_id`). A message that carries a context block an app put
 in it is not the user's own words, whoever sent it (`ownWords`): a mail or Lark message handed on from the Inbox to a new or
-an existing chat, a page's selection used as context or for an AI edit, another conversation's message, a document; only a
-workspace block, which the manager fills in from the user's own settings, is. A line counts only when it holds those words (the node ties an id to a line by its first words), and the
+an existing chat, a page's selection used as context or for an AI edit, another conversation's message, a document, a to-do's
+decisions. Only a workspace mention the manager resolves is theirs: every `kind` it names is `workspace` and its computer and
+folder are known, so the manager writes the block anew and the app's words in it never reach the model. Text an app sends
+without such a block counts as typed: the iPhone's share sheet and Siri / Shortcuts ("Ask Persona") send what they carry that
+way today, and are to mark it (#3962 step 4b). A line counts only when it holds those words (the node ties an id to a line by its first words), and the
 transcript's window must open with the turn's prompt. An id counts once: for the first line it is read on, never for another
 line that carries it; a send the hub did not vouch for that carries it, or a second vouched send of it with other words, voids
 it. A `client_msg_id` alone proves nothing (channels, the inbox, extensions and Persona's own sends carry one too, and the hub

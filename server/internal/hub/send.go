@@ -98,6 +98,12 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
 		return
 	}
+	if id, _ := p["client_msg_id"].(string); strings.HasPrefix(id, assistantwire.FirstMessageIDPrefix) {
+		// The manager's own, for a conversation's first message (assistant start.go humanStart): never an app's, so no
+		// later message carries one (and passes for that first message). Refused before anything else is done with it.
+		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
+		return
+	}
 	sid := r.PathValue("sid")
 	p["session_id"] = sid
 	todoID, _ := p["todo_id"].(string)
@@ -194,12 +200,6 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), wait)
 	defer cancel()
 	id, _ := p["client_msg_id"].(string)
-	if strings.HasPrefix(id, assistantwire.FirstMessageIDPrefix) {
-		// The manager's own, for a conversation's first message (assistant start.go humanStart): never an app's, so no
-		// later message carries one (and passes for that first message).
-		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
-		return
-	}
 	if ch := channel.FromClientMsgID(id, []string{"voice"}); ch != "" {
 		h.channelNoted(ch, m.cfg.ID, sid) // a voice conversation's errand (docs/extensions/channels.md "Source markers")
 	}

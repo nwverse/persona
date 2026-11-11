@@ -113,8 +113,8 @@ type StartParams struct {
 
 // FirstMessageIDPrefix begins the client_msg_id the manager gives the first message of a conversation a person's own
 // app opened (StartParams.Human). It is the manager's alone: the hub refuses an app's send that names one, so no later
-// message can carry it.
-const FirstMessageIDPrefix = "start-"
+// message can carry it; a channel's ids (<channel>-<message>) never begin with it.
+const FirstMessageIDPrefix = "start:"
 
 // SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is
 // the app's language, the one a refusal is said in ("": the user's; an older hub sends none).

@@ -73,11 +73,7 @@ func contextAttrs(tag string) map[string]string {
 // workspaceBlock is the filled-in block for a mention with these attributes; false when it names no computer the hub
 // knows or no folder.
 func (s *Service) workspaceBlock(ctx context.Context, attrs map[string]string) (string, bool) {
-	machine, cwd := strings.TrimSpace(attrs["machine"]), strings.TrimSpace(attrs["cwd"])
-	if machine == "" || cwd == "" {
-		return "", false
-	}
-	d, ok := s.device(ctx, machine)
+	d, cwd, ok := s.workspaceDevice(ctx, attrs)
 	if !ok {
 		return "", false
 	}
@@ -113,6 +109,17 @@ func (s *Service) workspaceBlock(ctx context.Context, attrs map[string]string) (
 		}
 	}
 	return prompts.RenderWorkspaceMention(w), true
+}
+
+// workspaceDevice is the computer and folder a workspace mention's attributes name; false when either is missing or the
+// computer is not one the manager knows (the mention then stays as the app wrote it).
+func (s *Service) workspaceDevice(ctx context.Context, attrs map[string]string) (Device, string, bool) {
+	machine, cwd := strings.TrimSpace(attrs["machine"]), strings.TrimSpace(attrs["cwd"])
+	if machine == "" || cwd == "" {
+		return Device{}, "", false
+	}
+	d, ok := s.device(ctx, machine)
+	return d, cwd, ok
 }
 
 // workspaceSessions are the agents (not the assistant's own conversations) whose folder is dir or under it, the most
