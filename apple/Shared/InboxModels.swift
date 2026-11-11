@@ -440,6 +440,19 @@ extension APIClient {
         try await Self.decodeInbox(request("GET", "/api/v1/inbox", query: connectors ? ["sources": "all"] : [:]))
     }
 
+    /// The list again, sending the tag of the one held as `If-None-Match`: nil when it is still the hub's (304), and
+    /// nothing is downloaded or decoded. Without a tag it sends one no answer has, so the hub tags its answer
+    /// (docs/protocol/protocol.md "Inbox validator", #4739). Old hubs answer the whole list every time, untagged.
+    func inboxListing(connectors: Bool, etag: String?) async throws -> (listing: InboxListing?, etag: String?) {
+        let answer = try await conditionalGet("/api/v1/inbox", query: connectors ? ["sources": "all"] : [:],
+                                              etag: etag ?? Self.noInboxTag)
+        guard let data = answer.data else { return (nil, etag) }
+        return (try await Self.decodeInbox(data), answer.etag)
+    }
+
+    /// The tag a client sends before it has one (as the web app does): no answer has it.
+    nonisolated static let noInboxTag = #"W/"i1-""#
+
     /// A page of done items older than the list's (GET /api/v1/inbox/done, #2200), from `after` (nil: the newest).
     /// `before` without a cursor is a moment: the items done before it (a Done group's end, #2969).
     func inboxDone(after cursor: InboxDonePage.Cursor?, before moment: Date? = nil, limit: Int = 100, connectors: Bool = false) async throws -> InboxDonePage {

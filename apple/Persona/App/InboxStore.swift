@@ -26,6 +26,10 @@ final class InboxStore {
     @ObservationIgnored private var marks = InboxMarks()
     @ObservationIgnored private let saver = Debouncer(.seconds(1))
     private static let stateName = "inbox-items"
+    /// The hub's tag of the list `items` came from (`ETag`, #4739): sent with the next reload, which then costs a 304
+    /// while nothing changed. Good only for that hub and while nothing changed `items` here since (`itemsRevision`); not
+    /// kept on disk, where a done mark the hub never got could outlive it.
+    @ObservationIgnored private var listTag: (etag: String, hub: URL, revision: UInt64)?
 
     private init() {
         items = StateCache.load(Self.stateName, as: [InboxItem].self) ?? []
@@ -162,7 +166,32 @@ final class InboxStore {
         guard reloading == nil else { return }
         reloading = Task {
             defer { reloading = nil }
-            await fetch { try await $0.inboxListing(connectors: Self.drawsConnectors) }
+            await fetchListing()
+        }
+    }
+
+    /// `reload`'s request: with the held list's tag, so a list the hub still has costs a 304, nothing decoded or written.
+    private func fetchListing() async {
+        guard let api = AppModel.shared.api else { return }
+        let hub = api.config.url
+        let held = listTag.flatMap { $0.hub == hub && $0.revision == itemsRevision ? $0.etag : nil }
+        loading = true
+        let seq = marks.beginList()
+        defer {
+            loading = false
+            marks.endList(seq)
+        }
+        do {
+            let answer = try await api.inboxListing(connectors: Self.drawsConnectors, etag: held)
+            if let listing = answer.listing {
+                apply(marks.lay(listing.items, seq: seq))
+                if listing.triage != triage { triage = listing.triage }
+            }
+            listTag = answer.etag.map { (etag: $0, hub: hub, revision: itemsRevision) }
+            listed = true
+            error = nil
+        } catch {
+            if let shown = error.shown { self.error = shown }
         }
     }
 
