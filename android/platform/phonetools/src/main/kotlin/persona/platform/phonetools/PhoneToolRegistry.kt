@@ -53,6 +53,17 @@ class PhoneToolRegistry(
                 } catch (cancelled: CancellationException) {
                     gate.fail(call.callId, cancelled)
                     throw cancelled
+                } catch (t: Throwable) {
+                    // runCall converts every expected failure into a result. If something still escapes (a
+                    // future tool, a confirmation summary that throws an unexpected type, a refusal check
+                    // that blows up), the leader must not leave the in-flight slot forever: followers would
+                    // wait indefinitely and the exception would escape the runtime's launch. Convert it into
+                    // a failure result and complete the leader so the gate is released and followers answer.
+                    // A confirmed write that already entered execute is handled inside executeCall and still
+                    // caches uncertain; this branch never re-executes anything.
+                    val result = PhoneToolText.failed(t as? Exception ?: RuntimeException(t))
+                    gate.complete(call.callId, result)
+                    result
                 }
             }
         }
