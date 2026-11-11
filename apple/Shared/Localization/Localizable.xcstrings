@@ -20109,19 +20109,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arrives when this turn ends"
+            "value" : "Arrives when this chat is free"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このターンが終わってから届きます"
+            "value" : "この会話が空いたら届きます"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本轮结束后送达"
+            "value" : "对话空闲后送达"
           }
         }
       },
@@ -64521,19 +64521,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Item %1$lld: %2$@, arrives when this turn ends"
+            "value" : "Item %1$lld: %2$@, arrives when this chat is free"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld件目：%2$@（このターンが終わってから届きます）"
+            "value" : "%1$lld件目：%2$@（この会話が空いたら届きます）"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "第 %1$lld 条：%2$@，本轮结束后送达"
+            "value" : "第 %1$lld 条：%2$@，对话空闲后送达"
           }
         }
       },

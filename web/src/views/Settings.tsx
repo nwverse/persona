@@ -846,6 +846,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
   const [error, setError] = useState("");
   const [checks, setChecks] = useState<Record<string, LauncherCheck | null>>({});
   const [confirm, setConfirm] = useState(false);
+  // what still names an rc-file launcher, asked when its Hide is confirmed: they keep running on it (#4661)
+  const [uses, setUses] = useState<string[] | null>(null);
   const [showDef, setShowDef] = useState(false);
   const mname = (id: string) => machines.find((m) => m.id === id)?.name ?? id;
   // extensions draw a section here (docs/extensions/extensions.md "Declarative UI" launcher_section)
@@ -860,6 +862,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
     setError("");
     setChecks({});
     setConfirm(false);
+    setUses(null);
     setShowDef(false);
     if (!name) return;
     let live = true;
@@ -899,6 +902,15 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
         if (shown.current === asked) setChecks((x) => ({ ...x, [id]: c }));
       }),
     );
+  };
+
+  const askRemove = () => {
+    setConfirm((c) => !c);
+    if (!l || !name || managedProvider(l.source) || uses !== null) return;
+    const asked = name;
+    api<{ uses?: string[] }>(`${enLauncher(name)}/uses`)
+      .then((r) => shown.current === asked && setUses(r.uses ?? []))
+      .catch(() => {}); // an older hub: the plain confirmation, as before
   };
 
   const remove = async () => {
@@ -942,12 +954,13 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               </Button>
             ) : (
               <span className="relative">
-                <Button tone="quiet" icon={managedProvider(l.source) ? "x" : undefined} onClick={() => setConfirm((c) => !c)} className="text-red enabled:hover:text-red">
+                <Button tone="quiet" icon={managedProvider(l.source) ? "x" : undefined} onClick={askRemove} className="text-red enabled:hover:text-red">
                   {managedProvider(l.source) ? t("settings.delete_provider") : t("settings.hide_in_persona")}
                 </Button>
                 {/* the confirmation comes up right at the button (like the app), not as another dialog */}
                 {confirm && (
-                  <span className="absolute bottom-full left-0 mb-1.5 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
+                  <span className="absolute bottom-full left-0 mb-1.5 flex flex-col items-start gap-1 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
+                    {!managedProvider(l.source) && !!uses?.length && <span className="w-72 px-1 text-[12px] text-ink-2">{t("settings.hide_uses", { uses: uses.join(", ") })}</span>}
                     <Button tone="danger" onClick={() => void remove()}>
                       {managedProvider(l.source) ? t("settings.confirm_delete") : t("settings.confirm_hide")}
                     </Button>
