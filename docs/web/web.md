@@ -1529,7 +1529,8 @@ and components (`docs/design/DESIGN_SYSTEM.md` 3.1). A Persona chat keeps its la
   Codex thread keeps its model ("Codex can't change the model of a running session"), but the model it runs still opens
   its flyout, where the thinking effort and Fast apply at once. While the Agent works or waits on you, picks are off and
   the panel says why. A launcher that fixes its own `--model` says so and takes no pick. Claude Code and Codex take a model
-  ID typed into the search ("Use “…”", #1644, `lib/model-id.ts`); IDs typed before are listed and can be forgotten.
+  ID typed into the search ("Use “…”", #1644, `lib/model-id.ts`), offered only when none of the launcher's models answers
+  the search (a word that names a listed model is a search); IDs typed before are listed and can be forgotten.
 - **Applying**: a pick sends `POST …/modes {"model"}`, then `{"effort"}`, then (Codex) `{"service_tier"}`, each only when it
   differs from the session's. The model and effort are drawn at once and put back with a toast if the node refuses; the
   speed waits for the session's push (DESIGN_SYSTEM.md "Codex speed controls"). The panel closes once a pick applied and
