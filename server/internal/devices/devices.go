@@ -639,6 +639,11 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
+	if p.Method == proto.MethodSecretStage || p.Method == "session.start" && startHasSecretTicket(params) {
+		// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another
+		// manager's to ask for, so nobody else can stage values or start an Agent with them.
+		return nil, &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items

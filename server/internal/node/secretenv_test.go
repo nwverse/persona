@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,46 +19,92 @@ import (
 // handoffTestValue is the one value staged in these tests: nothing the node sends or logs may carry it.
 const handoffTestValue = "synthetic-handoff-value-5b1e9d"
 
+// handoffTestNode is launchKeyTestNode with hand-offs of its own (not the test process's).
+func handoffTestNode() *Node {
+	n := launchKeyTestNode()
+	n.secrets = newSecretStage()
+	return n
+}
+
+// stageForTest does what the manager does: a check for a key, then the values sealed to it.
 func stageForTest(t *testing.T, n *Node, env ...proto.SecretEnvVar) (proto.SecretStageResult, error) {
 	t.Helper()
-	raw, _ := json.Marshal(proto.SecretStageParams{Env: env})
-	out, err := n.secretStageCall(raw)
+	out, err := n.secretStageCall(json.RawMessage(`{"check":true}`))
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	k := out.(proto.SecretStageResult)
+	if k.Key == "" || k.KeyID == "" || k.Ticket != "" {
+		t.Fatalf("check answered %+v", k)
+	}
+	sealed, err := proto.SealSecretEnv(k.Key, k.KeyID, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(sealed, []byte(handoffTestValue)) {
+		t.Fatal("sealed in the clear")
+	}
+	raw, _ := json.Marshal(proto.SecretStageParams{KeyID: k.KeyID, Sealed: sealed})
+	res, err := n.secretStageCall(raw)
 	if err != nil {
 		return proto.SecretStageResult{}, err
 	}
-	return out.(proto.SecretStageResult), nil
+	return res.(proto.SecretStageResult), nil
 }
 
 func envVar(name, value string) proto.SecretEnvVar {
 	return proto.SecretEnvVar{Name: name, Value: []byte(value)}
 }
 
-// Staged values go once, with the machine's launch key, to the first who asks with the ticket; nobody after.
+// A hand-off is sealed to a one-time key; its values go once, with the machine's launch key, to the first who asks
+// with the ticket; nobody after.
 func TestSecretStageAndTake(t *testing.T) {
 	launchKeyHome(t)
-	n := launchKeyTestNode()
+	n := handoffTestNode()
 	key, err := ensureLaunchKey(nodeclient.LaunchKeyPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, err := n.secretStageCall(json.RawMessage(`{"check":true}`)); err != nil || out.(proto.SecretStageResult).Ticket != "" {
-		t.Fatalf("check: %v %v", out, err)
+	nine := []proto.SecretEnvVar{}
+	for i := range 9 {
+		nine = append(nine, envVar(fmt.Sprintf("A%d", i), handoffTestValue))
 	}
 	for what, env := range map[string][]proto.SecretEnvVar{
-		"none":         nil,
-		"PATH":         {envVar("PATH", handoffTestValue)},
-		"a loader's":   {envVar("LD_PRELOAD", handoffTestValue)},
-		"a mac loader": {envVar("DYLD_INSERT_LIBRARIES", handoffTestValue)},
-		"Persona's":    {envVar("PERSONA_HOME", handoffTestValue)},
-		"lower case":   {envVar("github_token", handoffTestValue)},
-		"too short":    {envVar("GITHUB_TOKEN", "short")},
-		"a NUL":        {envVar("GITHUB_TOKEN", "abcdefgh\x00ij")},
-		"twice":        {envVar("A_TOKEN", handoffTestValue), envVar("A_TOKEN", handoffTestValue)},
-		"nine":         {envVar("A1", handoffTestValue), envVar("A2", handoffTestValue), envVar("A3", handoffTestValue), envVar("A4", handoffTestValue), envVar("A5", handoffTestValue), envVar("A6", handoffTestValue), envVar("A7", handoffTestValue), envVar("A8", handoffTestValue), envVar("A9", handoffTestValue)},
+		"none":          nil,
+		"PATH":          {envVar("PATH", handoffTestValue)},
+		"a loader's":    {envVar("LD_PRELOAD", handoffTestValue)},
+		"a mac loader":  {envVar("DYLD_INSERT_LIBRARIES", handoffTestValue)},
+		"Persona's":     {envVar("PERSONA_HOME", handoffTestValue)},
+		"the Agent's":   {envVar("ANTHROPIC_BASE_URL", handoffTestValue)},
+		"a proxy":       {envVar("HTTPS_PROXY", handoffTestValue)},
+		"git's command": {envVar("GIT_SSH_COMMAND", handoffTestValue)},
+		"an editor":     {envVar("EDITOR", handoffTestValue)},
+		"lower case":    {envVar("github_token", handoffTestValue)},
+		"too short":     {envVar("GITHUB_TOKEN", "fifteen-bytes!!")},
+		"a NUL":         {envVar("GITHUB_TOKEN", "abcdefghijklmnop\x00q")},
+		"twice":         {envVar("A_TOKEN", handoffTestValue), envVar("A_TOKEN", handoffTestValue)},
+		"nine":          nine,
 	} {
 		if _, err := stageForTest(t, n, env...); err == nil || strings.Contains(err.Error(), handoffTestValue) {
 			t.Errorf("%s: %v", what, err)
 		}
+	}
+
+	// A key works once, and only for what was sealed to it.
+	out, _ := n.secretStageCall(json.RawMessage(`{"check":true}`))
+	k := out.(proto.SecretStageResult)
+	other, _ := n.secretStageCall(json.RawMessage(`{"check":true}`))
+	sealed, _ := proto.SealSecretEnv(other.(proto.SecretStageResult).Key, other.(proto.SecretStageResult).KeyID, []proto.SecretEnvVar{envVar("GITHUB_TOKEN", handoffTestValue)})
+	raw, _ := json.Marshal(proto.SecretStageParams{KeyID: k.KeyID, Sealed: sealed})
+	if _, err := n.secretStageCall(raw); err == nil {
+		t.Fatal("opened with another key")
+	}
+	raw, _ = json.Marshal(proto.SecretStageParams{KeyID: k.KeyID, Sealed: sealed}) // the node zeroed the first
+	if _, err := n.secretStageCall(raw); err == nil || !strings.Contains(err.Error(), "used") {
+		t.Fatalf("the key again: %v", err)
+	}
+	if _, err := n.secretStageCall(json.RawMessage(`{"env":[{"name":"GITHUB_TOKEN","value":"` + base64.StdEncoding.EncodeToString([]byte(handoffTestValue)) + `"}]}`)); err == nil {
+		t.Fatal("values in the clear were taken")
 	}
 
 	res, err := stageForTest(t, n, envVar("GITHUB_TOKEN", handoffTestValue))
@@ -93,7 +140,7 @@ func TestSecretStageAndTake(t *testing.T) {
 	st.expires = time.Now().Add(-time.Second)
 	s.staged[res.Ticket] = st
 	s.mu.Unlock()
-	if n.handoffs().has(res.Ticket) {
+	if n.handoffs().has(res.Ticket) || n.handoffs().reserve(res.Ticket) {
 		t.Fatal("expired, still good")
 	}
 	if resp := ask(res.Ticket, key); resp["error"] == nil {
@@ -109,7 +156,7 @@ func fmtEnv(resp map[string]any) string {
 // Through the real socket, with what personad launch --ticket sends.
 func TestSecretEnvOverTheSocket(t *testing.T) {
 	launchKeyHome(t)
-	n := launchKeyTestNode()
+	n := handoffTestNode()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ln, err := n.listenOnce(ctx)
@@ -130,7 +177,15 @@ func TestSecretEnvOverTheSocket(t *testing.T) {
 	}
 }
 
-// What the node sends has every handed-over value hidden, in any string, and stays valid JSON.
+func jsonLine(v any, html bool) []byte {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(html)
+	_ = enc.Encode(v)
+	return b.Bytes()
+}
+
+// What the node sends has every handed-over value hidden in its string values, never in keys, and stays valid JSON.
 func TestSecretScrubberHidesValuesInLines(t *testing.T) {
 	s := &secretScrubber{}
 	plain := []byte(`{"method":"session.items","params":{"items":[{"text":"nothing here"}]}}` + "\n")
@@ -139,23 +194,15 @@ func TestSecretScrubberHidesValuesInLines(t *testing.T) {
 	}
 	value := "tok<en>&" + handoffTestValue + `"quoted"\back`
 	s.add([]byte(value))
-	encoded := func(v any, html bool) []byte {
-		var b bytes.Buffer
-		enc := json.NewEncoder(&b)
-		enc.SetEscapeHTML(html)
-		_ = enc.Encode(v)
-		return b.Bytes()
-	}
 	for _, html := range []bool{false, true} {
 		for what, v := range map[string]any{
 			"a transcript item": map[string]any{"method": "session.items", "params": map[string]any{"items": []any{map[string]any{"text": "the token is " + value + " (from the env)"}}}},
 			"a card's input":    map[string]any{"method": "hook.event", "params": map[string]any{"tool_input": map[string]any{"command": "curl -H 'Authorization: " + value + "'"}}},
 			"a screen":          map[string]any{"result": map[string]any{"text": "$ echo $TOKEN\n" + value + "\n$ "}},
-			"base64 of it":      map[string]any{"result": map[string]any{"text": "printf %s $TOKEN | base64 → " + base64.StdEncoding.EncodeToString([]byte(value))}},
 			"next to escapes":   map[string]any{"result": map[string]any{"text": "\n\t" + value + "\\\n"}},
 			"twice":             map[string]any{"result": map[string]any{"a": value, "b": value + value}},
 		} {
-			got := s.line(encoded(v, html))
+			got := s.line(jsonLine(v, html))
 			if !json.Valid(bytes.TrimSpace(got)) {
 				t.Errorf("%s (html %v): not JSON any more: %s", what, html, got)
 			}
@@ -165,13 +212,64 @@ func TestSecretScrubberHidesValuesInLines(t *testing.T) {
 		}
 	}
 
-	// A match must start a character: never inside an escape, so the line stays valid.
+	// Its base64 becomes base64 of the same length: text shows no value, a payload around it still decodes.
+	b64 := base64.StdEncoding.EncodeToString([]byte(value))
+	got := s.line(jsonLine(map[string]any{"text": "printf %s $TOKEN | base64 → " + b64}, false))
+	if bytes.Contains(got, []byte(b64)) || !json.Valid(bytes.TrimSpace(got)) {
+		t.Fatalf("base64 in text: %s", got)
+	}
+	payload := base64.StdEncoding.EncodeToString(append([]byte("abc"), []byte(value)...)) // aligned: the value's own base64 inside
+	got = s.line(jsonLine(map[string]any{"data": payload}, false))
+	var back struct{ Data string }
+	if err := json.Unmarshal(got, &back); err != nil {
+		t.Fatal(err)
+	}
+	if dec, err := base64.StdEncoding.DecodeString(back.Data); err != nil || bytes.Contains(dec, []byte(handoffTestValue)) {
+		t.Fatalf("a base64 payload: %v %q", err, dec)
+	}
+
+	// Never a key: a value that is also a key name stays as a key.
 	s2 := &secretScrubber{}
-	s2.add([]byte("nsynthetic-value"))
-	line := encoded(map[string]any{"text": "a\nsynthetic-value and nsynthetic-value"}, false)
-	got := s2.line(line)
-	if !json.Valid(bytes.TrimSpace(got)) || !strings.Contains(string(got), `a\nsynthetic-value and `+proto.Redacted) {
-		t.Fatalf("escape boundary: %s", got)
+	s2.add([]byte("a-sixteen-byte-key-name"))
+	got = s2.line([]byte(`{"a-sixteen-byte-key-name": "a-sixteen-byte-key-name"}`))
+	if string(got) != `{"a-sixteen-byte-key-name": "`+proto.Redacted+`"}` {
+		t.Fatalf("a key: %s", got)
+	}
+
+	// A match starts a character: never inside an escape (\n, \uXXXX), so the line stays valid.
+	s3 := &secretScrubber{}
+	s3.add([]byte("nsynthetic-value-0123"))
+	s3.add([]byte("00e9synthetic-value-4567"))
+	line := jsonLine(map[string]any{"text": "a\nsynthetic-value-0123 and nsynthetic-value-0123, ésynthetic-value-4567 or 00e9synthetic-value-4567"}, false)
+	line = bytes.ReplaceAll(line, []byte("é"), []byte(`é`))
+	got = s3.line(line)
+	if !json.Valid(bytes.TrimSpace(got)) || !strings.Contains(string(got), `a\nsynthetic-value-0123 and `+proto.Redacted) ||
+		!strings.Contains(string(got), `ésynthetic-value-4567 or `+proto.Redacted) {
+		t.Fatalf("escape boundaries: %s", got)
+	}
+	// A value ending in a backslash cannot eat half of an escape.
+	s4 := &secretScrubber{}
+	s4.add([]byte(`Tr0ub4dor3-xyz-pw\`))
+	got = s4.line(jsonLine(map[string]any{"text": `pw is Tr0ub4dor3-xyz-pw\" ok`}, false))
+	if !json.Valid(bytes.TrimSpace(got)) {
+		t.Fatalf("a trailing backslash: %s", got)
+	}
+}
+
+// The process keeps the last secretScrubMost values, the oldest going first, whole.
+func TestSecretScrubberKeepsTheNewest(t *testing.T) {
+	s := &secretScrubber{}
+	for i := range secretScrubMost + 1 {
+		s.add([]byte(fmt.Sprintf("synthetic-value-%04d-padding", i)))
+	}
+	if got := s.line(jsonLine(map[string]any{"a": "synthetic-value-0000-padding"}, false)); bytes.Contains(got, []byte(proto.Redacted)) {
+		t.Fatalf("the oldest is still hidden: %s", got)
+	}
+	for _, i := range []int{1, secretScrubMost} {
+		v := fmt.Sprintf("synthetic-value-%04d-padding", i)
+		if got := s.line(jsonLine(map[string]any{"a": v, "b": base64.StdEncoding.EncodeToString([]byte(v))}, false)); bytes.Contains(got, []byte(v)) || bytes.Contains(got, []byte(base64.StdEncoding.EncodeToString([]byte(v)))) {
+			t.Fatalf("%d: %s", i, got)
+		}
 	}
 }
 
@@ -191,16 +289,22 @@ func TestScrubWriter(t *testing.T) {
 	}
 }
 
-// Staging hides the values in what the node sends from then on; terminal bytes sent as base64 are hidden at their
-// source.
+// Staging hides the values in what the node sends from then on, a terminal frame's base64 included, at any offset.
 func TestStagedValuesAreHidden(t *testing.T) {
 	launchKeyHome(t)
-	n := launchKeyTestNode()
+	n := handoffTestNode()
 	if _, err := stageForTest(t, n, envVar("GITHUB_TOKEN", handoffTestValue)); err != nil {
 		t.Fatal(err)
 	}
 	if got := n.scrubBytes([]byte("out: " + handoffTestValue)); string(got) != "out: "+proto.Redacted {
 		t.Fatalf("terminal bytes: %q", got)
+	}
+	for _, lead := range []string{"", "a", "ab"} { // every base64 alignment
+		frame := base64.StdEncoding.EncodeToString([]byte("\x1b[1m" + lead + handoffTestValue + "\r\n"))
+		dec, err := base64.StdEncoding.DecodeString(n.scrubB64(frame))
+		if err != nil || bytes.Contains(dec, []byte(handoffTestValue)) || !bytes.Contains(dec, []byte(lead+proto.Redacted)) {
+			t.Fatalf("frame with %q in front: %v %q", lead, err, dec)
+		}
 	}
 	var out bytes.Buffer
 	p := rpc.New("t", scrubWriter{w: &out, s: n.handoffs().scrub})
@@ -210,12 +314,22 @@ func TestStagedValuesAreHidden(t *testing.T) {
 	}
 }
 
-// Only a new Claude Code start whose command personad can exec takes a ticket, and only one staged now; its command
-// line carries the ticket, never a value, and runs the agent through personad launch.
+// Every connection's Node of a process shares its hand-offs: a reconnect keeps the values hidden.
+func TestHandoffsOutliveAConnection(t *testing.T) {
+	a, b := &Node{}, &Node{}
+	if a.handoffs() != b.handoffs() {
+		t.Fatal("two connections, two stages")
+	}
+}
+
+// Only a new Claude Code start whose command personad can exec takes a ticket, and only one staged and no other
+// start's; its command line carries the ticket, never a value, and runs the agent through personad launch.
 func TestSecretStartCommand(t *testing.T) {
 	launchKeyHome(t)
-	n := launchKeyTestNode()
+	n := handoffTestNode()
 	n.bin = "/opt/persona/personad"
+	n.setManaged([]proto.ManagedLauncher{{Name: "gw", BaseURL: "http://gw.example.com", Model: "m1", APIKey: launchKeyTestSecret},
+		{Name: "cx", Agent: "codex", BaseURL: "http://gw.example.com", Model: "m1", APIKey: launchKeyTestSecret}})
 	res, err := stageForTest(t, n, envVar("GITHUB_TOKEN", handoffTestValue))
 	if err != nil {
 		t.Fatal(err)
@@ -228,23 +342,25 @@ func TestSecretStartCommand(t *testing.T) {
 		return ""
 	}
 	for what, err := range map[string]error{
-		"codex":          n.secretStartProblem("codex", "codex", "", res.Ticket),
-		"a resume":       n.secretStartProblem("claude", "gw", "11111111-2222-3333-4444-555555555555", res.Ticket),
-		"an rc function": n.secretStartProblem("claude", "myclaude", "", res.Ticket),
-		"not staged":     n.secretStartProblem("claude", "gw", "", "nope"),
-		"omp":            n.secretStartProblem(ompAgent, ompAgent, "", res.Ticket),
+		"codex":                    n.secretStartProblem("codex", "codex", "", res.Ticket),
+		"a Codex managed launcher": n.secretStartProblem("claude", "cx", "", res.Ticket),
+		"a resume":                 n.secretStartProblem("claude", "gw", "11111111-2222-3333-4444-555555555555", res.Ticket),
+		"an rc function":           n.secretStartProblem("claude", "myclaude", "", res.Ticket),
+		"not staged":               n.secretStartProblem("claude", "gw", "", "nope"),
+		"omp":                      n.secretStartProblem(ompAgent, ompAgent, "", res.Ticket),
 	} {
-		if err == nil {
-			t.Errorf("%s: allowed", what)
+		if code(err) == "" {
+			t.Errorf("%s: %v", what, err)
 		}
 	}
 	if c := code(n.secretStartProblem("claude", "gw", "", "nope")); c != secretEnvGoneCode {
 		t.Errorf("not staged: %q", c)
 	}
-	for _, launcher := range []string{"gw", "claude"} {
-		if err := n.secretStartProblem("claude", launcher, "", res.Ticket); err != nil {
-			t.Errorf("%s: %v", launcher, err)
-		}
+	if err := n.secretStartProblem("claude", "gw", "", res.Ticket); err != nil {
+		t.Fatalf("gw: %v", err)
+	}
+	if code(n.secretStartProblem("claude", "claude", "", res.Ticket)) != secretEnvGoneCode {
+		t.Fatal("a second start took the same ticket")
 	}
 
 	spec := claudeLaunch{Launcher: "gw"}
@@ -262,5 +378,8 @@ func TestSecretStartCommand(t *testing.T) {
 	line = n.withSecretTicket(n.claudeCommandLine(spec, "--session-id x", shellQuote), "claude", res.Ticket, shellQuote)
 	if !strings.HasPrefix(line, `CLAUDE_CONFIG_DIR="$HOME"/.claude-work /opt/persona/personad launch --ticket `+res.Ticket+" -- claude --session-id x") {
 		t.Fatalf("plain claude with its directory: %s", line)
+	}
+	if err := LaunchWithSecrets(context.Background(), res.Ticket, []string{"sh", "-c", "env"}); err == nil || !strings.Contains(err.Error(), "only -- claude") {
+		t.Fatalf("another command: %v", err)
 	}
 }

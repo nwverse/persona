@@ -498,9 +498,8 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
-	if (method == proto.MethodSecretStage || method == "session.start" && startHasSecretTicket(params)) && !nodeHas(info, nodeproto.SecretEnv) {
-		// An older node would ignore the ticket and start the Agent without the values the card gave it.
-		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_env")}
+	if err := secretEnvRefusal(ctx, info, method, params); err != nil {
+		return err
 	}
 	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
 		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
@@ -508,8 +507,11 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 	}
 	if p == nil && (m.waitWarm(ctx) || m.waitFirst(ctx)) { // the manager just started: its node is on its way (warm.go)
 		m.mu.Lock()
-		p = m.peer
+		p, info = m.peer, m.info
 		m.mu.Unlock()
+		if err := secretEnvRefusal(ctx, info, method, params); err != nil { // checked against the node it got
+			return err
+		}
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
@@ -855,6 +857,19 @@ func (m *Machine) isOnline() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.online
+}
+
+// secretEnvRefusal refuses a hand-off (secret.stage, a session.start with a ticket) to a node that has not announced
+// secret_env: an older one would answer "unknown method", or start the Agent without the values the card gave it.
+// Announced, never assumed: a node not yet known (no handshake) is refused too.
+func secretEnvRefusal(ctx context.Context, info proto.NodeInfo, method string, params any) error {
+	if method != proto.MethodSecretStage && (method != "session.start" || !startHasSecretTicket(params)) {
+		return nil
+	}
+	if info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.SecretEnv) {
+		return nil
+	}
+	return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_env")}
 }
 
 // startHasSecretTicket: session.start params carrying a hand-off's ticket.

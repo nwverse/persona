@@ -336,6 +336,11 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		if err != nil {
 			return errors.New("personad launch " + name + ": " + err.Error())
 		}
+		for _, k := range envNames(secrets) { // the launcher's own settings are never replaced by a hand-off
+			if slices.Contains(envNames(resp.Env), k) {
+				return errors.New("personad launch " + name + ": " + k + " is the provider's own setting, not a secret to hand over")
+			}
+		}
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
 	argv := launchArgv(agent, args, resp.Args, resp.Effort, resp.Model, resp.Env)
@@ -346,8 +351,8 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 // LaunchWithSecrets is `personad launch --ticket <ticket> -- <command> [args…]`: plain claude (or what argv names)
 // with a hand-off's values in its environment (secretenv.go), the rest of the environment as the shell gave it.
 func LaunchWithSecrets(ctx context.Context, ticket string, argv []string) error {
-	if len(argv) == 0 {
-		return errors.New("personad launch --ticket: no command")
+	if len(argv) == 0 || argv[0] != "claude" { // the only command the node starts this way (withSecretTicket)
+		return errors.New("personad launch --ticket: only -- claude …")
 	}
 	exe, err := exec.LookPath(argv[0])
 	if err != nil {

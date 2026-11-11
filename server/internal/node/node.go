@@ -238,9 +238,8 @@ type Node struct {
 	larkCfg     proto.AssistantLark
 	larkCfgAt   time.Time
 	larkAllowed map[string]bool
-	// The hand-offs to Agent starts: values staged for a ticket, and those hidden from what the node sends (secretenv.go).
-	secretsOnce sync.Once
-	secrets     *secretStage
+	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
+	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
 	gp *gateProxy
 	// lark-cli (larkcligate.go): each command's risk level as lark-cli reported it, and where the binary is.
@@ -934,7 +933,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID}
 		if p.SecretTicket != "" { // only a new Claude Code start in a terminal takes one (control.go secretStartProblem)
 			_, onRuntime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]
-			if h, _ := n.startRuntime(p.Launcher); h != nil || onRuntime {
+			if h, _ := n.startRuntime(p.Launcher); h != nil || onRuntime || p.ResumeSessionID != "" {
 				return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
 			}
 			if !n.handoffs().has(p.SecretTicket) {

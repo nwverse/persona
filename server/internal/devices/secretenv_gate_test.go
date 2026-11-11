@@ -2,8 +2,11 @@ package devices
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/devicewire"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -39,5 +42,30 @@ func TestSecretHandOffNeedsANodeWithSecretEnv(t *testing.T) {
 	m.mu.Unlock()
 	if err := m.call(context.Background(), "session.start", map[string]any{"cwd": "/tmp", "secret_ticket": "t"}, nil); err != nil {
 		t.Fatalf("a node with secret_env: %v", err)
+	}
+}
+
+// Only the manager that connects the computer makes a hand-off (CallNode, in its own process, after its card): the
+// hub's and other managers' calls (Devices.Call) cannot stage values or start an Agent with a ticket, whatever node.
+func TestSecretHandOffIsTheManagersOwn(t *testing.T) {
+	d, _, m, _ := engineHub(t)
+	f, _ := connectEngineNode(t, m)
+	m.mu.Lock()
+	m.info.Version, m.info.Protocol, m.info.Capabilities = "new", 1, []string{nodeproto.Sessions, nodeproto.SecretEnv}
+	m.mu.Unlock()
+	for what, c := range map[string]devicewire.NodeCall{
+		"secret.stage":          {MachineID: m.cfg.ID, Method: proto.MethodSecretStage, Params: json.RawMessage(`{"check":true}`)},
+		"a start with a ticket": {MachineID: m.cfg.ID, Method: "session.start", Params: json.RawMessage(`{"cwd":"/tmp","secret_ticket":"t"}`)},
+	} {
+		var rerr *rpc.Error
+		if _, err := d.Call(context.Background(), c); !errors.As(err, &rerr) || rerr.Code != devicewire.CodeHandoffRefused {
+			t.Errorf("%s from the hub: %v", what, err)
+		}
+	}
+	if calls := f.seen(); len(calls) != 0 {
+		t.Fatalf("sent to the node: %v", calls)
+	}
+	if _, err := d.CallNode(context.Background(), m.cfg.ID, proto.MethodSecretStage, json.RawMessage(`{"check":true}`)); err != nil {
+		t.Fatalf("the manager's own: %v", err)
 	}
 }

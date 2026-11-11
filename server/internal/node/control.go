@@ -37,6 +37,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if err := execution.check(); err != nil {
 		return nil, err
 	}
+	if execution.SecretTicket != "" && resume != "" { // a hand-off goes only to a new start (secretenv.go)
+		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
+	}
 	if resume != "" && validID(resume) && n.codexPath(resume) != "" && !n.isAssistantSession(resume) {
 		if _, live := n.agent(resume); !live { // a Codex thread nothing runs (codex_resume.go)
 			return n.resumeCodexSession(ctx, resume, launcher, prompt, mode)
@@ -81,6 +84,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 	}
 	argv, codex := n.codexLauncher(ctx, launcher)
+	if codex && execution.SecretTicket != "" { // Codex would start without the values (secretenv.go)
+		return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
+	}
 	if mode == "plan" {
 		if codex && kind != traexAgent {
 			if argv, err = n.codexReadonlyArgs(launcher, argv, mode); err != nil {
