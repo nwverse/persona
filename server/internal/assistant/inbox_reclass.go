@@ -148,7 +148,7 @@ func feedbackOf(it *InboxItem, to string, now time.Time) InboxFeedback {
 
 // ---- moving an item ----
 
-var errUserTier = i18n.ErrEnglish("inbox-errors.user_tier")
+var errUserTier = i18n.ErrEnglish("inbox-errors.policy_tier") // the same words as a policy's tier
 
 // reclassify moves item id to tier (action, fyi, noise), or with tier "" puts back what it had before the user's
 // last move ("Undo"). It keeps the correction (an undo takes it back) and says whether a rule is being drafted from it.

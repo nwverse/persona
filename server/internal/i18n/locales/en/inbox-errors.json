@@ -38,6 +38,5 @@
   "history_cursor": "before must be an RFC 3339 time, and before_id comes with it",
   "history_zone": "tz must be a time zone name, such as Europe/Berlin",
   "bad_folder": "folder must have at least one name between the slashes",
-  "user_tier": "tier must be action, fyi, noise or empty",
   "rules_long": "The rules are too long (4000 characters at most)"
 }
