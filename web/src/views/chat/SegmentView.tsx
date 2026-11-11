@@ -71,7 +71,6 @@ export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], 
   return Math.round(h + gap * Math.max(0, nodes.length + (user ? 1 : 0) + (modelChange ? 1 : 0) - 1));
 }
 
-
 /** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
  *  (spec/fixtures/sync); the transcript's own bubbles have none. `starting`: the first message of a conversation still
  *  starting (the new-conversation page, #1697): drawn as it will be once sent, without actions (there is nothing yet to
