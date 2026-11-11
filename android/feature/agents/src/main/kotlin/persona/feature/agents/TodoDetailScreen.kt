@@ -334,6 +334,8 @@ fun TodoDetailScreen(
                 }
             }
 
+            // Where its work stands (#4636, iOS TodoStageBar): only for a stage this build knows
+            TodoStage.of(todo.stage)?.let { stage -> item(key = "stage") { JCard { TodoStageBar(stage) } } }
             // Due date, reminder and priority (#4636, iOS TodoPlanSection), saved as they change
             item(key = "plan") {
                 val feedback = LocalAppFeedback.current
