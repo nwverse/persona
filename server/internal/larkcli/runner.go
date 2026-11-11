@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -239,6 +238,9 @@ func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
 				return
 			default:
 				_ = osproc.StopGroup(pid, true)
+				// A child forked while that signal goes out can miss it (macOS) and live on, adopted by launchd, holding
+				// stdout open so the login reports done only once it exits: sweep until the group is empty (#4004).
+				osproc.SweepGroup(pid, time.Second)
 			}
 		case <-finished:
 		}
@@ -699,12 +701,12 @@ func findConfigFields(value any, out *ConfigInfo) {
 }
 
 var (
-	configAppIDPattern = regexp.MustCompile(`(?i)["']?app[_-]?id["']?\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
-	configBrandPattern = regexp.MustCompile(`(?i)["']?brand["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)`)
-	loginURLPattern    = regexp.MustCompile(`https://[^\s"'<>]+`)
+	configAppIDPattern = lazyre.New(`(?i)["']?app[_-]?id["']?\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
+	configBrandPattern = lazyre.New(`(?i)["']?brand["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)`)
+	loginURLPattern    = lazyre.New(`https://[^\s"'<>]+`)
 )
 
-func firstRegex(raw []byte, re *regexp.Regexp) string {
+func firstRegex(raw []byte, re *lazyre.Regexp) string {
 	match := re.FindSubmatch(raw)
 	if len(match) == 2 {
 		return strings.TrimRight(string(match[1]), ".,;)")

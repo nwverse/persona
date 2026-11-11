@@ -64,6 +64,8 @@ nonisolated enum MarkdownTableText {
     struct Measure: Sendable {
         var natural: [CGFloat]
         var minimum: [CGFloat]
+        /// Each column's alignment (`alignments`).
+        var alignments: [TextAlignment] = []
     }
 
     private static let memo = TextMemo<Measure>(limit: 200)
@@ -89,6 +91,28 @@ nonisolated enum MarkdownTableText {
         return rows
     }
 
+    /// Each column's alignment, from the table's delimiter row as GFM reads it: `--:` trailing, `:-:` centered, `:--` and
+    /// `---` leading. The Grid MarkdownUI draws a table in aligns its columns so, but `FittedTableCell` gives every cell
+    /// its column's whole width, so the cell aligns its words itself. Empty when there is no delimiter row.
+    static func alignments(_ markdown: String) -> [TextAlignment] {
+        for line in markdown.split(separator: "\n") {
+            var t = line.trimmingCharacters(in: .whitespaces)
+            guard t.contains("-"), t.allSatisfy({ "|-: \t".contains($0) }) else { continue }
+            if t.hasPrefix("|") { t.removeFirst() }
+            if t.hasSuffix("|") { t.removeLast() }
+            let cells = t.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard cells.allSatisfy({ $0.contains("-") }) else { continue }
+            return cells.map { c in
+                switch (c.hasPrefix(":"), c.hasSuffix(":")) {
+                case (true, true): .center
+                case (false, true): .trailing
+                default: .leading
+                }
+            }
+        }
+        return []
+    }
+
     /// `**a**`, `` `b` ``, `[c](u)`, `<u>` → the words shown.
     static func plain(_ s: String) -> String {
         var t = s.replacingOccurrences(of: #"\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
@@ -97,12 +121,14 @@ nonisolated enum MarkdownTableText {
         return t
     }
 
-    /// Natural and minimum widths per column at the cell font (`fontSize`, the header semibold).
+    /// Natural and minimum widths per column at the cell font (`fontSize`, the header semibold, digits tabular as the
+    /// cells draw them), and the columns' alignments.
     static func measure(_ markdown: String, fontSize: CGFloat) -> Measure {
         memo("\(fontSize)\n" + markdown) { _ in
             let rows = rows(markdown)
             let n = rows.map(\.count).max() ?? 0
-            let body = UIFont.systemFont(ofSize: fontSize), head = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
+            let body = UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+            let head = UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold)
             func width(_ s: String, _ f: UIFont) -> CGFloat { ceil((s as NSString).size(withAttributes: [.font: f]).width) + 2 }
             var natural = Array(repeating: CGFloat(0), count: n), minimum = Array(repeating: CGFloat(0), count: n)
             for (r, row) in rows.enumerated() {
@@ -114,7 +140,7 @@ nonisolated enum MarkdownTableText {
                     minimum[c] = max(minimum[c], min(width(piece, f), 160))
                 }
             }
-            return Measure(natural: natural, minimum: minimum)
+            return Measure(natural: natural, minimum: minimum, alignments: alignments(markdown))
         }
     }
 
@@ -166,6 +192,8 @@ final class MarkdownTablePreparation {
 extension EnvironmentValues {
     /// The text width of each column of the table being drawn (`TablePlan`); empty until measured.
     @Entry var tableColumnWidths: [CGFloat] = []
+    /// How each column of the table being drawn aligns its words (`MarkdownTableText.alignments`).
+    @Entry var tableColumnAlignments: [TextAlignment] = []
 }
 
 /// The reply theme's table: fitted to the width it gets (`TablePlan`); when it still has to scroll, its right edge fades
@@ -198,7 +226,9 @@ struct FittedTable: View {
                             available: available - n * (Self.cellPadding + Self.border) - Self.border * 3)
             : nil
         ScrollView(.horizontal, showsIndicators: false) {
-            Self.drawn(config.label).environment(\.tableColumnWidths, plan?.widths ?? [])
+            Self.drawn(config.label)
+                .environment(\.tableColumnWidths, plan?.widths ?? [])
+                .environment(\.tableColumnAlignments, measure.alignments)
         }
         .scrollDisabled(plan?.scrolls != true)
         // What shows of it, not offset + container: on an iPad the chat's scroll views run on under the sidebar, inset
@@ -229,21 +259,31 @@ struct FittedTable: View {
     }
 }
 
-/// A cell of `FittedTable`: as wide as its column's plan, wrapping inside it.
+/// A cell of `FittedTable`: as wide as its column's plan, wrapping inside it, its words aligned as the delimiter row
+/// says (`| --: |` trailing, `| :-: |` centered), digits tabular so the numbers in a column line up.
 struct FittedTableCell: View {
     @Environment(\.tableColumnWidths) private var widths
+    @Environment(\.tableColumnAlignments) private var alignments
     let config: TableCellConfiguration
 
     var body: some View {
+        let alignment = config.column < alignments.count ? alignments[config.column] : .leading
+        let place: Alignment = switch alignment {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
         let label = config.label
             .markdownTextStyle {
                 FontSize(.em(0.88))
+                FontDigitVariant(.monospaced)
                 if config.row == 0 { FontWeight(.semibold) }
             }
             .relativeLineSpacing(.em(0.15))
+            .multilineTextAlignment(alignment)
         Group {
             if config.column < widths.count {
-                label.frame(width: widths[config.column], alignment: .leading)
+                label.frame(width: widths[config.column], alignment: place)
             } else {
                 MaxWidthLayout(max: 280) { label } // before the table knows its width
             }

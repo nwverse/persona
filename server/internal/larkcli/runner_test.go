@@ -141,19 +141,15 @@ func TestBlockingLoginPrintsLinkAndPollsProcess(t *testing.T) {
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
+	select {
+	case <-p.done:
 		done, err := p.Poll()
-		if done {
-			if err != nil {
-				t.Fatal(err)
-			}
-			break
+		if !done || err != nil {
+			t.Fatalf("finished login poll = %v, %v", done, err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("login process did not finish")
-		}
-		time.Sleep(10 * time.Millisecond)
+	case <-time.After(time.Second):
+		p.Cancel()
+		t.Fatal("login process did not finish")
 	}
 }
 
@@ -178,16 +174,13 @@ func TestBlockingLoginCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Cancel()
-	deadline := time.Now().Add(time.Second)
-	for {
-		done, _ := p.Poll()
-		if done {
-			return
+	select {
+	case <-p.done:
+		if done, err := p.Poll(); !done || err != nil {
+			t.Fatalf("cancelled login poll = %v, %v", done, err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("login process did not cancel")
-		}
-		time.Sleep(10 * time.Millisecond)
+	case <-time.After(time.Second):
+		t.Fatal("login process did not cancel")
 	}
 }
 
