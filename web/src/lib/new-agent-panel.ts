@@ -85,11 +85,13 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
       p.unavailable = block.reason;
       p.help = true;
     }
-    if (list === undefined) {
-      if (e.error) p.error = e.error;
-      else p.loading = true;
+    if (list === undefined && !e.error) {
+      p.loading = true;
       return p;
     }
+    // a list that couldn't be read says why, with Retry; the launcher still starts with its default, and Claude Code and
+    // Codex still take a typed ID (the old picker's "Enter model ID…" beside the error)
+    if (list === undefined) p.error = e.error;
     const effortsOf = (m: AgentModel | undefined): string[] => (!takesEffort(agent) ? [] : m && !m.custom ? (m.efforts ?? []) : ALL_EFFORTS);
     const all = list?.models ?? [];
     const d = defaultModel(all);
@@ -141,7 +143,10 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
 
   const presets = tiers.map((x): PanelPreset => {
     const list = listOf(x.launcher).list;
-    const setup = cleanSetup({ provider: x.launcher, model: x.model || defaultRowId(list), effort: x.effort });
+    // the row the preset stands on: its model where its launcher's group has it (or takes it typed), else the launcher's
+    // Default row; picking it still hands the whole preset over, so what this launcher can't take is said under the box
+    const takes = x.model && (list === undefined || (!list?.locked && (listed(list, x.model) || (typedModelOffered(launcherAgent(x.launcher, launchers, list), list) && list !== null))));
+    const setup = cleanSetup({ provider: x.launcher, model: (takes ? x.model : "") || defaultRowId(list), effort: x.effort });
     const runsOn = providers.find((p) => p.id === x.launcher);
     const description = x.description || [runsOn?.name ?? x.launcher, x.model && modelTitle(list, x.model), x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
     return { key: x.name, name: x.name, ...(description ? { description } : {}), setup };

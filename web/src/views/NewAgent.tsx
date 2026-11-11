@@ -155,6 +155,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const shownMid = useRef("");
   const choiceNow = useRef<ModelChoice>({ launcher: "", model: "", effort: "" });
   choiceNow.current = { launcher, model, effort };
+  // the choice was made by hand in this opening (a model, a preset, the follow row): only that one goes along; one a
+  // computer's pick merely restored gives way to the next computer's own (#2134)
+  const touched = useRef(false);
   const firstMessage = useRef<HTMLTextAreaElement>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -163,6 +166,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (!open) {
       setForward(null); // a forward goes with the sheet it came in, not into the next one
       shownMid.current = "";
+      touched.current = false;
       return;
     }
     submitted.current = false;
@@ -266,6 +270,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // list for it (the configuration runs no launcher): no model.
   const restoreLauncher = (machine: string, card: RecentSetup | null, ls: Launcher[], effective: ModelBinding | null, carry: ModelChoice | null = null) => {
     if (!card && carry && (carry.launcher || effective !== null) && choiceCarries(carry, ls)) {
+      touched.current = true; // still the user's: it goes on to the computer after this one too
       setLauncher(carry.launcher);
       setModel(carry.model);
       setEffort(carry.effort);
@@ -290,7 +295,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     // another computer picked while the sheet is open: the choice made on the one before goes along if this one can run it
     const before = shownMid.current;
     shownMid.current = mid;
-    const carry = before && before !== mid ? choiceNow.current : null;
+    const carry = before && before !== mid && touched.current ? choiceNow.current : null;
+    touched.current = false;
     setLaunchers([]);
     setProviderNames([]);
     setHelpFor("");
@@ -368,6 +374,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   }, [models.list]);
   // a preset picked: the launcher, model and effort it fills in (the model is checked once the list is in)
   const pickTier = (x: PickerTier) => {
+    touched.current = true;
     setHelpFor("");
     setDropped(null);
     setTier(x);
@@ -377,6 +384,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   };
   // a model picked in the panel: the launcher and model it runs on, the effort its row stands for
   const pickModel = (c: ModelChoice) => {
+    touched.current = true;
     setHelpFor("");
     setDropped(null);
     if (c.launcher !== launcher || c.model !== model) setTier(null);
@@ -386,6 +394,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setEffort(c.effort);
   };
   const followDefault = () => {
+    touched.current = true;
     setHelpFor("");
     setDropped(null);
     setTier(null);
@@ -436,6 +445,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (!up || !online.some((m) => m.id === setup.machine)) return;
     setPickedSetup(setupKey(setup));
     setTier(null);
+    touched.current = false;
     setEffort(setup.agent_type === "claude" ? setup.effort : "");
     pendingSetup.current = null;
     if (setup.machine !== mid) {

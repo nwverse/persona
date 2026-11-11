@@ -87,6 +87,15 @@ describe("the panel's providers", () => {
     expect(locked.locked).toBeUndefined();
   });
 
+  it("a list that couldn't be read: why and Retry, the launcher's Default row, and a typed ID for Claude Code and Codex", () => {
+    const p = newAgentPanel({ launchers, listOf: (name) => (name === "claude" || name === "work_gw" ? { error: "no answer" } : listOf(name)), choice: none, configured: null, runs: "claude", tiers: [] });
+    expect(provider(p, "claude")).toMatchObject({ error: "no answer", typable: true });
+    expect(provider(p, "claude").models?.map((m) => [m.id, m.providerDefault])).toEqual([["default", true]]);
+    expect(provider(p, "claude").models?.[0].efforts).toEqual(EFFORTS);
+    const typed = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "acme/coder-9", favorites: [], recent: [], overrides: {} });
+    expect(typed.flatMap((s) => s.rows).filter((r) => r.kind === "typed").map((r) => r.provider.id)).toEqual(["claude", "codex"]);
+  });
+
   it("Codex has no effort here (a start doesn't set it); a list still read is a spinner", () => {
     const p = panel();
     expect(provider(p, "codex").models?.every((m) => m.efforts.length === 0)).toBe(true);
@@ -137,6 +146,18 @@ describe("presets", () => {
     const sections = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [{ uid: "f", provider: "claude", model: "sonnet" }], recent: [], overrides: {}, presets: p.presets });
     expect(sections.slice(0, 2).map((s) => s.kind)).toEqual(["favorites", "presets"]);
     expect(sections[1].rows.map((r) => [r.kind, r.preset?.name, r.current])).toEqual([["preset", "quick", false], ["preset", "review", false]]);
+  });
+
+  it("stand on a row their launcher's group has: a model a fixed or untyped launcher lacks gives way to its Default row", () => {
+    const p = panel({ tiers: [{ name: "fast", launcher: "sonnetcc", model: "opus", effort: "high" }, { name: "x", launcher: "claude", model: "vendor/other" }, { name: "y", launcher: "p-relay", model: "m-1" }] });
+    expect(p.presets.map((x) => x.setup)).toEqual([
+      { provider: "sonnetcc", model: "default", effort: "high" },
+      // Claude Code takes a typed ID, and a list not read yet is not judged
+      { provider: "claude", model: "vendor/other" },
+      { provider: "p-relay", model: "m-1" },
+    ]);
+    const rows = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [], recent: [], overrides: {}, presets: p.presets }).find((s) => s.kind === "presets")?.rows;
+    expect(rows?.map((r) => r.preset?.key)).toEqual(["fast", "x", "y"]);
   });
 
   it("searched by their name and description, and listed in their launcher's view", () => {
