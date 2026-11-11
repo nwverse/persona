@@ -100,6 +100,7 @@ class AssistantTest {
         assertEquals(listOf(leadA, leadB), result.directions)
         assertEquals("Growth", result.names["lead-a"])
         assertEquals(listOf(mine), result.pinned)
+        assertEquals(setOf(leadB.key), result.pinnedDirections)
         assertTrue(result.recent.isEmpty())
         // a search finds a direction by its name
         assertEquals(listOf(leadA), conversationGroups(snapshot, "growth", emptySet(), words).directions)

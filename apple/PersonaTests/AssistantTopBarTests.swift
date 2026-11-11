@@ -115,6 +115,7 @@ struct AssistantTopBarTests {
         let all = [try s("1", "早报 · 周三", "两个会议"), try s("2", "Weekly Report", nil), try s("3", "吃饭", "已经加到日历")]
         #expect(AssistantSidebarSearch.filter(all, "日历").map(\.sessionID) == ["3"])
         #expect(AssistantSidebarSearch.filter(all, "ｗｅｅｋｌｙ").map(\.sessionID) == ["2"]) // width and case
+        #expect(AssistantSidebarSearch.filter(all, "Growth", names: ["3": "Growth"]).map(\.sessionID) == ["3"]) // a direction by its name
         #expect(AssistantSidebarSearch.filter(all, "  ").count == 3)
     }
 

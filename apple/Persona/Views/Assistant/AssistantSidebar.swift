@@ -788,7 +788,7 @@ struct AssistantSidebar: View {
                         }
                         conversations(all, archived: archived)
                     } else {
-                        results(AssistantSidebarSearch.filter(all, query))
+                        results(AssistantSidebarSearch.filter(all, query, names: model.directionNames))
                     }
                 }
                 #if os(macOS)
@@ -1361,7 +1361,7 @@ struct AssistantSidebar: View {
             .padding(.top, 40)
         } else {
             heading(String(localized: "\(hits.count) Chats [Assistant Sidebar a72a2a]")) { EmptyView() }
-            ForEach(hits) { row($0) }
+            ForEach(hits) { row($0, named: model.directionNames[$0.sessionID]) }
         }
     }
 
@@ -1838,11 +1838,15 @@ nonisolated enum AssistantSidebarGroups {
 
 /// The sidebar's search: a conversation matches on its title or its last message, ignoring case and width.
 nonisolated enum AssistantSidebarSearch {
-    static func filter(_ sessions: [Session], _ query: String) -> [Session] {
+    /// `names`: the directions' names by session id; a direction is found by its name too.
+    static func filter(_ sessions: [Session], _ query: String, names: [String: String] = [:]) -> [Session] {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return sessions }
         let opts: String.CompareOptions = [.caseInsensitive, .widthInsensitive, .diacriticInsensitive]
-        return sessions.filter { $0.title.range(of: q, options: opts) != nil || ($0.lastText ?? "").range(of: q, options: opts) != nil }
+        return sessions.filter {
+            $0.title.range(of: q, options: opts) != nil || ($0.lastText ?? "").range(of: q, options: opts) != nil
+                || (names[$0.sessionID] ?? "").range(of: q, options: opts) != nil
+        }
     }
 }
 

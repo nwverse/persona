@@ -992,7 +992,8 @@ internal fun AssistantDrawer(
             } }
             if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
             if (!drawer || searchVisible || query.isNotBlank()) item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
-            // The leader conversations, under their directions' names: the group says what they are (no Pin / Unpin here).
+            // The leader conversations, under their directions' names: the group says what they are (no Pin here; Unpin
+            // only for one pinned before it became a direction).
             if (groups.directions.isNotEmpty()) item(key = "directions-header") {
                 JSectionHeader(stringResource(R.string.assistant_directions), count = groups.directions.size)
             }
@@ -1001,6 +1002,8 @@ internal fun AssistantDrawer(
                     position = GroupPosition.of(index, groups.directions.size),
                     onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
                     onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
+                    pinned = session.key in groups.pinnedDirections,
+                    onPin = onPin?.takeIf { session.key in groups.pinnedDirections }?.let { pin -> { pin(session) } },
                     named = groups.names[session.sessionId])
             }
             if (groups.pinned.isNotEmpty()) item(key = "pinned-header") {

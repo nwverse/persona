@@ -159,12 +159,18 @@ class RealAssistantRepository(
         }
         // Network calls never hold the page/cache mutex: a slow manager cannot block switching away.
         val data = request.transport.assistantOf(request.owner)
-        val names = directionNames(request, leadersOf(data), current.value.directionNames)
+        // the names are asked for again only when the leaders or their titles change (as the web does)
+        val fresh = decode(data, request)
+        val held = current.value.takeIf { it.managerId == request.owner }
+        fun AssistantSnapshot.leaderTitles() = leaders.map { id -> conversations.firstOrNull { it.sessionId == id }?.title }
+        val names = if (held != null && held.directionNames.isNotEmpty() && held.leaders == fresh.leaders &&
+            held.leaderTitles() == fresh.leaderTitles()) held.directionNames
+            else directionNames(request, fresh.leaders, held?.directionNames.orEmpty())
         val pins = if (preferences != null) preferences.preferences.value.pins.sessions.mapNotNull(::sessionPath).toSet()
             else request.transport.pins().array("sessions").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.let(::sessionPath) }.toSet()
         lock.withLock {
             if (!selected(request) || version != refreshVersion) return
-            val snapshot = decode(data, request).copy(directionNames = names)
+            val snapshot = fresh.copy(directionNames = names)
             cached[request.key] = snapshot
             current.value = snapshot
             currentPins.value = pins

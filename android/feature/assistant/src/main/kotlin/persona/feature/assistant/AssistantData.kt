@@ -32,6 +32,8 @@ import java.util.UUID
 internal data class ConversationGroups(
     val main: Session?, val pinned: List<Session>, val recent: List<Session>, val auto: List<Session> = emptyList(),
     val directions: List<Session> = emptyList(), val names: Map<String, String> = emptyMap(),
+    /** Directions also pinned (before they became one): their menu keeps Unpin, so the pin can still go. */
+    val pinnedDirections: Set<SessionKey> = emptySet(),
 )
 
 /** The drawer's groups of automatic conversations, in its order; [Other] is any origin this app doesn't know. */
@@ -78,7 +80,7 @@ internal fun conversationGroups(
         matches.filter { it.key != snapshot.mainSession && it.key in pinned && it.key !in isDirection },
         if (searching) others else others.filter { it.autoOrigin() == null },
         if (searching) emptyList() else others.filter { it.autoOrigin() != null },
-        directions, names)
+        directions, names, directions.map { it.key }.filter { it in pinned }.toSet())
 }
 
 /** How many recent conversations the history lists before folding the rest into "See all N". */
