@@ -5,8 +5,18 @@ import persona.core.contracts.HubScope
 import persona.core.contracts.api.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
-/** Owned by the paired hub scope, never by a settings screen or an Activity. */
+/**
+ * Owned by the paired hub scope, never by a settings screen or an Activity.
+ *
+ * Calls are received concurrently: a confirmed write waiting for the user does not stop later calls (reads
+ * included) from being accepted and executed. A bounded [Semaphore] caps how many calls are in flight so a
+ * flood of calls still applies back-pressure to the transport queue. A confirmed write whose local execution
+ * has started is no longer killed by the enabled / permission / visibility watcher: it must produce a definite
+ * result or failure, which is then delivered via [PhoneToolResultOutbox] if the socket cannot take it.
+ */
 class PhoneToolsRuntime(
     context: Context, hubScope: HubScope, private val deviceId: String,
     private val connection: HubConnection, private val transport: PhoneToolsTransport,
@@ -15,6 +25,9 @@ class PhoneToolsRuntime(
     /** What the hub and settings call this phone (register_phone device_name): "manufacturer model", as the old app sent. */
     private val deviceName: String = listOf(android.os.Build.MANUFACTURER, android.os.Build.MODEL)
         .filter { it.isNotBlank() }.joinToString(" ").ifBlank { "Android" },
+    /** Test seam: replaces the platform backend so the runtime's concurrency can be exercised without Android
+     * system providers. Defaults to the real `AndroidPhoneTools.execute`. */
+    executeOverride: (suspend (String, kotlinx.serialization.json.JsonObject) -> PhoneToolResult)? = null,
 ) : AutoCloseable {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.Main.immediate)
@@ -25,9 +38,11 @@ class PhoneToolsRuntime(
     private val resident = MutableStateFlow(false)
     private val permissionRevision = MutableStateFlow(0)
     private val backend = AndroidPhoneTools(context) { visibility.value }
+    private val outbox = PhoneToolResultOutbox()
+    private val inFlight = Semaphore(MAX_IN_FLIGHT)
     private fun available() = !automation && connection.state.value == ConnectionState.Online && (visibility.value || resident.value)
     val registry = PhoneToolRegistry({ settings.enabled.value }, ::available, { visibility.value }, permissions::allowed,
-        confirmations::confirm, backend::execute)
+        confirmations::confirm, executeOverride ?: backend::execute)
 
     init {
         require(deviceId.isNotBlank())
@@ -38,32 +53,50 @@ class PhoneToolsRuntime(
                     transport.register(deviceId, deviceName, simulator, emptyList())
                     return@collectLatest
                 }
+                // Reconnected: results held while the socket was down go out first, in their original order.
+                // The hub matches them by call_id whatever connection they arrive on and decides whether it
+                // still waits; nothing here re-executes a tool.
+                outbox.flush { callId, result -> transport.result(callId, result) }
                 coroutineScope {
                     launch {
                         combine(settings.enabled, visibility, resident, permissionRevision) { _, _, _, _ -> registry.enabledSpecs() }
                             .distinctUntilChanged().collect { specs -> transport.register(deviceId, deviceName, simulator, specs) }
                     }
                     transport.calls.collect { call ->
-                        // Cancellation retracts the confirmation when a connection or active scope ends.
-                        coroutineScope {
-                            val execution = async { registry.call(call) }
-                            val watcher = launch {
-                                combine(visibility, resident, settings.enabled, permissionRevision) { visible, _, _, _ -> visible }.collect { visible ->
-                                    val tool = PhoneToolCatalog.all.firstOrNull { it.spec.name == call.name }
-                                    if (!available() || tool != null &&
-                                        (tool.source !in settings.enabled.value || !permissions.allowed(call.name, tool.source) || tool.foregroundOnly && !visible)) {
-                                        execution.cancel()
+                        // Bounded concurrency: back-pressure on the transport queue when many calls arrive.
+                        // Each call has its own supervised coroutine, so one waiting for the user never blocks
+                        // the receive loop or another call.
+                        scope.launch {
+                            inFlight.withPermit {
+                                coroutineScope {
+                                    val execution = async { registry.call(call) }
+                                    val watcher = launch {
+                                        combine(visibility, resident, settings.enabled, permissionRevision, registry.writesInFlight) {
+                                                visible, _, _, _, writes -> visible to writes
+                                        }.collect { (visible, writes) ->
+                                            // A confirmed write whose local execute has started must finish on
+                                            // its own; the result may end up uncertain but it is never silently
+                                            // abandoned. Pairing close still cancels through the parent job.
+                                            if (call.callId in writes) return@collect
+                                            val tool = PhoneToolCatalog.all.firstOrNull { it.spec.name == call.name }
+                                            if (!available() || tool != null &&
+                                                (tool.source !in settings.enabled.value || !permissions.allowed(call.name, tool.source) || tool.foregroundOnly && !visible)) {
+                                                execution.cancel()
+                                            }
+                                        }
                                     }
+                                    try {
+                                        val result = try { execution.await() }
+                                        catch (cancelled: CancellationException) {
+                                            currentCoroutineContext().ensureActive()
+                                            PhoneToolText.interrupted()
+                                        }
+                                        // Send now if the socket can take it; otherwise hold only the result
+                                        // (never the call) for a later flush on reconnect.
+                                        outbox.send(call.callId, result) { transport.result(call.callId, result) }
+                                    } finally { watcher.cancel() }
                                 }
                             }
-                            try {
-                                val result = try { execution.await() }
-                                catch (cancelled: CancellationException) {
-                                    currentCoroutineContext().ensureActive()
-                                    PhoneToolText.interrupted()
-                                }
-                                transport.result(call.callId, result)
-                            } finally { watcher.cancel() }
                         }
                     }
                 }
@@ -77,6 +110,8 @@ class PhoneToolsRuntime(
     fun refreshPermissions() { permissionRevision.value += 1 }
     override fun close() {
         transport.register(deviceId, deviceName, simulator, emptyList())
-        confirmations.close(); job.cancel(); transport.discardPending()
+        confirmations.close(); outbox.close(); job.cancel(); transport.discardPending()
     }
+
+    private companion object { const val MAX_IN_FLIGHT = 8 }
 }
