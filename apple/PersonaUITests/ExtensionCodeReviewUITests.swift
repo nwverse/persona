@@ -79,14 +79,16 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             if !gap.exists { app.buttons["code-diff-folded-diff:src/upload/client.go"].tap() } // folded when checked viewed
             XCTAssertTrue(gap.waitForExistence(timeout: 5), app.debugDescription)
             gap.tap()
-            XCTAssertTrue(text(app, "src/upload/client.go: line 19").waitForExistence(timeout: 5), app.debugDescription)
+            let shown = text(app, "src/upload/client.go: line 19")
+            XCTAssertTrue(shown.waitForExistence(timeout: 5), app.debugDescription)
+            reveal(app, shown)
             shot(app, "context-" + look)
             // Its thread can be resolved.
             XCTAssertTrue(app.buttons["code-thread-resolve-t3"].exists, app.debugDescription)
 
             // Two line numbers: a comment on the lines between, a suggestion started from them.
-            tapNumber(text(app, "新增第 22 行"))
-            tapNumber(text(app, "新增第 25 行"))
+            tapNumber(app, text(app, "新增第 22 行"))
+            tapNumber(app, text(app, "新增第 25 行"))
             XCTAssertTrue(text(app, "评论第 22–25 行").waitForExistence(timeout: 5), app.debugDescription)
             app.buttons["code-inline-suggest"].tap()
             let field = app.descendants(matching: .any)["code-inline-comment"]
@@ -107,10 +109,19 @@ final class ExtensionCodeReviewUITests: XCTestCase {
         } }
     }
 
-    /// A diff line's number (the gutter's first column).
-    @MainActor private func tapNumber(_ line: XCUIElement) {
+    /// A diff line's number (the gutter's first column), scrolled to first: a tap at a point does not scroll.
+    @MainActor private func tapNumber(_ app: XCUIApplication, _ line: XCUIElement) {
         XCTAssertTrue(line.waitForExistence(timeout: 5))
+        reveal(app, line)
         line.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 14, dy: 0)).tap()
+    }
+
+    /// Drags the page up a little at a time until `element` is in the top two thirds of the screen, clear of the bar at
+    /// the bottom.
+    @MainActor private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+        for _ in 0..<10 where element.frame.maxY > app.frame.height * 0.66 { from.press(forDuration: 0.05, thenDragTo: to) }
     }
 
     @MainActor private func text(_ app: XCUIApplication, _ t: String) -> XCUIElement {
