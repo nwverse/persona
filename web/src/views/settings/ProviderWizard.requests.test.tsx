@@ -90,13 +90,19 @@ async function resolve(request: Pending, value: unknown) {
 function leave(el: HTMLInputElement) {
   act(() => { el.focus(); el.blur(); });
 }
-/** Pastes so the field ends up holding `value`: over all its text (`whole`), or at the caret after what is there. */
-function paste(el: HTMLInputElement, value: string, whole = true) {
+/** Pastes `text`: over all the field's text (`whole`), or at the caret after it. As a browser does, the paste event
+ *  carries the text, then the field changes (only when its text does). */
+function paste(el: HTMLInputElement, text: string, whole = true) {
   act(() => {
-    if (whole) el.setSelectionRange(0, el.value.length);
-    else el.setSelectionRange(el.value.length, el.value.length);
-    el.dispatchEvent(new Event("paste", { bubbles: true }));
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    const before = el.value;
+    if (whole) el.setSelectionRange(0, before.length);
+    else el.setSelectionRange(before.length, before.length);
+    const event = new Event("paste", { bubbles: true });
+    Object.defineProperty(event, "clipboardData", { value: { getData: () => text } });
+    el.dispatchEvent(event);
+    const after = whole ? text.replace(/[\r\n]+/g, "") : before + text;
+    if (after === before) return;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, after);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }));
   });
 }
@@ -498,18 +504,8 @@ describe("the Connect step's own check (#4881)", () => {
   });
 
   it.each([
-    ["a refused key", { models: [], error: "The gateway refused this key", code: "auth" }],
-    ["a refused region", { models: [], error: "Not available in this region", code: "region_blocked" }],
-  ] as const)("does not test the same connection again after %s", async (_, answer) => {
-    await draw({ ...a, model: "known-model", models: [{ id: "known-model" }] });
-    type(keyInput(), "example-key-b");
-    await advance(AUTO);
-    await resolve(pending[0]!, answer);
-    await advance(AUTO * 3);
-    expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/discover"]);
-  });
-
-  it.each([
+    // a key may answer without being allowed to list models: the list's 401 / 403 says nothing about chatting
+    ["a list refused for the key", { models: [], error: "The gateway refused this key", code: "auth" }],
     ["a busy gateway", { models: [], error: "Too many requests" }],
     ["an unreadable list", { models: [], error: "The model list could not be read" }],
     ["a list that failed after its first page", { models: [{ id: "first-model" }], error: "The next page could not be read" }],
@@ -518,6 +514,14 @@ describe("the Connect step's own check (#4881)", () => {
     type(keyInput(), "example-key-b");
     await advance(AUTO);
     await resolve(pending[0]!, answer);
+    expect(pending[1]).toMatchObject({ path: "/api/v1/launchers/test", body: { model: "known-model" } });
+  });
+
+  it("still tests the model when the hub itself could not fetch the list", async () => {
+    await draw({ ...a, model: "known-model", models: [{ id: "known-model" }] });
+    type(keyInput(), "example-key-b");
+    await advance(AUTO);
+    await settle(pending[0]!, "http error");
     expect(pending[1]).toMatchObject({ path: "/api/v1/launchers/test", body: { model: "known-model" } });
   });
 
@@ -539,7 +543,20 @@ describe("the Connect step's own check (#4881)", () => {
     const url = urlInput();
     act(() => url.focus());
     type(url, "https://b.exa");
-    paste(url, "https://b.example", false);
+    paste(url, "mple", false);
+    expect(url.value).toBe("https://b.example");
+    await advance(AUTO * 3);
+    expect(pending).toHaveLength(0);
+    paste(url, "https://b.example.com\n");
+    await advance(AUTO);
+    expect(pending[0]).toMatchObject({ path: "/api/v1/launchers/discover", body: { base_url: "https://b.example.com" } });
+  });
+
+  it("counts pasting the same URL over all of it, though nothing changes", async () => {
+    await draw(a);
+    const url = urlInput();
+    act(() => url.focus());
+    type(url, "https://b.example.com");
     await advance(AUTO * 3);
     expect(pending).toHaveLength(0);
     paste(url, "https://b.example.com");
@@ -547,7 +564,19 @@ describe("the Connect step's own check (#4881)", () => {
     expect(pending[0]).toMatchObject({ path: "/api/v1/launchers/discover", body: { base_url: "https://b.example.com" } });
   });
 
-  it("takes Next as the URL being entered, even when the field never blurs", async () => {
+  it("keeps a half-typed URL waiting when Next is refused for the name", async () => {
+    await draw("new");
+    click("settings-providerwizard.custom");
+    type(nameInput(), "1 bad");
+    type(keyInput(), "example-key-a");
+    type(urlInput(), "https://api.exa");
+    click("settings-providerwizard.next");
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(t("lib-launcher-presets.name_invalid"));
+    await advance(AUTO * 3);
+    expect(pending).toHaveLength(0);
+  });
+
+  it("takes leaving the step as the URL being entered, even when the field never blurs", async () => {
     await draw("new");
     click("settings-providerwizard.custom");
     type(nameInput(), "my_gateway");

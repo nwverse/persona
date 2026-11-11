@@ -78,14 +78,15 @@ const stepTitle = (s: Step) =>
     devices: t("settings-providerwizard.step_devices"),
   })[s];
 
+/** What a single-line field keeps of pasted text: no line breaks, no space at the ends. */
+const oneLine = (s: string) => s.replace(/[\r\n]+/g, "").trim();
+
 /** A preset's key test: running, or what it answered. */
 type KeyTest = { running: true } | { running: false; result: TestResult };
 
 /** What fetching a gateway's models found: how many, or why not; `check` when it was the Connect step's check
- *  (which goes on to test), `seq` the request it answers. `testable`: a test can still tell something; not when the
- *  gateway refused the key (`auth`) or the region (`region_blocked`), or the hub refused the request, since a test
- *  would fail the same way. */
-type Found = { n: number; error?: string; check: boolean; seq: number; testable: boolean };
+ *  (which goes on to test), `seq` the request it answers. */
+type Found = { n: number; error?: string; check: boolean; seq: number };
 
 /** How long a pasted or typed key (a gateway's address and key) has to stay the same before it is tested on its own. */
 const AUTO_TEST_MS = 700;
@@ -109,12 +110,15 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const connectionTestSeq = useRef(0);
   // The Connect step's own check (#4881): whether this connection was already checked (by itself or by hand); the
   // discovery (its sequence number) whose end starts the check's test, 0 when none; whether the address is being typed
-  // (a key never goes to a half-typed address: it counts once pasted or its field is left).
+  // (a key never goes to a half-typed address: it counts once its field is left, the step is, or a paste fills all of
+  // it), and the text such a paste is putting there.
   const [checked, setChecked] = useState(false);
   const testAfter = useRef(0);
   const [urlTyping, setUrlTyping] = useState(false);
-  // the model the latest test asked about (running or answered), so a list fetched again never re-sends a test of it
-  const testedModel = useRef("");
+  const urlPaste = useRef<string | null>(null);
+  // the latest test still standing: its model and how it went, so fetching the list again never repeats a test of the
+  // same model that is running or passed (a ref: the effect that reads it may run before a newer answer renders)
+  const lastTest = useRef<{ model: string; state: "running" | "ok" | "failed" } | null>(null);
   const modelToTest = probeModel.trim() || testModel(f);
   // the hub's providers (built-in ones, then the extensions'); null while loading
   const [presets, setPresets] = useState<LauncherPreset[] | null>(null);
@@ -152,7 +156,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     setTesting(false);
     setTest(null);
     setChecked(false);
-    testedModel.current = "";
+    lastTest.current = null;
     return () => { ++connectionGeneration.current; };
   }, [existing, choice, f.kind, f.agent, f.api, f.base_url, f.auth, f.api_key, f.headers, f.headers_touched]);
 
@@ -161,6 +165,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     ++connectionTestSeq.current;
     setTesting(false);
     setTest(null);
+    lastTest.current = null;
     return () => { ++connectionTestSeq.current; };
   }, [modelToTest]);
 
@@ -243,17 +248,22 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const runTest = async () => {
     if (hasLegacyChat) return;
     setChecked(true);
-    testedModel.current = modelToTest;
+    const model = modelToTest;
+    lastTest.current = { model, state: "running" };
     const generation = connectionGeneration.current;
     const seq = ++connectionTestSeq.current;
     const current = () => generation === connectionGeneration.current && seq === connectionTestSeq.current;
+    const answered = (result: TestResult) => {
+      lastTest.current = { model, state: result.ok ? "ok" : "failed" };
+      setTest(result);
+    };
     setTesting(true);
     setTest(null);
     try {
-      const result = await api<TestResult>("/launchers/test", { method: "POST", json: probeBody(f, old?.name ?? null, modelToTest) });
-      if (current()) setTest(result);
+      const result = await api<TestResult>("/launchers/test", { method: "POST", json: probeBody(f, old?.name ?? null, model) });
+      if (current()) answered(result);
     } catch (e) {
-      if (current()) setTest({ ok: false, ms: 0, error: errorText(e) });
+      if (current()) answered({ ok: false, ms: 0, error: errorText(e) });
     } finally {
       if (current()) setTesting(false);
     }
@@ -273,7 +283,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     setDiscovering(true);
     setFound(null);
     try {
-      const r = await api<{ models?: ProviderModel[]; error?: string; code?: string }>("/launchers/discover", { method: "POST", json: probeBody(f, old?.name ?? null) });
+      const r = await api<{ models?: ProviderModel[]; error?: string }>("/launchers/discover", { method: "POST", json: probeBody(f, old?.name ?? null) });
       if (!current()) return;
       const list = r.models ?? [];
       setF((x) => {
@@ -281,9 +291,9 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
         const models = mergeDiscovered(x.models, list, x.kind === "api" && x.api === "chat");
         return { ...x, models, model: x.model || models.find((m) => m.checked)?.id || "" };
       });
-      setFound({ n: list.length, error: r.error, check, seq, testable: !r.error || (r.code !== "auth" && r.code !== "region_blocked") });
+      setFound({ n: list.length, error: r.error, check, seq });
     } catch (e) {
-      if (current()) setFound({ n: 0, error: errorText(e), check, seq, testable: false });
+      if (current()) setFound({ n: 0, error: errorText(e), check, seq });
     } finally {
       if (current()) setDiscovering(false);
     }
@@ -299,15 +309,14 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   }, [autoCheck, existing, f.kind, f.agent, f.api, f.base_url, f.auth, f.api_key, f.headers, f.headers_touched]);
 
   // The check's test, after the render that put the fetched models in the form (and retired any test of the model
-  // before them): the default model, else the first found, else the one typed to test with. A list that failed or came
-  // back empty still has a model already known tested, unless the key or region was refused; none known, nothing is
-  // tested. A test of the same model that is running or passed is not sent again (Retry on the list); a test or fetch
-  // pressed by hand meanwhile takes over (testAfter is 0).
+  // before them): the default model, else the first found, else the one typed to test with, whatever the list said (a
+  // key may answer without being allowed to list models); none known, nothing is tested. A test of the same model that
+  // is running or passed is not sent again (Retry on the list); a test or fetch pressed by hand meanwhile takes over.
   useEffect(() => {
     if (!found || found.seq !== testAfter.current) return;
     testAfter.current = 0;
-    const same = testedModel.current === modelToTest && (testing || !!test?.ok);
-    if (found.testable && modelToTest && !same) void runTest();
+    const standing = lastTest.current?.model === modelToTest && lastTest.current.state !== "failed";
+    if (modelToTest && !standing) void runTest();
   }, [found]);
   // Leaving the step is leaving the URL field (a field removed while focused never blurs).
   useEffect(() => {
@@ -356,7 +365,6 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const at = steps.indexOf(step);
   const stepProblem = step === "connect" ? problems.connect : step === "models" ? problems.models || problems.advanced : step === "devices" ? devicesProblem : "";
   const next = () => {
-    setUrlTyping(false); // Next or Enter: the address is as the user wants it
     if (stepProblem) return setError(stepProblem);
     setError("");
     setStep(steps[at + 1]);
@@ -489,9 +497,19 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
               </Labelled>
             )}
             <TextField label={t("settings-providerwizard.base_url")} value={f.base_url} mono inputMode="url" placeholder="https://…"
-              onChange={(v, pasted) => {
-                setUrlTyping(!pasted);
+              onChange={(v) => {
+                // typed, or a paste into part of it; a paste over all of it is the address as the user has it
+                setUrlTyping(urlPaste.current === null || oneLine(urlPaste.current) !== v.trim());
+                urlPaste.current = null;
                 set("base_url")(v);
+              }}
+              onPaste={(e) => {
+                const el = e.currentTarget;
+                const whole = el.selectionStart === 0 && el.selectionEnd === el.value.length;
+                const text = e.clipboardData.getData("text/plain");
+                urlPaste.current = whole ? text : null;
+                // the same text again changes nothing, so no change follows: it counts here
+                if (whole && oneLine(text) === el.value.trim()) setUrlTyping(false);
               }}
               // left for another field or the page; the window losing focus keeps the field focused, and the URL unfinished
               onBlur={(e) => document.activeElement !== e.currentTarget && setUrlTyping(false)}
