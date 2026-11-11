@@ -74,6 +74,8 @@ func TestAssistantBypassCommandGate(t *testing.T) {
 		{"substitution send", proto.ModeBypass, "echo $(lark-cli im +messages-send --text hello)", true, false, "deny", 1},
 		{"script read", proto.ModeBypass, "sh -c 'lark-cli docs +fetch --doc-id example | head'", true, false, "allow", 0},
 		{"script send", proto.ModeBypass, "sh -c 'lark-cli im +messages-send --text hello'", true, false, "deny", 1},
+		{"bot API delete action", proto.ModeBypass, "lark-cli api POST /open-apis/drive/v1/files/example/comments/delete --as bot", true, false, "deny", 1},
+		{"unknown script argv", proto.ModeBypass, `python3 -c 'run(["lark-cli", "im", "+messages-send"])'`, true, false, "deny", 1},
 		{"unknown script", proto.ModeBypass, `python3 -c 'run("lark-cli im +messages-send")'`, true, false, "deny", 1},
 		{"mixed read and send", proto.ModeBypass, "lark-cli docs +fetch --doc-id example | jq '.data'; lark-cli im +messages-send --text hello", true, false, "deny", 1},
 		{"mixed read and unknown gate", proto.ModeBypass, "ex GET /health; for value in one; do ex POST $route; done", true, false, "deny", 1},

@@ -31,7 +31,7 @@ var (
 	larkCLIEventRead  = map[string]bool{"list": true, "schema": true, "status": true}
 	larkRiskRe        = lazyre.New(`(?m)^\s*Risk:\s*([a-z-]+)`)
 	// larkCLIRe: a lark-cli call anywhere in a command the gate cannot parse.
-	larkCLIRe = lazyre.New("(^|[\\s;&|(\"'`])(\\S*/)?lark-cli(\\s|$)")
+	larkCLIRe = lazyre.New("(^|[\\s;&|(\"'`])(\\S*/)?lark-cli(\\s|[\"']|$)")
 )
 
 func isLarkCLI(name string) bool { return name == "lark-cli" || filepath.Base(name) == "lark-cli" }

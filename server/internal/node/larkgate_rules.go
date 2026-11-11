@@ -127,6 +127,7 @@ var larkActions = []struct {
 }{
 	{lazyre.New(`^CLI /im/messages/delete`), "撤回消息", larkDeletion},
 	{lazyre.New(`^DELETE `), "删除", larkDeletion},
+	{lazyre.New(`^(POST|PUT|PATCH) /.*(?:delete|remove|trash|recall)(?:/|$)`), "删除", larkDeletion},
 	{lazyre.New(`^CLI /.*(?:/|\+|-)(?:delete|remove|trash|recall)(?:$|/|-)`), "删除", larkDeletion},
 	{lazyre.New(`^CLI /.*(?:comments|replies)/(?:create|reply)$`), "发表评论", larkOutbound},
 	{lazyre.New(`^CLI /mail/.*(?:send|reply|forward)$`), "发邮件", larkOutbound},
@@ -135,7 +136,6 @@ var larkActions = []struct {
 	{lazyre.New(`^POST /(?:conversations/[^/]+/(?:messages|files|images)|messages/[^/]+/(?:reply|forward|recall|reactions))`), "发消息", larkOutbound},
 	{lazyre.New(`^(POST|PUT|PATCH) /.*(?:comments|replies)(?:/|$)`), "发表评论", larkOutbound},
 	{lazyre.New(`^POST /.*(?:mail|mailboxes).*/(?:send|reply|forward)$`), "发邮件", larkOutbound},
-	{lazyre.New(`^(POST|PUT|PATCH) /.*(?:delete|remove|trash|recall)(?:/|$)`), "删除", larkDeletion},
 	{lazyre.New(`^CLI /im/(?:messages/(?:create|reply|patch|update|send)|threads/forward)(?:/|$)`), "发消息", larkOutbound},
 	// lark-cli commands (larkcligate.go): "CLI /<domain>/<command>"
 	{lazyre.New(`^CLI /im/\+messages-send`), "发消息", larkOutbound},
