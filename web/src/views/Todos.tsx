@@ -291,10 +291,12 @@ export function TodosView({
   // The list by status sections (#3156, docs/assistant/todo-status-sop.md), or by folder as before
   const [chosenGrouping, setGrouping] = useState<TodoGrouping>(() => todoGrouping(pref(GROUPING_KEY)));
   // "Pinned" (#4352): the hub's direction tree, offered while there is a leader; else the list goes by status and the
-  // choice is kept for when there is one
+  // choice is kept for when there is one. Before the first read lands (undefined) a saved 常驻 choice stays and the list
+  // shows its loading state, as the sidebar's Agents block does, rather than flashing the status grouping.
   const directionTree = useDirectionTree();
   const byDirection = groupsByDirection(directionTree);
-  const grouping: TodoGrouping = chosenGrouping === "direction" && !byDirection ? "status" : chosenGrouping;
+  const directionPending = chosenGrouping === "direction" && directionTree === undefined;
+  const grouping: TodoGrouping = chosenGrouping === "direction" && !byDirection && !directionPending ? "status" : chosenGrouping;
   const byStatus = grouping === "status";
   const leaderTitles = useStore((s) => s.assistant?.conversations);
   const directionSections = useMemo(() => {
@@ -344,8 +346,10 @@ export function TodosView({
       // nothing in the open sections: Other open starts unfolded (TodoTriageSection), its first row; never a shelved or done one
       return triaged.sections.other[0]?.lead;
     }
+    // by 常驻: the first row shown (a to-do outside every section is not on the list), else the first completed one
+    if (grouping === "direction") return directionSections[0]?.todos[0] ?? filteredCompleted[0];
     return filteredUncompleted[0] ?? filteredCompleted[0];
-  }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, triaged]);
+  }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, triaged, grouping, directionSections]);
 
   // The to-do open beside the calendar: the address's, while it is there.
   const selectedTodo = calendarOn && selectedId ? todos.find((td) => td.id === selectedId) : undefined;
@@ -597,7 +601,7 @@ export function TodosView({
               options={[
                 { v: "status", label: t("todos.grouping_status") },
                 { v: "folder", label: t("todos.grouping_folder") },
-                ...(byDirection ? [{ v: "direction" as const, label: t("todos.grouping_direction") }] : []),
+                ...(byDirection || directionPending ? [{ v: "direction" as const, label: t("todos.grouping_direction") }] : []),
               ]}
               onChange={(next) => {
                 setPref(GROUPING_KEY, next);
@@ -609,7 +613,7 @@ export function TodosView({
 
           {/* List Content */}
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-            {!todosLoaded && todos.length === 0 ? (
+            {(!todosLoaded && todos.length === 0) || (grouping === "direction" && directionPending) ? (
               <div className="flex justify-center py-16" data-testid="todos-loading">
                 <Loading />
               </div>
@@ -625,7 +629,7 @@ export function TodosView({
               >
                 {todosError}
               </Empty>
-            ) : filteredUncompleted.length === 0 && filteredCompleted.length === 0 ? (
+            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0)) && filteredCompleted.length === 0 ? (
               offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : search.trim() ? (
@@ -696,6 +700,7 @@ export function TodosView({
                     selectedId={activeTodo?.id}
                     onSelect={openFromList}
                     onToggleDone={toggleDone}
+                    onMenu={openRowMenu}
                   />
                 )) : projectGroups.map((g) => (
                   <TodoProjectSection
@@ -1026,6 +1031,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   selectedId,
   onSelect,
   onToggleDone,
+  onMenu,
 }: {
   direction: Direction;
   title: string;
@@ -1034,6 +1040,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
+  onMenu: TodoRowMenuOpener;
 }) {
   const holds = todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(`todos-direction:${direction.id}`, false, { holds });
@@ -1048,7 +1055,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
       {!folded && (
         <div className="flex flex-col gap-1 pl-2 pt-0.5">
           {todos.map((todo) => (
-            <TodoListItem key={todo.id} todo={todo} view={views.get(todo.id)!} selected={selectedId === todo.id} onSelect={onSelect} onToggleDone={onToggleDone} />
+            <TodoListItem key={todo.id} todo={todo} view={views.get(todo.id)!} selected={selectedId === todo.id} onSelect={onSelect} onToggleDone={onToggleDone} onMenu={onMenu} />
           ))}
         </div>
       )}

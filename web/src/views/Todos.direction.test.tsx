@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // The To-dos page's third grouping, 常驻 (#4352): offered only with a leader in the hub's direction tree, one section per
 // direction in the tree's order (empty ones skipped, the secretary's titled 书记官), the page's own rows, the Completed
-// fold kept; a saved choice falls back to status with no leaders or on a hub without the tree.
+// fold kept, closed to-dos only there; the rows keep their menu; a saved choice waits for the first read (loading, not
+// the status grouping) and falls back to status with no leaders or on a hub without the tree.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,7 +37,7 @@ const todo = (id: string, title: string, extra: Partial<Todo> = {}): Todo => ({ 
 const counts = (working = 0, needs_you = 0) => ({ working, needs_you, stuck: 0, review: 0 });
 const TREE: DirectionTree = {
   directions: [
-    { id: "lead-b", name: "Infrastructure", counts: counts(1, 0), tasks: [{ id: "t-infra", title: "Infra", state: "working" }] },
+    { id: "lead-b", name: "Infrastructure", counts: counts(1, 0), tasks: [{ id: "t-infra", title: "Infra", state: "working" }, { id: "t-done", title: "Shipped", state: "working" }] },
     { id: "lead-empty", name: "Nothing yet", counts: counts(), tasks: [] },
     { id: "lead-a", name: "Product", counts: counts(1, 1), tasks: [{ id: "t-ask", title: "Ask", state: "needs_you" }, { id: "t-card", title: "Card", state: "working" }] },
     { id: "main", name: "", secretary: true, counts: counts(1, 0), tasks: [{ id: "t-own", title: "Own", state: "working" }] },
@@ -49,6 +50,7 @@ const before = { ...getState() };
 let host: HTMLDivElement, root: Root;
 const render = async () => { await act(async () => root.render(<TodosView />)); };
 const option = (label: string) => [...host.querySelectorAll<HTMLElement>("[role=radio]")].find((b) => b.textContent?.trim() === label);
+const menuItems = () => [...document.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio]")];
 const sections = () => [...host.querySelectorAll<HTMLElement>('[data-testid="todo-group"][data-group^="direction:"]')];
 
 beforeEach(async () => {
@@ -86,6 +88,43 @@ describe("To-dos grouped by 常驻", () => {
     expect(text.indexOf("Ask")).toBeGreaterThan(-1);
     expect(text.indexOf("Ask")).toBeLessThan(text.indexOf("Card"));
     expect(host.textContent).toContain(t("todos.done_section", { count: 1 }));
+    // a closed to-do the tree still lists is in no section, only in the Completed fold
+    expect(sections().some((s) => s.textContent?.includes("Shipped"))).toBe(false);
+    expect(infra.textContent).toContain("Infra");
+    // the first row shown opens beside the list, not the list's first open to-do ("Card", second in Product)
+    expect(host.querySelector<HTMLInputElement>("[data-testid=todos-detail-column] input[type=text]")?.value).toBe("Infra");
+  });
+
+  it("opens a row's menu on a right click, as the other groupings do", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    await render();
+    const row = [...sections()[1].querySelectorAll<HTMLElement>("[role=button]")].find((r) => r.textContent?.includes("Card"));
+    expect(row).toBeTruthy();
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 120 });
+    await act(async () => void row!.dispatchEvent(ev));
+    expect(ev.defaultPrevented).toBe(true);
+    expect(menuItems().length).toBeGreaterThan(0);
+  });
+
+  it("keeps a saved choice while the first read is out, the list loading, then draws the sections", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    tree.current = undefined;
+    await render();
+    expect(option(t("todos.grouping_direction"))?.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector('[data-testid="todos-loading"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="todos-sections"]')).toBeNull();
+    tree.current = TREE;
+    await render();
+    expect(host.querySelector('[data-testid="todos-loading"]')).toBeNull();
+    expect(sections()).toHaveLength(3);
+  });
+
+  it("shows the empty state when no open to-do is in the tree", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    seed({ todos: [todo("t-loose", "Loose")] });
+    await render();
+    expect(sections()).toHaveLength(0);
+    expect(host.textContent).toContain(t("todos.empty_title"));
   });
 
   it("is not offered with no leader, and a saved choice shows by status", async () => {

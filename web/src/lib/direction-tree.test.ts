@@ -102,6 +102,31 @@ describe("direction tree", () => {
     expect(tree.loose.flatMap((g) => g.sessions.map((s) => s.session_id))).toEqual(["loose"]);
   });
 
+  it("puts the secretary's agents in a last 书记官 group, and drops a task none of whose agents the list holds", () => {
+    const withSecretary: DirectionTree = {
+      directions: [
+        TREE.directions[0],
+        {
+          ...TREE.directions[2],
+          tasks: [
+            { id: "t3", title: "Own", state: "working", agents: [{ machine_id: "m", session_id: "s4", title: "four", state: "working" }] },
+            { id: "t4", title: "Filtered", state: "stuck", agents: [{ machine_id: "m", session_id: "hidden", title: "hidden", state: "working" }] },
+          ],
+        },
+      ],
+    };
+    const all = [session("m", "s1", "needs_you"), session("m", "s2"), session("m", "s3"), session("m", "s4"), session("m", "loose", "idle")];
+    const tree = buildDirectionAgentTree(withSecretary, all, [{ id: "m", online: true } as Machine], undefined, Date.parse("2026-11-11T00:00:00Z"));
+    expect(tree.projects.map((p) => p.key)).toEqual(["direction-agents:lead-a", "direction-agents:main"]);
+    const secretary = tree.projects.at(-1)!;
+    expect(secretary.name).toBe("书记官");
+    expect(secretary.direction).toEqual({ counts: counts(1), secretary: true });
+    expect(secretary.todos.map((td) => td.todoId)).toEqual(["t3"]);
+    expect(secretary.todos[0].agents.map((n) => n.session.session_id)).toEqual(["s4"]);
+    // a listed agent the tree does not hold stays in the loose groups
+    expect(tree.loose.flatMap((g) => g.sessions.map((s) => s.session_id))).toEqual(["loose"]);
+  });
+
   it("is asked on load, again on a directions push and on hello; a 404 is no tree", async () => {
     let status = 200;
     const fetch = vi.fn(async () => (status === 200 ? new Response(JSON.stringify(TREE), { status: 200, headers: { "Content-Type": "application/json" } }) : new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json" } })));
