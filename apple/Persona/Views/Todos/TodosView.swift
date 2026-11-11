@@ -319,6 +319,8 @@ struct TodosView: View {
         }
         // VoiceOver: the row opens the to-do; its "N related" is an action of its own, not lost inside the row
         .modifier(RelatedAction(related: related))
+        // The link merges its children and would otherwise take the "N related" button's identifier too
+        .accessibilityIdentifier("todos.row.\(todo.id)")
     }
 
     /// Restore from Shelved: counts as activity now, so it goes back to its section until another 48 hours pass.
