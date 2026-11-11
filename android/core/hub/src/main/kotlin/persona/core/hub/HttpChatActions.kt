@@ -130,6 +130,13 @@ class HttpChatActions internal constructor(
         else -> failure
     }
 
+    override suspend fun restoreModel(session: Session) {
+        // The hub waits up to 30 s for the node: the slow client's timeout covers it.
+        slow(api("sessions", session.machineId, session.sessionId, "restore-model"), "POST", ByteArray(0).toRequestBody()).use {
+            if (!it.isSuccessful) throw HubFailure.from(it)
+        }
+    }
+
     override suspend fun info(session: Session): SessionInfo =
         request(api("sessions", session.machineId, session.sessionId, "info"), "GET", null).use {
             if (!it.isSuccessful) throw HubFailure.from(it)

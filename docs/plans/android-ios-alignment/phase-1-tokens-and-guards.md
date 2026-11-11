@@ -125,7 +125,7 @@ Call sites of the names that change meaning:
 
 Android's springs use damping 0.82 or 0.9 at stiffness 400; Brief (140/240 ms) and Board (100/160 ms) use tweens. In `Tokens.Motion` only `reduced` is read.
 
-**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS.
+**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS. Done in two PRs: the tokens, the drift test and Glass's state and layout springs first (`IosSpring`), then the breathing ring, which changes how the mark looks.
 
 Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; Android's count and breathe timings have no iOS counterpart and stay Android-only until iOS has one.
 
@@ -161,7 +161,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 4. `StyleContrastTest` gets floors per style: Glass fails on the three iOS floors and reports the WCAG checks without failing, as `rules.json` does; Brief and Board keep 4.5:1.
 5. `GlassTokenContractTest`, `docs/android/android-design.md` and rule 7 of `DESIGN_SYSTEM.md` section 6 are updated in the same PR.
 
-**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it.
+**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it. Done: the extension themes keep their 4.5:1 check, since a theme applies to every style and Brief and Board keep 4.5:1; places that picked black or white by contrast on the accent now use the palette's `onAccent` (white in Glass).
 
 ### T7. Icons by meaning
 
@@ -174,7 +174,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 3. A Python test that every name exists in `Icons.swift` and every glyph in the Phosphor list.
 4. A ratchet in `scripts/app/android_token_baseline.py` that moves pages from `PhIcons.*` to meaning names, file by file.
 
-Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout.
+Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout. Done: `spec/icons/meanings.json` maps 168 of iOS's meanings (the ones with a fitting glyph among the 170 generated), `PersonaIcons` is generated from it, and the ratchet's `icon` category starts at the 1,190 direct glyph references in pages.
 
 ### T8. Guards
 
