@@ -71,15 +71,17 @@ const SHAPE_NAME: Record<CropShape, string> = {
   "9:16": "9:16",
 };
 
-function inkColor(ink: Ink): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(`--mark-${ink}`).trim() || ink;
+/** The inks' colors (`--mark-*`, the same in light and dark), read once for a drawing rather than once a mark. */
+function inkColors(): Record<Ink, string> {
+  const css = getComputedStyle(document.documentElement);
+  return Object.fromEntries(INKS.map((ink) => [ink, css.getPropertyValue(`--mark-${ink}`).trim() || ink])) as Record<Ink, string>;
 }
 
 /** A mark's line, in whatever coordinates the context is set to (the source's pixels). */
-function strokeMark(ctx: CanvasRenderingContext2D, m: Mark) {
+function strokeMark(ctx: CanvasRenderingContext2D, m: Mark, colors: Record<Ink, string>) {
   const pts = m.points;
   if (pts.length < 2) return;
-  ctx.strokeStyle = inkColor(m.ink);
+  ctx.strokeStyle = colors[m.ink];
   ctx.lineWidth = m.width;
   ctx.beginPath();
   if (m.tool === "box") {
@@ -232,7 +234,8 @@ export function ImageEditor({
     const dpr = devicePixelRatio || 1;
     c.width = Math.round(size.width * dpr);
     c.height = Math.round(size.height * dpr);
-    const ctx = c.getContext("2d")!;
+    const ctx = c.getContext("2d");
+    if (!ctx) return; // no 2D canvas (lost, or none at all): nothing to draw on
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.width, size.height);
     ctx.save();
@@ -245,7 +248,8 @@ export function ImageEditor({
     ctx.drawImage(img, 0, 0, natural.width, natural.height);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    for (const m of current ? [...edits.marks, current] : edits.marks) strokeMark(ctx, m);
+    const colors = inkColors();
+    for (const m of current ? [...edits.marks, current] : edits.marks) strokeMark(ctx, m, colors);
     ctx.restore();
     if (tool === "crop") drawCropFrame(ctx, size, l.crop, cropping !== null);
   });
@@ -370,16 +374,18 @@ export function ImageEditor({
       const out = document.createElement("canvas");
       out.width = plan.width;
       out.height = plan.height;
-      const ctx = out.getContext("2d")!;
+      const ctx = out.getContext("2d");
+      if (!ctx) throw new Error("no 2D canvas");
       // a transparent picture sent as JPEG would go black where it is clear: white under it, as iOS and Android do
-      ctx.fillStyle = inkColor("white");
+      const colors = inkColors();
+      ctx.fillStyle = colors.white;
       ctx.fillRect(0, 0, plan.width, plan.height);
       ctx.setTransform(...plan.matrix);
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(img, 0, 0, natural.width, natural.height);
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      for (const m of edits.marks) strokeMark(ctx, m);
+      for (const m of edits.marks) strokeMark(ctx, m, colors);
       const blob = (await encode(out, "image/png")) ?? null;
       // a big screenshot as PNG can pass the 8 MB a message takes: JPEG then
       const fitting = blob && blob.size <= MAX_IMAGE ? blob : await encode(out, "image/jpeg", 0.9);
@@ -463,6 +469,7 @@ export function ImageEditor({
                 key={c}
                 type="button"
                 aria-label={INK_NAME[c]}
+                title={INK_NAME[c]}
                 aria-pressed={ink === c}
                 onClick={() => setInk(c)}
                 className={cx("size-7 shrink-0 rounded-full transition-[box-shadow,transform] active:scale-90", ink === c ? "ring-3 ring-white" : "ring-1 ring-white/40")}
@@ -504,6 +511,11 @@ export function ImageEditor({
   );
 }
 
+/** A control's name with the value it shows, in the language's own form ("Line width: Medium", "粗细：中"). */
+function named(label: string, value: string): string {
+  return t("chat-imageeditor.named_value", { label, value });
+}
+
 function encode(c: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> {
   return new Promise((ok) => c.toBlob(ok, type, quality));
 }
@@ -531,11 +543,13 @@ function ToolButton({
   onClick: (el: HTMLElement) => void;
 }) {
   const shown = text ?? label;
+  // icon-only, or showing its value: named in full ("Aspect ratio: Freeform"), aloud and in the tooltip
+  const said = text ? named(label, text) : label;
   return (
     <button
       type="button"
-      aria-label={text ? `${label}: ${text}` : words ? undefined : label}
-      title={words && !text ? undefined : text ? `${label}: ${text}` : label}
+      aria-label={text || !words ? said : undefined}
+      title={text || !words ? said : undefined}
       aria-pressed={active}
       aria-haspopup={menu === undefined ? undefined : "menu"}
       aria-expanded={menu === undefined ? undefined : menu}
@@ -560,7 +574,7 @@ function LineSample({ width }: { width: number }) {
 }
 
 function IconAction({ icon, label, value, menu, disabled, onClick }: { icon: IconName | React.ReactNode; label: string; value?: string; menu?: boolean; disabled: boolean; onClick: (el: HTMLElement) => void }) {
-  const said = value ? `${label}: ${value}` : label;
+  const said = value ? named(label, value) : label;
   return (
     <button
       type="button"
