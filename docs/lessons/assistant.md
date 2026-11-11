@@ -258,3 +258,12 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   for a supervised task with a current read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
   the terminal hook and Paseo then send no permission or mode update. Reuse `PlanTask.TodoID`, whose old bindings are
   retired on takeover, rather than treating a historical read-only plan as authority for a new writable worker.
+
+- **A quiet ending is still an ending: it has to say how the run ended** (#4228). `channel.Run.Decide` returned a held
+  run's quiet result (`&Result{Quiet: true}`) from an early branch, before the `End` below it was computed — and it left
+  `Stopped` empty too — so `End` stayed `EndDone` whatever had happened, and once #4101 posted that line as a card of its
+  own the owner was told "Done" about a turn that was interrupted, hit a model API error, or lost its computer. Both
+  endings now come from one `endOf(rd, l)` (the turn's last notice, the failed turn, an offline machine), and the sink
+  posts the card of a quiet end unless it was recalled (`end != channel.EndRecalled`), not only when it ended as done:
+  gating the post on `EndDone` would have made every bad quiet ending silent instead. A branch that answers a run owes
+  it the same ending fields as the normal path.
