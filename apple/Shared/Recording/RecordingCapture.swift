@@ -32,6 +32,18 @@ final class RecordingCapture {
     /// The recorded time now, read without observing it (`elapsed` changes four times a second).
     var timeline: Double { writer?.elapsed ?? sampleElapsed }
     @ObservationIgnored private var sampleElapsed: Double = 0
+    /// The microphone's recent level, 0...1 (the writer's smoothed, perceptual level, read-only), for the live page's meter.
+    /// Not observed: a meter reads it from its own clock, many times a second.
+    var inputLevel: Double {
+        #if DEBUG
+        if writer == nil { return sampleLevel }
+        #endif
+        return Double(writer?.level ?? 0)
+    }
+    #if DEBUG
+    /// Screenshots and the DEBUG flow (`-showMeetingSample`): the level a recording with no microphone shows.
+    @ObservationIgnored var sampleLevel: Double = 0
+    #endif
     @ObservationIgnored private var input: RecordingInput = .phone
     /// Persona may answer out loud during this recording (#2981: a meeting it takes part in). The phone's microphone
     /// session then also lets a Bluetooth headset play (A2DP is listening only, so the recording keeps its microphone);

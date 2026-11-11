@@ -1088,6 +1088,9 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
   | Moving with the keyboard | `keyboard` (the system's spring) |
   | The composer and the 「+」 panel | their `composer…` / `hold…` / `attach…` tokens, measured from Telegram |
+  | The meeting recording's level meter (`RecordingLevelMeter`) | `recordingLevelFrame`: a 1/30 s clock; fixed-height bars scaled vertically (`Theme.Size.recordingMeter…`); one still frame with Reduce Motion, Low Power Mode or off screen |
+  | A timeline row arrives in the live recording sheet | `reveal` with a small rise (`Theme.Recording.arrivalOffset`); opacity only with Reduce Motion |
+  | The recording dot | `holdBlink`, steady with Reduce Motion (a pause glyph when paused: the state is never the color alone) |
 
   Red lines:
   - Leaving is quicker than arriving (`conceal` < `reveal`, `holdLeave` < `holdAppear`, `attachContentOut` < `attachContentIn`), and a
