@@ -324,6 +324,7 @@ The behavior before #1046 (several separate truths), its measurements and the pl
 | 10 | Several pending cards over the chat (#939) | At rest: no ↓, following; scrolled up, ↓ sits clear of the cards and returns to latest |
 | 11 | Flick up from latest and tap ↓ while the list still glides (#3027) | The glide stops at once; at latest within 0.7 s, following, no ↓, never reading again |
 | 12 | The same in Persona's chat while its turn runs | As 11, then keeps following the steps the turn adds |
+| 13 | A long Agent chat at work (tall messages, screenshots): read a few screens up, let go at rest, a reply streams meanwhile, then tap ↓ (#4788) | At the newest end and staying there while the reply streams on, its newest line on screen, ↓ gone; never put back where the user read |
 
 ### How ↓ gets there (#3027)
 
@@ -341,6 +342,12 @@ rather than asking SwiftUI's `ScrollPosition`:
    at once. A finger on the list ends it where it is, and the release decides as always.
 4. Meanwhile `contentArrived` does not jump (it would cut the glide short; offset 0 stays the newest end whatever streams
    in). Once there: the geometry is read from the list (#1211), and following catches up with what came in.
+5. SwiftUI's stored `ScrollPosition` is forgotten on the tap and set to the newest end once there (#4788). The jump moves
+   the scroll view, not that position, which still held where the user's own scrolling had left the list; the next change
+   of content (the rows held back while reading, let in by the tap, a streamed line) made SwiftUI put the list back there,
+   during the jump or just after it. By then the chat followed, so ↓ was gone and nothing brought the list back. `ChatPin`
+   forgets the position before it moves the list for the same reason. 0.3 s after landing the list is looked at once more:
+   if anything took it from the newest end while the chat follows, it goes there again (logged as `chat-jump`).
 
 ↓ acts the moment the finger lands, a glide or not: a UIKit view laid over the button takes the touch
 (`JumpArrowTouch`; a tap on the SwiftUI `Button` during a glide did nothing on phones,

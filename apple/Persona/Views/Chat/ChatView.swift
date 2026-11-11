@@ -2126,6 +2126,15 @@ struct ChatView: View {
     }
     #endif
 
+    /// The list's distance from its newest end by its scroll view, for `probe.chat-rows` (-1: none, the Mac).
+    private var listGap: Int {
+        #if os(iOS) || os(visionOS)
+        return pin.measuredNewestGap.map { Int($0.rounded()) } ?? -1
+        #else
+        return -1
+        #endif
+    }
+
     /// `probe.chat-rows` (`-probes YES`): what the list has and shows, sampled ten times a second (which lines are on
     /// screen is the list's, written as it scrolls and not observed): the chat must not go blank or move by itself.
     private var rowsProbe: some View {
@@ -2133,6 +2142,7 @@ struct ChatView: View {
             let order = currentLines().map(\.id)
             let index = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
             let visible = scratch.visibleLines.filter { index[$0] != nil }.sorted { index[$0]! < index[$1]! }
+            let lastShown = order.last.map { scratch.drawnLines.contains($0) } ?? false
             // A work line's header by its own report, the one the pin holds it by: the pin moves the list from inside
             // that report, and the line's own geometry callback missed the move. A header kept in place while a reply
             // streamed under it read as moving 56 pt and back, on screenshots identical to the pixel (#1046).
@@ -2146,7 +2156,8 @@ struct ChatView: View {
                                            x: Int(scratch.offsetX.rounded()),
                                            near: follow.near, mode: "\(follow.mode)", arrow: arrowShows, gap: Int(scratch.newestGap.rounded()),
                                            dragging: scratch.userDragging, held: pin.holding, blank: scratch.blankLandings,
-                                           glideTaps: scratch.glideTaps, jumpMs: scratch.jumpMs))
+                                           glideTaps: scratch.glideTaps, jumpMs: scratch.jumpMs, slips: scratch.jumpSlips,
+                                           listGap: listGap, lastShown: lastShown))
         }
     }
 
@@ -2597,8 +2608,9 @@ struct ChatView: View {
         #if DEBUG
         .onAppear {
             guard ScrollTrace.enabled else { return }
-            ScrollTrace.shared.start(list: { [pin] in pin.list }) { [store, scratch, follow = $follow, frozen = $frozen] in
-                Self.traceLine(follow: follow.wrappedValue, frozen: frozen.wrappedValue, scratch: scratch, store: store)
+            ScrollTrace.shared.start(list: { [pin] in pin.list }) { [store, scratch, follow = $follow, frozen = $frozen, position = $position] in
+                Self.traceLine(follow: follow.wrappedValue, frozen: frozen.wrappedValue, scratch: scratch, store: store,
+                               position: position.wrappedValue)
             }
         }
         #endif
@@ -2676,10 +2688,20 @@ struct ChatView: View {
     static let glideNote = "dev.persona.test.chat-glide"
 
     /// One `ScrollTrace` state line. Out of the modifier chain: inline, its interpolation helped the chain time out (#2963).
-    private static func traceLine(follow: ChatFollow, frozen: Frozen?, scratch: ChatScratch, store: ChatStore) -> String {
+    private static func traceLine(follow: ChatFollow, frozen: Frozen?, scratch: ChatScratch, store: ChatStore,
+                                  position: ScrollPosition) -> String {
         let mode = "\(follow.mode) near \(follow.near ? 1 : 0) touch \(follow.touching ? 1 : 0) drag \(scratch.userDragging ? 1 : 0)"
         let held = "frozen \(frozen == nil ? 0 : 1) ftext \(frozen?.text.count ?? -1)"
         return "\(mode) \(held) live \(store.liveText.count) items \(store.items.count) gap \(Int(scratch.newestGap)) jumps \(scratch.endJumps)"
+            + " pos \(traced(position)) slips \(scratch.jumpSlips)"
+    }
+
+    /// What SwiftUI's stored position holds, for the trace: an edge, a point, a row's id, or nothing; `user` when the
+    /// user's own scrolling put it there (#4788).
+    private static func traced(_ p: ScrollPosition) -> String {
+        let at = if let e = p.edge { "edge:\(e)" } else if let pt = p.point { "pt:\(Int(pt.y))" }
+            else if let id = p.viewID(type: String.self) { "id:\(id.suffix(12))" } else { "none" }
+        return at + (p.isPositionedByUser ? "/user" : "")
     }
     #endif
 
@@ -6443,6 +6465,7 @@ final class ChatScratch {
     var endJumps = 0 // jumps to the newest (scrollToEnd), for the scroll probe
     var glideTaps = 0 // ↓ tapped while the list glided (#3027), for the scroll probe
     var jumpMs = -1 // how long the last ↓ took to the newest end (#3027), for the scroll probe
+    var jumpSlips = 0 // ↓ landed and the list was taken away from the newest end while following (#4788), for the scroll probe
     var lineY: [String: CGFloat] = [:] // each line's top on screen, for the fold probe (-showFoldProbe)
     #endif
 }
@@ -6554,5 +6577,12 @@ nonisolated struct ChatRowsShown: Encodable, Equatable {
     /// end (ms; -1: none yet).
     var glideTaps: Int
     var jumpMs: Int
+    /// ↓ landed and the list was then taken away from the newest end while following (#4788): it went there again.
+    var slips: Int
+    /// The list's distance from its newest end as its scroll view has it now (pt; -1: not known), not SwiftUI's
+    /// geometry, which can lag a move made on the scroll view (#1211).
+    var listGap: Int
+    /// The newest line has some part on screen.
+    var lastShown: Bool
 }
 #endif

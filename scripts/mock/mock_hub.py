@@ -14957,6 +14957,54 @@ if os.environ.get("MOCK_CHURN") == "1":
         _x["seq"] = _w[0]["seq"] + _n
 
 
+# MOCK_TALL_HISTORY=1: the weather chat with twelve tall exchanges in front, like an Agent chat used for a day of work
+# (#4788): long messages of the user's (Chinese and English, lists, paths), replies with headings and nested lists, and
+# tool calls whose results are screenshots. Rows of very different heights, so the lazy list's guesses are far off.
+# With MOCK_STREAM=1 the chat keeps working at its newest end (ScrollToBottomTests 13).
+if os.environ.get("MOCK_TALL_HISTORY") == "1":
+    _tall = []
+    for _k in range(12):
+        _m = 900 - _k * 40
+        _ask = "\n".join([
+            "第 %d 轮：请把下面几件事按顺序推进，做完一件回我一句。" % (_k + 1),
+            "1) 先看 `apps/weather/Sources/Forecast%d.swift` 里的重试逻辑：断网时 retry 没有上限，改成最多 3 次、指数退避。" % _k,
+            "2) Then check the widget timeline: it reloads every 5 minutes even when nothing changed, which drains the battery.",
+            "3) 截图对比：改前 / 改后各一张，深色和浅色都要，放到 `.shots/round-%d/` 下面，拼成一张给我看。" % (_k + 1),
+            "4) 跑相关测试（ForecastTests、WidgetTimelineTests），不用跑整套。",
+            "说明：如果第 2 件需要改接口，先停下来问我；其余的直接做，不用等我确认。",
+            "补充：上一轮的截图里标题被截断了（「天气预报 · 未来七…」），这次一起看一下是不是同一个原因。",
+        ])
+        _tall.append(it("user", "text", _m, text=_ask))
+        _tall.append(it("assistant", "thinking", _m - 1, text="先看重试逻辑，再看小组件的刷新，最后截图。"))
+        _tall += tool("Read", {"file_path": "/Users/me/code/weather/Sources/Forecast%d.swift" % _k}, "struct Forecast%d {}" % _k, _m - 1)
+        _shot = tool("Bash", {"command": "xcrun simctl io booted screenshot .shots/round-%d/after.png" % (_k + 1),
+                              "description": "截改后的图"}, "", _m - 2)
+        _tall += _shot
+        for _dark in (False, True):
+            _tall.append(it("user", "image", _m - 2, tool_use_id=_shot[0]["tool_use_id"],
+                            image={"mime": "image/png", "data": base64.b64encode(_page_png(360, 480, dark=_dark)).decode()}))
+        _tall.append(it("assistant", "text", _m - 3, text="\n".join([
+            "第 %d 轮做完了，按顺序说：" % (_k + 1),
+            "",
+            "**重试逻辑：** 改成最多 3 次，间隔 1 s、2 s、4 s；断网时第三次失败就停下，界面显示「暂时连不上」。",
+            "- 改了 `Forecast%d.swift` 和它的测试，`ForecastTests` 全过。" % _k,
+            "- 顺手把两处重复的超时判断合并成一个函数。",
+            "",
+            "**Widget timeline:** it now reloads only when the forecast changed or at the next hour, instead of every 5 minutes.",
+            "- Measured on the simulator: 12 reloads an hour before, 1–2 after.",
+            "- `WidgetTimelineTests` passes, including a new case for an unchanged forecast.",
+            "",
+            "**截图：** 改前 / 改后、深浅色各一张，拼图在上面。",
+            "- 标题截断是同一个原因：标题行没有给日期留位置，改成最多两行。",
+            "- 第 2 件没有动接口，所以没停下来问你。",
+            "",
+            "**接下来：** 等你看完截图，没问题我就开 PR；有要改的直接说。",
+        ])))
+    _w = ITEMS[WIDGET]
+    ITEMS[WIDGET] = _tall + _w
+    for _n, _x in enumerate(ITEMS[WIDGET]):  # transcript order: the tall history first
+        _x["seq"] = _n + 1
+
 # MOCK_COMPUTER=ready|permissions|locked: the hub's plugin cua is on (docs/extensions/computer-use.md) and macbook is turned on
 # in that state; Mac Studio is a Mac it is not on for yet. =off: on, but for no machine yet. Unset: the plugin is off.
 MOCK_COMPUTER = os.environ.get("MOCK_COMPUTER", "")

@@ -7,6 +7,7 @@ import XCTest
 ///   Agents chat:  PORT=… MOCK_STREAM=1 MOCK_LONG_HISTORY=1 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py  (PERSONA_MOCK_HUB)
 ///   Persona chat:  PORT=… MOCK_ASSISTANT_RUN=1 (PERSONA_RUN_HUB); MOCK_ASSISTANT_RUN=alone for the one-screen chat;
 ///                  12: PORT=… MOCK_ASSISTANT_RUN=1 MOCK_LONG_ASSISTANT=1 (PERSONA_LONG_RUN_HUB, a long chat to glide in)
+///   13: PORT=… MOCK_TALL_HISTORY=1 MOCK_STREAM=1 (PERSONA_TALL_HUB: a long Agent chat of tall messages and screenshots, at work)
 final class ScrollToBottomTests: XCTestCase {
     private var app: XCUIApplication!
     private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001" // streams with MOCK_STREAM, long history
@@ -29,6 +30,9 @@ final class ScrollToBottomTests: XCTestCase {
         var glideTaps: Int?
         var jumpMs: Int?
         var content: Int?
+        var slips: Int?
+        var listGap: Int?
+        var lastShown: Bool?
     }
 
     private typealias Timeline = [(t: Double, r: Rows)]
@@ -362,6 +366,57 @@ final class ScrollToBottomTests: XCTestCase {
     func testL_ArrowWhileTheListGlidesInPersonasChat() throws {
         launch(try hub("PERSONA_LONG_RUN_HUB"), chat: Self.main, assistant: true, ["-scrollTrace", "YES"])
         try tapWhileGliding("12")
+    }
+
+    /// 13. A long Agent chat at work (#4788, seen on a phone): tall messages and screenshots, read a few screens up
+    /// with drags let go at rest, while the agent works and a reply streams at the newest end (all of it held back); then
+    /// ↓ at rest, the reply still streaming. On the phone the list leapt toward the newest end, was put back where the
+    /// user had read about 0.2 s later, and ↓ was gone, three times in a row. It must end at the newest end and stay
+    /// there, the newest line on screen and ↓ gone, never pulled back (`listGap` is the scroll view's own distance).
+    func testM_ArrowInALongChatAtWork() throws {
+        let hub = try hub("PERSONA_TALL_HUB")
+        launch(hub, chat: Self.widget, assistant: false, ["-scrollTrace", "YES"])
+        // A few screens up, each drag let go at rest (no glide): where SwiftUI records the user's own position.
+        for _ in 0..<7 { drag(from: 0.25, to: 0.8, rest: 0.4) }
+        sleep(1)
+        let screen = Int(app.frame.height)
+        let read = record("13 reading", seconds: 1, shots: 1)
+        let r0 = try XCTUnwrap(read.last?.r)
+        XCTAssertEqual(r0.mode, "reading", "read up, let go:\n\(describe(read))")
+        XCTAssertGreaterThan(r0.listGap ?? 0, screen * 3 / 2, "far enough up that ↓ leaps a screen short of the newest first")
+        // A reply streams in at the newest end (a delta every 80 ms for about 5 s, then written), with the agent's own
+        // steps every 2 s (MOCK_STREAM): held back while the user reads.
+        say(hub, "第 13 轮的结果先发你：重试和小组件都改好了，截图在上面，测试都过了。\n\n还剩一件：标题截断的那张图我再补一张深色的。")
+        sleep(2)
+        XCTAssertTrue(waitFor(seconds: 2) { $0.frozen == true && $0.arrow == true }, "held back while reading, ↓ showing")
+        XCTAssertTrue(arrowButton.waitForExistence(timeout: 2) && arrowButton.isHittable, "↓ to tap")
+        arrowButton.tap()
+        let s = record("13 after ↓", seconds: 6, shots: 4)
+        let end = try XCTUnwrap(s.last?.r)
+        XCTAssertTrue(end.newest && end.mode == "following" && end.arrow != true && !(end.frozen ?? true),
+                      "↓ in a long chat at work: at the newest end, following, no ↓:\n\(describe(s))")
+        XCTAssertLessThanOrEqual(end.listGap ?? .max, 1, "the scroll view is at its newest end:\n\(describe(s))")
+        XCTAssertEqual(end.lastShown, true, "the newest line is on screen:\n\(describe(s))")
+        XCTAssertFalse(arrowButton.exists, "↓ gone")
+        // Once there, it stays there while the reply streams on and is written: never put back up.
+        if let at = s.firstIndex(where: { ($0.r.listGap ?? .max) <= 1 }) {
+            let away = s[at...].filter { ($0.r.listGap ?? 0) > 1 }
+            XCTAssertTrue(away.isEmpty, "pulled away from the newest end after ↓ got there:\n\(describe(s))")
+        } else {
+            XCTFail("never at the newest end after ↓:\n\(describe(s))")
+        }
+        XCTAssertEqual(end.slips ?? -1, 0, "↓ landed and was taken away again (the second look had to bring it back)")
+        XCTAssertFalse(s.contains { $0.r.mode == "reading" }, "reading again after ↓:\n\(describe(s))")
+        XCTAssertGreaterThan(end.items, r0.items, "the agent's steps and the reply came in")
+        consistent("13", s)
+    }
+
+    /// A reply streamed into the open chats (`/mock/say`): a delta every 80 ms, as the hub sends them, then written.
+    private func say(_ hub: String, _ text: String) {
+        var c = URLComponents(string: hub + "/mock/say")!
+        c.queryItems = [URLQueryItem(name: "text", value: text), URLQueryItem(name: "stream", value: "1"),
+                        URLQueryItem(name: "steps", value: "60"), URLQueryItem(name: "ms", value: "80")]
+        _ = try? Data(contentsOf: c.url!)
     }
 
     /// From the newest end, as the chat opens or as ↓ leaves it: a thumb's flick toward the oldest (3000 pt/s, it glides
