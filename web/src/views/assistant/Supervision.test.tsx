@@ -52,6 +52,18 @@ describe("a supervised task", () => {
     expect(html).toContain("go test: PASS");
     expect(html).toContain('dateTime="2026-11-11T01:00:00Z"');
   });
+  it("keeps the upstream parked explanation beside the persisted criterion", () => {
+    const html = renderToStaticMarkup(<ReviewChecklist todo={{ ...todo, supervision: {
+      supervisor: "main", done_when: ["Tests pass"], state: "parked",
+      parked: { reason: "Waiting for the external release", until: "2026-11-14T09:00:00Z", waiting_on: "external_event", count: 1 },
+      criteria: [{ criterion: "Tests pass", state: "met", evidence: "go test: PASS", by: "agent:box/s1", at: "2026-11-11T01:00:00Z" }],
+    } }} />);
+    expect(html).toContain('data-testid="review-parked"');
+    expect(html).toContain("Waiting for the external release");
+    expect(html).toContain("go test: PASS");
+    expect(html).toContain("agent:box/s1");
+    expect(html).toContain('dateTime="2026-11-11T01:00:00Z"');
+  });
   it("tints accepted work green but keeps reviews requiring user input neutral", () => {
     const accepted = renderToStaticMarkup(<ReviewBadge todo={{ ...todo, done_at: "2026-11-05T10:00:00Z", supervision: { ...todo.supervision!, state: "accepted" } }} />);
     expect(accepted).toContain("bg-green-tint text-green");

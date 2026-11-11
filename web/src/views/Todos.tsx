@@ -57,7 +57,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import { useRestoredTodos } from "../lib/todo-restore";
-import { autoReviewLine, checklist, latestReview, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
+import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
@@ -931,7 +931,7 @@ export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Int
     return view;
   }
   if (!view.urgentLine && !todo.done_at) {
-    const said = progressLine(todo.supervision);
+    const said = parkedLine(todo) ?? progressLine(todo.supervision);
     if (said) {
       view.urgentLine = true;
       view.urgentText = said;
@@ -1302,6 +1302,7 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
   if (!sup) return null;
   const list = checklist(sup);
   const review = latestReview(sup);
+  const parked = parkedLine(todo);
   return (
     <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
       <div className="flex items-center gap-2">
@@ -1336,6 +1337,7 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
           })}
         </ul>
       )}
+      {parked && <p data-testid="review-parked" className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{parked}</p>}
       {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
       <AutoReviewResult sup={sup} />
     </section>
