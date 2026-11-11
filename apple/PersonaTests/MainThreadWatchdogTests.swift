@@ -20,10 +20,13 @@ final class MainThreadWatchdogTests: XCTestCase {
         XCTAssertTrue(reportedWhileBlocked, "a persistent block must be visible before the main thread answers again")
 
         let deadline = Date.now.addingTimeInterval(2)
-        while watchdog.snapshot.count == 0, Date.now < deadline {
+        var report = watchdog.snapshot
+        while Date.now < deadline {
+            report = watchdog.snapshot
+            let stack = report.longest.first?.backtrace.joined(separator: "\n") ?? ""
+            if report.maxMS >= 200, stack.contains("PersonaTests") { break }
             RunLoop.current.run(mode: .default, before: Date.now.addingTimeInterval(0.01))
         }
-        let report = watchdog.snapshot
         XCTAssertEqual(report.count, 1)
         XCTAssertGreaterThanOrEqual(report.maxMS, 100)
         guard let block = report.longest.first else { return XCTFail("no main-thread block was recorded") }

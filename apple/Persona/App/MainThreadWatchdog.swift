@@ -54,6 +54,7 @@ nonisolated final class MainThreadWatchdog: @unchecked Sendable {
 
     private let lock = NSLock()
     private let samplingLock = NSLock()
+    private let symbolicationLock = NSLock()
     private var worker: Thread?
     private var mainThread: thread_act_t?
     private var generation = 0
@@ -126,11 +127,15 @@ nonisolated final class MainThreadWatchdog: @unchecked Sendable {
 
     private func run(threshold: TimeInterval, interval: TimeInterval, generation: Int) {
         let answered = DispatchSemaphore(value: 0)
+        let answeredAt = OSAllocatedUnfairLock(initialState: 0.0)
+        let capacity = 66
+        let sampleBuffer = UnsafeMutablePointer<UInt64>.allocate(capacity: capacity)
+        defer { sampleBuffer.deallocate() }
         while running(generation), !Thread.current.isCancelled {
+            answeredAt.withLock { $0 = 0 }
             let started = CACurrentMediaTime()
-            let answeredAtLock = OSAllocatedUnfairLock(initialState: 0.0)
             DispatchQueue.main.async {
-                answeredAtLock.withLock { $0 = CACurrentMediaTime() }
+                answeredAt.withLock { $0 = CACurrentMediaTime() }
                 answered.signal()
             }
             if answered.wait(timeout: .now() + threshold) == .success {
@@ -138,27 +143,43 @@ nonisolated final class MainThreadWatchdog: @unchecked Sendable {
                 continue
             }
 
+            // The answer may have timestamped just before its semaphore signal won the timeout race. A real answer below
+            // the budget is not a block; an answer already over budget no longer has the blocked stack to capture.
+            let answeredBeforeCapture = answeredAt.withLock { $0 }
+            let earlyDurationMS = (answeredBeforeCapture - started) * 1000
+            if answeredBeforeCapture > 0, earlyDurationMS < threshold * 1000 {
+                _ = answered.wait(timeout: .now() + 0.01)
+                Thread.sleep(forTimeInterval: interval)
+                continue
+            }
             let detectedMS = (CACurrentMediaTime() - started) * 1000
-            let sample = sampleMainThread(generation: generation)
+            let sample = answeredBeforeCapture > 0
+                ? MainThreadSample(addresses: [], failure: "main thread answered before stack capture")
+                : sampleMainThread(generation: generation, buffer: sampleBuffer, capacity: capacity)
             let rawStack = sample.addresses.map { String(format: "0x%016llx", $0) } + (sample.failure.map { [$0] } ?? [])
-            let answeredBeforeSample = answeredAtLock.withLock { $0 }
+            let answeredBeforeSample = answeredBeforeCapture > 0 ? answeredBeforeCapture : answeredAt.withLock { $0 }
             let initialMS = answeredBeforeSample > 0 ? (answeredBeforeSample - started) * 1000 : detectedMS
             begin(durationMS: initialMS, backtrace: rawStack, generation: generation)
 
             // Raw addresses are already visible if symbolication itself has to wait for a runtime lock.
+            guard running(generation) else { return }
             let symbols = symbolicate(sample.addresses)
             if !symbols.isEmpty { updateBacktrace(symbols, generation: generation) }
             while answered.wait(timeout: .now() + 0.01) == .timedOut {
                 guard running(generation), !Thread.current.isCancelled else { return }
             }
-            let answeredAt = answeredAtLock.withLock { $0 }
+            if symbols.isEmpty {
+                let resolved = symbolicate(sample.addresses)
+                if !resolved.isEmpty { updateBacktrace(resolved, generation: generation) }
+            }
+            let answeredAt = answeredAt.withLock { $0 }
             let durationMS = answeredAt > 0 ? (answeredAt - started) * 1000 : (CACurrentMediaTime() - started) * 1000
             finish(durationMS: durationMS, generation: generation)
             Thread.sleep(forTimeInterval: interval)
         }
     }
 
-    private func sampleMainThread(generation: Int) -> MainThreadSample {
+    private func sampleMainThread(generation: Int, buffer: UnsafeMutablePointer<UInt64>, capacity: Int) -> MainThreadSample {
         samplingLock.lock()
         defer { samplingLock.unlock() }
         guard running(generation) else { return MainThreadSample(addresses: [], failure: nil) }
@@ -170,12 +191,21 @@ nonisolated final class MainThreadWatchdog: @unchecked Sendable {
         guard suspended == KERN_SUCCESS else {
             return MainThreadSample(addresses: [], failure: "thread_suspend failed (\(suspended))")
         }
-        let sample = captureMainThread(main)
+        // Nothing in this suspended region allocates: the buffer belongs to the worker and all Mach reads write into it.
+        let captured = captureMainThread(main, buffer: buffer, capacity: capacity)
         _ = thread_resume(main)
-        return sample
+        let addresses = Array(UnsafeBufferPointer(start: buffer, count: captured.count))
+        let failure: String?
+        if captured.result != KERN_SUCCESS {
+            failure = "thread_get_state failed (\(captured.result))"
+        } else {
+            failure = addresses.isEmpty ? "main-thread backtrace unavailable" : nil
+        }
+        return MainThreadSample(addresses: addresses, failure: failure)
     }
 
-    private func captureMainThread(_ main: thread_act_t) -> MainThreadSample {
+    private func captureMainThread(_ main: thread_act_t, buffer: UnsafeMutablePointer<UInt64>, capacity: Int)
+        -> (count: Int, result: kern_return_t) {
         var pc: UInt64 = 0
         var lr: UInt64 = 0
         var fp: UInt64 = 0
@@ -207,23 +237,35 @@ nonisolated final class MainThreadWatchdog: @unchecked Sendable {
         #else
         let result = KERN_FAILURE
         #endif
-        guard result == KERN_SUCCESS else {
-            return MainThreadSample(addresses: [], failure: "thread_get_state failed (\(result))")
-        }
+        guard result == KERN_SUCCESS else { return (0, result) }
 
-        var addresses = [pc, lr].filter { $0 != 0 }
+        var frames = 0
+        if pc != 0, frames < capacity {
+            buffer[frames] = pc
+            frames += 1
+        }
+        if lr != 0, lr != pc, frames < capacity {
+            buffer[frames] = lr
+            frames += 1
+        }
         for _ in 0..<64 {
-            guard fp != 0, fp & 0x7 == 0, let frame = perfReadFrame(fp) else { break }
+            guard frames < capacity, fp != 0, fp & 0x7 == 0, let frame = perfReadFrame(fp) else { break }
             let returnAddress = perfStripPointer(frame.returnAddress)
-            if returnAddress != 0 { addresses.append(returnAddress) }
+            if returnAddress != 0 {
+                buffer[frames] = returnAddress
+                frames += 1
+            }
             let next = perfStripPointer(frame.next)
             guard next > fp, next - fp < 16 * 1024 * 1024 else { break }
             fp = next
         }
-        return MainThreadSample(addresses: addresses, failure: addresses.isEmpty ? "main-thread backtrace unavailable" : nil)
+        return (frames, result)
     }
 
     private func symbolicate(_ addresses: [UInt64]) -> [String] {
+        // backtrace_symbols is also used by crash reporting; do not let an old and a new worker call it concurrently.
+        symbolicationLock.lock()
+        defer { symbolicationLock.unlock() }
         let pointers = addresses.map { UnsafeMutableRawPointer(bitPattern: UInt($0)) }
         return pointers.withUnsafeBufferPointer { frames -> [String] in
             guard let base = frames.baseAddress, let lines = backtrace_symbols(base, Int32(frames.count)) else { return [] }
