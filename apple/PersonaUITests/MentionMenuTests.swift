@@ -129,7 +129,8 @@ final class MentionMenuTests: XCTestCase {
         // The iPhone's tap opens the photo / file panel; its touch and hold, the menu (#3225).
         let plus = app.buttons["shell-composer-add"].firstMatch
         if UIDevice.current.userInterfaceIdiom == .pad { plus.tap() } else { plus.press(forDuration: 1.0) }
-        let item = app.buttons["composer-menu-mention"]
+        // By its title too, where UIKit's menu drops the identifier.
+        let item = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "composer-menu-mention", "提及文件或会话")).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "no Mention item in +:\n\(app.debugDescription)")
         item.tap()
         XCTAssertTrue(wait(field, "look at @"), "the item did not type @: \(String(describing: field.value))")

@@ -883,16 +883,17 @@ struct AttachMenuItems: View {
             if let split = row.split {
                 item(row) { Text(split.title); Text(split.word); Theme.Icon.image(row.symbol) }
             } else {
-                item(row) { Text(row.title); Theme.Icon.image(row.symbol) }
+                item(row) { Label { Text(row.title).lineLimit(1) } icon: { Theme.Icon.image(row.symbol) } }
             }
         }
     }
 
+    /// The identifier right on the button, as the composer's menus had it; UI tests fall back on the title where UIKit's
+    /// menu drops it.
     private func item(_ row: AttachMoreRow, @ViewBuilder label: () -> some View) -> some View {
         Button(role: row.destructive ? .destructive : nil, action: row.action, label: label)
-            .disabled(row.disabled)
-            .accessibilityLabel(row.title)
             .accessibilityIdentifier(row.id)
+            .disabled(row.disabled)
     }
 }
 

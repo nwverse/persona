@@ -6,10 +6,13 @@ import XCTest
 /// same, less what needs a conversation (Voice Chat). The iPad's + is that menu, with Photos and Files first. Against
 /// scripts/mock/mock_hub.py (PERSONA_MOCK_HUB); `-showCameraRows YES` lists Take Photo, since the simulator has no camera.
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps screenshots, in light and dark (`-ui.scheme`) and in the BeautifulUI style too.
+/// Voice Chat is the iPhone's alone (`VoicePlatform.phone`), as it was before.
 final class AttachMenuTests: XCTestCase {
     private var hub = ""
-    private static let persona = ["-tab", "assistant", "-app.tab", "assistant"]
-    private static let new = persona + ["-newAssistant", "YES"]
+    private static let tab = ["-tab", "assistant", "-app.tab", "assistant"]
+    /// The main conversation, named: the Persona tab otherwise opens on whatever the last launch left (a new one).
+    private static let persona = tab + ["-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]
+    private static let new = tab + ["-newAssistant", "YES"]
     private static let agent = ["-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000002"] // weather › tests: working, Claude in herdr
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     private var shots: Bool { ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil }
@@ -30,7 +33,7 @@ final class AttachMenuTests: XCTestCase {
             for scheme in schemes {
                 let app = launch(Self.persona, scheme: scheme, style: style)
                 openMenu(app)
-                for id in ["composer-menu-voice", "composer-menu-camera", "composer-menu-mention"] {
+                for id in ["composer-menu-camera", "composer-menu-mention"] + (isPad ? [] : ["composer-menu-voice"]) {
                     XCTAssertTrue(item(app, id).waitForExistence(timeout: 5), "no \(id) in the menu:\n\(app.debugDescription)")
                 }
                 XCTAssertFalse(commands(app).exists, "Quick Commands in Persona's conversation")
@@ -68,7 +71,8 @@ final class AttachMenuTests: XCTestCase {
             openMenu(app)
             let quick = commands(app)
             XCTAssertTrue(quick.waitForExistence(timeout: 5), "no Quick Commands:\n\(app.debugDescription)")
-            XCTAssertTrue(item(app, "composer-menu-voice").exists && item(app, "composer-menu-mention").exists)
+            XCTAssertTrue(item(app, "composer-menu-mention").exists, "no Mention:\n\(app.debugDescription)")
+            XCTAssertEqual(item(app, "composer-menu-voice").exists, !isPad, "Voice Chat in an Agent's menu")
             XCTAssertFalse(item(app, "attach-clear").exists, "the commands are not folded")
             shot("attach-menu-agent", scheme)
             quick.tap()
@@ -100,7 +104,9 @@ final class AttachMenuTests: XCTestCase {
                     XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "no \(id) in More (\(name)):\n\(app.debugDescription)")
                 }
                 XCTAssertEqual(app.buttons["composer-menu-voice"].exists, name != "new", "Voice Chat in More (\(name))")
-                XCTAssertEqual(app.buttons["attach-clear"].exists, name == "agent", "the commands in More (\(name))")
+                // The list draws what is on screen: the first command, not /clear at the bottom.
+                let command = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'attach-command-'")).firstMatch
+                XCTAssertEqual(command.exists, name == "agent", "the commands in More (\(name))")
                 shot("attach-panel-more-\(name)", scheme, style)
                 app.terminate()
             }
@@ -159,8 +165,12 @@ final class AttachMenuTests: XCTestCase {
         if isPad { plus.tap() } else { plus.press(forDuration: 1.0) }
     }
 
+    /// A menu row by its identifier, or by its title where UIKit's menu drops the identifier (zh-Hans, as the tests run).
     @MainActor private func item(_ app: XCUIApplication, _ id: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(identifier: id).firstMatch
+        let titles = ["composer-menu-voice": "语音对话", "composer-menu-camera": "拍照", "composer-menu-mention": "提及文件或会话",
+                      "attach-clear": "清空上下文"]
+        let title = titles[id] ?? (id.hasPrefix("attach-command-") ? String(id.dropFirst("attach-command-".count)) : id)
+        return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ OR label BEGINSWITH %@", id, title)).firstMatch
     }
 
     /// The Quick Commands submenu: by its title too, as a submenu may not carry its identifier through UIKit's menu.
