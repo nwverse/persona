@@ -819,7 +819,7 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
 
 ## Launcher health in New Agent (#1643)
 
-`Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher.
+`Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher. Since #4437 the hub leaves out a launcher whose latest check failed, so the list the app reads carries `blocked` only for `not_in_terminal` and for the configured default; the rest are gone until a check passes.
 `Launcher.block` / `LauncherChoices` (`Views/NewChat/LauncherAvailability.swift`, `LauncherHealthTests`) decide what is grayed out: only `blocked`, one line per failure class.
 In `LauncherPicker` a blocked row is gray with the line (`LauncherBlockLine`) and an info mark; a tap opens `LauncherBlockedHelp` (why, How to Fix, the record under Details, Add Provider → `ProviderWizard`, Try Anyway picks it once the sheet has closed),
 never picks it. The form says the line under the launcher row when the launcher that will run is blocked (Model Settings' default, or picked anyway); Start stays enabled. Run Agent Here picks a usable launcher first, lists blocked ones last in its menu under a section titled with the line (a picker menu drops an option's second line), and says it in its footer once picked.
