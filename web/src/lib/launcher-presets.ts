@@ -129,16 +129,24 @@ export function assignByDefault(claudeAnswers: boolean, test: TestResult | null 
   return !claudeAnswers && !regionBlocked(test);
 }
 
+/** What the wizard asks for a preset: the key, and under "More options" the startup ID, the display name and the model. */
+export interface PresetForm {
+  name: string;
+  display_name: string;
+  api_key: string;
+  model: string;
+}
+
 /** POST /api/v1/launchers' body: the startup ID and the display name only when typed (the hub names it after the
  *  provider), the model only when another one than the preset's default was picked, `assign` when asked. */
-export function presetBody(p: LauncherPreset, name: string, key: string, model: string, assign = false, displayName = "") {
-  const m = model.trim();
-  const n = name.trim();
-  const d = displayName.trim();
+export function presetBody(p: LauncherPreset, f: PresetForm, assign = false) {
+  const m = f.model.trim();
+  const n = f.name.trim();
+  const d = f.display_name.trim();
   return {
     ...(n ? { name: n } : {}),
     ...(d ? { display_name: d } : {}),
-    api_key: key.trim(),
+    api_key: f.api_key.trim(),
     preset: p.id,
     ...(m && m !== presetDefaultModel(p) ? { model: m } : {}),
     ...(assign ? { assign: [...ASSIGN_PURPOSES] } : {}),

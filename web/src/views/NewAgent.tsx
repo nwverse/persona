@@ -34,6 +34,7 @@ import { startBlocked, ultracodeStartOffered } from "../lib/ultracode";
 import { UltracodeStartRow } from "./chat/Ultracode";
 import { Icon } from "../ui/icons";
 import { ModelPicker, type ModelList } from "../ui/ModelPicker";
+import { ProviderName } from "../ui/ProviderName";
 import { t } from "../i18n";
 import { useAddComputer } from "./machines/AddComputerEntry";
 import { useScopedMachines } from "../lib/current-assistant";
@@ -804,12 +805,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                             <Pill tone="orange">{t("newagent.runs_this_time")}</Pill>{" "}
                           </>
                         )}
-                        <span className={cx("text-ink-2", !providerIdNote(l) && "font-mono")}>{providerTitle(l)}</span>{" "}
-                        {providerIdNote(l) && (
-                          <>
-                            <span className="font-mono text-[11px]">{providerIdNote(l)}</span>{" "}
-                          </>
-                        )}
+                        <ProviderName of={l} className="text-ink-2" idClassName="text-[11px]" />{" "}
                         <span>{block.reason}</span>{" "}
                         <button
                           type="button"

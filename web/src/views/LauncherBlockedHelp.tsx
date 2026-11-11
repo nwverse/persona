@@ -5,6 +5,7 @@ import type { LauncherBlock } from "../lib/launcher-health";
 import { providerIdNote, providerTitle, type Named } from "../lib/provider-names";
 import { Button, cx, IconButton } from "../ui/atoms";
 import { Icon } from "../ui/icons";
+import { ProviderName } from "../ui/ProviderName";
 import { t } from "../i18n";
 
 export function LauncherBlockedHelp({ launcher, block, onTryAnyway, onAddProvider, onClose }: {
@@ -26,8 +27,7 @@ export function LauncherBlockedHelp({ launcher, block, onTryAnyway, onAddProvide
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="shrink-0 text-[13px] font-medium text-ink">{block.title}</span>
-            <span className={cx("min-w-0 truncate text-[11.5px]", id ? "text-ink-2" : "font-mono text-ink-3")}>{name}</span>
-            {id && <span className="min-w-0 shrink-[2] truncate font-mono text-[11px] text-ink-3">{id}</span>}
+            <ProviderName of={launcher} className={cx("min-w-0 truncate text-[11.5px]", id ? "text-ink-2" : "text-ink-3")} idClassName="min-w-0 shrink-[2] truncate text-[11px] text-ink-3" />
           </div>
           {/* the cause itself, whole (the line under the launchers was the only other place it was said); the title of
               one the terminal can't run says it already */}

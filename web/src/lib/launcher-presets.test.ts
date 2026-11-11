@@ -69,18 +69,18 @@ describe("launcher presets", () => {
   });
 
   it("sends the model only when another one was picked", () => {
-    expect(presetBody(team, " jv_team ", " sk-x ", "example-pro")).toEqual({ name: "jv_team", api_key: "sk-x", preset: "example-gateway/team" });
-    expect(presetBody(team, "jv_team", "k", "example-mini")).toEqual({ name: "jv_team", api_key: "k", preset: "example-gateway/team", model: "example-mini" });
+    expect(presetBody(team, { name: " jv_team ", display_name: "", api_key: " sk-x ", model: "example-pro" })).toEqual({ name: "jv_team", api_key: "sk-x", preset: "example-gateway/team" });
+    expect(presetBody(team, { name: "jv_team", display_name: "", api_key: "k", model: "example-mini" })).toEqual({ name: "jv_team", api_key: "k", preset: "example-gateway/team", model: "example-mini" });
   });
 
   it("leaves the name out when none is typed, so the hub names it, and asks to assign when told to", () => {
-    expect(presetBody(glm, "  ", "sk-x", "glm-x", true)).toEqual({ api_key: "sk-x", preset: "builtin/glm", assign: ["assistant", "agent.new"] });
-    expect(presetBody(glm, "", "sk-x", "")).toEqual({ api_key: "sk-x", preset: "builtin/glm" });
+    expect(presetBody(glm, { name: "  ", display_name: "", api_key: "sk-x", model: "glm-x" }, true)).toEqual({ api_key: "sk-x", preset: "builtin/glm", assign: ["assistant", "agent.new"] });
+    expect(presetBody(glm, { name: "", display_name: "", api_key: "sk-x", model: "" })).toEqual({ api_key: "sk-x", preset: "builtin/glm" });
   });
 
   it("sends a typed display name, trimmed; left empty the hub uses the preset's (#5029)", () => {
-    expect(presetBody(glm, "", "sk-x", "glm-x", true, " 团队的 GLM ")).toEqual({ display_name: "团队的 GLM", api_key: "sk-x", preset: "builtin/glm", assign: ["assistant", "agent.new"] });
-    expect(presetBody(glm, "glm_team", "sk-x", "glm-x", false, "  ")).toEqual({ name: "glm_team", api_key: "sk-x", preset: "builtin/glm" });
+    expect(presetBody(glm, { name: "", display_name: " 团队的 GLM ", api_key: "sk-x", model: "glm-x" }, true)).toEqual({ display_name: "团队的 GLM", api_key: "sk-x", preset: "builtin/glm", assign: ["assistant", "agent.new"] });
+    expect(presetBody(glm, { name: "glm_team", display_name: "  ", api_key: "sk-x", model: "glm-x" })).toEqual({ name: "glm_team", api_key: "sk-x", preset: "builtin/glm" });
   });
 
   it("tests a key against the preset: the hub fills in the address and the default model", () => {

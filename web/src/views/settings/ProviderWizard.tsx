@@ -33,6 +33,7 @@ import {
   testableKey,
   type AddResult,
   type LauncherPreset,
+  type PresetForm,
 } from "../../lib/launcher-presets";
 import {
   autoCheckable,
@@ -73,6 +74,7 @@ import { t } from "../../i18n";
 
 type Step = "pick" | "key" | "done" | "connect" | "models" | "devices";
 const CUSTOM = "custom";
+const NO_PRESET_FORM: PresetForm = { name: "", display_name: "", api_key: "", model: "" };
 /** The hub's hello feature for built-in presets, a name it makes up and assign (docs/integrations/launchers.md "Built-in presets"). */
 const BUILTIN_PRESETS_FEATURE = "builtin_presets";
 /** The hub's hello feature for making up a gateway's startup ID when none is typed (#5029). */
@@ -153,7 +155,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const [presetsError, setPresetsError] = useState("");
   // a preset's id, or CUSTOM for a gateway typed by hand; "" before anything is picked
   const [choice, setChoice] = useState("");
-  const [pf, setPf] = useState<PresetForm>({ name: "", display_name: "", api_key: "", model: "" });
+  const [pf, setPf] = useState(NO_PRESET_FORM);
   // "More options": a preset's names and model, a gateway's startup ID
   const [more, setMore] = useState(false);
   // null: not touched, so it follows the readiness (off while Claude Code already answers)
@@ -218,7 +220,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     setStep(old ? "connect" : "pick");
     if (!isNew) return;
     setChoice("");
-    setPf({ name: "", display_name: "", api_key: "", model: "" });
+    setPf(NO_PRESET_FORM);
     setAssign(null);
     setKeyTest(null);
     setAdded(null);
@@ -271,7 +273,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
       const p = presets?.find((x) => x.id === id);
       // The key belongs to the provider it was typed for: carried over, it would be tested against (and saved for)
       // another provider's endpoint.
-      setPf((x) => ({ ...x, name: "", display_name: "", api_key: "", model: p ? presetDefaultModel(p) : "" }));
+      setPf({ ...NO_PRESET_FORM, model: p ? presetDefaultModel(p) : "" });
       setMore(false);
     }
     setChoice(id);
@@ -373,7 +375,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
           give = hubNames && (assignSet ?? assignByDefault(claudeWorks(before), keyTest && !keyTest.running ? keyTest.result : null));
           noClaude = claudeMissing(before);
         }
-        const result = await api<AddResult>("/launchers", { method: "POST", json: { ...presetBody(preset, pf.name, pf.api_key, pf.model, give, pf.display_name), ...(scopeOn ? scopeBody(scope, null, machines, give) : {}) } });
+        const result = await api<AddResult>("/launchers", { method: "POST", json: { ...presetBody(preset, pf, give), ...(scopeOn ? scopeBody(scope, null, machines, give) : {}) } });
         forgetProviderNames();
         onSaved();
         setAdded({ result, asked: give, fallback: pf.display_name.trim() || pf.name.trim() || presetTitle(preset), noClaude, direct });
@@ -669,8 +671,6 @@ function PickStep({ presets, error, choice, onPick }: { presets: LauncherPreset[
     </div>
   );
 }
-
-type PresetForm = { name: string; display_name: string; api_key: string; model: string };
 
 /** (2) for a preset: only the key; it is tested by itself. The names and another model wait under "More options". */
 function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAssign, checking, works, more, setMore, devices }: {

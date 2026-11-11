@@ -1027,7 +1027,8 @@ list, toasts and dialog titles), it leads with the provider's display name in th
 the startup ID as secondary text: small monospace in `--ink-3` where a row has room, the `title` tooltip on chips and
 buttons, "Title (id)" in a native `<option>`. A launcher with no display name (an rc alias, plain `claude`, a provider
 from an older hub) shows its ID in monospace as before. One module decides it, `web/src/lib/provider-names.ts`; a page
-that holds only an ID looks the title up there. The provider wizard asks for the display name first (any language, at
+that holds only an ID looks the title up there, and a row that shows the ID beside the name draws both with
+`ProviderName` (`web/src/ui/ProviderName.tsx`). The provider wizard asks for the display name first (any language, at
 most 64 characters; left empty, the hub takes the address's host) and keeps the startup ID under More options, where
 the hub makes one up when it is left empty and its format is checked only once something is typed. A saved provider can
 be renamed; its ID can't change, and the edit page says why (launches, Agent presets and the model settings refer to

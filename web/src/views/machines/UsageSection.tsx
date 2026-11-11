@@ -263,7 +263,7 @@ function Totals({ data }: { data: MachineUsage }) {
   );
 }
 
-function Filter({ label, all, value, options, labelOf = (v) => (v === "" ? launcherName(v) : v), onChange, disabled }: {
+function Filter({ label, all, value, options, labelOf = launcherName, onChange, disabled }: {
   label: string;
   all: string;
   value: string | null;

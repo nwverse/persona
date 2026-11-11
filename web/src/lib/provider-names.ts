@@ -6,8 +6,7 @@
 // the model configuration's providers (GET /model-config, whose `name` the hub sets to the display name), read once a
 // minute at most and shared by every place on the page.
 import { useEffect, useState } from "react";
-import { api } from "./api";
-import { MANAGER_HEADER } from "./manager-choice";
+import { modelConfiguration } from "./model-config";
 
 /** Anything with a startup ID and maybe a display name: a `Launcher` (GET /machines/{mid}/launchers), a `ProviderView`
  *  (GET /launchers), a preset's add result. */
@@ -53,7 +52,8 @@ export function namesFromProviders(providers: readonly { id: string; name?: stri
     if (!p.id.startsWith("launcher.")) continue;
     const name = p.id.slice("launcher.".length);
     if (!name || name === "claude") continue;
-    out.push(p.name?.trim() && p.name.trim() !== name ? { name, display_name: p.name.trim() } : { name });
+    const d = p.name?.trim();
+    out.push(d && d !== name ? { name, display_name: d } : { name });
   }
   return out;
 }
@@ -66,7 +66,7 @@ const namesCache = new Map<string, { at: number; list: Promise<Named[]> }>();
 export function loadProviderNames(manager = ""): Promise<Named[]> {
   const hit = namesCache.get(manager);
   if (hit && Date.now() - hit.at < NAMES_TTL_MS) return hit.list;
-  const list = api<{ providers?: { id: string; name?: string }[] }>("/model-config", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined })
+  const list = modelConfiguration(manager)
     .then((r) => namesFromProviders(r.providers))
     .catch(() => {
       namesCache.delete(manager);

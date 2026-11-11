@@ -19711,8 +19711,9 @@ class H(BaseHTTPRequestHandler):
                 b["model"] = b.get("model") or pr.get("model") or (pr.get("models") or [{}])[0].get("id", "")
             if not b.get("base_url") or not b.get("model"): return self.send_json({"error": "要填 Base URL 和模型"}, 400)
             l = {"name": name, "source": "persona", "base_url": b["base_url"], "model": b["model"], "has_key": bool(b.get("api_key"))}
-            for k in ("kind", "api", "small_model", "args", "display_name"):
-                if b.get(k): l[k] = b[k].strip() if k == "display_name" else b[k]
+            for k in ("kind", "api", "small_model", "args"):
+                if b.get(k): l[k] = b[k]
+            if (b.get("display_name") or "").strip(): l["display_name"] = b["display_name"].strip()
             LAUNCHERS.insert(0, l)
             return self.send_json({"launcher": l})
         if p.startswith("/api/v1/launchers/") and (self.command == "DELETE" or p.endswith("/restore")):  # hide / bring back
