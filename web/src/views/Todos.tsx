@@ -57,7 +57,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import { useRestoredTodos } from "../lib/todo-restore";
-import { progressLine } from "../lib/supervision";
+import { autoReviewLine, checklist, latestReview, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
@@ -68,7 +68,7 @@ import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
 import type { Route } from "../lib/router";
-import { CriteriaSummary, LatestReport, ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
+import { LatestReport, ReviewBadge } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
 import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
@@ -1075,7 +1075,6 @@ const TodoListItem = memo(function TodoListItem({
         </div>
 
         {/* What it waits on from the user, with the one tap that answers it (#2056) */}
-        <CriteriaSummary todo={todo} />
         <TodoAskLine todo={todo} className="mt-1" />
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
@@ -1280,6 +1279,89 @@ function askText(ix: Interaction | undefined): string {
 }
 
 // ── Todo Detail ──────────────────────────────────────────────
+
+// The existing review UI lives with this lazy page, not the first screen's card badges.
+const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
+  met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
+  missing: { icon: "x", className: "text-red", label: () => t("assistant-tasks.review_missing") },
+  open: { icon: "clock", className: "text-ink-3", label: () => t("assistant-tasks.review_open") },
+  // added after the acceptance, which still stands (#3156): nothing waits on it
+  unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
+};
+
+/** The task's criteria, each as its latest report or review found it, and what the supervisor said last. */
+export function ReviewChecklist({ todo }: { todo: Todo }) {
+  const sup = todo.supervision;
+  if (!sup) return null;
+  const list = checklist(sup);
+  const review = latestReview(sup);
+  return (
+    <section data-testid="review-checklist" className="mt-4 rounded-control bg-inset p-3.5 shadow-hairline">
+      <div className="flex items-center gap-2">
+        <span className="text-[12.5px] font-semibold text-ink-2">{t("assistant-tasks.review_title")}</span>
+        <ReviewBadge todo={todo} />
+        <span className="flex-1" />
+        {sup.expect_minutes ? <span className="text-[12px] text-ink-3">{t("assistant-tasks.review_expect", { minutes: sup.expect_minutes })}</span> : null}
+      </div>
+      {list.length === 0 ? (
+        <p className="mt-2 text-[12.5px] text-ink-3">{t("assistant-tasks.review_none")}</p>
+      ) : (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {list.map((c) => {
+            const m = MARK[c.mark];
+            return (
+              <li key={c.criterion} className="flex items-start gap-2 text-[13px]">
+                <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
+                  <Icon name={m.icon} size={13} stroke={2.4} />
+                </span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-ink">{c.criterion}</span>
+                  {c.evidence && <span className="text-[12px] text-ink-3 select-text">{c.evidence}</span>}
+                  {(c.at || c.by) && (
+                    <span className="flex flex-wrap gap-x-1.5 text-[11px] text-ink-3">
+                      {c.by && <span>{c.by}</span>}
+                      {c.at && <time dateTime={c.at} title={c.at}>{new Date(c.at).toLocaleString()}</time>}
+                    </span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
+      <AutoReviewResult sup={sup} />
+    </section>
+  );
+}
+
+/** The independent reviewer's result (#2173) under the criteria: a line, and its report on a click. Nothing when no
+ *  review ran, so a task without one looks as it did. */
+function AutoReviewResult({ sup }: { sup: Supervision }) {
+  const [open, setOpen] = useState(false);
+  const line = autoReviewLine(sup);
+  if (!line) return null;
+  const findings = sup.auto_review?.findings;
+  return (
+    <div data-testid="auto-review" className="mt-2 flex flex-col gap-1 text-[12.5px] text-ink-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <Icon name="target" size={12} className="shrink-0" />
+        <span className="shrink-0 whitespace-nowrap font-semibold">{t("assistant-tasks.auto_review_title")}</span>
+        <span className="min-w-0">· {line}</span>
+        {findings && (
+          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="touch-hit ml-auto shrink-0 whitespace-nowrap text-ink-3 hover:text-ink-2">
+            {t(open ? "assistant-tasks.auto_review_hide" : "assistant-tasks.auto_review_show")}
+          </button>
+        )}
+      </div>
+      {open && findings && (
+        <div data-testid="auto-review-findings" className="leading-[1.55] whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">
+          {findings}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TodoDetail({
   todo,

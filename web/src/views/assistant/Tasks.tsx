@@ -59,7 +59,7 @@ import { Button, Collapse, cx, Dialog, IconButton, Menu, toast, useNow } from ".
 import { StatusMark } from "../../ui/StatusMark";
 import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
-import { CriteriaSummary, ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
+import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { AcceptRow, BriefCard } from "./Brief";
 
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
@@ -537,7 +537,6 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
         </span>
       </div>
       {/* what its result waits on from the user, and the one tap that answers it (#2056) */}
-      <CriteriaSummary todo={todo} />
       <TodoAskLine todo={todo} className="px-1" />
       {/* what Persona sent its agent (#1542): the hand-off sent with this card is drawn only here */}
       <TaskSentList todoId={todo.id} conversation={conversation} />

@@ -106,12 +106,13 @@ These reports are evidence, not acceptance: no count closes a task, changes
 dispatch, runs tests, or substitutes for the supervisor's own review.
 
 To-do API responses include `supervision.criteria` for all clients. The web task
-cards and to-do list show the live N/M count and an expandable criterion list;
-details show the same status, evidence, timestamp and reporter. The count and
-disclosure are available immediately; the shared evidence renderer loads only
-when a disclosure or task detail opens, using the existing lazy-page loader.
-It shows the localized loading state while fetching and keeps the original
-first-screen byte budget unchanged. Mobile UI changes,
+cards and to-do list keep their existing N/M badge. The task detail's existing
+`review-checklist` renders persisted criteria through the same `checklist()` and
+`MARK` states and existing translations; older hubs fall back to review checks.
+Evidence, timestamp and the recorded reporter stay in that existing detail
+section. No new component, panel, disclosure or translation is added, and the
+existing checklist and marks live with the lazy to-do page rather than the
+first-screen card badges. The first-screen byte budget stays unchanged. Mobile UI changes,
 automatic CI observation, and criterion dependency gates are outside this change.
 
 ## Boundary with hub (2026-11-04, #1446)

@@ -97,17 +97,16 @@ describe("todo rows on a sessions push", () => {
     api.mockImplementation(async (path) => path === "/todos" ? { todos: updated } : {});
     await act(async () => { await refreshTodos(); });
     expect(row().querySelector('[data-testid="review-badge"]')?.textContent).toContain("1/2");
-    await act(async () => {
-      row().querySelector("summary")!.click();
-      row().querySelector("details")!.dispatchEvent(new Event("toggle"));
-      await (await import("../lib/lazy-page")).loadPages();
-    });
-    expect(row().querySelector("details")?.open).toBe(true);
-    expect(row().textContent).toContain("go test: PASS");
-    expect(row().textContent).toContain("Agent · m1/s2");
-    expect(row().querySelector("time")?.dateTime).toBe(now);
-    // Expanding evidence must not navigate to that row's task.
+    expect(row().querySelector('[data-testid="criteria-summary"], details, summary, time')).toBeNull();
+    expect(row().textContent).not.toContain("go test: PASS");
+    expect(row().textContent).not.toContain("Agent · m1/s2");
     expect(host.querySelector('[aria-current="true"]')?.textContent).toContain("整理发布清单");
+    // The existing task navigation opens the existing review checklist; the row adds no criterion UI.
+    await act(async () => { row().click(); });
+    const detail = host.querySelector('[data-testid="review-checklist"]')!;
+    expect(detail.textContent).toContain("go test: PASS");
+    expect(detail.textContent).toContain("agent:m1/s2");
+    expect(detail.querySelector("time")?.dateTime).toBe(now);
   });
   it("keeps the selected Needs you detail neutral while working retains its orange tint", async () => {
     const { TODO_STATUS_INFO } = await import("../lib/todos");

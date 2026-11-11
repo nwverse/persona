@@ -1,12 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { FeedItem } from "../../lib/feed";
-import { loadPages } from "../../lib/lazy-page";
 import type { Todo } from "../../lib/todos";
+import { Icon } from "../../ui/icons";
 import { FeedLineView } from "./Tasks";
-import { LatestReport, ReviewBadge, ReviewChecklist } from "./Supervision";
-
-beforeAll(() => loadPages());
+import { LatestReport, ReviewBadge } from "./Supervision";
+import { ReviewChecklist } from "../Todos";
 
 const todo: Todo = {
   id: "todo_1",
@@ -38,9 +37,20 @@ describe("a supervised task", () => {
     expect(html).toContain("1/2");
     expect(html).toContain("pull/7 merged");
     expect(html).toContain('dateTime="2026-11-10T09:00:00Z"');
-    expect(html).toContain("Agent");
-    expect(html).toContain("box/s1");
+    expect(html).toContain("agent:box/s1");
     expect(html).toContain('aria-label="还没验收"');
+  });
+  it.each([
+    "agent:box/s1", "supervisor:main", "judge",
+  ])("keeps the %s evidence attribution in the existing task detail without new labels", (by) => {
+    const detail: Todo = { ...todo, supervision: {
+      supervisor: "main", done_when: ["Tests pass"],
+      criteria: [{ criterion: "Tests pass", state: "met", evidence: "go test: PASS", at: "2026-11-11T01:00:00Z", by }],
+    } };
+    const html = renderToStaticMarkup(<ReviewChecklist todo={detail} />);
+    expect(html).toContain(by);
+    expect(html).toContain("go test: PASS");
+    expect(html).toContain('dateTime="2026-11-11T01:00:00Z"');
   });
   it("tints accepted work green but keeps reviews requiring user input neutral", () => {
     const accepted = renderToStaticMarkup(<ReviewBadge todo={{ ...todo, done_at: "2026-11-05T10:00:00Z", supervision: { ...todo.supervision!, state: "accepted" } }} />);
@@ -65,6 +75,16 @@ describe("a supervised task", () => {
     expect(html).toContain('aria-label="缺口"');
     expect(html).toContain("只有浅色");
     expect(html).toContain("督办说明：补深色截图");
+  });
+
+  it("keeps the existing unchecked minus for a legacy criterion added after acceptance", () => {
+    const html = renderToStaticMarkup(<ReviewChecklist todo={{ ...todo, supervision: {
+      ...todo.supervision!, state: "accepted",
+      reviews: [{ at: "2026-11-05T09:00:00Z", verdict: "accepted", checks: [{ criterion: todo.supervision!.done_when![0], met: true }] }],
+    } }} />);
+    expect(html).toContain('aria-label="验收后追加，未单独核对"');
+    expect(html).toContain(renderToStaticMarkup(<Icon name="minus" size={13} stroke={2.4} />));
+    expect(html).toContain("1/1");
   });
 
   it("shows the agent's latest report as it wrote it, Markdown rendered, on its page (#3181)", () => {

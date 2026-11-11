@@ -150,28 +150,22 @@ export interface ChecklistEntry {
  */
 export function checklist(sup: Supervision | undefined): ChecklistEntry[] {
   if (!sup) return [];
-  if (sup.criteria && sup.done_when?.length) {
-    const current = new Map(sup.criteria.map((c) => [c.criterion, c]));
-    return (sup.done_when ?? []).map((criterion) => {
-      const c = current.get(criterion);
-      return { criterion, mark: c?.state === "met" ? "met" : c?.state === "not_met" ? "missing" : "open",
-        evidence: c?.evidence || undefined, at: c?.at, by: c?.by };
+  const criteria = sup.done_when ?? [];
+  const current = criteria.length ? sup.criteria : undefined;
+  const latest = new Map<string, ChecklistEntry>();
+  for (const c of current ?? sup.reviews?.flatMap((r) => r.checks ?? []) ?? []) {
+    latest.set(c.criterion, {
+      criterion: c.criterion,
+      mark: "state" in c ? (c.state === "met" ? "met" : c.state === "not_met" ? "missing" : "open") : c.met ? "met" : "missing",
+      evidence: c.evidence || undefined,
+      ...("state" in c ? { at: c.at, by: c.by } : {}),
     });
   }
-  const settled = acceptanceStands({ supervision: sup });
-  const latest = new Map<string, ReviewCheck>();
-  for (const r of sup.reviews ?? []) for (const c of r.checks ?? []) latest.set(c.criterion, c);
-  const out: { criterion: string; mark: CheckMark; evidence?: string }[] = [];
-  const seen = new Set<string>();
-  for (const criterion of sup.done_when ?? []) {
-    seen.add(criterion);
-    const c = latest.get(criterion);
-    out.push({ criterion, mark: c ? (c.met ? "met" : "missing") : settled ? "unchecked" : "open", evidence: c?.evidence || undefined });
-  }
-  for (const [criterion, c] of latest) {
-    if (!seen.has(criterion)) out.push({ criterion, mark: c.met ? "met" : "missing", evidence: c.evidence || undefined });
-  }
-  return out;
+  const settled = !current && acceptanceStands({ supervision: sup });
+  return [
+    ...criteria.map((criterion): ChecklistEntry => latest.get(criterion) ?? { criterion, mark: settled ? "unchecked" : "open", evidence: undefined }),
+    ...(current ? [] : [...latest.values()].filter((c) => !criteria.includes(c.criterion))),
+  ];
 }
 
 /** The latest review, if any. */
