@@ -243,7 +243,7 @@ Apple has no shadow tokens. Shadows are inline literals:
 | Island surface | black 0.13, r20, y10 | `apple/Persona/DesignSystem/Styling.swift:66` |
 | Soft button | black 0.12 (0.25 tinted), r6, y3 | `apple/Persona/DesignSystem/Styling.swift:183` |
 | Composer | black 0.08, r12, y4 | `apple/Persona/DesignSystem/ShellComposerBar.swift:477` |
-| Message action bar | black 0.25, r10, y4 | `apple/Persona/Views/Chat/MessageMenu.swift:461` |
+| Message action bar | black 0.25, r10, y4 | `apple/Persona/Views/Chat/MessageMenu.swift:498` |
 | Drawer card (under iPhone Duo's side bars, the sidebar over the page) | black 0.18, r24 | `apple/Persona/Views/Assistant/AssistantSidebar.swift:219` |
 
 The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`) plus `--shadow-knob` for the switch knob. Android has four literals. See DS-08.
@@ -289,6 +289,7 @@ Reduce Motion:
   No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
+- Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Only anonymous absolute HTTPS URLs without account credentials load. Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
 
 `Theme.Icon.phoneControl` (`iphone.radiowaves.left.and.right`) is the assistant operating an iPhone through a computer:
 the phone-control sections and the `iphone_*` tools. Why a separate symbol: `Theme.Icon.phone` (`iphone`) already means a
@@ -333,6 +334,13 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - User bubble: trailing, radius 20, padding 16 x 12, `ChatBox.user` fill in the unified layout, otherwise the theme's bubble gradient (`apple/Persona/DesignSystem/QuoteViews.swift:295-345`, `apple/Persona/Views/Chat/MessageViews.swift:151`).
 - Assistant text: unboxed in Agents chats; boxed in `ChatBox.persona` in Assistant chats. Streaming text re-parses only the tail.
 - Quotes sit above the words and jump to the original on tap.
+- Forwards (#3807) use the quote card with the forward arrow before the heading ("Forwarded from Claude · chat"), a line
+  for the computer and time, and four lines of the original; a tap opens the original chat at that message. Over the
+  composer the same row adds a line saying where it comes from and goes. Forward takes Share's place in the message bar
+  (the bar keeps its width); Share as Image is the first row of the Forward To sheet. Web (#3899): Forward takes Hand to
+  Persona's place in the message actions; the card over the composer (`ForwardBar`) and in the bubble (`ForwardBlock`)
+  are the quote bar's and quote card's shapes (`views/chat/Quote.tsx`) with the `forward` icon, and Forward to is a
+  `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 
@@ -457,6 +465,8 @@ This is a requested default and interaction change, not a new style or component
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
 
+Apple counts and row marks (#4538): `CountBadge` takes the web's three looks by name. `.needs` (Needs you's text on its soft tint) is for what waits for the user, `.neutral` (white on `Theme.countBadge` gray, the default) for a passive total such as unread messages or items in a group, and `.accent` (white on the accent) for a mention or the selected item. It shows nothing at zero and "99+" past 99 (`CountBadge.text`, which the tab and pane badges that must be plain strings also use); VoiceOver reads the exact number unless the host passes its own `label`. A dense row's state at its end is `RowStateMark`: Needs you a still blue dot, Unread a green dot, Working the amber spinner (`WorkingIndicator`), nothing otherwise, used by the Assistant sidebar's rows (the main chat and the Directions) and by All Chats (`AutoConversationsView`). Why: the sidebar drew Unread in the accent, the same blue as Needs you, so the two states looked alike, and its Needs you counts were white on solid blue while every other Needs you count was blue on the tint.
+
 Assistant avatar: a disc with the first character of the assistant's name. The default assistant's is the AI purple; any other takes one of five hues (blue, green, orange, pink, indigo, in that order) by the sum of its id's UTF-8 bytes modulo 5, so every client colors the same assistant alike. A status mark sits at its foot (online green, offline neutral, installing orange) and, on the sidebar's head only, a mark at its head when another assistant has something waiting. Web: `web/src/ui/AssistantAvatar.tsx` with the `--ai` and `--hue-*` tokens. The letter is sized by the disc, not by the system's text size, so it never outgrows it. Android: `JManagerAvatar` (the status mark's ring is cut out of the disc, so the surface behind shows around it), with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows (an offline one's row faded with `HomeTokens.assistantOfflineAlpha`), and `JAssistantSettingsHeader` for the head of Settings' first group (the monogram at `HomeTokens.assistantAvatarHeader`, the title, and a Switch text button opening the same roster). Apple: `AssistantMonogram` (`Monogram` drawn on the assistant's hue, its letter in the panel's color and capped at the largest standard text size) with `AssistantStateDot` (ringed in the color it sits on), an offline row faded with `Theme.Fade.offline`; the sidebar's head keeps the Persona face with the same dot. Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
 
 The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
@@ -475,6 +485,8 @@ projection and cross-platform rules are in `docs/assistant/unified-entry.md`, "B
 This is a requested status correction, not a new style or setting; the existing reduced-motion behavior applies.
 Workflow phase text may ellipsize, but the done/started count stays visible; simultaneous command/subagent counts
 use another subtitle line rather than pushing the workflow count out of the row.
+
+Conversations an extension opened (#3758, `origin` `lark_agent` or `extension`) carry a source mark beside their title wherever they are a row, in the slot and size of the channel mark (iOS `ConversationSourceMark` / `ExternalSourceMark` in `ConversationChannelMark`'s place, web `OriginMark` in `ChannelMark`'s; Android has not caught up yet, #4203): Lark's `BrandMark` for Lark /agent, the extensions symbol in the secondary color for any other extension. A row has one source mark: the origin's replaces the channel's. No text tag: the row's accessible name carries "From Lark /agent" / "From an extension" instead. The message that opened the conversation gets the "From …" line channel messages already have (iOS `ExternalSourceLine` beside `ChannelSourceLine`, web the channel line in `SegmentView`), on that first message only and only once the page has loaded back to it; the chat's header stays as it is. Why not a new badge or a pinned line: the owner chose the existing channel patterns so the same place says the same thing for a channel's message and an extension's conversation.
 
 The web main conversation has one compact header line on the welcome page and in the open main chat (#4572).
 It uses the same neutral text in both places and reveals the full line on hover, focus or tap when space is tight.
@@ -548,7 +560,7 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Horizontal drag between pages | pager with 3x resistance past the ends; flick above 300 pt/s or past half way |
 | Edge swipe back | system; the pan yields to it |
 | Swipe on a message (Agents) | quote, threshold 66 pt, with a VoiceOver "Quote" action |
-| Long press on a message | lifted menu with an action bar |
+| Long press on a message | lifted menu with an action bar; a message only on this device ends it in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
@@ -556,6 +568,12 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
+
+The web user-input navigator (#4836) initially exposes the latest 50 genuine inputs, or all inputs in a shorter
+conversation. Upward transcript loading extends that range when it reaches earlier inputs; global ordinal labels
+still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
+This requested pagination correction does not add a setting or change placement. Android has no corresponding
+navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
 
 ### 4.3 Feedback and haptics
 
@@ -568,7 +586,7 @@ Which action gives which haptic, on both (#4209; the rule iOS follows):
 | Copy | success, with a "Copied" notice (Android: every copy goes through `rememberCopy()`) |
 | Send, Stop, switching pages, opening the avatar menu | tap |
 | Pressing Approve, Deny or a choice | tap on the press; success when the answer went through |
-| Archive, mark a to-do done | tap, with its notice and Undo |
+| Archive a conversation or an Agent | tap, then its "Archived" notice (iOS `archiveConversation`; marking a to-do done plays none) |
 | Save, an answer or approval that went through | success |
 | A request newly arrives, or what the user acted on changed and must wait | attention |
 | An operation failed | error, paired with its error notice |
@@ -649,6 +667,10 @@ full text. Without an outcome (an older node) a row draws as before.
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
 - **Home**: the bottom of the session page. A request that blocks the Agent stays visible there until it is answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). Several read "1 of 3", one open at a time; any can be folded to answer later.
+  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: above its composer, under
+  the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
+  you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
+  its row for one closes the tray onto the card instead of drawing it a second time.
 - **One count, per session**: the Agents list's Needs you section, its Needs you filter and the tab's badge count the sessions that wait for the user, each once, its requests in its row oldest first, the way `docs/assistant/managers.md` ("Counts") counts an assistant's waiting agents (principle 4). The Inbox's Agent section and the Assistant's composer entries open the same requests; the composer's entries count tasks (`docs/assistant/unified-entry.md`).
 - **Background rounds and supervisors** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation a round another conversation, a scheduled task or a follow-up started reuses the quiet supervision record, one muted line `@<source> · Background round` that always opens, never a new component; a round that asked or told the user stays shown. While that switch is on, the composer's Needs you groups rows under the conversation supervising them, this one's first, with a plain caption header and no other change: the same rows, order within a group and count.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
@@ -747,15 +769,18 @@ Full glossary: `docs/protocol/i18n.md`. Languages: en, zh-Hans, ja. Apple string
 | Inbox item | message, mail | the Inbox | the sender or group, and a summary |
 | Computer | computer | the Machines page | the user's name for it |
 
-Titles of plans, permissions, questions and terminal prompts, the same on every client and screen that names one (cards, list rows, the Inbox, the chat panel's label, the hub's push titles). iOS writes them in title case, the web, Android and the hub in sentence case. A notification may put the agent's name in front; a label that cannot name the agent reads "Has a question" (在问你, 質問があります). The line under a title says what is asked (the command, the plan's title, the question) and keeps its own words; a row with one line puts the title first ("Needs your permission: swift test").
+Titles of plans, permissions, questions and terminal prompts, the same on every client and screen that names one (cards, list rows, the Inbox, the chat panel's label, the hub's push titles). iOS writes them in title case, the web, Android and the hub in sentence case. A notification may put the agent's name in front; a label that cannot name the agent reads "Has a question" (在问你, 質問があります). The line under a title says what is asked (the command, the plan's title, the question) and keeps its own words; a row with one line puts the title first ("Waiting for your approval: swift test").
 
 | Request | en | zh-Hans | ja |
 | --- | --- | --- | --- |
 | Plan | Plan awaiting approval | 计划等你审批 | プランの承認待ち |
-| Tool or command | Needs your permission; {agent} needs your permission | 需要你授权；{agent} 需要你授权 | 許可が必要です；{agent}に許可が必要です |
+| Tool or command | Waiting for your approval; {agent} is waiting for your approval | 在等你批准；{agent} 在等你批准 | 承認を待っています；{agent}が承認を待っています |
 | Question | {agent} has a question (Claude by default, Persona for its own) | {agent} 在问你 | {agent}から質問があります |
 | Terminal prompt | Terminal needs you | 终端等你处理 | ターミナルで対応が必要です |
 | A kind the client does not know | Needs you | 需要你 | 要対応 |
+
+Notification titles for a tool approval (the hub's pushes, the web's browser notifications) still read "{agent} needs
+your permission" (section 5, "Notifications"); moving them to the card's words is a follow-up of #4883.
 
 - A session's title is its top-bar title and its row's first line.
 - Primary screens (list rows, top-bar titles, the Assistant home and notifications) never show raw model IDs, session IDs, paths or engine names (herdr, Orca, Paseo); this is principle 2 applied to Agent work. A row may name the model by its short name.
@@ -842,7 +867,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | DS-20 | Bubble variants: padding 16 x 12 in chat vs 12 x 8 in Messages; gutters 48, 40, 32; strokes 0.08, 0.1, 0.22 | `apple/Persona/DesignSystem/QuoteViews.swift:305`; `apple/Persona/Views/Messages/MessagesViews.swift:420`; `apple/Persona/Views/Chat/MessageViews.swift:178,324` | Visual drift | One bubble component with tokens |
 | DS-21 | Chip, filter-chip and button lookalikes hand-built in feature code (about 109 capsule backgrounds, 50+ view types); a second pale user-blue (`ChatBox.user` vs blue bubble) on both Apple and Android | `apple/Persona/Views/Inbox/InboxView.swift:770,1004`; `apple/Persona/Views/Inbox/InboxActions.swift:64`; `apple/Shared/Design/ChatLayoutTokens.swift:18` | Tint, padding and states diverge | Add an accent `Chip` look and a fill-width themed button; pick one user blue |
 | DS-22 | Sheet presentation: detents `[.medium, .large]`, `[.fraction(0.6), .large]`, none; drag indicator on 18 of 43 detent sites; toolbar placement mixed | `apple/Persona/Views/Link/LinkSheet.swift:142`; `apple/Persona/Views/Chats/ChatsView.swift:348` | Unpredictable dismissal | A small `themedSheet` helper with a rule per sheet kind |
-| DS-23 | Haptics: the mapping is written in section 4.3 (11-11, #4209), and Android's copy actions all follow it (`rememberCopy()`). Android's presses of send, stop, answers, the switcher and the persona button follow it too (`PressHapticsTest`). So do arriving requests (`ArrivingRequestsTest`). Open: Android's archive; iOS's `Haptics` still lives in `AppModel.swift`, with one direct UIKit use | `apple/Persona/App/AppModel.swift`; `apple/Persona/Views/Chat/ChatEdgeScrub.swift`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Clipboard.kt` | Android feels thinner than iOS outside copy | Adopt the 4.3 rows on Android screen by screen; move iOS `Haptics` to the design system |
+| DS-23 | Haptics: the mapping is written in section 4.3 (11-11, #4209), and Android's copy actions all follow it (`rememberCopy()`). Android's presses of send, stop, answers, the switcher and the persona button follow it too (`PressHapticsTest`). So do arriving requests (`ArrivingRequestsTest`) and archiving (11-12). Open: iOS's `Haptics` still lives in `AppModel.swift`, with one direct UIKit use | `apple/Persona/App/AppModel.swift`; `apple/Persona/Views/Chat/ChatEdgeScrub.swift`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Clipboard.kt` | Android feels thinner than iOS outside copy | Adopt the 4.3 rows on Android screen by screen; move iOS `Haptics` to the design system |
 | DS-24 | Seven confirmation mechanisms; destructive role used for non-delete actions; swipe-delete without confirm or Undo | `apple/Persona/Views/Todos/TodosView.swift:125`; `apple/Persona/Views/Mail/MailViews.swift:470`; `apple/Persona/App/AppModel.swift:3063` | Data loss risk; unclear meaning of red | Adopt the ladder in section 4.4; add Undo to archive |
 | DS-25 | Resolved on Android 11-11 (#4209): one toast model as iOS's (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Toast.kt`: `FeedbackStyle`, one slot per window, iOS timing stretched by the accessibility timeout, announced, only its buttons take touches), drawn by the root and by windows of their own (the image viewer); pages' snackbars are gone. System toasts remain only where no Persona screen shows | `apple/Persona/DesignSystem/Toasts.swift`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Toast.kt`; `android/app/src/main/java/persona/android/ui/Root.kt` | Web still differs | Move the web's toasts to the top capsule |
 | DS-26 | Optional Messages page is a third primary destination against super rule 3 | `apple/Persona/Views/RootView.swift:182`; `apple/Persona/Views/Shell/ShellState.swift:23` | Rule ambiguity | Rule owner decides: opt-in extension page or amend the rule |
@@ -924,11 +949,16 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 Where a form exists to connect to something with an address or key the user types (the web provider wizard's preset
 key step and its custom gateway's Connect step), the check runs without a button: once what it needs is valid and has
-stopped changing for 0.7 s, it runs once for that input. It never runs on opening something already saved, only after
-its connection fields change; fields that play no part in the connection (a name) never block or repeat it. A line
-says it will check by itself, then shows progress with a spinner, then the result; a failure keeps the server's words
-and offers to run it again (Retry on the Connect step). Manual buttons, where the form has them, and the note that a
-test may cost a little stay. Once the check found what the next step needs, that step's button is the one primary
+stopped changing for 0.7 s, it runs once for that input. An address being typed counts only once focus moves from its
+field to something else on the page (not when the window loses focus), the step is left, or a paste fills all of it,
+so a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never runs
+on opening something already saved, only after the fields the form names as its connection change (the provider
+wizard: address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it.
+Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
+without listing models); a part that is running or passed is not sent again. A line says it will check by itself, then
+shows progress with a spinner, then the result; a failure keeps the server's words and offers to run that part again
+(Retry on the Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay;
+pressing one counts as the check. Once the check found what the next step needs, that step's button is the one primary
 action (section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path
 already answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and
 status-line styles and adds no setting.
