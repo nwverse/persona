@@ -5,6 +5,7 @@ package lark
 
 import (
 	"errors"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -39,6 +40,19 @@ type CLIConfig struct {
 	// integration to use its bounded, read-only RPC. It grants no shell access,
 	// no writes, and no credentials.
 	Extensions bool `json:"extensions,omitempty"`
+	// InboxPollSeconds controls the lark-cli Inbox watcher. Values below 60
+	// seconds are clamped; zero keeps the two-minute default.
+	InboxPollSeconds int `json:"inbox_poll_seconds,omitempty"`
+	// InboxPageLimit bounds search pages in one round. Remaining pages are read
+	// by later rounds so one busy tenant cannot monopolize the poll.
+	InboxPageLimit int `json:"inbox_page_limit,omitempty"`
+}
+
+func (c *CLIConfig) InboxPoll() time.Duration {
+	if c == nil || c.InboxPollSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(c.InboxPollSeconds) * time.Second
 }
 
 // MaxAccount is the largest account number.

@@ -10,8 +10,10 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
@@ -38,7 +40,10 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.graphics.asAndroidBitmap
 import java.io.File
 
-/** Home grouping opens a menu, while the request-history row keeps its navigation action. */
+/**
+ * Home grouping opens a menu, while the request-history row keeps its navigation action. A row under "Subtasks" offers
+ * no Pin (#4494).
+ */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp")
 @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
@@ -90,9 +95,44 @@ class AgentsHomeAffordancesTest {
         rule.onNodeWithText("Requests waiting for you").assertIsDisplayed()
     }
 
-    private fun showScreen(dark: Boolean = false): AgentsViewModel {
+    /** A runtime's agent and one it created (#4494), which the list draws under "Subtasks (1)". */
+    private val family = listOf(Session("box", "lead", title = "Plan the release", state = "working", sourceKind = "runtime", agent = "claude"),
+        Session("box", "review", title = "Review the plan", state = "working", sourceKind = "runtime", agent = "claude",
+            isSubagent = true, parentSessionId = "lead"))
+
+    /** The menu a long press on the row titled [title] opens, after "Subtasks (1)" was opened. */
+    private fun menuOf(title: String) {
+        rule.onNodeWithText("Subtasks (1)").performClick()
+        rule.onNodeWithText(title).performTouchInput { longClick() }
+        rule.onNodeWithText("Mute").assertIsDisplayed()
+    }
+
+    @Test fun aRowUnderSubtasksOffersNoPin() {
+        showScreen(rows = family)
+        menuOf("Review the plan")
+        rule.onNodeWithText("Pin").assertDoesNotExist()
+        rule.onNodeWithText("Unpin").assertDoesNotExist()
+    }
+
+    @Test fun aRowOfItsOwnOffersPin() {
+        showScreen(rows = family)
+        menuOf("Plan the release")
+        rule.onNodeWithText("Pin").assertIsDisplayed()
+    }
+
+    @Test fun aPinnedRowUnderSubtasksOffersUnpin() {
+        showScreen(rows = family, pins = listOf("box/review"))
+        menuOf("Review the plan")
+        rule.onNodeWithText("Unpin").assertIsDisplayed()
+        rule.onNodeWithText("Pin").assertDoesNotExist()
+    }
+
+    private fun showScreen(
+        dark: Boolean = false, rows: List<Session> = listOf(Session("box", "s1", title = "Example task", state = "working")),
+        pins: List<String> = emptyList(),
+    ): AgentsViewModel {
         val model = AgentsViewModel(object : SessionsRepository {
-            override val sessions = MutableStateFlow(listOf(Session("box", "s1", title = "Example task", state = "working")))
+            override val sessions = MutableStateFlow(rows)
             override val machines = MutableStateFlow(listOf(Machine("box", "Example computer", online = true)))
             override suspend fun refresh() = Unit
         }, object : InteractionCenter {
@@ -112,7 +152,7 @@ class AgentsHomeAffordancesTest {
             override suspend fun updateData(transform: suspend (Preferences) -> Preferences) =
                 transform(data.value).also { data.value = it }
         }, object : HubPreferences {
-            override val preferences = MutableStateFlow(HubPreferencesSnapshot())
+            override val preferences = MutableStateFlow(HubPreferencesSnapshot(pins = HubPreferenceSet(sessions = pins)))
             override suspend fun refresh() = Unit
             override suspend fun togglePin(path: String, space: Boolean) = Unit
             override suspend fun toggleMute(path: String, space: Boolean) = Unit

@@ -13,5 +13,11 @@
   "rate_limited": "lark-cli 受到频率限制，请稍后再试",
   "error": "lark-cli 无法读取飞书",
   "expiry_reminder": "登录还有 {count} 天过期，请在 hub 机器运行 {command}",
+  "larkcli_message": "飞书消息",
+  "larkcli_direct_message": "飞书私聊消息",
+  "larkcli_mention": "飞书提及",
+  "watched_doc_unreadable": "已关注的文档“{title}”暂时读取不到，每 10 分钟会重试一次；不再需要可在设置 › 连接器中移除",
+  "doc_comment_label": "文档评论",
+  "doc_comment_rule": "规则：文档评论提到了你，或回复了你参与过的评论。",
   "larkcli_name": "飞书 · 我的消息"
 }

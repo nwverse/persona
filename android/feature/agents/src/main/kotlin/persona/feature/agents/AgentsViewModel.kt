@@ -207,16 +207,18 @@ internal class AgentsViewModel(
     }
 
     private val todosFlow = tasks?.todos ?: MutableStateFlow(emptyList())
+    private val todosSupportedFlow = tasks?.todosSupported ?: MutableStateFlow(false)
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         preferences.snapshots(pairingScope).combine(repository.listStatus) { prefs, status -> prefs to status },
-        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, ::Pair)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos) ->
+        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos, todosSupported) ->
         // The current assistant's (the hub's lists are every manager's, each row with its own).
         val everySession = if (assistant == null) hubSessions else hubSessions.filter { assistant.ownsOn(it.machineId, it.manager) }
         val everyMachine = if (assistant == null) hubMachines else hubMachines.filter { assistant.ownsOn(it.id, it.manager) }
         val source = if (group == null) everySession else everySession.filter { group.admits(it.machineId) }
         val machines = if (group == null) everyMachine else everyMachine.filter { group.admits(it.id) }
         val sessions = ops.project(source)
-        val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes)
+        val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
+            grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
         val rows = sessions.map { it.listSession(prefs) }
         // A partial machine snapshot must not hide sessions in machine grouping.
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
@@ -227,14 +229,14 @@ internal class AgentsViewModel(
         previousContext = context
         // Server row search uses complete index text; searching the truncated summary again would lose matches.
         val projectionSettings = if (pagination.paged) effective.copy(query = "") else effective
-        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos)
+        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos, openedRowsOfTheirOwn(previous, effective.kept))
         val result = retainOpenedRows(sorted, previous, effective.kept).also { previous = it }
         val all = scopedAgentList(rows, knownMachines, prefs,
             projectionSettings.copy(quick = AgentQuickFilter.All, kept = emptySet()), todos)
         // The chips count what each computer would show under the current range, search and quick filter.
         val everywhere = scopedAgentList(rows, knownMachines, prefs, projectionSettings.copy(machineFilter = "", kept = emptySet()), todos)
-            .groups.flatMap { it.rows }.filterNot { it.session.isCodexSubagent }
-        AgentsPageState(sessions, knownMachines, prefs, effective, result, all.groups.sumOf { group -> group.rows.count { !it.session.isCodexSubagent } },
+            .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }
+        AgentsPageState(sessions, knownMachines, prefs, effective, result, all.groups.sumOf { group -> group.rows.count { !it.isNestedSubtask } },
             machineCounts(knownMachines, everywhere), everywhere.size, groupCounts(everySession, everyMachine, prefs, effective, ops),
             // With botmux shown, "All"'s own "Lark groups" count is it; hidden, counted without a fourth list.
             botmuxCount = if (effective.hideBotmux) botmuxCount(rows, prefs, effective)
@@ -462,7 +464,7 @@ internal class AgentsViewModel(
         if (machines.none { GroupKeys.namespaceOf(it.id) != null } && all.none { GroupKeys.namespaceOf(it.machineId) != null }) return emptyMap()
         val rows = ops.project(all).map { it.listSession(prefs) }
         return scopedAgentList(rows, machines, prefs, settings.copy(machineFilter = "", kept = emptySet()))
-            .groups.flatMap { it.rows }.filterNot { it.session.isCodexSubagent }.distinctBy { it.id }
+            .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }.distinctBy { it.id }
             .groupingBy { GroupKeys.namespaceOf(it.session.machineId) }.eachCount()
     }
 

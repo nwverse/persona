@@ -238,8 +238,9 @@ func needsYou(agents []fleetInput, ixs []proto.Interaction, counts func(fleetInp
 	return out
 }
 
-// liveCounts: the agent is on the Live Activity at all (muted agents and Codex sub-agents are not).
-func liveCounts(a fleetInput) bool { return !a.Session.IsCodexSubagent() && !a.Muted }
+// liveCounts: the agent is on the Live Activity at all (muted agents and subtasks are not: Codex sub-agents, and a
+// runtime's session another one started, which its parent's row stands for until it needs the user).
+func liveCounts(a fleetInput) bool { return !a.Session.IsSubtask() && !a.Muted }
 
 // cardStands: the card may stand for its agent (on the Live Activity and in Persona Link's summary). An elicitation
 // does not: the Fleet is shared with legacy clients, whose terminal fallback stays (the agent shows as in a dialog).

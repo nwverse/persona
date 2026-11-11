@@ -484,7 +484,7 @@ copy; none is presented as the current location.
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
 | Chat API failure | `APIErrorCard` with details and Retry |
 
-Toasts: error, success or info; one slot, so a new toast replaces the old. Duration 2.5 s, 4 s for errors, 5 s with an action (`apple/Persona/DesignSystem/Toasts.swift:57`). Drawn in a pass-through window and announced to VoiceOver. About 255 call sites. Loading and error shapes are inconsistent across screens (DS-15, DS-16). Web toasts are dark capsules at the bottom (2.8 / 5.2 / 6 s). Android uses Snackbar, per-feature hosts and system Toast (DS-25).
+Toasts: error, success or info; one slot, so a new toast replaces the old. Duration 2.5 s, 4 s for errors, 5 s with an action (`apple/Persona/DesignSystem/Toasts.swift:57`). Drawn in a pass-through window and announced to VoiceOver. About 255 call sites. Loading and error shapes are inconsistent across screens (DS-15, DS-16). Web toasts are dark capsules at the bottom (2.8 / 5.2 / 6 s). Android draws the same toast (`JToastHost`, one per window: the root's, and the image viewer's) and keeps system toasts for places where no Persona screen shows (DS-25).
 
 ### 3.11 Code blocks, inline code and quotes in replies
 
@@ -552,7 +552,9 @@ Severity ladder to adopt:
 1. Reversible: do it and offer Undo in a toast (inbox bulk actions, remove from list, folder trash do this).
 2. Destructive with one object: `confirmationDialog` with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
-4. `.alert` for short prompts and text entry.
+4. `.alert` for short prompts and text entry, except where the text needs what the alert would cover (below).
+
+In-meeting typed questions (#4486) are the exception to rung 4: they use an inline input row in the live recording sheet's bottom bar (`apple/Persona/Recording/RecordingLiveBar.swift`), not a system text-entry alert. The question usually refers to what was just said, and a modal alert hid the live lines and the earlier answers while the user typed. It also allowed only one line and no reference back. The keyboard button beside Ask Persona opens the row (at accessibility sizes, More › Type a Question opens it). The row shows a hint, then a field and send button that reuse the composer's `ComposerSurface` and `ComposerRoundButton` (3.1). The field grows to `Theme.Recording.askLines` lines (`askLinesLargeType` at accessibility sizes, where the hint also steps aside while the keyboard is up and the field's spoken hint carries it). Send stays in place but is dimmed and disabled until there is non-whitespace text, and Return sends too. While the row is open, the keyboard button becomes Cancel, which drops the draft as the alert's Cancel did. While the field has the keyboard, Pause, Stop and Bookmark step aside so the timeline keeps the room. Sending goes through the same `MeetingAsk.ask(_:text:)`, then clears the field and closes the row. It is not a fifth composer (DS-19): it has no attachments, dictation (the microphone is recording), model menu or full-page editor.
 
 The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
 
@@ -564,8 +566,7 @@ The archive toast offers Undo; Undo restores visibility without reopening the Ag
 Task-progress reply drafts (#3743) use the reversible rung: **Send** is primary, **Later** and **Don't handle** are
 secondary. Don't handle removes only the exact draft from Needs you, sends nothing and leaves its task, Agent and
 Inbox source open. It persists a task decision and offers receipt-scoped Undo in the web's existing six-second toast
-or Android's snackbar. Android's production `JAppSnackbarHost` keeps the Material geometry and duration but uses
-`inverseOnSurface` for action text, so Undo remains readable in every style and appearance. A newer progress draft
+or Android's toast (`JToastHost`, which draws the button in the accent, as iOS). A newer progress draft
 remains eligible; Undo cannot overwrite it. Web uses `Button` with
 44 px grid-based minimum targets and stacks the action group at narrow widths. Android reuses `DraftDecisionButtons`
 with the existing 48 dp button token and stacks the entire group at large text sizes or narrow widths, primary first.
@@ -772,7 +773,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Min target | 44 | 44 hit area, 28-32 visuals | 48 dp touch targets, 32-40 visuals | violated on web visuals |
 | Motion | token set | 150/220/300 ms | Glass: the iOS state and layout springs | web differs |
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
-| Toast | capsule, top | dark capsule, bottom | Snackbar, 3 mechanisms | different |
+| Toast | capsule, top | dark capsule, bottom | capsule, top (`JToastHost`) | web differs |
 | Haptics | 4 kinds, 443 sites | none | 4 kinds, every copy plus some actions | thin on Android beyond copy |
 | Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
@@ -806,7 +807,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | DS-22 | Sheet presentation: detents `[.medium, .large]`, `[.fraction(0.6), .large]`, none; drag indicator on 18 of 43 detent sites; toolbar placement mixed | `apple/Persona/Views/Link/LinkSheet.swift:142`; `apple/Persona/Views/Chats/ChatsView.swift:348` | Unpredictable dismissal | A small `themedSheet` helper with a rule per sheet kind |
 | DS-23 | Haptics: the mapping is written in section 4.3 (11-11, #4209), and Android's copy actions all follow it (`rememberCopy()`). Open: Android's send, stop, approval presses, archive and arriving requests; iOS's `Haptics` still lives in `AppModel.swift`, with one direct UIKit use | `apple/Persona/App/AppModel.swift`; `apple/Persona/Views/Chat/ChatEdgeScrub.swift`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Clipboard.kt` | Android feels thinner than iOS outside copy | Adopt the 4.3 rows on Android screen by screen; move iOS `Haptics` to the design system |
 | DS-24 | Seven confirmation mechanisms; destructive role used for non-delete actions; swipe-delete without confirm or Undo | `apple/Persona/Views/Todos/TodosView.swift:125`; `apple/Persona/Views/Mail/MailViews.swift:470`; `apple/Persona/App/AppModel.swift:3063` | Data loss risk; unclear meaning of red | Adopt the ladder in section 4.4; add Undo to archive |
-| DS-25 | Feedback channels: Apple one toast model; Android Snackbar plus feature hosts plus system Toast | `apple/Persona/DesignSystem/Toasts.swift:7`; `android/app/src/main/java/persona/android/ui/Root.kt:120` | Different placement and timing | One feedback layer on Android |
+| DS-25 | Resolved on Android 11-11 (#4209): one toast model as iOS's (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Toast.kt`: `FeedbackStyle`, one slot per window, iOS timing stretched by the accessibility timeout, announced, only its buttons take touches), drawn by the root and by windows of their own (the image viewer); pages' snackbars are gone. System toasts remain only where no Persona screen shows | `apple/Persona/DesignSystem/Toasts.swift`; `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Toast.kt`; `android/app/src/main/java/persona/android/ui/Root.kt` | Web still differs | Move the web's toasts to the top capsule |
 | DS-26 | Optional Messages page is a third primary destination against super rule 3 | `apple/Persona/Views/RootView.swift:182`; `apple/Persona/Views/Shell/ShellState.swift:23` | Rule ambiguity | Rule owner decides: opt-in extension page or amend the rule |
 | DS-27 | Heading case: sidebar headings sentence case, Apple titles Title Case, with Title Case counted 1143 vs sentence 754 | `docs/protocol/i18n.md`, `docs/apple/sidebar.md` | Mixed catalog | Adopt the split in section 5.2 and normalize in one pass |
 | DS-28 | Copy typography: apostrophes mixed, trailing ellipsis missing on 17 of 41 progress strings, "Retry" vs "Try Again", Stop vs End in recording | `apple/Shared/Localization/Localizable.xcstrings`; `apple/Persona/Recording/RecordingsSection.swift:161` | Polish | Apply section 5 |
