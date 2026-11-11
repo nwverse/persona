@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -52,8 +54,12 @@ func (p modelPick) wire() *proto.ModelPick {
 	return &proto.ModelPick{Launcher: p.Launcher, Model: p.Model, Effort: p.Effort}
 }
 
+// modelPickBook is the book in memory. m is replaced, never changed in place, so a reader keeps the one it took; mu
+// guards m and loaded, write makes changes one at a time and is held over the database write, which readers (every
+// snapshot, every message) never wait on.
 type modelPickBook struct {
 	mu     sync.Mutex
+	write  sync.Mutex
 	loaded bool
 	m      map[string]modelPick // by session id
 }
@@ -109,41 +115,128 @@ func (s *Service) modelPickOf(ctx context.Context, machine, sid string) (modelPi
 // setModelPick keeps p as conversation sid's pick (nil: drops it) and tells the apps. Dropping a pick that isn't there
 // is no error.
 func (s *Service) setModelPick(ctx context.Context, sid string, p *modelPick) error {
+	return s.updateModelPick(ctx, sid, func(_ modelPick, had bool) (*modelPick, bool) {
+		if p == nil {
+			return nil, had
+		}
+		return p, true
+	})
+}
+
+// updateModelPick changes conversation sid's pick to what change makes of it (its pick, and whether it had one): the
+// next pick (nil: none) and whether anything changed. A change is saved, then the apps are told.
+func (s *Service) updateModelPick(ctx context.Context, sid string, change func(p modelPick, had bool) (*modelPick, bool)) error {
 	st := s.store()
 	if st == nil {
 		return i18n.Err("assistant-models.err_no_database")
 	}
 	b := &s.modelPicks
+	b.write.Lock()
+	defer b.write.Unlock()
 	b.mu.Lock()
 	if !s.modelPicksLocked(ctx) {
 		b.mu.Unlock()
-		return errors.New("conversation model picks could not be read")
+		return i18n.Err("assistant-model_pick.err_unreadable")
 	}
-	next := maps.Clone(b.m)
+	cur := b.m
+	b.mu.Unlock()
+	old, had := cur[sid]
+	p, changed := change(old, had)
+	if !changed {
+		return nil
+	}
+	next := maps.Clone(cur)
 	if p == nil {
-		if _, ok := next[sid]; !ok {
-			b.mu.Unlock()
-			return nil
-		}
 		delete(next, sid)
 	} else {
 		next[sid] = *p
-		for len(next) > maxModelPicks { // the oldest picks go
-			ids := slices.Collect(maps.Keys(next))
-			oldest := slices.MinFunc(ids, func(a, b string) int { return next[a].At.Compare(next[b].At) })
-			delete(next, oldest)
-		}
+		s.evictModelPicks(ctx, next, sid)
 	}
-	err := st.PutSetting(ctx, modelPicksKey, next)
-	if err == nil {
-		b.m = next
-	}
-	b.mu.Unlock()
-	if err != nil {
+	if err := st.PutSetting(ctx, modelPicksKey, next); err != nil {
 		return err
 	}
+	b.mu.Lock()
+	b.m = next
+	b.mu.Unlock()
 	s.publish(ctx) // the apps get the conversation with its model_pick now
 	return nil
+}
+
+// evictModelPicks bounds picks to maxModelPicks: the oldest go, but never the main conversation's, however long it has
+// kept it, nor kept's (the one just set).
+func (s *Service) evictModelPicks(ctx context.Context, picks map[string]modelPick, kept string) {
+	if len(picks) <= maxModelPicks {
+		return
+	}
+	main := s.settings(ctx).Main
+	for len(picks) > maxModelPicks {
+		oldest := ""
+		for id, p := range picks {
+			if id != main && id != kept && (oldest == "" || p.At.Before(picks[oldest].At)) {
+				oldest = id
+			}
+		}
+		if oldest == "" {
+			return
+		}
+		delete(picks, oldest)
+	}
+}
+
+// applyPick puts conversation pick into p, a message's (or warm's) params, as a start with it runs: its launcher, its
+// model, its effort unless p has one, checked and fingerprinted. A pick without a model runs what the start ran: Model
+// configuration › Main chat's model when the launcher is the one configured there (applyModel, later changes there
+// too), else the launcher's own default.
+func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPick) error {
+	p["launcher"] = pick.Launcher
+	if e, _ := p["effort"].(string); e == "" && pick.Effort != "" {
+		p["effort"] = pick.Effort
+	}
+	if pick.Model == "" {
+		delete(p, "model")
+		return s.applyModel(ctx, "assistant", p)
+	}
+	p["model"] = pick.Model
+	return s.applyPickedModel(ctx, p)
+}
+
+// pickEffortSet makes effort the pick's effort of conversation sid on machine, when it has a pick: the apps set it
+// through POST …/modes (#2416), and the next message would otherwise put the pick's back.
+func (s *Service) pickEffortSet(ctx context.Context, machine, sid, effort string) {
+	if !slices.Contains(pickEfforts, effort) {
+		return
+	}
+	err := s.updateModelPick(ctx, sid, func(p modelPick, had bool) (*modelPick, bool) {
+		if !had || p.MachineID != machine || p.Effort == effort {
+			return nil, false
+		}
+		p.Effort, p.At = effort, time.Now().UTC()
+		return &p, true
+	})
+	if err != nil {
+		s.logf("[%s] %s: the pick's effort: %v", machine, short(sid), err)
+	}
+}
+
+// nodeCallDone sees a node call the hub made through this manager's devices (devices.call, params) once it went
+// through: an effort set on a conversation with a pick (session.modes) becomes the pick's (pickEffortSet). Anything else
+// is left alone, without being decoded.
+func (s *Service) nodeCallDone(ctx context.Context, params json.RawMessage) {
+	if !bytes.Contains(params, []byte(`"session.modes"`)) {
+		return
+	}
+	var c devicewire.NodeCall
+	if json.Unmarshal(params, &c) != nil || c.Method != "session.modes" {
+		return
+	}
+	var m struct {
+		SessionID string `json:"session_id"`
+		Effort    string `json:"effort"`
+	}
+	if json.Unmarshal(c.Params, &m) != nil || m.SessionID == "" || m.Effort == "" {
+		return
+	}
+	s.pickEffortSet(ctx, c.MachineID, m.SessionID, m.Effort)
 }
 
 // conversationMachine is where conversation sid runs: machine when the app named one, the main conversation's
@@ -274,13 +367,13 @@ func (s *Service) pickedModelRefusal(ctx context.Context, machine, launcher, mod
 
 // keepStartPick keeps the launcher / model / effort a new conversation was started with (POST
 // /api/v1/assistant/conversations) as its pick, so its later messages keep them, and shows it on sess. Nothing is kept
-// when none was named, or when the start fell back to another launcher than the one named (or than the one the model
+// when neither a launcher nor a model was named, or when the start fell back to another launcher than the one named (or than the one the model
 // was for); an effort a pick can't carry is left out.
 func (s *Service) keepStartPick(ctx context.Context, sess *proto.Session, launcher, model, effort string) {
 	launcher, effort = strings.TrimSpace(launcher), strings.TrimSpace(effort)
 	switch {
-	case launcher == "" && model == "" && effort == "", sess.Launcher == "":
-		return
+	case launcher == "" && model == "", sess.Launcher == "":
+		return // an effort alone (iOS sends its last one with every start) is no pick: Model configuration still holds
 	case launcher != "" && launcher != sess.Launcher, model != "" && model != sess.Model:
 		return // it fell back: the pick is not what runs
 	}
@@ -314,7 +407,7 @@ func (s *Service) modelPickRoutes() {
 		}
 		id := r.PathValue("id")
 		if !validSessionID(id) {
-			apierr.Write(w, http.StatusBadRequest, errors.New("invalid conversation id"))
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-model_pick.err_invalid_id"))
 			return
 		}
 		var in struct {
@@ -347,7 +440,7 @@ func (s *Service) modelPickRoutes() {
 		}
 		id := r.PathValue("id")
 		if !validSessionID(id) {
-			apierr.Write(w, http.StatusBadRequest, errors.New("invalid conversation id"))
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-model_pick.err_invalid_id"))
 			return
 		}
 		if err := s.setModelPick(r.Context(), id, nil); err != nil {

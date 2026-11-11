@@ -10,5 +10,7 @@
   "unavailable_not_main_chat": "Can start Agents on {machine} but can’t run assistant chats",
   "unavailable_api_responses": "Connects through the Responses API. Assistant chats need Claude Code or a Messages API connection",
   "unavailable_api_chat": "Connects through the Chat Completions API. Assistant chats need Claude Code or a Messages API connection",
-  "unavailable_api_other": "Connects through the {api} API. Assistant chats need Claude Code or a Messages API connection"
+  "unavailable_api_other": "Connects through the {api} API. Assistant chats need Claude Code or a Messages API connection",
+  "err_invalid_id": "That isn’t a conversation ID",
+  "err_unreadable": "The conversations’ model picks couldn’t be read. Try again in a moment."
 }

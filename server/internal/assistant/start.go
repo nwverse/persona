@@ -424,6 +424,9 @@ type mainHandoff struct {
 		Role string `json:"role"`
 		Text string `json:"text"`
 	} `json:"recent,omitempty"`
+	// Pick: the model pick of a main conversation cleared in place (clearMain), for the next one to start on and keep
+	// (model_pick.go). A new main conversation (newMain) starts on the default, so its handoff has none.
+	Pick *modelPick `json:"pick,omitempty"`
 }
 
 // mainBook holds the main conversation still while it changes, and the handoff with no database.
@@ -464,9 +467,22 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	}
 	p.MachineID, p.Purpose, p.Main = "", "", false
 	p.Origin, p.OriginRef, p.OpenedBy = OriginUser, "", "" // the main conversation is the user's, whatever channel opened it
+	// A cleared main conversation's pick, unless this start names its own launcher or model.
+	carried := handoff.Pick
+	if carried != nil && p.Launcher == "" && p.Model == "" {
+		p.Launcher, p.Model = carried.Launcher, carried.Model
+		if p.Effort == "" {
+			p.Effort = carried.Effort
+		}
+	} else {
+		carried = nil
+	}
 	sess, err := s.startConversationOn(ctx, p, true)
 	if err != nil {
 		return proto.Session{}, err
+	}
+	if carried != nil {
+		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, p.Effort)
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
@@ -475,10 +491,10 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	}); err != nil {
 		s.logf("assistant: save main: %v", err)
 	}
-	if handoff.From != "" {
+	if handoff.From != "" || handoff.Pick != nil {
 		next := mainHandoff{} // used
-		if empty {
-			next, next.For = handoff, sess.SessionID
+		if empty && handoff.From != "" {
+			next, next.For, next.Pick = handoff, sess.SessionID, nil
 		}
 		if err := s.saveHandoff(ctx, next); err != nil {
 			s.logf("assistant: what the old main conversation left: %v", err)
@@ -533,11 +549,12 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 }
 
 // clearMain clears the main conversation's context in place (the apps' "Clear context" and /clear, as Cindy's /clear
-// does): it is put away as newMain puts it, with nothing carried over, then its process is closed whether it works or
+// does): it is put away as newMain puts it, with no summary carried over, then its process is closed whether it works or
 // not (a turn stops, and nothing it ran in the background starts another turn there) and a question it waits on is
 // taken back. What an earlier newMain left for the next conversation is dropped too, so the next message to the main
-// conversation starts a new one with a fresh context (startMain): no --resume, no handoff. Nothing is deleted, and the
-// work it handed out (tasks, their Agents) goes on. It answers the old conversation's id ("" when there was none).
+// conversation starts a new one with a fresh context (startMain): no --resume, no handoff. Its model pick goes with it
+// (mainHandoff.Pick): the context is cleared, not the model the user picked. Nothing is deleted, and the work it handed
+// out (tasks, their Agents) goes on. It answers the old conversation's id ("" when there was none).
 func (s *Service) clearMain(ctx context.Context, expect string) (string, error) {
 	// past the checks it goes through as one change, even when the app stops waiting for the answer
 	ctx = context.WithoutCancel(ctx)
@@ -562,7 +579,11 @@ func (s *Service) clearMainLocked(ctx context.Context, expect string) (old, mach
 	if expect != "" && expect != old {
 		return "", "", c, false, &rpc.Error{Code: "main_changed", Message: i18n.T(s.lang(ctx), "assistant-start.main_changed")}
 	}
-	if err := s.saveHandoff(ctx, mainHandoff{}); err != nil {
+	cleared := mainHandoff{}
+	if p, ok := s.modelPickOf(ctx, cfg.mainRouteMachine(), old); old != "" && ok {
+		cleared.Pick = &p // the context is cleared, not the model the user picked for the main conversation
+	}
+	if err := s.saveHandoff(ctx, cleared); err != nil {
 		return "", "", c, false, err
 	}
 	if old == "" {
@@ -1056,14 +1077,7 @@ func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[str
 	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {
 		return err
 	}
-	p["launcher"] = pick.Launcher
-	if pick.Model != "" {
-		p["model"] = pick.Model
-	}
-	if e, _ := p["effort"].(string); e == "" && pick.Effort != "" {
-		p["effort"] = pick.Effort
-	}
-	return s.applyPickedModel(ctx, p)
+	return s.applyPick(ctx, p, pick)
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.

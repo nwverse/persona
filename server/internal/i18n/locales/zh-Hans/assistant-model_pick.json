@@ -10,5 +10,7 @@
   "unavailable_not_main_chat": "能在 {machine} 上开 Agent，但跑不了助手对话",
   "unavailable_api_responses": "通过 Responses API 接入。助手对话需要 Claude Code 或 Messages API 接入",
   "unavailable_api_chat": "通过 Chat Completions API 接入。助手对话需要 Claude Code 或 Messages API 接入",
-  "unavailable_api_other": "通过 {api} API 接入。助手对话需要 Claude Code 或 Messages API 接入"
+  "unavailable_api_other": "通过 {api} API 接入。助手对话需要 Claude Code 或 Messages API 接入",
+  "err_invalid_id": "这不是一个对话 ID",
+  "err_unreadable": "读不到各对话选的模型，请稍后再试。"
 }
