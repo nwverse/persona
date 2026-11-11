@@ -52,9 +52,9 @@ export function portLink(url: string, hostnames: readonly string[] = []): PortLi
   return { port, path: u.pathname + u.search + u.hash || "/", secure: u.protocol === "https:" };
 }
 
-/** http(s) URLs in prose, Markdown links and <autolinks>: they end at whitespace, quotes, brackets and CJK punctuation. */
+/** http(s) URLs in prose, Markdown links and <autolinks>: keep a bracketed IPv6 authority, but stop at surrounding delimiters. */
 // i18n-ignore: CJK punctuation that ends a URL in an agent's reply
-const SCHEME_URL = /\bhttps?:\/\/[^\s<>"'`()[\]{}，。；！？、（）「」]+/gi;
+const SCHEME_URL = /\bhttps?:\/\/(?:\[[0-9a-f:.]+\])?[^\s<>"'`()[\]{}，。；！？、（）「」]+/gi;
 /** Bare `localhost:3000/x`, as servers often print it; not part of a longer name (`mylocalhost:3000`) or path. */
 const BARE = /(^|[^A-Za-z0-9_./:@-])((?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d{1,5}(?:\/[A-Za-z0-9_.~!$&'()*+,;=:@%/?#-]*)?)/g;
 /** Sentence punctuation after a link is not part of it. */
