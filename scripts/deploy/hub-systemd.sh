@@ -85,6 +85,17 @@ use_split_hub() {
   fi
   BIN="$SPLIT_HUB"
 }
+# switched: what the switch left running. A resident node (its socket node-attach.sock, node/attach.go) keeps this
+# machine's chats; without one the hub ran this machine's node itself, and the switch replaced it, stopping the
+# assistant's chats on it (docs/operations/hub-restart.md "Chats not interrupted: hosting by the resident node").
+switched() {
+  if [ -S "$ROOT/node-attach.sock" ]; then
+    echo "hub: switched to the new binary (blue-green, nothing restarted)"
+  else
+    echo "hub: switched to the new binary (blue-green); no resident node here, so any assistant chat running on this" \
+      "machine stopped with its node (scripts/deploy/node-launchd.sh install keeps them across switches)"
+  fi
+}
 # Blue-green (docs/operations/hub-restart.md "Blue-green switching: the hub's edge"): the running hub's edge starts the new binary next to the one serving
 # and switches once it is up, nothing restarts. It returns 0 once switched; 1 (no edge here, or one older than the new
 # binary's protocol: `hub switch` exits 3; or a binary that cannot run it) to have the caller restart the service;
@@ -102,7 +113,7 @@ switch_or_restart() {
   # The program given, not hub switch's default: the deploy says which one the hub runs.
   "$BIN" hub switch --binary "$BIN" --timeout 8m ${prev[@]+"${prev[@]}"} || rc=$?
   case $rc in
-    0) echo "hub: switched to the new binary (blue-green, nothing restarted)"; return 0 ;;
+    0) switched; return 0 ;;
     1) ;;
     *) echo "hub: no edge to switch on (hub switch: exit $rc): restarting the service"; return 1 ;;
   esac
