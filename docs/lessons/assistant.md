@@ -252,3 +252,9 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   source, read as what the field means. A test that binds three cards of one Agent along with two other Agents, and
   loads the view ten times, shows it. The settings pages are the only readers — web and iOS key the rows by session id,
   Android draws them in order — so none of them changes.
+
+- A read-only worker must be able to report while staying in plan mode (#4201). Denying `ExitPlanMode` does not remove
+  the provider's separate permission request for `mcp__persona__report_to_supervisor`. Allow that exact call once only
+  for a supervised task with a current read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
+  the terminal hook and Paseo then send no permission or mode update. Reuse `PlanTask.TodoID`, whose old bindings are
+  retired on takeover, rather than treating a historical read-only plan as authority for a new writable worker.
