@@ -610,7 +610,7 @@ A long-used main chat accumulates large context; users can replace it: `POST /ap
    `carry: none` still includes the old main-chat id, allowing `conversation_read`.
    Android first creates an empty `prompt`, then sends separately: bind background to the new session id (`for`) and include it with the first `POST …/messages` or Lark / channel message, all through `assistant.send_params`, not as a separate turn.
 5. The old main chat's open tasks follow (#4866, `assistant/main_handover.go`). When the new main chat starts, each task's `supervision.supervisor` and `origin` move to it together, as a closed leader's workers are rehomed. The ledger stays as it was: criteria, reviews, round, parking and owner waits.
-   A task waiting for review is signalled to the new chat, and its card goes there; the archived chat keeps its history.
+   A task waiting for review is signalled to the new chat. The card of each task it now supervises goes there; the archived chat keeps its history.
    A leader keeps supervising its tasks; only their `origin` moves. Closed tasks, the owner's own to-dos and other conversations' tasks stay where they are.
    Making another conversation the main one in the settings (`PUT /api/v1/assistant` `main`) hands over the same way.
    The supervision loop also moves whatever a former main chat (`assistant.former_main`) still holds. That covers switches made before tasks moved, and a move a restart cut short.

@@ -79,6 +79,9 @@ func TestNewMainConversationTakesOverOpenTasks(t *testing.T) {
 	if l := todoNow(s, led.ID); l.Origin != next || l.Supervision.Supervisor != "lead1" {
 		t.Fatalf("the leader's task: origin %q, supervisor %q", l.Origin, l.Supervision.Supervisor)
 	}
+	if n := strings.Count(feedKinds(s, next), feedTask); n != 1 {
+		t.Fatalf("%d cards in the new conversation (only the task it supervises now has one)", n)
+	}
 	if x := todoNow(s, side.ID); x.Origin != "side1" || x.Supervision.Supervisor != "side1" {
 		t.Fatalf("a side conversation's task moved: origin %q, supervisor %q", x.Origin, x.Supervision.Supervisor)
 	}
@@ -131,6 +134,20 @@ func TestFormerMainConversationTasksHandedOverByThePass(t *testing.T) {
 	s.handOverFormerMainTasks(ctx)
 	if again := strings.Count(feedKinds(s, "conv2"), feedTask); again != cards {
 		t.Fatalf("cards %d → %d on a second pass", cards, again)
+	}
+	// A task already moved by hand ("Move to…": its supervisor and card are the main conversation's) only has its origin
+	// moved: no second card.
+	moved, err := s.newTodo(ctx, "已经手动转过的", "", "conv1", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, moved.ID, "conv2", []string{"做完"}, 30)
+	s.taskCard(ctx, "conv2", moved.ID)
+	cards = strings.Count(feedKinds(s, "conv2"), feedTask)
+	s.handOverFormerMainTasks(ctx)
+	if x := todoNow(s, moved.ID); x.Origin != "conv2" || x.Supervision.Supervisor != "conv2" || strings.Count(feedKinds(s, "conv2"), feedTask) != cards {
+		t.Fatalf("a task moved by hand: origin %q, supervisor %q, cards %d → %d", x.Origin, x.Supervision.Supervisor, cards,
+			strings.Count(feedKinds(s, "conv2"), feedTask))
 	}
 	// A former main conversation that is a leader now keeps what it supervises.
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1", "conv0"} })
