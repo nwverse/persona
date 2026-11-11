@@ -53,7 +53,7 @@ import { jumpHint, useBindings } from "../lib/shortcuts";
 import { markAllSeenLabel, stateCount } from "../lib/state-labels";
 import { PagedSessionList } from "./agents/PagedSessionList";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
-import { runtimeIdentity, runtimeOrder, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
+import { runtimeActiveAt, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, useActiveKey, useGo, useNavPages } from "./SidebarParts";
@@ -498,6 +498,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
     <HubNoticeLine />
     <HerdrNotices />
     <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} event="sessions_list" onRepo={chooseGrouping ? () => chooseGrouping("repo") : undefined}
+      activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
