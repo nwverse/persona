@@ -217,13 +217,14 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		if quiet && i == 0 {
 			// The ending has to land somewhere: in the progress card the run still has, or — when that card was refused
 			// (recalled, no longer a card, still limited after the wait) or a held run gave its card back with its
-			// message — as a card of its own. A recalled message says nothing.
-			post := end != channel.EndRecalled && (card != "" || end == channel.EndDone)
+			// message — as a card of its own, which says how the run ended, done or not (#4228). A recalled message
+			// says nothing.
 			var err error
+			post := end != channel.EndRecalled
 			if card != "" {
 				if err = s.botUpdateAnswerCard(ctx, card, c); err == nil {
 					post = false
-				} else if end != channel.EndRecalled {
+				} else if post {
 					s.logf("bots: the progress card's end: %v; sending it", err)
 				}
 			}
