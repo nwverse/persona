@@ -260,6 +260,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if !resume {
 		guest = guestFrom(ctx)
 	}
+	if mode == "" && guest == nil {
+		mode = st.AppMode
+		if mode == "" {
+			mode = n.assistantModeOf(id)
+		}
+		if mode == "" {
+			mode = proto.ModeBypass
+		}
+	}
 	if guest != nil {
 		if resume {
 			launcher, options = "", nil // it keeps what it started on (the hub sends none either)

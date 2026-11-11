@@ -76,6 +76,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	if v.deny != "" {
 		return "deny", v.deny, nil
 	}
+	health := n.gates().healthSession(session) || identity.InHealthSpace(cwd)
 	if v.other {
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
@@ -95,7 +96,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			}
 			ix.Kind, ix.ToolName = proto.IxPermission, title
 			ix.Summary = "以你的身份在" + title + "上写（命令较复杂，整条显示）\n" + prettyBody(command)
-			decision, reason, _, err := n.confirmLark(ctx, session, ix, nil)
+			decision, reason, _, err := n.confirmLark(ctx, session, ix, nil, health)
 			return decision, reason, err
 		}
 		return "", "", nil
@@ -104,7 +105,6 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	// Its space is the one its process was started in (assistantLarkEnv notes it, and the gate proxy goes by the same),
 	// not the directory the hook says: that is where the model's last `cd` left it. A hook directory in a health space
 	// (the space's own or one inside it, identity.InHealthSpace) counts too, so a mix-up can only ask more.
-	health := n.gates().healthSession(session) || identity.InHealthSpace(cwd)
 	// ask: the calls to confirm on the phone; covered: those "Always allow for this session" covers. Once let through
 	// here, the gate proxy lets each go once (gateproxy.go).
 	var ask, covered []larkCall
@@ -144,7 +144,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	if health {
 		remember = nil // nothing for "Always allow for this session" to keep
 	}
-	decision, reason, card, err := n.confirmLark(ctx, session, ix, remember)
+	decision, reason, card, err := n.confirmLark(ctx, session, ix, remember, health)
 	if decision == "allow" {
 		n.grantGateCalls(cfg, session, ask, card)
 		n.grantGateCalls(cfg, session, covered, proto.LarkLetThrough{Kind: proto.LarkThroughAlways})
@@ -204,10 +204,15 @@ func callTitle(gates []proto.CommandGate, c larkCall) string {
 	return "飞书" // lark-cli
 }
 
-// confirmLark asks the phone; "Always allow for this session" remembers the calls' routes (not for whole commands).
+// confirmLark honors the assistant's bypass mode; other calls ask the phone. Always grants cover routes, not whole commands.
 // When it allows, card is how: the card, with who answered it, or that "Always allow" covered it (the manager's
 // answer says it kept one).
-func (n *Node) confirmLark(ctx context.Context, session string, ix proto.Interaction, ask []larkCall) (decision, reason string, card proto.LarkLetThrough, err error) {
+func (n *Node) confirmLark(ctx context.Context, session string, ix proto.Interaction, ask []larkCall, health bool) (decision, reason string, card proto.LarkLetThrough, err error) {
+	if !health && n.isAssistantSession(session) && n.guestOf(session) == nil {
+		if mode, _ := n.modesOf(session); mode == proto.ModeBypass {
+			return "allow", "Conversation permission mode allows this tool call.", proto.LarkLetThrough{Kind: proto.LarkThroughBypass}, nil
+		}
+	}
 	if ix.ID == "" { // a gated tool's card has none yet: the ledger names the card by it
 		ix.ID = "ix_" + randHex(6)
 	}
