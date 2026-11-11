@@ -243,7 +243,7 @@ Apple has no shadow tokens. Shadows are inline literals:
 | Island surface | black 0.13, r20, y10 | `apple/Persona/DesignSystem/Styling.swift:66` |
 | Soft button | black 0.12 (0.25 tinted), r6, y3 | `apple/Persona/DesignSystem/Styling.swift:183` |
 | Composer | black 0.08, r12, y4 | `apple/Persona/DesignSystem/ShellComposerBar.swift:477` |
-| Message action bar | black 0.25, r10, y4 | `apple/Persona/Views/Chat/MessageMenu.swift:461` |
+| Message action bar | black 0.25, r10, y4 | `apple/Persona/Views/Chat/MessageMenu.swift:498` |
 | Drawer card (under iPhone Duo's side bars, the sidebar over the page) | black 0.18, r24 | `apple/Persona/Views/Assistant/AssistantSidebar.swift:219` |
 
 The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`) plus `--shadow-knob` for the switch knob. Android has four literals. See DS-08.
@@ -549,7 +549,7 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Horizontal drag between pages | pager with 3x resistance past the ends; flick above 300 pt/s or past half way |
 | Edge swipe back | system; the pan yields to it |
 | Swipe on a message (Agents) | quote, threshold 66 pt, with a VoiceOver "Quote" action |
-| Long press on a message | lifted menu with an action bar |
+| Long press on a message | lifted menu with an action bar; a message only on this device ends it in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
@@ -931,11 +931,13 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 Where a form exists to connect to something with an address or key the user types (the web provider wizard's preset
 key step and its custom gateway's Connect step), the check runs without a button: once what it needs is valid and has
-stopped changing for 0.7 s, it runs once for that input. It never runs on opening something already saved, only after
-its connection fields change; fields that play no part in the connection (a name) never block or repeat it. A line
-says it will check by itself, then shows progress with a spinner, then the result; a failure keeps the server's words
-and offers to run it again (Retry on the Connect step). Manual buttons, where the form has them, and the note that a
-test may cost a little stay. Once the check found what the next step needs, that step's button is the one primary
-action (section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path
-already answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and
-status-line styles and adds no setting.
+stopped changing for 0.7 s, it runs once for that input. An address being typed counts only once its field is left or
+an address is pasted, so a key never goes to a half-typed host. It never runs on opening something already saved, only
+after the fields the form names as its connection change (the provider wizard: address, key, sign-in method); fields
+that play no part in the connection (a name) never block or repeat it. A line says it will check by itself, then shows
+progress with a spinner, then the result; a failure keeps the server's words and offers to run it again (Retry on the
+Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay; pressing one
+counts as the check. Once the check found what the next step needs, that step's button is the one primary action
+(section 3.7). Reason: the user's next question after pasting a key is whether it works, and the preset path already
+answered it this way; two paths in one dialog should not differ. This reuses the existing Button, Spinner and status-
+line styles and adds no setting.

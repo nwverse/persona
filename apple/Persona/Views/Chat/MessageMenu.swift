@@ -259,8 +259,10 @@ extension View {
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
     /// quote (it may never reach the agent) and no Edit (a waiting one would still go out besides the edited one).
-    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false) -> some View {
-        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending))
+    /// delete: one only on this phone ends in Delete (#4626), on the bar and in the plain context menu alike.
+    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false,
+                          delete: MessageBarDelete? = nil) -> some View {
+        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, delete: delete))
     }
     /// Messages shown with the bar outside the chat's list (the background tasks' drawer): a tap or a drag there closes
     /// it, as on the list, and it closes with the sheet (#1388: it stayed until one of its buttons was used).
@@ -350,17 +352,23 @@ private struct MessageActionBarHost: ViewModifier {
     let isUser: Bool
     let date: Date?
     let pending: Bool
+    let delete: MessageBarDelete?
     @State private var drag: CGFloat = 0
     @State private var armed = false
 
     func body(content: Content) -> some View {
         if let menu {
             swipeable(content, menu)
-                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending))
+                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, delete: delete))
                 .coordinateSpace(.named(MessageMenu.row))
                 .zIndex(menu.selected == id ? 1 : 0)
         } else {
-            content.contextMenu { CopyButton(text: text) }
+            content.contextMenu {
+                CopyButton(text: text)
+                if let delete {
+                    Button(role: .destructive, action: delete.run) { Label(delete.title, systemImage: Theme.Icon.delete) }
+                }
+            }
         }
     }
 
@@ -419,6 +427,8 @@ struct MessageActionBar: View {
     var menu: MessageMenu
     /// Not in the transcript yet (`messageActionBar(pending:)`): Copy, Select Text and Share.
     var pending = false
+    /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
+    var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
 
     static let height: CGFloat = 62
@@ -428,8 +438,8 @@ struct MessageActionBar: View {
     /// Each action's width when the bar is `width` wide.
     static func itemWidth(_ width: CGFloat, count: Int) -> CGFloat { min(item, (width - 12) / CGFloat(max(count, 1))) }
     /// How many actions the bar has for this message.
-    static func count(id: String, isUser: Bool, menu: MessageMenu, pending: Bool = false) -> Int {
-        if pending { return 3 }
+    static func count(id: String, isUser: Bool, menu: MessageMenu, pending: Bool = false, deletes: Bool = false) -> Int {
+        if pending { return 3 + (deletes ? 1 : 0) }
         return (isUser ? 5 : 4) + (forks(id: id, isUser: isUser, menu: menu) ? 1 : 0) + (rewinds(id: id, isUser: isUser, menu: menu) ? 1 : 0)
     }
     /// Your own message ends in Rewind when the chat's session is a Claude agent's and the message is a transcript line
@@ -476,6 +486,9 @@ struct MessageActionBar: View {
             if Self.forks(id: id, isUser: isUser, menu: menu) {
                 action(String(localized: "More"), Theme.Icon.more) { menu.more = id }
             }
+            if let delete { // last, as a menu's destructive item is
+                action(delete.title, Theme.Icon.delete, tint: Theme.danger, perform: delete.run)
+            }
         }
         .padding(.horizontal, Theme.Space.sm)
         .frame(height: Self.height)
@@ -485,21 +498,24 @@ struct MessageActionBar: View {
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
     }
 
-    private func action(_ title: String, _ symbol: String, closes: Bool = true, perform: @escaping () -> Void) -> some View {
+    /// tint: the danger color for Delete; nil, the primary ink.
+    private func action(_ title: String, _ symbol: String, closes: Bool = true, tint: Color? = nil,
+                        perform: @escaping () -> Void) -> some View {
         Button {
             perform()
             if closes { menu.close() }
-        } label: { label(title, symbol) }
+        } label: { label(title, symbol, tint: tint) }
         .buttonStyle(.plain)
+        .accessibilityLabel(title) // its word only, not the symbol's own name too
     }
 
-    private func label(_ title: String, _ symbol: String) -> some View {
+    private func label(_ title: String, _ symbol: String, tint: Color?) -> some View {
         VStack(spacing: Theme.Space.xs) {
             // Symbols differ in height: a fixed box keeps every label on one line.
             ThemedIcon(symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
             Text(title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
-        .foregroundStyle(.primary)
+        .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(HierarchicalShapeStyle.primary))
         .frame(width: itemWidth, height: Self.height)
         .contentShape(.rect)
     }
