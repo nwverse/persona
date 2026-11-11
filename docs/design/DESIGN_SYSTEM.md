@@ -76,6 +76,7 @@ Relationship to other docs:
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
 | `scripts/app/android_token_baseline.py` | Hard-coded counts in `android/feature` only. It does not scan the design system module. |
+| `scripts/app/android_slot_order.py` | An Android design-system component with a composable slot ends with a function-typed parameter (trailing lambdas keep working); the existing exceptions in `android/core/designsystem/tools/slot-order-baseline.json` may only shrink (#4146). |
 
 Not enforced anywhere: hit-area size, accessibility labels, shadows (inline literals), `.font(.system(size:))` in some Lark and Feishu views, numeric `listRowInsets`, `Spacer(minLength:)` and `lineWidth`.
 
