@@ -4854,6 +4854,7 @@ struct Composer: View, Equatable {
                                  gate: gate,
                                  openAttach: attachOpener,
                                  glows: glowsWhileReplying,
+                                 dictationHints: { [model, key] in DictationLanguage.ownerTexts(model.chat(key).items) },
                                  send: { if let gate { gate.action() } else { Task { await sendText(text) } } }) {
                     #if os(iOS)
                     // The iPhone's tap opens the panel, its touch and hold this menu; the iPad's + is the menu, with
