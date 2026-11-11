@@ -27,7 +27,7 @@ func TestRuntimeAssistantHistorySurvivesRediscovery(t *testing.T) {
 	for _, id := range []string{"assistant-session", "health-session", "ordinary-session", "external-session"} {
 		rows = append(rows, proto.Session{
 			SessionID: id, Cwd: n.home, Launcher: "runtime-launcher", Status: proto.StatusWorking,
-			Model: "native-model", PermissionMode: "native-mode", Effort: "high", BypassAvailable: true,
+			Model: "native-model", PermissionMode: "native-mode", Effort: "high", BypassAvailable: true, Compaction: &proto.Compaction{State: "running"},
 		})
 	}
 	publish := func(host *fakeRuntime) {
@@ -64,6 +64,9 @@ func TestRuntimeAssistantHistorySurvivesRediscovery(t *testing.T) {
 			}
 			if s.Status != proto.StatusWorking || s.Model != "native-model" || s.PermissionMode != "native-mode" || s.Effort != "high" || !s.BypassAvailable {
 				t.Errorf("runtime state changed for %s: %+v", id, s)
+			}
+			if s.Compaction == nil || s.Compaction.State != "running" {
+				t.Errorf("runtime compaction changed for %s: %+v", id, s.Compaction)
 			}
 			if s.Capabilities == nil || !s.Capabilities.Send || s.Capabilities.Model == nil || !*s.Capabilities.Model {
 				t.Errorf("runtime capabilities changed for %s: %+v", id, s.Capabilities)
