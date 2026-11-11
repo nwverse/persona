@@ -7,7 +7,20 @@ plugins {
 android {
     namespace = "persona.feature.settings"
     // Plugins' views are rendered on the JVM (Robolectric's native graphics) for their pixel checks and screenshots.
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    // The screenshots share one test process; retain the bounded heap it needs rather than the 512 MB default.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                it.maxHeapSize = "1g"
+                // Robolectric's API 36 shared-memory setup accesses the JDK file-descriptor bridge.
+                it.jvmArgs(
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED"
+                )
+            }
+        }
+    }
     defaultConfig {
         manifestPlaceholders["googleOAuthScheme"] = "persona.oauth.unset"
     }

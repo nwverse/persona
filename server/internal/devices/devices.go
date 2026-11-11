@@ -99,6 +99,8 @@ type Devices struct {
 	opts Options
 	logf func(format string, args ...any)
 
+	transfers transfers // computer to computer file transfers running or just over (transfer.go)
+
 	mu    sync.Mutex
 	cfg   devicewire.Config
 	got   bool          // a config came from the hub
@@ -127,9 +129,11 @@ type Devices struct {
 	engines engineChoices
 	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
 	clipboard clipboardSwitches
-	links     linkSet
-	stopping  atomic.Bool
-	workers   sync.WaitGroup
+	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
+	fileTransfer fileTransferSwitches
+	links        linkSet
+	stopping     atomic.Bool
+	workers      sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]
@@ -221,6 +225,8 @@ func (d *Devices) Run(ctx context.Context) error {
 		}()
 	}
 	go d.usageLoop(mctx)
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
@@ -637,8 +643,15 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
+	var receipt string
+	var prepareErr error
+	params, receipt, prepareErr = d.prepareShareCall(ctx, p, params)
+	if prepareErr != nil {
+		return nil, wireError(prepareErr)
+	}
 	var out json.RawMessage
 	err := m.call(ctx, p.Method, params, &out)
+	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
 		return nil, wireError(err)

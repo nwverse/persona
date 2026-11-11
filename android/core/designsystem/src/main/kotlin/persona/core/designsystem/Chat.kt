@@ -101,9 +101,8 @@ fun ChatTopBar(
         }
         AppStyle.Board -> Column(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                back()
-                if (status != null) { JStatusMark(status); Spacer(Modifier.width(8.dp)) }
-                titleBlock(); actions()
+                // The state is said once, in the title's line (#3957, as iOS #3719): no second mark before the title.
+                back(); titleBlock(); actions()
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.line))
         }
@@ -409,18 +408,15 @@ fun ComposerFrame(
             .clip(shape).background(fill).border(HomeTokens.composerStroke, stroke, shape)
             .then(keepsKeyboard).padding(Tokens.Space.s)) {
             accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s), content = it) }
-            if (expanded) {
-                Box(Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.android).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.invoke(this)
+                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.android).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
                     contentAlignment = Alignment.CenterStart, content = field)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    leading?.invoke(this)
-                    Spacer(Modifier.weight(1f))
-                    trailing?.invoke(this)
-                }
-            } else Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) trailing?.invoke(this)
+            }
+            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke(this)
-                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
-                    contentAlignment = Alignment.CenterStart, content = field)
+                Spacer(Modifier.weight(1f))
                 trailing?.invoke(this)
             }
         }
@@ -430,18 +426,15 @@ fun ComposerFrame(
         AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
             .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius)).then(keepsKeyboard).padding(Tokens.Space.s)) {
             accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs), content = it) }
-            if (expanded) {
-                Box(Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
-                    contentAlignment = Alignment.CenterStart, content = field)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    leading?.invoke(this)
-                    Spacer(Modifier.weight(1f))
-                    trailing?.invoke(this)
-                }
-            } else Row(verticalAlignment = Alignment.CenterVertically) {
-                leading?.invoke(this)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.invoke(this)
                 Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
                     contentAlignment = Alignment.CenterStart, content = field)
+                if (!expanded) trailing?.invoke(this)
+            }
+            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke(this)
+                Spacer(Modifier.weight(1f))
                 trailing?.invoke(this)
             }
         }

@@ -714,9 +714,17 @@ struct AssistantSidebar: View {
     /// Meeting Recording (docs/apple/recording.md「Meeting recordings」): starts recording a meeting and opens Recordings;
     /// while something records, opens it. nil leaves the row out (the Mac records nothing).
     var startMeeting: (() -> Void)? = nil
+    /// The column's own button that folds it away, at its top trailing corner, as ChatGPT's on iPhone Duo open (#2623).
+    /// Search goes to its foot then, beside Persona's name and where it runs, and the main conversation's row holds what
+    /// the face's menu at the top of the page did (the switch has that place). nil elsewhere.
+    var collapse: (() -> Void)? = nil
     private var isShell: Bool { openInbox != nil }
     @State private var query = ""
     @State private var searchOpen = false
+    #if os(iOS)
+    /// The open iPhone Duo's search, over the whole window (`footerSearch`).
+    @State private var fullSearch = false
+    #endif
     #if os(macOS)
     /// Its header is in the title bar's row (#830): past the traffic lights when the window's sections column is hidden.
     @Environment(\.macTitleRowLeading) private var titleRowLeading
@@ -828,6 +836,14 @@ struct AssistantSidebar: View {
                 open(key)
             }
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $fullSearch) {
+            AssistantFullSearch { key in
+                fullSearch = false
+                open(key)
+            }
+        }
+        #endif
         .background {
             if let drawer {
                 SidebarClosed(drawer: drawer) {
@@ -857,14 +873,20 @@ struct AssistantSidebar: View {
             }
         } else {
             HStack {
-                #if os(macOS)
-                // The other sections' title (`MacPageTitle`), #3179.
-                Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                #else
-                Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                #endif
+                if model.showsAssistantIdentity {
+                    #if os(macOS)
+                    Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
+                    #else
+                    Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
+                    #endif
+                }
                 Spacer(minLength: Theme.Space.s)
-                if besideBar {
+                if let collapse {
+                    AssistantTopBar.circle(Theme.Icon.sidebar, label: String(localized: "Hide Sidebar"), id: "assistant-sidebar-collapse") {
+                        Haptics.tap()
+                        collapse()
+                    }
+                } else if besideBar {
                     // The same button as the top bar's beside it (2026-11-04: on iPhone Duo open, this one stood lower
                     // and larger than Chat History / New Chat in the next column).
                     AssistantTopBar.circle(Theme.Icon.search, label: String(localized: "Search Chats [Assistant Sidebar 55c9e4]"), id: "assistant-sidebar-search", action: openSearch)
@@ -881,6 +903,17 @@ struct AssistantSidebar: View {
                 }
             }
         }
+    }
+
+    /// Search at the foot, beside Persona's name, where the column has its fold at the top instead (iPhone Duo open): it
+    /// opens over the whole window, its field at the foot (`AssistantFullSearch`, #3705).
+    private var footerSearch: (() -> Void)? {
+        guard collapse != nil else { return nil }
+        #if os(iOS)
+        return { fullSearch = true }
+        #else
+        return { openSearch() }
+        #endif
     }
 
     private func openSearch() {
@@ -929,7 +962,7 @@ struct AssistantSidebar: View {
             // The shell's: the places to go (the main conversation is the row above them, `mainItem`).
             VStack(alignment: .leading, spacing: 0) {
                 meetingRow
-                action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.actionCount, run: openInbox)
+                action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, run: openInbox)
                 if TodoStore.shared.isSupported {
                     action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.badgeCount, run: { (openTodos ?? openInbox)() })
                 }
@@ -1060,12 +1093,18 @@ struct AssistantSidebar: View {
         let radius = Theme.Sidebar.radius
         return Button { if let key { open(key) } else { newConversation() } } label: {
             HStack(spacing: Theme.Sidebar.gap) {
-                // Where the places below have their symbol, the same width (on the Mac's plain list, `macPlace`'s).
-                AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
-                // The small "Main Chat" under the name keeps the row readable as a conversation, not a heading (#6328, as the web, #6293).
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                    Text("Main Chat").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                if model.showsAssistantIdentity {
+                    AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                        Text("Main Chat").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                } else {
+                    ThemedIcon(Theme.Icon.conversation)
+                        .font(Theme.Font.body)
+                        .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                        .scaledFrame(width: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn)
+                    Text("Main Chat").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if let main { mark(main) }
@@ -1081,12 +1120,13 @@ struct AssistantSidebar: View {
         }
         .buttonStyle(.plain)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([Self.mainTitle, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityLabel([model.showsAssistantIdentity ? Self.mainTitle : nil, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-main")
         .disabled(key == nil && model.assistantConfig == nil)
         .contextMenu {
             if let key {
+                if collapse != nil { MainChatPlaceItems(key: key, openKnowledge: openKnowledge, openProfile: openProfile) }
                 MainConversationMenu(key: key) // Compact context, New Main Chat… (#1762)
                 Button {
                     UIPasteboard.general.string = key.sessionID
@@ -1105,6 +1145,10 @@ struct AssistantSidebar: View {
 
     /// The main conversation's name in the sidebar (#2004; it was Main Chat before, and again in #4606).
     static let mainTitle = "Persona"
+
+    static func shownMainTitle(_ showsIdentity: Bool) -> String {
+        showsIdentity ? mainTitle : String(localized: "Main Chat")
+    }
 
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, run: @escaping () -> Void) -> some View {
         if AppStyle.current.usesBeautifulUI {
@@ -1374,14 +1418,19 @@ struct AssistantSidebar: View {
     private func row(_ s: Session) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
-        let title = isMain ? Self.mainTitle : s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
+        let title = isMain ? Self.shownMainTitle(model.showsAssistantIdentity) : s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         return Button { open(s.key) } label: {
             HStack(spacing: Theme.Space.m) {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
                 // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
-                if isMain {
+                if isMain && model.showsAssistantIdentity {
                     AppGlyph(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark, scaled: true)
+                } else if isMain {
+                    ThemedIcon(Theme.Icon.conversation)
+                        .font(Theme.Font.body)
+                        .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                        .scaledFrame(width: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark)
                 } else if isShell {
                     EmptyView()
                 } else {
@@ -1406,7 +1455,7 @@ struct AssistantSidebar: View {
         .buttonStyle(.plain)
         .tag(s.key)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([title, isMain && s.title != title ? s.title : nil, stateWord(s), preview.isEmpty ? nil : preview]
+        .accessibilityLabel([title, isMain && model.showsAssistantIdentity && s.title != title ? s.title : nil, stateWord(s), preview.isEmpty ? nil : preview]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(isMain ? "sidebar-main" : "sidebar-conversation")
@@ -1505,12 +1554,14 @@ struct AssistantSidebar: View {
             // The iPad's column (the shell's places beside the conversation): Persona's face and where it runs stay
             // at the foot, under the shell's New Chat + Settings (2026-11-05 user: the bottom left is fine).
             if drawer == nil {
-                AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: nil)
+                AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: nil, search: footerSearch)
             }
         } else {
             #if os(macOS)
             if macPlacesGroup {
-                AssistantStatusLine(machineID: machineID, openProfile: openProfile)
+                if model.showsAssistantIdentity {
+                    AssistantStatusLine(machineID: machineID, openProfile: openProfile)
+                }
             } else {
                 AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: openSettings)
             }
@@ -1558,6 +1609,46 @@ struct AssistantSidebar: View {
     }
 }
 
+/// What the face's menu at the top of the page held, on the main conversation's long press too (iPhone Duo open, where the
+/// Assistant | Agents switch takes the face's place, #2623; the user asked for it there): whose Persona it is (several
+/// hubs), Knowledge and Details, the directory and the facts to copy. The switch's Assistant, tapped while it is
+/// selected, keeps the whole menu, as in the shell.
+private struct MainChatPlaceItems: View {
+    @Environment(AppModel.self) private var model
+    let key: SessionKey
+    let openKnowledge: () -> Void
+    let openProfile: () -> Void
+
+    var body: some View {
+        if model.isMultiHub, let current = model.hub?.group {
+            Section("hub") {
+                Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
+                    ForEach(model.groupIDs, id: \.self) { g in
+                        Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(g)
+                    }
+                }
+            }
+        }
+        Section {
+            Button(action: openKnowledge) { Label("Knowledge", systemImage: Theme.Icon.knowledge) }
+            Button(action: openProfile) { Label("Details [Assistant Top Bar 1932da]", systemImage: Theme.Icon.person) }
+        }
+        Section {
+            Button { copy(AssistantCopyText.cwd(key, in: model), String(localized: "Working Directory Copied")) } label: {
+                Label("Copy Directory", systemImage: Theme.Icon.folder)
+            }
+            Button { copy(AssistantCopyText.info(key, in: model), String(localized: "Chat Info Copied")) } label: {
+                Label("Copy Info", systemImage: Theme.Icon.copy)
+            }
+        }
+    }
+
+    private func copy(_ text: String, _ done: String) {
+        UIPasteboard.general.string = text
+        model.toast = Toast(done, style: .success)
+    }
+}
+
 /// Persona's face and name with where it runs, Settings on the right: a view of its own, so the machines' heartbeats (and
 /// the page coming to the front) draw this row again, not the conversations' list.
 private struct AssistantProfileFooter: View {
@@ -1566,6 +1657,8 @@ private struct AssistantProfileFooter: View {
     let machineID: String
     let openProfile: () -> Void
     let openSettings: (() -> Void)?
+    /// Search on the right, where ChatGPT has it beside the account on iPhone Duo open (#2623); nil, none.
+    var search: (() -> Void)? = nil
 
     var body: some View {
         // Behind another section (the Mac keeps the page): the machine as it is now, not each push's heartbeat.
@@ -1577,27 +1670,48 @@ private struct AssistantProfileFooter: View {
             HStack(spacing: Theme.Space.m) {
                 Button(action: openProfile) {
                     HStack(spacing: Theme.Space.m) {
-                        PersonaAvatar(size: Theme.Size.avatarL)
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            HStack(spacing: Theme.Space.xs) {
-                                Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
-                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                        if model.showsAssistantIdentity {
+                            PersonaAvatar(size: Theme.Size.avatarL)
+                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                HStack(spacing: Theme.Space.xs) {
+                                    Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                                }
+                                HStack(spacing: Theme.Space.xs) {
+                                    Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
+                                        .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
+                                    Text(online ? String(localized: "Online · \(machine?.name ?? machineID)") : String(localized: "Offline · \(machine?.name ?? machineID)")).lineLimit(1)
+                                }
+                                .font(Theme.Font.label)
+                                .foregroundStyle(.secondary)
                             }
-                            HStack(spacing: Theme.Space.xs) {
-                                Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
-                                    .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
-                                Text(online ? String(localized: "Online · \(machine?.name ?? machineID)") : String(localized: "Offline · \(machine?.name ?? machineID)")).lineLimit(1)
-                            }
-                            .font(Theme.Font.label)
-                            .foregroundStyle(.secondary)
+                        } else {
+                            Label("Details [Assistant Top Bar 1932da]", systemImage: Theme.Icon.person)
+                                .font(Theme.Font.bodyStrong)
+                                .lineLimit(1)
                         }
                     }
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(model.persona.name), \(state), view profile")
+                .accessibilityLabel(model.showsAssistantIdentity ? String(localized: "\(model.persona.name), \(state), view profile") : String(localized: "Details [Assistant Top Bar 1932da]"))
+                .accessibilityIdentifier("assistant-profile-footer")
                 Spacer(minLength: Theme.Space.s)
+                if let search {
+                    // The shell's foot's round button (Settings beside New Chat), as the row above has it.
+                    Button(action: search) {
+                        ThemedIcon(Theme.Icon.search)
+                            .font(Theme.Font.heading)
+                            .foregroundStyle(Color.primary)
+                            .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .surface(interactive: true, in: .circle)
+                    .accessibilityLabel("Search Chats [Assistant Sidebar 55c9e4]")
+                    .accessibilityIdentifier("assistant-sidebar-search")
+                }
                 if let openSettings {
                     Button(action: openSettings) {
                         ThemedIcon(Theme.Icon.settings).font(Theme.Font.title).foregroundStyle(Color.primary)

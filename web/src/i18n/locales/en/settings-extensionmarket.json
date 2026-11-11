@@ -63,8 +63,15 @@
   "keep_data": "Keep its data",
   "keep_data_hint": "Pick up where you left off if you reinstall.",
   "disable_dependents": "Also disable the extensions that depend on it: {names} (not uninstalled)",
-  "uninstall_members": "Also uninstall pack members: {names}",
+  "uninstall_members_title": "Also uninstall pack members",
+  "uninstall_members_hint": "{names}. Left unchecked, they stay installed.",
   "not_uninstalled": "Couldn't uninstall: {error}",
+  "partial_title": "Pack partly uninstalled",
+  "partial_body": "\"{name}\" is still installed. Members already uninstalled stay uninstalled, and nothing was put back. You can try again.",
+  "partial_removed": "Uninstalled: {names}",
+  "partial_failed": "Not uninstalled: {names}",
+  "partial_failed_item": "{name} ({error})",
+  "partial_remaining": "Not tried, still installed: {names}",
   "auto_on": "Automatic extension updates on",
   "auto_off": "Automatic extension updates off",
   "auto_failed": "Couldn't change: {error}",
@@ -119,7 +126,7 @@
   "op_title_uninstall": "Uninstalling",
   "op_retry": "Retry",
   "op_dismiss": "Dismiss",
-  "op_gone": "It's no longer running: its manager doesn't have it any more (it may have restarted). You can start it again.",
+  "op_gone": "It's no longer running: its assistant doesn't have it any more (it may have restarted). You can start it again.",
   "op_cancel": "Cancel",
   "op_review": "Review",
   "op_error": "Why: {error}",
@@ -130,5 +137,5 @@
   "market_unread": "Extensions show up here once the market can be read.",
   "token_create_hint": "No token yet? Create one on GitHub: the name, purpose and a one-year expiry are filled in and no permissions are needed. Click Generate token, then paste it above.",
   "token_create": "Create on GitHub",
-  "for_manager": "For the manager “{name}”: only its copy changes (each manager has its own extensions)."
+  "for_manager": "For the assistant “{name}”: only its copy changes (each assistant has its own extensions)."
 }

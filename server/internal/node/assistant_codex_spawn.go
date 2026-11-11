@@ -57,8 +57,15 @@ func codexArgsForHome(bin, key, home string, windows ...int) []string {
 // Use alias-safe definitions and calls: zsh expands aliases while parsing the script.
 func codexShell(launcher string) string {
 	return `__persona_args=("$@")
-function codex { builtin command codex "$@" app-server "${__persona_args[@]}"; }
-function command { if [[ "$1" == codex ]]; then shift; \codex "$@"; else builtin command "$@"; fi; }
+function __persona_codex { builtin command codex "$@" app-server "${__persona_args[@]}"; }
+if [[ -n "${ZSH_VERSION-}" ]] && (( $+functions[codex] )); then
+  # Keep a user-defined codex() launcher intact while routing its final command through the app-server wrapper.
+  functions -c "${${:-codex}}" __persona_user_codex
+  function codex { __persona_user_codex "$@"; }
+else
+  function codex { __persona_codex "$@"; }
+fi
+function command { if [[ "$1" == codex ]]; then shift; __persona_codex "$@"; else builtin command "$@"; fi; }
 ` + launcher
 }
 
@@ -143,11 +150,17 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 		if wasSpare {
 			n.spare = nil
 		}
+		var recovery *assistantTurnRecovery
 		if p.id != "" && n.procs[p.id] == p {
 			delete(n.procs, p.id)
+			recovery = n.recoveries[p.id] // do not confuse a replaced process's late exit with the current one
 		}
 		n.mu.Unlock()
 		if wasSpare || p.id == "" {
+			return
+		}
+		if recovery != nil {
+			n.finishAssistantRecoveryOnExit(p, recovery)
 			return
 		}
 		n.emitDelta(p.id, "")

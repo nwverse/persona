@@ -67,12 +67,37 @@ func conclusionServiceOn(t *testing.T, st Store, onlyConclusions bool) (s *Servi
 func reviewTask(t *testing.T, s *Service, todo string, args map[string]any) string {
 	t.Helper()
 	args["todo_id"] = todo
+	asDecision(args)
 	raw, _ := json.Marshal(args)
 	res, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw)
 	if err != nil {
 		t.Fatalf("task_review %v: %v", args, err)
 	}
 	return res
+}
+
+// asDecision fills in what a needs_user review must carry to be a decision (#3804, decision_test.go tests each part)
+// where a test about something else left it out: why only the owner decides (one that cannot be undone, so nothing is
+// taken by default unless the test sets a reversible deadline), two options with the recommended first, and what
+// waiting costs. What the test gave is kept; a review without reason or recommend is still refused.
+func asDecision(args map[string]any) {
+	if args["verdict"] != "needs_user" {
+		return
+	}
+	if _, ok := args["why_owner"]; !ok {
+		args["why_owner"] = whyIrreversible
+		if rev, _ := args["reversible"].(bool); rev {
+			args["why_owner"] = whyPriority
+		}
+	}
+	if _, ok := args["options"]; !ok {
+		if rec, _ := args["recommend"].(string); rec != "" {
+			args["options"] = []map[string]string{{"label": rec, "leads_to": "照推荐的做"}, {"label": "先不动", "leads_to": "任务停在这里"}}
+		}
+	}
+	if _, ok := args["cost_of_waiting"]; !ok {
+		args["cost_of_waiting"] = "任务停着等你"
+	}
 }
 
 // waitsForReview has the task's agent finish a turn with reply until the judge's "done" puts the task up for review.
@@ -94,7 +119,8 @@ func cardsWith(posts []string, want string) (out []string) {
 }
 
 // A supervised research task that ends with "cannot be done" is one card: that verdict, the reason, the link; its
-// closing is not a line of the task report as well. "OK" to it is taken, and said so.
+// closing is not a line of the task report as well. The supervisor checked it, so the card says so and nothing waits
+// for the owner's "OK" (#3240).
 func TestSupervisedCannotBeDoneIsOneConclusionCard(t *testing.T) {
 	s, f, todo, posts, notes := conclusionService(t, false)
 	waitsForReview(t, s, f, todo.ID, "查了，对方接口不对外开放，直连做不了。文档 https://docs.example.com/api")
@@ -111,27 +137,49 @@ func TestSupervisedCannotBeDoneIsOneConclusionCard(t *testing.T) {
 		t.Fatalf("%d cards after the review, want the conclusion only:\n%s", len(after), strings.Join(after, "\n---\n"))
 	}
 	card := after[0]
-	for _, want := range []string{"结论：修登录崩溃", "⛔ 做不了：对方接口不对外开放", "https://docs.example.com/api", "知道了", `"a":"accept"`} {
+	for _, want := range []string{"结论：修登录崩溃", "⛔ 做不了：对方接口不对外开放", "https://docs.example.com/api", "督办已核对证据"} {
 		if !strings.Contains(card, want) {
 			t.Errorf("card lacks %q:\n%s", want, card)
 		}
+	}
+	if strings.Contains(card, `"a":"accept"`) {
+		t.Errorf("the card still asks the owner:\n%s", card)
 	}
 	if strings.Contains(card, "🏁") || strings.Contains(card, "改了什么") {
 		t.Fatalf("not a conclusion card:\n%s", card)
 	}
 	a := askOf(s, todo.ID)
-	if a == nil || !a.Conclusion || a.Outcome != outcomeCannot || a.MessageID == "" {
+	if a == nil || !a.Conclusion || a.Outcome != outcomeCannot || a.MessageID == "" || a.AcceptedAt.IsZero() || !a.BySupervisor {
 		t.Fatalf("ask %+v", a)
 	}
-	if !s.acceptReply(context.Background(), "om_ok", "OK", false, a.MessageID) {
-		t.Fatal("a reply to the conclusion card was not taken as one")
+	ctx := context.Background()
+	if _, total := s.snapshotUnaccepted(ctx, s.location(ctx)); total != 0 {
+		t.Fatalf("%d waiting for the owner", total)
 	}
-	if a := askOf(s, todo.ID); a.AcceptedAt.IsZero() {
-		t.Fatal("OK did not take it")
+	_ = notes
+}
+
+// judgeConcluded closes supervised todo, a big feature (high priority, #3205), as the done judge does (judgeClose) with
+// a cannot conclusion, which still waits for the owner's "OK": a big feature is the owner's to look at (#3356).
+func judgeConcluded(t *testing.T, s *Service, todo string) {
+	t.Helper()
+	ctx := context.Background()
+	s.todos.mu.Lock()
+	s.todos.todos[todo].Priority = "high"
+	s.todos.mu.Unlock()
+	if _, _, err := s.updateSupervision(ctx, todo, func(v *Supervision) bool {
+		v.State = reviewAccepted
+		v.Reviews = append(v.Reviews, TaskReview{At: time.Now().UTC(), Verdict: reviewAccepted, By: reviewerJudge})
+		return true
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if n := notes(); len(n) == 0 || n[len(n)-1] != "知道了，已收下" {
-		t.Fatalf("notes %q", n)
+	if ok, err := s.reviewDoneTodo(ctx, todo, "判官核对通过", true); err != nil || !ok {
+		t.Fatalf("close: %v %v", ok, err)
 	}
+	cur := todoNow(s, todo)
+	s.askConclusion(ctx, cur, conclusionInput{Outcome: outcomeCannot, Reason: "对方接口不对外开放", Link: "https://docs.example.com/api",
+		Verified: supervisorVerified(cur)})
 }
 
 // A conclusion with no link given takes the task's own: a web address in the review's evidence before the agent's chat.
@@ -172,35 +220,47 @@ func TestDeployedWorkKeepsPleaseVerifyWithTheVerdictOnTop(t *testing.T) {
 	if n := countAcceptCards(posts()); n != 1 {
 		t.Fatalf("%d 请验收 cards", n)
 	}
-	// The review closed the task, and its "Please verify" is what tells the owner: it still waits for them.
+	// The supervisor checked it: its "Please verify" is passed for the owner, who is not asked to press "Pass" (#3240).
 	ctx := context.Background()
-	if _, total := s.snapshotUnaccepted(ctx, s.location(ctx)); total != 1 || askOf(s, todo.ID) == nil {
-		t.Fatalf("the ask is gone after the review: %d waiting", total)
+	if a := askOf(s, todo.ID); a == nil || a.AcceptedAt.IsZero() || !a.BySupervisor {
+		t.Fatalf("the ask is not passed by the supervisor: %+v", a)
 	}
-	var listed bool
-	for _, r := range s.boardRows(ctx, s.botLang(ctx), s.webBase(ctx), time.Now()) {
-		listed = listed || r.id == todo.ID
-	}
-	if !listed {
-		t.Fatal("not on the board after the review")
+	if _, total := s.snapshotUnaccepted(ctx, s.location(ctx)); total != 0 {
+		t.Fatalf("%d still waiting for the owner", total)
 	}
 }
 
-// A task sent back twice and still short goes to the owner: the card asks how to go on, not with the rework the agent
-// was told.
+// A task sent back twice and still short goes to the owner only as a decision they can answer (#3804): a third rework
+// that states none is refused and changes nothing, so the supervisor states one; with one, the card asks that, not
+// with the rework the agent was told.
 func TestReworkOverAsksTheOwnerHowToGoOn(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
 	waitsForReview(t, s, f, todo.ID, "补了一部分")
 	if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool { v.Round = maxReworkRounds; return true }); err != nil {
 		t.Fatal(err)
 	}
-	res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "rework", "note": "把深色截图补上，再跑一遍 CI"})
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "把深色截图补上，再跑一遍 CI"})
+	_, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw)
+	if err == nil || !strings.Contains(err.Error(), "sent back 2 times") || !strings.Contains(err.Error(), "why_owner") {
+		t.Fatalf("a third rework with no decision: %v", err)
+	}
+	if v := todoNow(s, todo.ID).Supervision; v.State != reviewPending || len(v.Reviews) != 0 || askOf(s, todo.ID) != nil {
+		t.Fatalf("the refused rework changed the task: %+v, ask %+v", v, askOf(s, todo.ID))
+	}
+	res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "rework", "note": "把深色截图补上，再跑一遍 CI",
+		"why_owner": "priority", "reason": "返工了 2 轮还没做完，接下来怎么办", "recommend": "再返工一轮",
+		"options":         []map[string]string{{"label": "就这样收下", "leads_to": "缺深色截图，直接合并"}, {"label": "再返工一轮", "leads_to": "再等大约半小时"}},
+		"cost_of_waiting": "PR 一直开着"})
 	if !strings.Contains(res, "sent back 2 times") || !strings.Contains(res, "went to them in Lark") {
 		t.Fatalf("answer: %s", res)
 	}
 	cards := cardsWith(posts(), "结论：")
-	if len(cards) != 1 || !strings.Contains(cards[0], "🤔 要你拍板：返工了 2 轮还没做完，接下来怎么办？") || strings.Contains(cards[0], "深色截图") {
+	if len(cards) != 1 || !strings.Contains(cards[0], "🤔 要你拍板：返工了 2 轮还没做完，接下来怎么办") || strings.Contains(cards[0], "深色截图补上") {
 		t.Fatalf("cards %q", cards)
+	}
+	// The recommended option is listed first whatever order the review gave them in.
+	if a := askOf(s, todo.ID); a == nil || len(a.Options) != 2 || a.Options[0].Label != "再返工一轮" || todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+		t.Fatalf("ask %+v", a)
 	}
 }
 
@@ -266,7 +326,7 @@ func TestBriefingSaysTheSameVerdictAsTheCard(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "查了，做不了")
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "outcome": "cannot", "reason": "对方接口不对外开放", "link": "https://docs.example.com/api"})
+	judgeConcluded(t, s, todo.ID)
 	const verdict = "⛔ 做不了：对方接口不对外开放"
 	if len(cardsWith(posts(), feishubot.EscapeMarkdown(verdict))) != 1 {
 		t.Fatalf("the card does not say %q", verdict)

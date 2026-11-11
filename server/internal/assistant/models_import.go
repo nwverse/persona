@@ -201,6 +201,7 @@ func (s *Service) importGroups(ctx context.Context, machine string) ([]importGro
 
 // knownProviders opens only the keys needed to match aliases against every stored provider.
 // A key failure cannot be treated as an absent provider; unrelated sealed headers and environment stay opaque.
+// A key that is a reference stays the reference (launcher_secrets.go): it matches no alias's key and is not resolved.
 func (s *Service) knownProviders(stored []storedLauncher) ([]knownProvider, error) {
 	known := make([]knownProvider, 0, len(stored))
 	for _, l := range stored {
@@ -233,7 +234,8 @@ func importErr(w http.ResponseWriter, err error) {
 // sealImported makes g a stored launcher: the key and headers sealed.
 func (s *Service) sealImported(g importGroup, now time.Time) (storedLauncher, error) {
 	l := storedLauncher{ManagedLauncher: g.ManagedLauncher, Created: now, Updated: now}
-	l.HasHeaders = false // the preview's; a stored launcher's comes from its sealed headers
+	l.HasHeaders = false                         // the preview's; a stored launcher's comes from its sealed headers
+	_ = scopeInput{}.applyScope(&l, true, false) // a new provider's scope (docs/integrations/launchers.md "Device scope and on-demand delivery")
 	if l.Auth == "api_key" {
 		l.Auth = "" // stored as the default
 	}

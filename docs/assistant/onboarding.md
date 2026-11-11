@@ -36,7 +36,7 @@ Terminology rules (enforced by the copy guard tests in section 8.1):
 
 | Step | What users must do today | Where they get stuck | Evidence |
 | --- | --- | --- | --- |
-| Get the app | iOS is TestFlight-only and requires iOS 26+; Android requires sideloading an APK; the website FAQ says "Write to us if you'd like to try it" | The first step excludes most people | `site/public/index.html`, README "Platforms" |
+| Get the app | iOS is TestFlight-only and requires iOS 26+; Android requires sideloading an APK; the website links the public TestFlight beta and its demo mode (#3842; it used to say "Write to us if you'd like to try it") | The first step excludes most people | `site/public/index.html`, README "Platforms" |
 | Install hub | `install.sh --hub` only installs a binary; it does not create Postgres, install a service, or start it. It ends with the English instruction `personad hub run … then personad hub pair` | Starting in an empty directory exits immediately: `database_url is empty (run scripts/deploy/deploy.sh …)`, pointing to a repository script the user does not have | `scripts/deploy/install.sh:421`, `server/internal/db/db.go:37` |
 | First pairing code | All four platforms' first screens say "Run `personad hub pair`"; the web login page also teaches `jq -r .token ~/.persona/hub.json` | Users without a terminal stop here. `/admin` can generate a code, but setting its password locally requires a one-time setup code from the logs | `web/src/views/Login.tsx:45-48`, `server/internal/hub/admin_setupcode.go:51-52,75-79` |
 | Address in the QR code | The default `public_url` is `http://<full-hostname>:18660` | Phones often cannot resolve the hostname; changing the port does not update it either | `server/internal/hub/config.go:215` |
@@ -447,6 +447,8 @@ POST /api/v1/assistant/readiness/dismiss   {"dismissed": true}  →  {"ok": true
 ```
 
 `POST /api/v1/assistant/warm` keeps returning `{"ok": true}` and adds `readiness` (same structure, no probe). Clients refetch on entering the Persona tab, successful pairing, adding / confirming a computer, saving a provider, and receiving a `machines` change. No new push event in the first version.
+
+The Apple clients also ask again when the app comes back to the front (iOS and visionOS: the scene becomes active; Mac: the app is activated), and while a page that shows readiness is in front and one of computer / Claude Code / model is `todo` or `problem`, or any step is `checking`, they poll at 5, 10 and 20 seconds, then every 30 seconds, starting over when the open steps change (`ReadinessPoll`, #1893). Installing Claude Code, signing in to it or waking a computer happen on that computer and change nothing in the app; the hub keeps a negative Claude Code answer for a minute, so the 30-second cap finds the change within about a minute and a half. `first_message` and `unknown` steps are not polled: only the user's own try moves them.
 
 On old hubs, this endpoint returns 404: clients fall back to current behavior (no first-screen card; failures show cards by `code`).
 

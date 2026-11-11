@@ -76,6 +76,8 @@ struct PersonaApp: App {
                 model.retryRegistry() // launched in the background before the first unlock: the pairing reads now
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
+                // Rolling recordings expire even when no segment arrives and the recording page stays closed.
+                RecordingRollingKeeper.shared.schedule()
                 LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces }
                 // The home screen icon in step with the Avatar and Light & Dark (a scheme from a launch argument, a switch the system
                 // cut short, the old App Icon setting); nothing happens when it already is, so no alert.
@@ -97,6 +99,9 @@ struct PersonaApp: App {
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
                 model.suspendLinks()
+                #if os(iOS)
+                QuickAction.publish() // the home screen menu with the conversations' titles as they are now (#2191)
+                #endif
             }
         }
         #if os(visionOS)
@@ -149,7 +154,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if d.bool(forKey: "openImagesFresh") { try? FileManager.default.removeItem(at: URL.cachesDirectory.appending(path: "chat-images")) }
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
         if d.bool(forKey: "openAgentsFresh") {
-            for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key] { d.removeObject(forKey: k) }
+            for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key,
+                      "agents.list.width", "agents.list.closed"] { d.removeObject(forKey: k) }
+        }
+        // `-openSplitFresh YES`: the lists beside the pages at the system's width and open (SplitDividerTests, #2624).
+        if d.bool(forKey: "openSplitFresh") {
+            for list in ["agents.list", "assistant.list"] { d.removeObject(forKey: list + ".width"); d.removeObject(forKey: list + ".closed") }
         }
         // `-openRecapsFresh YES`: no away recap closed yet, so the newest shows open again (RecapInFlowTests).
         if d.bool(forKey: "openRecapsFresh") { d.removeObject(forKey: "closedRecaps") }

@@ -35,10 +35,15 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
     var engines: [DetectedEngine] = []
+    /// The set of engine hosts the computer runs (docs/integrations/engines.md "Host sets"); nil from a hub before sets.
+    /// `[]` is no terminal engine: `engine` still says herdr then, for older clients.
+    var engineHosts: [String]? = nil
     /// Operating it through Cua Driver; nil while the hub's plugin cua is off or it is not a Mac.
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
     var browser: MachineBrowser? = nil
+    /// The iPhones paired with it the assistant may operate; nil while the hub's extension iphone is off or it can't reach iPhones.
+    var iphone: MachineIPhone? = nil
     /// Sharing its clipboard with the phone (#3064); nil from hubs before it.
     var clipboard: MachineClipboard? = nil
     /// Hub mesh (docs/archive/operations/plan-hub-mesh.md 2.6): the hub that owns the computer in its group, its name, the computer's own
@@ -63,7 +68,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, clipboard, route, trust, manager
+        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, iphone, clipboard, route, trust, manager
+        case engineHosts = "engine_hosts"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
@@ -109,8 +115,10 @@ extension Machine {
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
+        engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
+        iphone = try? c.decodeIfPresent(MachineIPhone.self, forKey: .iphone)
         clipboard = try? c.decodeIfPresent(MachineClipboard.self, forKey: .clipboard)
         hubID = try? c.decodeIfPresent(String.self, forKey: .hubID)
         hubName = try? c.decodeIfPresent(String.self, forKey: .hubName)
@@ -198,11 +206,17 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let herdrApp = Self(rawValue: "herdr-core")
     static let herdrBoth = Self(rawValue: "herdr-both")
     static let orca = Self(rawValue: "orca")
+    /// Tern's terminals (docs/integrations/engines.md): its sessions are spaces, its tabs slots, its blocks panes
+    /// (`tern:<block id>`).
+    static let tern = Self(rawValue: "tern")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
     static let cindy = Self(rawValue: "cindy")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo, .cindy]
+    /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
+    /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
+    static let noEngine = Self(rawValue: "none")
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -210,8 +224,10 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrApp: "Herdr App"
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
+        case .tern: "Tern"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
+        case .noEngine: String(localized: "No Terminal Engine")
         default: rawValue
         }
     }
@@ -221,8 +237,10 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrApp: String(localized: "Terminals in the desktop app")
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
+        case .tern: String(localized: "Terminals in Tern")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
+        case .noEngine: String(localized: "Sessions of the desktop apps only")
         default: nil
         }
     }
@@ -436,7 +454,9 @@ nonisolated struct ComputerJob: Codable, Hashable, Sendable {
 }
 
 extension Machine {
-    var engineName: String { engines.first { $0.id == engine.rawValue }?.name ?? engine.name }
+    var engineName: String {
+        engineHosts?.isEmpty == true ? MachineEngine.noEngine.name : engines.first { $0.id == engine.rawValue }?.name ?? engine.name
+    }
 }
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
@@ -608,6 +628,7 @@ nonisolated enum SessionStatus: String, Codable, Sendable {
 }
 
 /// New sources opt in to every operation; a partial capability object never grants missing permissions.
+/// `modes` alone is optional: an older hub omits it and the client keeps its agent-based fallback.
 nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var read = false
     var send = false
@@ -615,8 +636,9 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var approve = false
     var terminal = false
     var attach = false
+    var modes: Bool?
 
-    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach }
+    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach, modes }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -626,6 +648,7 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         approve = try c.decodeIfPresent(Bool.self, forKey: .approve) ?? false
         terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         attach = try c.decodeIfPresent(Bool.self, forKey: .attach) ?? false
+        modes = try c.decodeIfPresent(Bool.self, forKey: .modes)
     }
 }
 
@@ -724,6 +747,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var listBackgroundCount: Int? = nil
     var listRunningSubagents: Int? = nil
     var listRunningWorkflows: Int? = nil
+    /// Summary projection (#3588): independent live jobs; zero clears cached activity.
+    var listBackgroundTasksCount: Int? = nil
+    /// Newest running workflow, without chat-only agent/phase arrays.
+    var listWorkflowProgress: WorkflowRun? = nil
     /// The /loop driving this agent (it wakes itself up on a schedule).
     var loop: LoopInfo?
     /// The goal it works toward until it holds (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md).
@@ -747,6 +774,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// hub's `background_waiting`, #6045): set only with `state` working, never while a subagent or workflow runs. False
     /// from older hubs. The rule is `waitsInBackground`.
     var backgroundWaiting: Bool = false
+    /// Its turn has ended while background commands, subagents, Monitors or workflows it started still run (the hub's
+    /// `background_working`, #2935): set only with `state` working. False from older hubs. A task counts it as waiting
+    /// (`waitsToBeWoken`, #3274).
+    var backgroundWorking: Bool = false
     /// What it is doing when its latest step is a tool call no words came after (「在跑测试」「在读 tasks.go」), and since
     /// when; nil once it writes again. The hub's `activity` / `activity_at` (docs/protocol/protocol.md); older hubs send neither.
     var activity: String? = nil
@@ -790,6 +821,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// AI twin, "routine": a scheduled task, "lark_agent": Lark /agent…). The sidebar keeps the others in Auto Chats. Nil
     /// from hubs that do not say, which list every conversation as before.
     var origin: String? = nil
+    /// The extension whose token opened an assistant conversation (protocol.md「Origin of assistant chats」); nil for any
+    /// other. Such a chat never attends a meeting (#2981).
+    var openedBy: String? = nil
     /// The last compaction the user asked for in an assistant conversation (POST …/compact, #1727): running, done or
     /// failed. Nil from hubs without `assistant_compact`, and before the first one.
     var compaction: CompactionRun? = nil
@@ -813,6 +847,20 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
     var waitsInBackground: Bool { state == .working && backgroundWaiting }
+    /// Its turn ended, yet something brings it back, so its task waits rather than stopped (#3274; the hub's agentWaits):
+    /// only its background work runs and will report back, or the hub waits out another agent, a deploy / CI / a time,
+    /// or a moment's model failure for it and wakes it (work blocked on anything but the user).
+    var waitsToBeWoken: Bool {
+        if state == .working { return backgroundWorking || backgroundWaiting }
+        guard state != .needsYou, state != .unread, let work, work.phase == "blocked" else { return false }
+        return work.on == "agent" || work.on == "external" || work.on == "transient"
+    }
+    /// What it waits for, in its own words, while it waits to be woken.
+    var waitLine: String? {
+        guard waitsToBeWoken, let work, work.phase == "blocked" else { return nil }
+        let line = (work.line ?? work.wait ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.isEmpty ? nil : line
+    }
     /// The state counts and the quick filters go by: one that only waits in the background is counted with the quiet
     /// ones, not as Working (#6045).
     var countedState: AgentState { waitsInBackground ? .idle : state }
@@ -867,21 +915,21 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         return canSend ? label : String(localized: "\(label) · View only: \(reason)", comment: "A session's source, and why it can only be viewed")
     }
 
-    /// The host tool it lives in, from its pane ref: `botmux:…`, `orca:…`, `herdr-core:…`; any other pane is herdr's
-    /// (its ids go bare and may hold a colon); nil without a pane. Keep the kinds in step with Kinds in
+    /// The host tool it lives in, from its pane ref: `botmux:…`, `orca:…`, `herdr-core:…`, `tern:…`; any other pane is
+    /// herdr's (its ids go bare and may hold a colon); nil without a pane. Keep the kinds in step with Kinds in
     /// server/internal/host/host.go.
     var hostKind: String? {
         guard let paneID, !paneID.isEmpty else { return nil }
         let kind = paneID.firstIndex(of: ":").map { String(paneID[..<$0]) } ?? ""
-        return ["orca", "herdr-core", "botmux"].contains(kind) ? kind : "herdr"
+        return ["orca", "herdr-core", "botmux", "tern"].contains(kind) ? kind : "herdr"
     }
 
-    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr pane a terminal; nil for the
-    /// rest (Orca, runtimes, apps), which carry no source label.
+    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr or Tern pane a terminal; nil
+    /// for the rest (Orca, runtimes, apps), which carry no source label.
     var source: SessionSource? {
         switch hostKind {
         case "botmux": .feishu
-        case "herdr", "herdr-core": .terminal
+        case "herdr", "herdr-core", "tern": .terminal
         default: nil
         }
     }
@@ -895,6 +943,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// to send now" or "ctrl+x ctrl+s to send now", #2467) the node presses. Other agents refuse it
     /// (`send_now_unsupported`).
     var steersQueue: Bool { isClaude && !assistant && !hasSource && paneID != nil && canSend }
+    /// A declared modes capability wins, including a runtime such as Orca or agy; an older hub that omits it keeps the old rule.
+    /// As on the web, a non-assistant must be live, while an assistant can apply its modes to the next run even while offline.
+    var canChangeModes: Bool { canSend && (assistant || status.isLive) && (capabilities?.modes ?? (assistant || isClaude)) }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
     /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
     var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !(efforts ?? []).isEmpty }
@@ -917,6 +968,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
+        case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
@@ -933,10 +985,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              assistantSpace = "space",
              spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
-             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
+             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
              starting, startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
-             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
+             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
              runtime, runtimeFallback = "runtime_fallback", manager
     }
 
@@ -1005,6 +1057,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         listBackgroundCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundCount)
         listRunningSubagents = try c.decodeIfPresent(Int.self, forKey: .listRunningSubagents)
         listRunningWorkflows = try c.decodeIfPresent(Int.self, forKey: .listRunningWorkflows)
+        listBackgroundTasksCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundTasksCount)
+        listWorkflowProgress = (try? c.decodeIfPresent(WorkflowRun.self, forKey: .listWorkflowProgress)).flatMap { $0 }
         loop = try c.decodeIfPresent(LoopInfo.self, forKey: .loop)
         goal = try c.decodeIfPresent(GoalInfo.self, forKey: .goal)
         subagents = try c.decodeIfPresent([Subagent].self, forKey: .subagents)
@@ -1017,6 +1071,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         asks = (try? c.decodeIfPresent(String.self, forKey: .asks)).flatMap { $0 } // an odd one never drops the session
         awaitsReply = (try? c.decodeIfPresent(Bool.self, forKey: .awaitsReply)).flatMap { $0 } ?? false
         backgroundWaiting = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundWaiting)).flatMap { $0 } ?? false
+        backgroundWorking = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundWorking)).flatMap { $0 } ?? false
         activity = try c.decodeIfPresent(String.self, forKey: .activity)
         activityAt = try c.decodeIfPresent(Date.self, forKey: .activityAt)
         pendingInteractions = try c.decodeIfPresent(Int.self, forKey: .pendingInteractions) ?? 0
@@ -1036,6 +1091,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         externalURL = try c.decodeIfPresent(String.self, forKey: .externalURL)
         channels = try c.decodeIfPresent([String].self, forKey: .channels)
         origin = try c.decodeIfPresent(String.self, forKey: .origin)
+        openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
         compaction = try? c.decodeIfPresent(CompactionRun.self, forKey: .compaction) // an odd one never drops the session
         work = try? c.decodeIfPresent(WorkState.self, forKey: .work) // an odd one never drops the session
         hubGroup = try c.decodeIfPresent(String.self, forKey: .hubGroup)
@@ -1191,6 +1247,7 @@ nonisolated extension Subagent {
     /// loaded lines: the list's word.
     func running(in tasks: TaskIndex, sessionWorks: Bool = false) -> Bool {
         guard let call = toolUseID else { return running }
+        if let status = tasks.agentStatuses[call] { return !SubagentDelivery.isTerminal(status) }
         if tasks.started.contains(call) { return running && !tasks.notes[call, default: []].contains { $0.status != "event" } }
         if tasks.answered.contains(call) { return false }
         return running || (sessionWorks && tasks.asked.contains(call))
@@ -1747,7 +1804,7 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var wake: Bool?
     /// kind == .fold: the work this item stands for.
     var fold: Fold?
-    /// kind == .notice: a background task reporting back.
+    /// kind == .notice or .toolResult: a background task reporting back.
     var task: TaskNote?
     /// The id the app sent the message this item came from with (`PendingMessage.id`): on every item of it — its text,
     /// its images, a queued copy, or the notice it became (`/compact`). Nil from older hubs, or when the node could not
@@ -1859,6 +1916,16 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var alwaysLabel: String?
     /// The persisted scope granted by this card; absent on older hubs and terminal-only sessions.
     var alwaysKeys: [String]?
+    /// Whether answering Always is kept, as the manager says (#3590): false on its own cards, which keep nothing, so
+    /// they offer only Allow and Deny; absent (an older hub, an Agents session's card) the card's own rule (`offersAlways`).
+    var alwaysHonored: Bool?
+    /// The manager's own tool by its name for people ("iPhone control" for iphone_do); absent on other cards.
+    var toolTitle: String?
+    /// The tool the card asks about: the manager's name for its own tools, else as it is called.
+    var toolDisplayName: String? {
+        if let toolTitle, !toolTitle.isEmpty { return toolTitle }
+        return toolName
+    }
     /// What the hub calls an agent this app does not know (a runtime's own name, "DSH"; docs/integrations/runtimes.md).
     var agentLabelHint: String?
     /// The group of paired hubs it came from (docs/protocol/multi-hub.md); nil for the default group. The app's own.
@@ -1907,7 +1974,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
         case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
-             toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
+             toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",
+             toolTitle = "tool_title", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted", elicitation, mcpServerName = "mcp_server_name", mcpConfigSource = "mcp_config_source",
              agentID = "agent_id", agentType = "agent_type"
     }

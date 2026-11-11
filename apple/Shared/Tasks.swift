@@ -53,6 +53,40 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// How an interrupted receipt's task was dealt with, as the hub worked it out (#3834; docs/protocol/protocol.md
+/// "Tasks and the chat feed").
+nonisolated enum InterruptResolution: String, Codable, Hashable, Sendable {
+    case pending, cancelled, rerouted, resumed, accepted, done
+}
+
+/// Interruptions with the same cause in one chat within ten minutes, as their first receipt carries them (#3834).
+nonisolated struct InterruptBatch: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable, Sendable {
+        var receipt: String
+        var todoID: String
+        var title: String
+        var resolution: String
+        enum CodingKeys: String, CodingKey { case receipt, todoID = "todo_id", title, resolution }
+        /// A resolution this build doesn't know reads as handled, not as pending.
+        var resolved: InterruptResolution { InterruptResolution(rawValue: resolution) ?? .done }
+    }
+    var cause: String
+    var machine: String?
+    var total: Int
+    var pending: Int
+    var resolved: Int
+    var tasks: [Entry]
+}
+
+/// How the chat draws an interrupted receipt: `hidden` inside its batch's head, `batch` the head of several,
+/// `resolved` one dealt with (a grey line), `pending` still to deal with (the red card).
+nonisolated enum InterruptLook: Equatable, Sendable {
+    case hidden
+    case batch(InterruptBatch)
+    case resolved(InterruptResolution)
+    case pending
+}
+
 /// An item the hub inserted into an assistant conversation; drawn among the transcript's lines by `at`.
 nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
@@ -115,6 +149,18 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     /// An interrupted receipt's raw error (the API error that cut the turn off); older hubs put it in `summary`.
     var receiptError: String? { string("error") }
     var summary: String? { string("summary") }
+    /// How the chat draws an interrupted receipt, from what the hub worked out (#3834): nil from a hub before it.
+    var interruptLook: InterruptLook? {
+        guard kind == .receipt, turnInterrupted, let raw = string("resolution"),
+              let resolution = InterruptResolution(rawValue: raw) else { return nil }
+        if let group = string("group"), !group.isEmpty, group != id { return .hidden }
+        if case .object(let o)? = body, let b = o["batch"],
+           let data = try? JSONEncoder().encode(b), let batch = try? JSONDecoder().decode(InterruptBatch.self, from: data),
+           batch.tasks.count > 1 {
+            return .batch(batch)
+        }
+        return resolution == .pending ? .pending : .resolved(resolution)
+    }
     var pr: String? { string("pr") }
     var machine: String? { string("machine") }
     /// `routed`: what the user said straight to the task; `message`: the message itself.
@@ -135,6 +181,9 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var sentAt: Date? { string("sent_at").flatMap(JSON.parseDate) }
     var sent: String? { string("sent") }
     var filedAt: Date? { sentAt == nil ? string("filed_at").flatMap(JSON.parseDate) : nil }
+    /// A per-card decision; it does not file the Inbox item or stop the task's Agent.
+    var dismissedAt: Date? { string("dismissed_at").flatMap(JSON.parseDate) }
+    var dismissalID: String? { string("dismissal_id") }
 
     /// `review`: the supervisor's verdict (accepted / rework / needs_user / cancelled), the rework round, its note.
     var verdict: String? { string("verdict") }
@@ -503,6 +552,72 @@ nonisolated enum WatchInteractions {
     }
 }
 
+/// A small, value-only snapshot of the work a tray row shows. It does not carry transcripts or subscribe to every session.
+nonisolated struct AssistantTrayActivity: Hashable, Sendable {
+    struct Workflow: Hashable, Sendable {
+        var title: String
+        var phase: String?
+        var counts: String?
+        var startedAt: Date? = nil
+    }
+
+    var backgroundTasks = 0
+    var subagents = 0
+    var workflows: [Workflow] = []
+    var workflowCount = 0
+    /// An older complete response may say background work runs without listing its kind.
+    var reportedBackgroundWork = false
+
+    var isActive: Bool { backgroundTasks > 0 || subagents > 0 || workflowCount > 0 || reportedBackgroundWork }
+
+    init() {}
+
+    init(sessions: [Session]) {
+        var seen = Set<SessionKey>()
+        for session in sessions where seen.insert(session.key).inserted {
+            let background = session.background ?? []
+            // Fresh bounded-summary counts, including omitted zeros, win over retained chat arrays (#3588).
+            if session.listWaiting != nil || session.listBackgroundTasksCount != nil {
+                let count = max(0, session.listRunningWorkflows ?? 0)
+                let agents = max(0, session.listRunningSubagents ?? 0)
+                workflowCount += count
+                subagents += agents
+                backgroundTasks += max(0, session.listBackgroundTasksCount ?? ((session.listBackgroundCount ?? 0) - count - agents))
+                if count > 0, let run = session.listWorkflowProgress, run.isRunning {
+                    workflows.append(Workflow(title: run.title, phase: run.phaseLabel, counts: run.counts, startedAt: run.startedAt))
+                }
+                continue
+            }
+            reportedBackgroundWork = reportedBackgroundWork || (session.backgroundWorking && !session.backgroundWaiting)
+            let runs = session.runningWorkflows
+            let workflowMarkers = background.filter { task in
+                task.isWorkflow && !(session.workflows ?? []).contains { run in
+                    (run.id == task.runID || run.taskID == task.id) && !run.isRunning
+                }
+            }
+            let count = max(runs.count, session.listRunningWorkflows ?? 0, workflowMarkers.count)
+            workflowCount += count
+            workflows += runs.map { Workflow(title: $0.title, phase: $0.phaseLabel, counts: $0.counts, startedAt: $0.startedAt) }
+            let listedAgents = session.subagents ?? []
+            let backgroundAgents = background.filter { task in
+                task.isAgent && !listedAgents.contains { $0.id == task.id && !$0.running }
+            }
+            let agentIDs = Set(listedAgents.filter(\.running).map(\.id) + backgroundAgents.map(\.id))
+            subagents += max(agentIDs.count, session.listRunningSubagents ?? 0)
+            if session.background != nil {
+                backgroundTasks += background.filter { !$0.isWorkflow && !$0.isAgent }.count
+            } else {
+                // Bounded lists include compatibility workflow markers in background_count too.
+                backgroundTasks += max(0, (session.listBackgroundCount ?? 0) - count)
+            }
+        }
+        workflows = workflows.enumerated().sorted { a, b in
+            let first = a.element.startedAt ?? .distantPast, second = b.element.startedAt ?? .distantPast
+            return first != second ? first > second : a.offset < b.offset
+        }.map(\.element)
+    }
+}
+
 /// An agent going on (Needs You / Working) as the main conversation's dock shows it after the tasks (#1113): the ones the user
 /// opened on the Agents page, which no conversation's task stands for. Made from the Agents page's session list, so
 /// it follows the agents without a poll of its own.
@@ -514,23 +629,29 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
     var since: Date?
     /// The todo it works for, as the hub tags the session (a task's, or one made by hand).
     var todoID: String?
+    var activity: AssistantTrayActivity
+    var backgroundWaiting: Bool
 
     var id: SessionKey { key }
     var isWaiting: Bool { state == .needsYou }
 
-    init(key: SessionKey, title: String, state: AgentState, since: Date? = nil, todoID: String? = nil) {
+    init(key: SessionKey, title: String, state: AgentState, since: Date? = nil, todoID: String? = nil,
+         activity: AssistantTrayActivity = .init(), backgroundWaiting: Bool = false) {
         self.key = key
         self.title = title
         self.state = state
         self.since = since
         self.todoID = todoID
+        self.activity = activity
+        self.backgroundWaiting = backgroundWaiting
     }
 
     /// The agents going on in a session list (Persona's own conversations are not agents): waiting for the user
     /// first, then the newest. Only what a pill shows goes in, so it changes when a pill would.
     @MainActor static func going(_ sessions: [Session]) -> [DockAgent] {
         sessions.filter { !$0.assistant && ($0.state == .needsYou || $0.state == .working) }
-            .map { DockAgent(key: $0.key, title: $0.displayTitle, state: $0.state, since: $0.stateSince, todoID: $0.todo?.id) }
+            .map { DockAgent(key: $0.key, title: $0.displayTitle, state: $0.state, since: $0.stateSince, todoID: $0.todo?.id,
+                             activity: AssistantTrayActivity(sessions: [$0]), backgroundWaiting: $0.waitsToBeWoken) }
             .sorted { a, b in
                 if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
                 if a.since != b.since { return (a.since ?? .distantPast) > (b.since ?? .distantPast) }
@@ -556,9 +677,12 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
 
 /// Where a task is, from its todo and its agents' states (docs/assistant/todos.md「State calculation rules」, the hub's taskState).
 nonisolated enum TaskState: String, Sendable, CaseIterable {
-    case needsYou, working, unread, followup, notStarted, done, failed
+    /// `waiting`: its agents ended their turn, yet something brings one back, its background work or the hub's wake-up
+    /// (`Session.waitsToBeWoken`, #3274); only a task nothing brings back is `followup`.
+    case needsYou, working, unread, waiting, followup, notStarted, done, failed
 
-    init(todo: TodoItem, agents: [AgentState]) {
+    /// `agents`: the states of the agents that do not wait to be woken; `waiting`: whether one does.
+    init(todo: TodoItem, agents: [AgentState], waiting: Bool = false) {
         if todo.failedToStart { self = .failed; return }
         if todo.doneAt != nil { self = .done; return }
         if todo.openAsk != nil { self = .needsYou; return }
@@ -566,15 +690,23 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
         if has.contains(.needsYou) { self = .needsYou }
         else if has.contains(.unread) { self = .unread }
         else if has.contains(.working) { self = .working }
+        else if waiting { self = .waiting }
         else if !agents.isEmpty { self = .followup }
         else { self = .notStarted }
+    }
+
+    /// From the task's agents as the app has them: one that waits to be woken makes it waiting, not stopped (#3274).
+    init(todo: TodoItem, sessions: [Session]) {
+        let waits = sessions.filter(\.waitsToBeWoken)
+        let others = sessions.filter { !$0.waitsToBeWoken }.map(\.state)
+        self.init(todo: todo, agents: others, waiting: !waits.isEmpty)
     }
 
     /// The agent state whose tone and mark the task borrows.
     var agentState: AgentState {
         switch self {
         case .needsYou: .needsYou
-        case .working, .notStarted: .working
+        case .working, .waiting, .notStarted: .working
         case .unread, .done: .unread
         case .followup, .failed: .idle
         }
@@ -584,7 +716,7 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
     var priority: Int {
         switch self {
         case .needsYou: 0
-        case .working, .notStarted: 1
+        case .working, .waiting, .notStarted: 1
         case .unread: 2
         case .followup: 3
         case .done, .failed: 4
@@ -596,7 +728,7 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
 
     /// Nothing of the task runs (it ended, stopped, or its agent never started; `notStarted` stays when the hub never
     /// said how the start went): the user may take it out of the conversation.
-    var isRemovable: Bool { self != .working && self != .needsYou }
+    var isRemovable: Bool { self != .working && self != .waiting && self != .needsYou }
 }
 
 /// What a task's card says its agent is on now (docs/assistant/unified-entry.md「Task cards」): its latest words, or — while it
@@ -677,9 +809,12 @@ nonisolated extension APIClient {
         var views: [String: ExtensionAssistantView]?
         var viewActions: [String: ExtensionViewAction]?
         var viewBlocks: [String]?
+        /// nil: legacy hub; empty: the frozen recovery window is complete.
+        var nextCursor: String?
 
         enum CodingKeys: String, CodingKey {
             case items, plans, views
+            case nextCursor = "next_cursor"
             case viewActions = "view_actions"
             case viewBlocks = "view_blocks"
         }
@@ -688,12 +823,37 @@ nonisolated extension APIClient {
     private struct PlanResponse: Decodable { var plan: TaskPlan }
     nonisolated private struct TodosResponse: Decodable, Sendable { var todos: [TodoItem] }
     private struct ItemResponse: Decodable { var item: FeedItem }
+    struct DraftDismissal: Decodable, Sendable {
+        var item: FeedItem
+        var dismissalID: String
+        enum CodingKeys: String, CodingKey { case item, dismissalID = "dismissal_id" }
+    }
+
+    /// Resolve exactly the displayed draft, using its original text rather than local edits.
+    func dismissDraft(_ id: String, original: String) async throws -> DraftDismissal {
+        struct Body: Encodable { var draft: String }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/dismiss", body: Body(draft: original), as: DraftDismissal.self)
+    }
+
+    /// Only the decision identified by this receipt can be undone.
+    func undoDraftDismissal(_ id: String, receipt: String) async throws -> FeedItem {
+        struct Body: Encodable {
+            var dismissalID: String
+            enum CodingKeys: String, CodingKey { case dismissalID = "dismissal_id" }
+        }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/undo-dismiss", body: Body(dismissalID: receipt), as: ItemResponse.self).item
+    }
 
     /// A conversation's feed after `since` (nil: all of it), with the plans its `plan` items name.
-    func feed(conversation: String, since: Date? = nil) async throws -> FeedResponse {
+    func feed(conversation: String, since: Date? = nil, cursor: String? = nil) async throws -> FeedResponse {
         let id = conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))) ?? conversation
-        var query: [String: String] = [:]
-        if let since { query["since"] = Self.feedTime.string(from: since) }
+        var query: [String: String]
+        if let cursor {
+            query = ["cursor": cursor]
+        } else {
+            query = ["paginate": "1"]
+            if let since { query["since"] = Self.feedTime.string(from: since) }
+        }
         return try await get("/api/v1/assistant/conversations/\(id)/feed", query: query)
     }
 

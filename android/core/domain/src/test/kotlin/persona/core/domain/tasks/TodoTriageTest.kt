@@ -141,6 +141,24 @@ class TodoTriageTest {
         assertEquals(TriageSection.Other, at(todo("t", updated = 100, agents = listOf(agent("idle")))).section)
     }
 
+    /** #3331: the assistant's Progress entry counts by the same bucket as the To-dos page's "Not done". */
+    @Test
+    fun bucketIsTheHeaderCountShelvedAndAcceptedAreNotOpen() {
+        val stale = todo("stale", updated = 100, agents = listOf(agent("old")))
+        val accepted = todo("accepted", agents = listOf(agent("idle")), reopenedAt = hoursAgo(4), supervision = acceptedReopened())
+        val open = todo("open", agents = listOf(agent("idle")))
+        val done = todo("done", doneAt = hoursAgo(3))
+        assertEquals(TodoBucket.Shelved, stale.bucket(lookup, now))
+        assertEquals(TodoBucket.Open, stale.bucket(lookup, now, restoredAt = now - 3_600_000L))
+        assertEquals(TodoBucket.Closed, accepted.bucket(lookup, now))
+        assertEquals(TodoBucket.Open, open.bucket(lookup, now))
+        assertEquals(TodoBucket.Closed, done.bucket(lookup, now))
+        val all = listOf(stale, accepted, open, done)
+        val header = triageTodos(all, lookup, now, zone = zone)
+        assertEquals(header.open, all.count { it.bucket(lookup, now) == TodoBucket.Open })
+        assertEquals(header.shelved, all.count { it.bucket(lookup, now) == TodoBucket.Shelved })
+    }
+
     @Test
     fun theUsersOwnTodoWithoutAgentsNeverShelvesNorOneDueAhead() {
         assertEquals(TriageSection.Other, at(todo("t", updated = 100, origin = null)).section)
@@ -210,6 +228,26 @@ class TodoTriageTest {
         val r = triageTodos(listOf(todo("f", startError = "no launcher", doneAt = hoursAgo(1))), groupLookup, now, zone = zone)
         assertEquals(listOf("f"), r.rows(TriageSection.Waiting).map { it.lead.id })
         assertEquals(1, r.open)
+    }
+
+    /** spec/fixtures/triage/groups.json `failed_start_superseded_by_finished_work` (#3713). */
+    @Test
+    fun movesAFailedStartOutOfWaitingOnceItsRowsWorkFinished() {
+        val failed = todo("f1", title = "Deploy the self-hosted panel", doneAt = hoursAgo(1), startError = "no launcher", planId = "p1")
+        val done = todo("done1", title = "Panel: verify it on the hub", doneAt = hoursAgo(2), planId = "p1")
+        val other = todo("f2", title = "Rotate the backup keys", doneAt = hoursAgo(3), startError = "no launcher", planId = "p2")
+        val twin = todo("f3", title = "Rotate the backup keys", doneAt = hoursAgo(4), startError = "no launcher")
+        val list = listOf(failed, done, other, twin)
+        assertEquals(setOf("f1"), supersededFailedStarts(list))
+        val r = triageTodos(list, groupLookup, now, zone = zone)
+        assertEquals(listOf(listOf("done1", "f1")), r.rows(TriageSection.JustDone).map { g -> g.members.map { it.id } })
+        assertEquals(listOf(listOf("f2", "f3")), r.rows(TriageSection.Waiting).map { g -> g.members.map { it.id } })
+        assertEquals(2, r.open)
+        assertEquals(TodoBucket.Closed, failed.bucket(groupLookup, now, superseded = true))
+        assertEquals(TodoBucket.Open, failed.bucket(groupLookup, now))
+        // the checkbox: open while it waits on the owner, done once superseded
+        assertEquals(true, other.checksAsOpen(r.rows(TriageSection.Waiting)[0].triage["f2"]))
+        assertEquals(false, failed.checksAsOpen(r.rows(TriageSection.JustDone)[0].triage["f1"]))
     }
 
     @Test

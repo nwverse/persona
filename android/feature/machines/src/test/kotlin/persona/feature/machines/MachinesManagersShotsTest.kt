@@ -27,6 +27,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,9 +45,9 @@ import java.io.File
 import java.time.Instant
 
 /**
- * 电脑 with several managers (docs/assistant/managers.md step 4): the computers under the manager they belong to, the default's
- * first (an unstamped one is its), the offline manager greyed with 最后同步于, in every style, light and dark. Written
- * to `build/managers-shots/machines-*.png`.
+ * 电脑 with several managers (docs/assistant/managers.md "Clients"): the list is the current assistant's computers only
+ * (an unstamped one is the default's), with no heading per manager; the offline assistant's computer says so, in every
+ * style, light and dark. Written to `build/managers-shots/machines-*.png`.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -61,7 +62,7 @@ class MachinesManagersShotsTest {
         HubManager("m-8b04d2", "家里", online = false, lastSeen = Instant.now().minusSeconds(3 * 3600).toString()),
         HubManager("m-c1e9f0", "测试", installing = "2026-11-05T06:07:00Z"),
     ), "assistant")
-    private val lab = Machine("lab", name = "Lab", kind = "ssh", online = true, system = MachineSystem(os = "linux", name = "Ubuntu 24.04", cores = 8))
+    private val lab = Machine("lab", name = "server", kind = "ssh", online = true, system = MachineSystem(os = "linux", name = "Ubuntu 24.04", cores = 8))
     private val mac = Machine("mac", name = "MacBook", kind = "local", online = true, manager = "m-3fa21c",
         system = MachineSystem(os = "darwin", distro = "macos", name = "macOS 26", cores = 10))
     private val nas = Machine("nas", name = "NAS", kind = "ssh", online = false, manager = "m-8b04d2", lastSeen = "2026-11-05T03:00:00Z",
@@ -85,9 +86,11 @@ class MachinesManagersShotsTest {
         override fun selectTab(tab: AppTab) = Unit
     }
 
+    @After fun resetChoice() = AssistantManagerChoice.reset()
+
     private fun top(text: String) = rule.onAllNodesWithText(text)[0].fetchSemanticsNode().boundsInRoot.top
 
-    @Test fun computersGroupByManager() {
+    @Test fun theListShowsOnlyTheCurrentAssistantsComputers() {
         val list = MachinesViewModel(api, repository, null) { now }
         runBlocking { list.load(MetricRange.Hour) }
         var style by mutableStateOf(AppStyle.Glass)
@@ -103,24 +106,96 @@ class MachinesManagersShotsTest {
             }
         }
         rule.waitForIdle()
-        assertTrue(top("助手") < top("Lab") && top("Lab") < top("工作") && top("工作") < top("MacBook"))
-        assertTrue(top("MacBook") < top("家里") && top("家里") < top("NAS"))
-        assertTrue(rule.onAllNodesWithText("最后同步于 3 小时前").fetchSemanticsNodes().isNotEmpty())
-        // Its manager offline: the card says so in our words, not the hub's for an unreachable assistant.
-        rule.onNodeWithText("它的管理者「家里」离线，管理者回来后这台电脑会恢复在线。").assertExists()
-        assertTrue(rule.onAllNodesWithText("助手暂时连不上，稍后再试").fetchSemanticsNodes().isEmpty())
+        val dir = File(System.getProperty("persona.shots") ?: "build/managers-shots").also { it.mkdirs() }
+        fun shoot(name: String) {
+            for (s in AppStyle.entries) for (d in listOf(false, true)) {
+                style = s; dark = d
+                rule.waitForIdle()
+                val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+                File(dir, "machines-$name-${s.key}-${if (d) "dark" else "light"}.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            }
+        }
+        fun gone(vararg texts: String) = texts.forEach { assertTrue(it, rule.onAllNodesWithText(it).fetchSemanticsNodes().isEmpty()) }
+        // The default assistant: its own (unstamped) computer, no heading, none of the others'.
+        rule.onNodeWithText("server").assertExists()
+        gone("MacBook", "NAS", "助手", "工作", "家里")
+        shoot("default")
+        // Another assistant: only its computers; the offline one's says so in our words, not the hub's for an unreachable assistant.
+        AssistantManagerChoice.pick("m-3fa21c")
+        rule.waitForIdle()
+        rule.onNodeWithText("MacBook").assertExists()
+        gone("server", "NAS", "助手", "工作")
+        shoot("work")
+        AssistantManagerChoice.pick("m-8b04d2")
+        rule.waitForIdle()
+        rule.onNodeWithText("NAS").assertExists()
+        gone("server", "MacBook", "家里")
+        gone("最后同步于 3 小时前") // that line was the manager heading's, which is gone
+        rule.onNodeWithText("它的助手「家里」离线，助手回来后这台电脑会恢复在线。").assertExists()
+        gone("助手暂时连不上，稍后再试")
+        shoot("offline")
+        // One manager: every computer is the default's, and the hub's words as before.
+        AssistantManagerChoice.reset()
+        shown = ManagerRoster(listOf(roster.managers.first()), "assistant")
+        rule.waitForIdle()
+        rule.onNodeWithText("server").assertExists()
+        rule.onNodeWithText("MacBook").assertExists()
+        rule.onNodeWithText("助手暂时连不上，稍后再试").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("助手").fetchSemanticsNodes().size)
+    }
+
+    /**
+     * An offline assistant with no computer the hub still keeps: the list says it is offline, not "no computers yet" with
+     * Add (docs/assistant/managers.md "Clients"); an online one with none, and one assistant, read as before.
+     */
+    @Test fun anOfflineAssistantWithNoComputerSaysSo() {
+        val none = object : SessionsRepository {
+            override val machines = MutableStateFlow(listOf(lab))
+            override val sessions = MutableStateFlow(emptyList<Session>())
+            override suspend fun refresh() = Unit
+        }
+        val labOnly = object : MachineMetricsApi {
+            override suspend fun dashboard() = MetricsDashboard(listOf(MachineMetrics("lab", true, lab.system, sample)), step = 10)
+            override suspend fun history(machineId: String, range: MetricRange) = error("unused")
+        }
+        val list = MachinesViewModel(labOnly, none, null) { now }
+        runBlocking { list.load(MetricRange.Hour) }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var shown by mutableStateOf<ManagerRoster?>(roster)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                CompositionLocalProvider(LocalManagerRoster provides shown) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                        MachinesScreen(null, list, navigator)
+                    }
+                }
+            }
+        }
+        fun gone(vararg texts: String) = texts.forEach { assertTrue(it, rule.onAllNodesWithText(it).fetchSemanticsNodes().isEmpty()) }
+        AssistantManagerChoice.pick("m-8b04d2")
+        rule.waitForIdle()
+        rule.onNodeWithText("家里 离线").assertExists()
+        rule.onNodeWithText("最后同步于 3 小时前。它上线后这里会更新。").assertExists()
+        gone("还没有电脑", "server")
         val dir = File(System.getProperty("persona.shots") ?: "build/managers-shots").also { it.mkdirs() }
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             rule.waitForIdle()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
-            File(dir, "machines-grouped-${s.key}-${if (d) "dark" else "light"}.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            File(dir, "machines-offline-empty-${s.key}-${if (d) "dark" else "light"}.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
-        // One manager: no headers, and the hub's words as before.
-        shown = ManagerRoster(listOf(roster.managers.first()), "assistant")
+        // Online with none: the first-run page, as before.
+        AssistantManagerChoice.pick("m-3fa21c")
         rule.waitForIdle()
-        assertEquals(0, rule.onAllNodesWithText("助手").fetchSemanticsNodes().size)
-        rule.onNodeWithText("助手暂时连不上，稍后再试").assertExists()
+        rule.onNodeWithText("还没有电脑").assertExists()
+        gone("工作 离线", "家里 离线")
+        // One assistant, offline: as before.
+        AssistantManagerChoice.reset()
+        shown = ManagerRoster(listOf(HubManager("assistant", "助手", online = false, isDefault = true, builtin = true)), "assistant")
+        rule.waitForIdle()
+        rule.onNodeWithText("server").assertExists()
+        gone("助手 离线")
     }
 
     /** A computer's page: Move to… with several managers, the menu listing the installed ones, and the move it sends. */
@@ -154,7 +229,7 @@ class MachinesManagersShotsTest {
         // The menu, open while the style and the scheme change under it.
         rule.onNode(hasText("移到…") and hasClickAction()).performClick()
         rule.waitForIdle()
-        rule.onNodeWithText("移到哪个管理者").assertExists()
+        rule.onNodeWithText("移到哪个助手").assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             save("machines-move-${s.key}-${if (d) "dark" else "light"}", rule.onNode(isDialog()))

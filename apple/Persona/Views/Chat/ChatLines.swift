@@ -133,12 +133,12 @@ struct ChatLines {
         for block in blocks {
             switch block {
             case .row(let r):
-                out.append(.row(r))
+                if !SubagentDelivery.isWake(r) { out.append(.row(r)) }
             case .turn(var t):
                 // Work a background task woke the agent for opens with that notice, where a message would be.
                 var wokeAt: Date?
                 if let first = t.ordered.first, case .notice(let n) = first, n.wake == true {
-                    out.append(.row(first))
+                    if !SubagentDelivery.isWake(first) { out.append(.row(first)) }
                     t.ordered.removeFirst()
                     wokeAt = n.ts
                 }
@@ -152,7 +152,7 @@ struct ChatLines {
                     let photos = Self.photos(seg.rows)
                     if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
                     if let u = seg.user { out.append(.row(u)) }
-                    let last = t.hasPendingWake || live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
+                    let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
                     // Only an idle compaction with no later work belongs after the answer. A running turn's
                     // latest narration is not its final answer, and tools can follow it before compaction.
                     let idleCompaction = !live && last.map { index in
@@ -455,7 +455,8 @@ struct ChatLines {
             case .thinking(let i):
                 if !(i.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { items.append(.step(.thought(i))) }
             case .tools(let steps): items += steps.map { .step($0) }
-            case .notice(let i): items.append(.step(.thought(i)))
+            case .notice(let i):
+                if !SubagentDelivery.isWake(r) { items.append(.step(.thought(i))) }
             case .assistant(let i): items.append(.text(i))
             default: break
             }
@@ -493,6 +494,12 @@ nonisolated struct ChangedFile: Hashable, Sendable {
 
 extension ChatLines {
     // MARK: The assistant's feed
+
+    /// What of the feed the cached lines depend on: each item's id, and a receipt's body too, which the hub sends again
+    /// changed (an interrupted receipt resolved or batched, #3834).
+    static func feedKey(_ feed: [FeedItem]) -> [String] {
+        feed.map { $0.kind == .receipt ? "\($0.id)#\($0.body.hashValue)" : $0.id }
+    }
 
     /// The lines with what the hub added to an assistant conversation (docs/assistant/unified-entry.md) among them: an item
     /// goes at the end of the exchange it happened in — before the first message sent after it — so a plan card or a

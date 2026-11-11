@@ -194,7 +194,7 @@ targets:
         NSCalendarsWriteOnlyAccessUsageDescription: "Persona adds events to your calendar when you ask Claude to, for example to save a meeting it scheduled for you."
         NSRemindersFullAccessUsageDescription: "Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list."
         NSLocationWhenInUseUsageDescription: "Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in."
-        NSHealthShareUsageDescription: "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night."
+        NSHealthShareUsageDescription: "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night. With rolling recording on, Persona also checks heart rate, HRV, steps, workouts and the moods you log, on your iPhone only, to keep the minutes around them."
         # Asked when Claude saves a health sample (phone_health_write_sample); App Store processing also wants it with the HealthKit entitlement.
         NSHealthUpdateUsageDescription: "Persona saves health data only after you approve it on your iPhone, one entry at a time, for example a weight or last night's sleep you told Claude about."
         NSPhotoLibraryUsageDescription: "Persona shows your recent photos under the + button so you can attach them to a message, and lets Claude look at recent photos when you ask, for example to read a screenshot you took."
@@ -406,6 +406,7 @@ targets:
       - path: Shared/ExtensionSystemLink.swift
       - path: Shared/ExtensionSurfaceStore.swift
       - path: Shared/ExtensionSurfaceClient.swift
+      - path: Shared/CloudflareAccess.swift
       - path: Shared/RequestClientMetadata.swift
       - path: Shared/ExtensionSurfaceEntities.swift
       - path: Shared/ExtensionSurfaceView.swift
@@ -640,6 +641,7 @@ targets:
       - path: Shared/ExtensionSystemLink.swift
       - path: Shared/ExtensionSurfaceStore.swift
       - path: Shared/ExtensionSurfaceClient.swift
+      - path: Shared/CloudflareAccess.swift
       - path: Shared/RequestClientMetadata.swift
       - path: Shared/ExtensionSurfaceEntities.swift
       - path: Shared/ExtensionSurfaceView.swift
@@ -685,6 +687,7 @@ targets:
       - path: Shared/ExtensionSystemLink.swift
       - path: Shared/ExtensionSurfaceStore.swift
       - path: Shared/ExtensionSurfaceClient.swift
+      - path: Shared/CloudflareAccess.swift
       - path: Shared/RequestClientMetadata.swift
       - path: Shared/ExtensionSurfaceEntities.swift
       - path: Shared/ExtensionSurfaceView.swift
@@ -758,6 +761,9 @@ targets:
       - path: PersonaTests/PushCryptoTests.swift
       - path: PersonaTests/UsageWindowsTests.swift
       - path: PersonaTests/SessionListTests.swift
+      - path: PersonaTests/AssistantIdentityTests.swift
+      - path: PersonaTests/AssistantTrayActivityTests.swift
+      - path: PersonaTests/AssistantEntriesFixtureTests.swift
       - path: PersonaTests/AgentListFallbackTests.swift
       - path: PersonaTests/AgentRepoTreeTests.swift
       - path: PersonaTests/AgentListOrderTests.swift
@@ -778,9 +784,16 @@ targets:
       - path: PersonaTests/DelegateTests.swift
       - path: PersonaTests/GitReadFailureTests.swift
       - path: PersonaTests/ChatSupervisionLinesTests.swift
+      - path: PersonaTests/SubagentResultTests.swift
+      - path: PersonaTests/SubagentDeliveryTests.swift
       - path: PersonaTests/SupervisionTests.swift
       - path: PersonaTests/BriefCardTests.swift
       - path: PersonaTests/TodoDecisionCompletionTests.swift
+      - path: PersonaTests/TaskSheetExpandTests.swift
+      - path: PersonaTests/DispatchedTasksTests.swift
+      - path: PersonaTests/MessageCardStateTests.swift
+      - path: PersonaTests/MessageDraftActionsTests.swift
+      - path: PersonaTests/DraftFeedCursorTests.swift
       - path: PersonaTests/FakeHub.swift
     dependencies:
       - target: PersonaMac
@@ -800,6 +813,8 @@ targets:
       - path: PersonaUITests/SupervisionRoundUITests.swift
       - path: PersonaUITests/SentNavigationUITests.swift
       - path: PersonaUITests/ReportEvidenceUITests.swift
+      - path: PersonaUITests/AssistantTrayActivityUITests.swift
+      - path: PersonaUITests/MessageCardStateUITests.swift
       - path: PersonaUITests/UITestStyle.swift
     dependencies:
       - target: PersonaMac

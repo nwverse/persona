@@ -56,6 +56,21 @@ nonisolated enum Theme {
     }
     #endif
 
+    /// The handle on the line between a split's list and its page (#2624, `SplitDividerHandle`).
+    enum Split {
+        static let handle = Color.secondary.opacity(0.45)
+        static let handleHeld = Color.secondary.opacity(0.8)
+        /// Its touch area: narrow (what it takes from the list's and the page's edges), tall.
+        static let handleWidth: CGFloat = 28
+        static let handleHeight: CGFloat = 88
+        /// How far it moves before it is a drag; past the least width, how far until letting go closes the list; from
+        /// the page's edge, how far to the right brings the list back; a step of VoiceOver's adjust.
+        static let slop: CGFloat = 6
+        static let closesPast: CGFloat = 80
+        static let opensPast: CGFloat = 40
+        static let step: CGFloat = 40
+    }
+
     /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
     enum WorkspaceSidebar {
         static let background = Color(light: 0xF5F5F5, dark: 0x2A2A2A)
@@ -461,6 +476,7 @@ nonisolated enum Theme {
     /// Small / Standard / Large and the system's text size (up to 1.6 ×, `Theme.sizeScale`); the lines stay as they are, in a
     /// plain `.frame`. Nothing on a page writes a size as a number (`TokenRatchetTests`).
     enum Size {
+        static let nonvisualProbe: CGFloat = 0
         // Lines, rules and bars: do not scale.
         static let hairline: CGFloat = 0.5
         /// The width of the small window's source layer (VNC's picture in picture, #1839): a normal size, behind the
@@ -557,6 +573,10 @@ nonisolated enum Theme {
         static let headerTitle: CGFloat = 480
         /// The list column of a split on iPad: wide enough for the agents' cards and the inbox rows.
         static let sidebarMin: CGFloat = 340
+        /// The least an iPhone Duo's list column is dragged to (#2624): its open display is narrower than an iPad.
+        static let sidebarMinPhone: CGFloat = 200
+        /// What a split's page keeps beside its list column when the list is dragged wider (#2624).
+        static let splitDetailMin: CGFloat = 300
         static let sidebar: CGFloat = 400
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
@@ -622,6 +642,8 @@ nonisolated enum Theme {
         /// Opening and closing things (a work card, a menu, a section): a state change, 0.25 s (it was the system's
         /// default snappy, 0.5 s, which trailed behind the finger).
         static let standard = state
+        /// Task-draft dismissal uses the same six-second Undo window as the web.
+        static let draftUndo: Duration = .seconds(6)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)

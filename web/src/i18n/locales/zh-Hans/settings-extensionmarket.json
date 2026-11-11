@@ -61,8 +61,15 @@
   "keep_data": "保留它的数据",
   "keep_data_hint": "以后重装能接着用。",
   "disable_dependents": "同时停用依赖它的扩展：{names}（不卸载）",
-  "uninstall_members": "连合集成员一起卸载：{names}",
+  "uninstall_members_title": "连合集成员一起卸载",
+  "uninstall_members_hint": "{names}。不勾选时它们会保留。",
   "not_uninstalled": "没有卸载：{error}",
+  "partial_title": "合集只卸载了一部分",
+  "partial_body": "「{name}」还在。已经卸载的成员不会恢复，可以再试一次。",
+  "partial_removed": "已卸载：{names}",
+  "partial_failed": "未能卸载：{names}",
+  "partial_failed_item": "{name}（{error}）",
+  "partial_remaining": "未处理，仍已安装：{names}",
   "auto_on": "已打开扩展自动升级",
   "auto_off": "已关掉扩展自动升级",
   "auto_failed": "没有改：{error}",
@@ -115,7 +122,7 @@
   "op_title_uninstall": "卸载进度",
   "op_retry": "重试",
   "op_dismiss": "关闭",
-  "op_gone": "它已不在进行：管理器那边已经没有它了（可能重启过），可以重新开始。",
+  "op_gone": "它已不在进行：助手那边已经没有它了（可能重启过），可以重新开始。",
   "op_cancel": "取消",
   "op_review": "查看权限",
   "op_error": "原因：{error}",
@@ -126,5 +133,5 @@
   "market_unread": "读到以后，扩展会显示在这里。",
   "token_create_hint": "没有 token？在 GitHub 上生成一个：名字、用途和一年的有效期已经填好，不用勾任何权限，点 Generate token 后复制回来粘贴到上面。",
   "token_create": "去 GitHub 生成",
-  "for_manager": "只改管理者「{name}」的这一份（每个管理者都有自己的扩展）。"
+  "for_manager": "只改助手「{name}」的这一份（每个助手都有自己的扩展）。"
 }

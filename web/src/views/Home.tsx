@@ -4,10 +4,11 @@ import { ago, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, s
 import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
+import { interactionKicker } from "../lib/row-line";
 import { answerLines, type Resolution } from "../lib/answered";
 import { quickAnswers, withHeld, type HeldRow, type QuickChoice } from "../lib/quick-answers";
 import { optionDisplay, permissionDetail } from "../lib/tool-detail";
-import { toolDisplayName } from "../lib/turns";
+import { cardToolName } from "../lib/turns";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { homeOverview, paneRoute, type TabGroup } from "../lib/herdr-tree";
 import { agentLabel } from "../lib/mentions";
@@ -17,11 +18,11 @@ import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { useAgentSessions, useCounts } from "../lib/sessions";
-import { getSession, useStore } from "../lib/store";
+import { useScopedAgentSessions, useScopedCounts, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
+import { getSession, useStore, withTaskRows } from "../lib/store";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
-import { heldDelivery, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
+import { heldDelivery, makeSessionLookup, orphanedLine, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
 import { Button, Collapse, cx, EASE, IconButton, Loading, useNow } from "../ui/atoms";
@@ -36,32 +37,32 @@ import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
 
-const KIND: Record<Interaction["kind"], string> = { question: t("home.kind_question"), plan: t("home.kind_plan"), permission: t("home.kind_permission"), screen: t("home.kind_screen"), elicitation: t("home.kind_elicitation") };
-
 function greeting() {
   const h = new Date().getHours();
   return h < 5 ? t("home.greeting_late") : h < 11 ? t("home.greeting_morning") : h < 13 ? t("home.greeting_noon") : h < 18 ? t("home.greeting_afternoon") : t("home.greeting_evening");
 }
 
 export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; onToggleSidebar: () => void }) {
-  const machines = useStore((s) => s.machines);
-  const interactions = useStore((s) => s.interactions);
+  // with several assistants, the current one's computers, cards, agents and tasks (docs/assistant/managers.md "Clients")
+  const machines = useScopedMachines();
+  const interactions = useScopedInteractions();
   const answered = useStore((s) => s.answered);
   // a card answered here moves its agent out of "Stuck" at once, not at the hub's next push (#4286)
-  const agentSessions = useAgentSessions();
+  const agentSessions = useScopedAgentSessions();
   const sessions = useMemo(() => answeredSessions(agentSessions, interactions, answered), [agentSessions, interactions, answered]);
   const loaded = useStore((s) => s.loaded);
   const noMachines = loaded && machines.length === 0;
-  const counts = useCounts();
+  const counts = useScopedCounts();
   const now = useNow(5000, counts.working > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
   // something to do, and "Mark all as seen" marks every unread agent, wherever its tab is filed
   const { groups, unread, markAllAt, quiet } = useMemo(() => homeOverview(sessions, interactions), [sessions, interactions]);
   // every open task with where it stands (#6450, the web side of the Lark bot's /tasks)
-  const todos = useStore((s) => s.todos);
+  const todos = useScopedTodos();
+  const taskRows = useStore((s) => s.taskRows);
   // read as the Tasks page reads them: a card answered here moves its task at once too
-  const tasks = useMemo(() => homeTasks(todos, answeredLookup(agentSessions, interactions, answered)), [todos, agentSessions, interactions, answered]);
+  const tasks = useMemo(() => homeTasks(todos, answeredLookup(withTaskRows(makeSessionLookup(agentSessions), taskRows), interactions, answered)), [todos, agentSessions, taskRows, interactions, answered]);
   const name = (mid: string) => machineWithHub(mid, machines);
   const [confirmSeen, setConfirmSeen] = useState<Session[] | null>(null);
   const markAll = <MarkAllSeen count={unread.length} onClick={() => setConfirmSeen(unread)} />;
@@ -123,7 +124,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                 const quick = interactionCanAnswer(ix, s ?? getSession(ix.machine_id, ix.session_id)) ? quickAnswers(ix) : null;
                 // allowed in one tap, a permission says the tool and what it runs or touches (iOS: "Bash: swift test"),
                 // not the agent's description of it
-                const tool = quick && ix.kind === "permission" ? toolDisplayName(ix.tool_name) : "";
+                const tool = quick && ix.kind === "permission" ? cardToolName(ix) : "";
                 // and a terminal dialog what it is about (the command under its question), as iOS's card does. Both
                 // as they are: read as Markdown, `ls **/*.ts` lost its stars and `a <in >out` its redirections
                 const about = quick && ix.kind === "screen" ? [ix.dialog?.question, ix.dialog?.detail].filter(Boolean).join(" · ") : "";
@@ -144,7 +145,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                         title={title}
                         tags={rowTags(title, [name(ix.machine_id), s?.space_name, s && tabLabel(s)])}
                         detail={(tool && ask && ask !== tool ? t("home.permission_detail", { tool, what: ask }) : ask) || undefined}
-                        pill={!done && <Pill>{KIND[ix.kind]}</Pill>}
+                        pill={!done && <Pill>{interactionKicker(ix)}</Pill>}
                         entry={cardState(ix.id)}
                         actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
                       />
@@ -283,6 +284,7 @@ function Group({ title, count, children, right, hint, grid }: { title: string; c
 function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
   const to: Route = { name: "todos", id: todo.id };
   const held = heldDelivery(todo);
+  const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
   const line = [held && t(`todos.delivery_${held.state}`), agents > 0 && t("todos.agent_count", { count: agents })].filter(Boolean).join(" · ");
   return (
     <div className="flex flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card" data-task={todo.id}>
@@ -292,8 +294,15 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
         </a>
         <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[TODO_STATUS_INFO[status].tone])}>{todoStatusLabel(todo, status)}</span>
       </div>
-      <TodoStageBar stage={todo.stage} prURL={todo.pr_url} />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
       {line && <p className={cx("truncate text-[11.5px]", held ? "text-orange" : "text-ink-3")}>{line}</p>}
+      {/* nobody is working on it (#3618): the hub's finding and why; a card that waits for the user says that instead */}
+      {orphan && (
+        <p data-orphaned-line className="truncate text-[11.5px] text-ink-3">
+          <span className="font-medium text-orange">{orphan.lead}</span>
+          {orphan.reason && <> · {orphan.reason}</>}
+        </p>
+      )}
     </div>
   );
 }

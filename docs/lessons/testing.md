@@ -1,5 +1,19 @@
 # Lessons: testing and validation
 
+- Bulk Postgres fixtures need physical isolation, not just row deletion (#3743). Deleting 500 feed rows left a larger
+  unsent B-tree than the sent index; a controlled statistics refresh then changed a later index-choice assertion even
+  though no fixture rows remained. Use the existing migrated-database clone for bulk fixtures so table, index and
+  catalog state stay private. Preserve the original planner assertion; an isolated passing test alone does not prove
+  that the complete package is unaffected. The controlled reproducer shows the mechanism, not which background
+  statistics event happened in a particular failed run.
+
+- An index-choice assertion needs a table of its own, shaped like production (#4191). On the few rows earlier tests
+  leave behind, with `enable_seqscan = off`, two indexes cost about the same, and the leftovers decide which one wins:
+  `TestMarkFeedSentUsesUnsentIndex` passed alone and failed from the third `-count=10` iteration on, before and after
+  #3787. Check the plan in a migrated clone, on a few thousand synthetic rows, after `ANALYZE` and at default costs.
+  Check the generic plan too (`PREPARE` + `EXPLAIN EXECUTE` under `plan_cache_mode`), since cached statements can
+  switch to it. Then prove the test by mutation: drop the index, or the query's matching predicate, and it must fail.
+
 - Bound cold simulator compilation separately from test execution (#2671). A combined `xcodebuild test` can spend
   most of its deadline compiling before the first test starts. Build for testing, then test without building against
   the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle
@@ -9,8 +23,12 @@
   (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held
   request then falsely labels the later card snapshot as a resurrection. Require an actual request before delivering
   its reply and test a delayed initial snapshot. Streaming projection must pass the active turn and whether live text
-  is drawn, as the real page does. A wake's nonempty work tail does not exempt the previous answer from replacement;
-  cover manual inspection, serialized reload, idle turns and other turn IDs separately.
+  is drawn, as the real page does. A pending wake joins the ordinary execution summary while the previous answer stays
+  in place; only when that turn's next words start streaming does the earlier narration fold into the inspectable work.
+  An idle or other-turn presentation still shows the last answer. Cover the ordered/no-tail shape, manual inspection,
+  serialized reload and other turn IDs separately. When a merge retains the maintained renderer, reconcile tests
+  imported from a competing wake model instead of letting their old tail expectations reintroduce it, and do not treat
+  `hasPendingWake` as proof that new words are streaming (#3169).
 
 - UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
   notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
@@ -74,6 +92,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Waiting for one effect does not wait for another made on a different goroutine (2026-11-09, #2152). A source page's tree changes first and its frame is sent later by the delivery goroutine (`ui_page_delivery.go`), so `TestPageNativeFiniteLoadStillStartsWithLoading`, which waited for the tree to say `loaded` and then counted delivered frames, failed only on busy CI. Wait for each effect you assert on (`pageAwait` for the frames too). To reproduce such a gap, slow the receiving side in a scratch copy (a fake `Notify` that sleeps 20 ms failed 10 of 10 runs), or run `go test -cpu 1 -count=60` with every core busy (4 of 60 failed); an idle machine passed 40 of 40.
 - A cancel on a fixed deadline counted from the start races the fake's own startup (2026-11-10, #2674). `TestToolCheckTimeoutStopsItsHelpers` gave the call 300 ms, but its fake had to start a shell and write its helper's pid first; on a busy machine the cancel came before there was a helper, and the test failed (1 of 30 runs with every core busy) without checking what it was about. Cancel once the fake shows it started (the pid file), and time the return from the cancel. Do not lengthen the deadline instead: it only makes the race rarer.
+- A recovering assistant conversation's `busy` alone does not mark the end of its turn (2026-11-10, #3815). When recovery moves to the next model, `assistantSend` registers the replacement process (`spawnAssistant`) before it marks it busy and sends the retry, with the context snapshot and the mode sync in between. `sdkFixture.idle` waited for the registered process's `!busy`, so `TestAssistantRecoveryStopsAfterBothModelsAndTheirRetries` counted 2 of its 4 requests (9 of 400 runs on a busy Mac). The node publishes that gap as working (`busy || recovering` in `assistantSessions`); a wait for the end of a turn must use the same rule. To find such a gap, log the internal state at the moment the wait returns in a scratch test: slowing the fake CLI's `initialize`, the first guess, did not widen it.
 
 - Fixtures must use real response shapes (2026-11-06, #2938 / #2017). Assistant-feed `view_actions` is an object indexed by card key, empty as `{}` too. When both web and acceptance drivers mistook it for an array, array fixtures kept unit tests green while the real model lost answered state after reload. Use protocol objects covering empty objects, answered snapshots, and pagination; in a real browser also reload and check latest version, answered state, and no repeat sends.
 
@@ -702,6 +721,10 @@ When a built-in extension's `runtime.command` is `personad`, the manager launche
 The test binary does not recognize `voice`, reruns the whole package recursively, and times out. `extmgr` `TestMain` therefore checks `os.Args[1]`: if `voice`, run as `personad voice`
 (`voice.Run`). Future built-in executable extensions (not declarations only) need the same `TestMain` dispatch, so tests actually run them through hub forwarding.
 
+## Stop test programs before their temporary directories go (2026-11-11, #4104)
+
+`t.TempDir` removes all of a test's temporary directories in one cleanup, added at its first call, and cleanups run last added, first called. A test that first calls it after starting extension programs (`extensionTestHub` adds the cleanup that stops them) has its directories removed while the programs still run. A program the test's last change restarted (a provider switched back on restarts the extensions holding its references) then writes into a directory being removed, and the run fails with only `TempDir RemoveAll cleanup: … directory not empty`, about one run in three. `startTestExtensions` therefore calls `t.TempDir` before adding its cleanup. Anything else that starts processes writing into a test's directories must also add its stop cleanup after the first `t.TempDir` call.
+
 ## Web screenshots on Linux unsupported by Playwright (2026-11-06, #3140)
 
 - Symptom: `npx playwright install chromium` on Debian 11 says "does not support chromium on debian11-x64"; ubuntu20.04 packages also fail. Playwright MCP looks for `/opt/google/chrome/chrome` and cannot launch either.
@@ -829,3 +852,7 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Presence tests wait for the existing state notification or report-request counter before checking the result (#2820). A negative observation keeps its entire window and fails immediately on an early result; it does not prove an unobservable internal wait has started. A wall-clock-seeded connection number needs a bounded check of that actual clock boundary, not a fixed startup delay.
 
 - A hosted test can install its app and establish the test-manager session yet never receive a PID from the app-launch request (#2671). Keep that distinct from a test assertion or a later shutdown error. Compare launch options with a passing run before changing them: `wait_for_debugger=1` also occurs in successful XCTest launches. Capture only the owned synthetic app and simulator's launch metadata within the original readiness window, with bounded time and output. An empty or unavailable diagnostic does not establish a cause, and adding diagnostics does not prove the launch fault is repaired.
+
+## Warm allocation measurements need one processor (2026-11-10, #3390)
+
+- Disabling GC preserves `sync.Pool` contents but does not keep a goroutine on the processor whose private pool was warmed. A switch during a byte-allocation measurement can charge a cold JSON encoder's buffer growth to the operation. Measure an explicitly warmed steady state with `GOMAXPROCS(1)` during the window and restore it afterward, as `testing.AllocsPerRun` does. Check warm-up errors and retain the original byte limit; a historical extra-copy implementation measured by the same helper must still fail that limit. This isolates the measurement from processor migration, not from unrelated allocating goroutines: do not run these process-wide measurements in parallel.

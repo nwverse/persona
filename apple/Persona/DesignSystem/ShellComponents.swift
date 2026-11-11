@@ -30,6 +30,8 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// it moves, so theirs sits on the page in front and does not read the strip at all (`PagerPill`).
     @Environment(\.shellPillFollowsStrip) private var follows
     @Environment(\.buiTheme) private var theme
+    /// A phone's tabs (iPhone Duo open, #2623): the switch stands in for the tab bar, Persona's badge with it.
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -62,20 +64,27 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// At rest the strip is on the shell's page anyway.
     private func opensMenu(_ value: AppTab) -> Bool {
         guard chosen == value else { return false }
+        // No menu to open (the switch over a phone's tabs, iPhone Duo open, #3680): the chosen segment is a plain button,
+        // not an empty menu that VoiceOver called List Options.
+        if value == .chats, WorkMenu.self == EmptyView.self { return false }
+        if value == .assistant, ChatMenu.self == EmptyView.self { return false }
         guard let pager = shell?.pager else { return true }
         return !pager.moving
     }
 
     private var row: some View {
         stack {
-            if opensMenu(.assistant) {
-                Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, selected: true) }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("shell-assistant")
-                    .accessibilityHint("Chat menu")
-            } else {
-                button(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, id: "shell-assistant")
+            ZStack(alignment: .topTrailing) {
+                if opensMenu(.assistant) {
+                    Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, selected: true) }
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("shell-assistant")
+                        .accessibilityHint("Chat menu")
+                } else {
+                    button(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, id: "shell-assistant")
+                }
+                if pageTabSwitch { AssistantWaitingBadge() }
             }
             ZStack(alignment: .topTrailing) {
                 if opensMenu(.chats) {
@@ -253,6 +262,22 @@ private struct WaitingBadge: View {
     }
 }
 
+/// Persona's own badge on the switch where it stands in for the tab bar (iPhone Duo open, #2623): what the Persona tab
+/// counted (`AppModel.badges`), read here as `WaitingBadge` reads the agents, so the switch is not built again for it.
+private struct AssistantWaitingBadge: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let waiting = model.badges.assistant
+        if waiting > 0 {
+            CountBadge(count: waiting, look: .tone(StatusPalette.needsYou))
+                .offset(x: Theme.Space.s, y: -Theme.Space.sm)
+                .allowsHitTesting(false)
+                .accessibilityLabel(StateName.count(.needsYou, waiting))
+        }
+    }
+}
+
 /// A round glass button of the shell's top bar (New Chat, New Session): the same size as the system toolbar's, so the Assistant
 /// page's floating bar and the Agents page's navigation bar line up.
 struct ShellCircleButton: View {
@@ -316,8 +341,17 @@ struct ShellPersonaButton: View {
             Haptics.tap()
             action()
         } label: {
-            PersonaDot(size: Theme.Size.tapTarget * k, state: state)
-                .contentShape(.circle)
+            Group {
+                if model.showsAssistantIdentity {
+                    PersonaDot(size: Theme.Size.tapTarget * k, state: state)
+                } else {
+                    ThemedIcon(Theme.Icon.sidebarMenu)
+                        .font(Theme.Font.heading)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .chromeSurface(in: Circle())
+                }
+            }
+            .contentShape(.circle)
         }
         .buttonStyle(.plain)
         .overlay(alignment: .bottomTrailing) {
@@ -327,7 +361,7 @@ struct ShellPersonaButton: View {
             }
         }
         .accessibilityLabel("Chat History [Shell Components 60636b]")
-        .accessibilityValue([String(localized: "\(model.persona.name), \(state.title)"), inbox ? String(localized: "Something in the Inbox needs you") : nil]
+        .accessibilityValue([model.showsAssistantIdentity ? String(localized: "\(model.persona.name), \(state.title)") : state.title, inbox ? String(localized: "Something in the Inbox needs you") : nil]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "List separator")))
         .accessibilityHint("Opens the sidebar")
         .accessibilityIdentifier(id)

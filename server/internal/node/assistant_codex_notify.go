@@ -62,9 +62,13 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 	n, p := c.p.ownerOr(c.n), c.p
 	var ev struct {
 		ThreadID string `json:"threadId"`
-		TurnID   string `json:"turnId"`
-		Delta    string `json:"delta"`
-		Turn     struct {
+		Settings struct {
+			Model       string          `json:"model"`
+			ServiceTier json.RawMessage `json:"serviceTier"`
+		} `json:"threadSettings"`
+		TurnID string `json:"turnId"`
+		Delta  string `json:"delta"`
+		Turn   struct {
 			ID     string          `json:"id"`
 			Status string          `json:"status"`
 			Error  json.RawMessage `json:"error"`
@@ -93,6 +97,15 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		return // a subagent's thread: its items are in the main rollout's events anyway
 	}
 	switch method {
+	case "thread/settings/updated":
+		c.mu.Lock()
+		c.speedModel = firstNonEmpty(ev.Settings.Model, c.speedModel)
+		if tier := codexServiceTier(ev.Settings.ServiceTier); tier != "" {
+			c.serviceTier = tier
+			c.serviceTierRevision++
+		}
+		c.mu.Unlock()
+		n.notifyCodex()
 	case "turn/started":
 		c.mu.Lock()
 		c.turnID = ev.Turn.ID
@@ -169,9 +182,10 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		}
 		c.mu.Unlock()
 		var failure, failureKind string
+		modelServiceFailure := false
 		if ev.Turn.Status != "interrupted" {
 			if len(ev.Turn.Error) > 0 && string(ev.Turn.Error) != "null" {
-				failure, failureKind = transcript.CodexTurnError(ev.Turn.Error)
+				failure, failureKind, modelServiceFailure = transcript.CodexTurnErrorRecovery(ev.Turn.Error)
 			}
 			if failure == "" && (ev.Turn.Status == "failed" || (ev.Turn.Status != "completed" && ev.Turn.Status != "")) {
 				failure = transcript.CodexTurnFailed
@@ -180,8 +194,18 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		if failure != "" {
 			n.logger.Printf("assistant codex %s: turn %s: %s", short(p.id), ev.Turn.Status, failure)
 		}
+		failureKinds := []string{failureKind}
+		if modelServiceFailure {
+			failureKinds = append(failureKinds, assistantModelServiceFailure)
+		}
+		recovering := n.recoverAssistantResult(p, failure != "", failure, failureKinds...)
+		if !recovering {
+			n.clearAssistantRecovery(p)
+		}
 		p.mu.Lock()
-		p.busy = false
+		if !recovering {
+			p.busy = false
+		}
 		p.turnError = failure
 		p.turnErrorKind = failureKind
 		p.lastActive = time.Now()
@@ -196,7 +220,9 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 			n.refresh(p.id, f)
 		}
 		n.emitDelta(p.id, "")
-		n.notifySessions()
+		if !recovering {
+			n.notifySessions()
+		}
 		go c.syncTasks()
 	case "error":
 		if !ev.WillRetry {

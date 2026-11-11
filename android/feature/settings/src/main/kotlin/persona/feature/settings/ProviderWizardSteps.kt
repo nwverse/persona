@@ -43,6 +43,8 @@ internal fun LazyListScope.pickStep(res: Resources, state: NewProviderState, onP
 internal fun LazyListScope.keyStep(
     state: NewProviderState, preset: ProviderPreset, editable: Boolean, onEdit: (NewProviderDraft) -> Unit, onAssign: (Boolean) -> Unit,
     onRetest: () -> Unit, onModel: () -> Unit, more: Boolean, onMore: () -> Unit,
+    /** "Computers" under "More options", on a hub with device scopes. */
+    onComputers: () -> Unit = {},
 ) {
     val draft = state.draft
     item("key-preset") {
@@ -53,7 +55,7 @@ internal fun LazyListScope.keyStep(
     }
     if (!state.hubNames) nameStepField(state, editable, onEdit)
     item("key") {
-        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key",
+        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key", // i18n-ignore: the field name providers' docs use, same on iOS / web
             placeholder = stringResource(R.string.settings_onb_key_paste), singleLine = true, enabled = editable,
             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             supportingText = preset.keyHint?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.settings_onb_key_hint_with, it) }
@@ -108,6 +110,7 @@ internal fun LazyListScope.keyStep(
             SettingsCaption(preset.modelsError?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.settings_src_provider_models_error, it) }
                 ?: stringResource(R.string.settings_src_provider_model_note), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
         }
+        computersRow(state, onComputers)
     }
 }
 
@@ -163,7 +166,7 @@ internal fun LazyListScope.doneStep(state: NewProviderState, added: WizardAdded)
     }
 }
 
-/** What "Now using it: main conversation, new Agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
+/** What "Now using it: main conversation, new agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
 internal data class AssignSummary(val assigned: ResText?, val kept: List<ResText>)
 
 internal fun assignSummary(result: ProviderAdded, asked: Boolean): AssignSummary {

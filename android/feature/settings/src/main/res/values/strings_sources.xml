@@ -76,7 +76,7 @@
     <string name="settings_src_mail_google_failed">Google sign-in failed</string>
     <string name="settings_src_mail_connect_failed">Couldn\'t connect</string>
     <string name="settings_src_mail_google_unsupported">This Android build doesn\'t register the hub\'s Google callback, so Google sign-in can\'t finish on this phone. Add the account with a Gmail app password instead (Google Account › Security › 2-Step Verification › App passwords), or sign in with Google on an iPhone.</string>
-    <string name="settings_src_mail_google_not_configured">The hub hasn\'t set up Google sign-in (google.client_id in the manager\'s manager.json). Add the account with a Gmail app password instead.</string>
+    <string name="settings_src_mail_google_not_configured">The hub hasn\'t set up Google sign-in (google.client_id in the assistant\'s manager.json). Add the account with a Gmail app password instead.</string>
     <string name="settings_src_mail_google_start_failed">Couldn\'t start Google sign-in</string>
     <string name="settings_src_mail_connect">Connect</string>
     <string name="settings_src_mail_google_connecting">Connecting Gmail…</string>
@@ -106,7 +106,7 @@
     <string name="settings_src_lark_title">Lark</string>
     <string name="settings_src_lark_status_header">Connection</string>
     <string name="settings_src_lark_last_event">Last live message</string>
-    <string name="settings_src_lark_not_configured_caption">The hub isn\'t connected to Lark yet: run a Lark gateway on the hub machine and add it under lark in the manager\'s manager.json (docs/extensions/feishu.md).</string>
+    <string name="settings_src_lark_not_configured_caption">The hub isn\'t connected to Lark yet: run a Lark gateway on the hub machine and add it under lark in the assistant\'s manager.json (docs/extensions/feishu.md).</string>
     <string name="settings_src_lark_caption">Lark accounts sign in through the Lark gateway on the hub machine. Chats and the Inbox share that account, so there\'s no second sign-in.</string>
     <string name="settings_src_lark_accounts_header">Accounts</string>
     <string name="settings_src_lark_quarantined">Can\'t open. Retry or remove it in the Lark gateway</string>
@@ -376,7 +376,19 @@
     <string name="settings_src_messages_read_failed">Couldn\'t read the Messages status: %1$s</string>
     <string name="settings_src_messages_save_failed">Not changed: %1$s</string>
     <string name="settings_src_messages_delete_failed">Not deleted: %1$s</string>
-    <string name="settings_src_messages_deleted">Deleted %1$d conversations, %2$d people and %3$d inbox items</string>
+    <string name="settings_src_messages_deleted">Deleted %1$s, %2$s and %3$s</string>
+    <plurals name="settings_src_messages_deleted_chats">
+        <item quantity="one">%1$d conversation</item>
+        <item quantity="other">%1$d conversations</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_people">
+        <item quantity="one">%1$d person</item>
+        <item quantity="other">%1$d people</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_inbox">
+        <item quantity="one">%1$d inbox item</item>
+        <item quantity="other">%1$d inbox items</item>
+    </plurals>
     <string name="settings_src_messages_guide_header">Allow access on %1$s</string>
     <string name="settings_src_messages_that_mac">that Mac</string>
     <string name="settings_src_messages_recheck">Check again</string>

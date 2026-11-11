@@ -156,7 +156,7 @@
     <string name="settings_ext_list_footer">拡張機能のインストール、アップグレード、アンインストールはハブのマシン上（personad extension）でのみ行えます。ここではオン/オフの切り替え、設定の変更、シークレットの入力ができます。</string>
     <string name="settings_ext_save">保存</string>
     <string name="settings_ext_saved_restart">保存しました。拡張機能が再起動します</string>
-    <string name="settings_ext_read_only">この拡張機能はマネージャーのmanager.jsonに書かれています。オン/オフと設定はそこで変更し、変更後にマネージャーを再起動してください。</string>
+    <string name="settings_ext_read_only">この拡張機能はアシスタントのmanager.jsonに書かれています。オン/オフと設定はそこで変更し、変更後にアシスタントを再起動してください。</string>
     <string name="settings_ext_enabled">有効</string>
     <string name="settings_ext_enabled_note">無効にすると実行が停止し、提供しているコネクタなども一緒にオフになります。設定とシークレットは保持されます。</string>
     <string name="settings_ext_unavailable">読み込めません</string>
@@ -316,6 +316,19 @@
     <!-- Removing from the extension's own page -->
     <string name="settings_ext_market_installed_note">この拡張機能はマーケットからインストールされました。アンインストール後もマーケットから再インストールできます。</string>
     <string name="settings_ext_keep_data_hint">再インストールしたときに続きから使えます。</string>
+    <string name="settings_ext_uninstall_members">パックのメンバーも一緒にアンインストール</string>
+    <string name="settings_ext_uninstall_members_hint">%1$s。チェックしない場合はそのまま残ります。</string>
+    <string name="settings_ext_uninstalled_with_members">%1$sとメンバーをアンインストールしました</string>
+    <string name="settings_ext_uninstalled_members_unknown">%1$sをアンインストールしました。メンバーの結果は返されませんでした</string>
+    <string name="settings_ext_partial_title">パックの一部だけアンインストールされました</string>
+    <string name="settings_ext_partial_text">%1$sはまだインストールされています。アンインストール済みのメンバーは元に戻りません。もう一度お試しください。</string>
+    <string name="settings_ext_partial_removed">アンインストール済み：%1$s</string>
+    <string name="settings_ext_partial_failed">アンインストールできなかったもの：%1$s</string>
+    <string name="settings_ext_partial_failed_item">%1$s（%2$s）</string>
+    <string name="settings_ext_partial_remaining">未処理でインストールされたまま：%1$s</string>
+    <plurals name="settings_ext_uninstalled_members">
+        <item quantity="other">%1$sをアンインストールしました。メンバー%2$d件もアンインストールしました</item>
+    </plurals>
     <!-- The machine list (format machine) -->
     <string name="settings_ext_machine_online">オンライン</string>
     <string name="settings_ext_machine_offline">オフライン</string>
@@ -349,4 +362,10 @@
     <string name="settings_ext_open_image">画像を表示</string>
     <string name="settings_ext_chosen_count">%1$d 件選択</string>
     <string name="settings_ext_pick_time">時刻</string>
+    <!-- Source subscriptions (#2041): the entry rows -->
+    <string name="settings_subscriptions_title">購読</string>
+    <string name="settings_subscriptions_row">購読</string>
+    <string name="settings_subscriptions_counts_on">%1$d 件オン</string>
+    <string name="settings_subscriptions_counts_failing">%1$d 件オン · %2$d 件エラー</string>
+    <string name="settings_subscriptions_counts_none">購読できます</string>
 </resources>

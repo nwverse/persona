@@ -61,8 +61,15 @@
   "keep_data": "データを残す",
   "keep_data_hint": "再インストールしたときに続きから使えます。",
   "disable_dependents": "依存する拡張機能も無効にする：{names}（アンインストールはしません）",
-  "uninstall_members": "パックのメンバーも一緒にアンインストール：{names}",
+  "uninstall_members_title": "パックのメンバーも一緒にアンインストール",
+  "uninstall_members_hint": "{names}。チェックしない場合はそのまま残ります。",
   "not_uninstalled": "アンインストールできませんでした：{error}",
+  "partial_title": "パックの一部だけアンインストールされました",
+  "partial_body": "「{name}」はまだインストールされています。アンインストール済みのメンバーは元に戻りません。もう一度お試しください。",
+  "partial_removed": "アンインストール済み：{names}",
+  "partial_failed": "アンインストールできなかったもの：{names}",
+  "partial_failed_item": "{name}（{error}）",
+  "partial_remaining": "未処理でインストールされたまま：{names}",
   "auto_on": "拡張機能の自動アップデートをオンにしました",
   "auto_off": "拡張機能の自動アップデートをオフにしました",
   "auto_failed": "変更できませんでした：{error}",
@@ -115,7 +122,7 @@
   "op_title_uninstall": "アンインストールの進行状況",
   "op_retry": "再試行",
   "op_dismiss": "閉じる",
-  "op_gone": "この処理はもう進んでいません。マネージャーに記録がありません（再起動した可能性があります）。もう一度始められます。",
+  "op_gone": "この処理はもう進んでいません。アシスタントに記録がありません（再起動した可能性があります）。もう一度始められます。",
   "op_cancel": "キャンセル",
   "op_review": "権限を確認",
   "op_error": "理由：{error}",
@@ -126,5 +133,5 @@
   "market_unread": "マーケットを読み込めると、ここに拡張機能が表示されます。",
   "token_create_hint": "トークンがない場合はGitHubで作成できます。名前・用途・1年の有効期限は入力済みで、権限は不要です。Generate tokenを押し、コピーして上に貼り付けてください。",
   "token_create": "GitHubで作成",
-  "for_manager": "マネージャー「{name}」の分だけを変更します（マネージャーごとに拡張機能があります）。"
+  "for_manager": "アシスタント「{name}」の分だけを変更します（アシスタントごとに拡張機能があります）。"
 }

@@ -151,8 +151,7 @@ func (m *Machine) setName(name string) {
 }
 
 func (m *Machine) snapshot() proto.Machine {
-	computer := m.hub.computerOf(m) // before m.mu: it takes it
-	browser := m.hub.browserOf(m)
+	computer, browser, iphone := m.hub.extrasOf(m) // before m.mu: it takes it
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	warm := m.warmLocked(time.Now())
@@ -194,7 +193,7 @@ func (m *Machine) snapshot() proto.Machine {
 		c := proto.EngineHostsOf(cmp.Or(s.Engine, proto.EngineHerdr))
 		s.EngineHosts, s.EngineDefault = c.Hosts, c.Default
 	}
-	s.Computer, s.Browser = computer, browser // the system is in the manager's report (its monitoring)
+	s.Computer, s.Browser, s.IPhone = computer, browser, iphone // the system is in the manager's report (its monitoring)
 	return s
 }
 

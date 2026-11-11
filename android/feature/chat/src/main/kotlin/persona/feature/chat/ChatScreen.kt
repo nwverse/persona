@@ -197,14 +197,14 @@ private fun ChatPage(
     val inboxDrafts by trayDraftSource.collectAsStateWithLifecycle(emptyList())
     var traySchedules by remember(chrome.assistantManagement) { mutableStateOf(emptyList<persona.core.contracts.api.ScheduledTask>()) }
     LaunchedEffect(chrome.assistantManagement, connection, assistantTrays.expanded) {
-        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Progress) {
+        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Running) {
             try { traySchedules = chrome.assistantManagement?.tasks().orEmpty() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* A failed read retains the last confirmed schedule list. */ }
         }
     }
     LaunchedEffect(chrome.inboxTrays, chrome.inboxScope, assistantTrays.expanded) {
-        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Pending) {
+        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.NeedsYou) {
             try { chrome.inboxScope?.let { chrome.inboxTrays?.refresh(it) } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Live or cached drafts remain visible. */ }
@@ -288,7 +288,8 @@ private fun ChatPage(
     var linkVisible by remember { mutableStateOf(false) }
     val chatList = rememberChatListState(readingKey, anchorStore)
     val search = remember { ChatSearchState() }
-    val openWork = chatList.position.expanded
+    // Not chatList.position: that changes every frame of a scroll, and reading it here re-ran this whole page (#4039).
+    val openWork = chatList.expanded
     var timelineVersion by remember { mutableIntStateOf(0) }
     val timeline = remember { ChatTimeline() }
     // Sent, the hub not saying working yet (#3909): the turn counts as started for a minute after the message.
@@ -626,7 +627,7 @@ private fun ChatPage(
             say = { text -> scope.launch { runCatching { sender.send(key, text, UUID.randomUUID().toString()) } } },
             sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
             pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
-            onOpenProgress = { assistantTrays.expanded = AssistantTray.Progress },
+            manager = session?.manager,
             backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true })
     }
     fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
@@ -821,7 +822,7 @@ private fun ChatPage(
                                 chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
                                 onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
                                 statusState = status, onDetails = { statusSheet = true },
-                                onOpenTodo = chrome.onOpenTodo,
+                                onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares,
                                 onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } }) {
                                 // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain.
                                 if (!readOnly && canTerminal && renderStyle != ChatRenderStyle.Assistant) JIconButton(PhIcons.TerminalWindow, stringResource(if (terminal != null) R.string.chat_screen_open_terminal else R.string.chat_screen_terminal_help),

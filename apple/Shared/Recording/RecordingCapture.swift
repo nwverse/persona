@@ -15,10 +15,14 @@ final class RecordingCapture {
     private(set) var state: State = .idle
     private(set) var elapsed: Double = 0
     private(set) var recordingID: UUID?
+    private(set) var rolling = false
     var error: String?
     /// Non-blocking hint, e.g. the Bluetooth microphone was not found and the phone mic is used.
     private(set) var notice: String?
     var onSaved: ((UUID) -> Void)?
+    /// A recording is about to stop, however it stops (Stop, low storage, a failed write, the audio service reset): while
+    /// its clock still runs, so whatever follows it (Persona's voice in a meeting, #2981) can end at the right time.
+    @ObservationIgnored var onStopping: ((UUID) -> Void)?
     /// Paused by the system (a phone call, Siri, an alarm), not by the user: it picks up again when the system ends the
     /// interruption, or when the app comes back to the front (`resumeAfterInterruption`).
     private(set) var interrupted = false
@@ -29,6 +33,10 @@ final class RecordingCapture {
     var timeline: Double { writer?.elapsed ?? sampleElapsed }
     @ObservationIgnored private var sampleElapsed: Double = 0
     @ObservationIgnored private var input: RecordingInput = .phone
+    /// Persona may answer out loud during this recording (#2981: a meeting it takes part in). The phone's microphone
+    /// session then also lets a Bluetooth headset play (A2DP is listening only, so the recording keeps its microphone);
+    /// a wired headset and the loudspeaker play anyway. Off for every other recording, whose session stays as it was.
+    @ObservationIgnored private(set) var playsAloud = false
     @ObservationIgnored private var writer: RecordingSegmentWriter?
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -93,7 +101,7 @@ final class RecordingCapture {
             notice = String(localized: "No glasses or Bluetooth headset microphone found; using the phone's microphone")
         }
         #endif
-        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+        try session.setCategory(.playAndRecord, mode: .default, options: Self.phoneOptions(playsAloud: playsAloud))
         try session.setActive(true)
         #if os(iOS)
         let ports = session.availableInputs ?? []
@@ -108,6 +116,27 @@ final class RecordingCapture {
         try session.setActive(true)
         #endif
     }
+
+    #if os(iOS) || os(visionOS)
+    /// The phone microphone's session options: the loudspeaker rather than the earpiece, and a Bluetooth headset for
+    /// listening when Persona may speak (`playsAloud`).
+    static func phoneOptions(playsAloud: Bool) -> AVAudioSession.CategoryOptions {
+        #if os(iOS)
+        playsAloud ? [.defaultToSpeaker, .allowBluetoothA2DP] : [.defaultToSpeaker]
+        #else
+        [.defaultToSpeaker]
+        #endif
+    }
+
+    /// Persona started or stopped taking part while recording: the same session, with or without the headset for
+    /// listening. A Bluetooth microphone's session plays through that headset already.
+    func setPlaysAloud(_ on: Bool) {
+        guard playsAloud != on else { return }
+        playsAloud = on
+        guard writer != nil, input == .phone else { return }
+        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: Self.phoneOptions(playsAloud: on))
+    }
+    #endif
 
     #if os(iOS)
     /// The Bluetooth HFP input appears only after the route settles, so poll for up to two seconds.
@@ -138,11 +167,14 @@ final class RecordingCapture {
     }
 
     /// `title` / `meeting`: what the recording is called and, for a meeting recording, its meeting (docs/apple/recording.md).
-    func start(locale: String = "zh-CN", input: RecordingInput = .phone, title: String = "", meeting: RecordingMeeting? = nil) async {
+    /// `playsAloud`: Persona takes part in this meeting and may answer out loud.
+    func start(locale: String = "zh-CN", input: RecordingInput = .phone, title: String = "", meeting: RecordingMeeting? = nil, rolling: Bool = false,
+               playsAloud: Bool = false) async {
         guard state == .idle else { return }
         generation = UUID(); let token = generation
-        state = .starting; error = nil; notice = nil
+        state = .starting; error = nil; notice = nil; self.rolling = rolling
         self.input = input
+        self.playsAloud = playsAloud
         let allowed = await Self.permission()
         guard generation == token, state == .starting else { return }
         guard allowed else { state = .idle; error = String(localized: "Allow Persona to use the microphone in Settings"); return }
@@ -156,7 +188,7 @@ final class RecordingCapture {
             try await configureSession(token: token)
             // Cancelled while Bluetooth discovery was running: cancelStarting() already released the session and mic.
             guard generation == token else { return }
-            let entry = try RecordingLibrary.shared.create(source: Self.source, locale: locale, title: title, meeting: meeting)
+            let entry = try RecordingLibrary.shared.create(source: Self.source, locale: locale, title: title, meeting: meeting, kind: rolling ? .rolling : .clip)
             recordingID = entry.id
             let writer = RecordingSegmentWriter(directory: RecordingLibrary.shared.folder(entry.id))
             writer.segmentLength = Self.segmentLength
@@ -172,7 +204,7 @@ final class RecordingCapture {
         } catch {
             guard generation == token else { return }
             if let id = recordingID { RecordingLibrary.shared.change(id) { $0.active = false; $0.expectedSegments = 0 } }
-            recordingID = nil; state = .idle
+            recordingID = nil; state = .idle; self.rolling = false
             releaseAudioSession()
             self.error = String(localized: "Can't open the microphone. Try again later.")
         }
@@ -180,7 +212,7 @@ final class RecordingCapture {
 
     func cancelStarting() {
         guard state == .starting else { return }
-        generation = UUID(); state = .idle; notice = nil
+        generation = UUID(); state = .idle; notice = nil; rolling = false
         releaseAudioSession()
     }
 
@@ -222,6 +254,13 @@ final class RecordingCapture {
         }
     }
 
+    /// Closes the segment being written and goes on in a new one, so what was just said is transcribed now rather than
+    /// at the segment's end (#2981: asking Persona about it).
+    func flushSegment() {
+        guard state == .recording, let writer, let id = recordingID, let segment = writer.cut() else { return }
+        save(segment, id: id)
+    }
+
     func addMark() {
         guard let id = recordingID, let writer else { return }
         let time = writer.elapsed
@@ -231,9 +270,17 @@ final class RecordingCapture {
         }
     }
 
+    /// Erases the last few minutes of a rolling recording everywhere; the segment being written is dropped when it finalizes.
+    func eraseRecent() {
+        guard rolling, let id = recordingID else { return }
+        let now = Date.now
+        RecordingLibrary.shared.erase(id, from: now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: now)
+    }
+
     @discardableResult func stop() -> UUID? {
         if state == .starting { cancelStarting(); return nil }
         guard let writer, let id = recordingID else { return nil }
+        onStopping?(id)
         generation = UUID()
         resumeTask?.cancel(); resumeTask = nil
         ticker?.cancel(); ticker = nil
@@ -242,9 +289,10 @@ final class RecordingCapture {
         for segment in writer.finishedSegments { save(segment, id: id) }
         RecordingLibrary.shared.change(id) { entry in
             entry.active = false
-            entry.expectedSegments = (entry.segments.map(\.index).max() ?? -1) + 1
+            entry.expectedSegments = entry.nextIndex
+            entry.endedAt = .now
         }
-        self.writer = nil; recordingID = nil; state = .idle; interrupted = false; notice = nil
+        self.writer = nil; recordingID = nil; state = .idle; interrupted = false; notice = nil; rolling = false; playsAloud = false
         releaseAudioSession()
         onSaved?(id)
         return id
@@ -262,7 +310,8 @@ final class RecordingCapture {
     }
 
     private func save(_ segment: RecordingSegmentWriter.Segment, id: UUID) {
-        RecordingLibrary.shared.addSegment(id, RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration))
+        RecordingLibrary.shared.addSegment(id, RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration,
+                                                                startedAt: segment.startedAt))
         onSaved?(id)
     }
 
@@ -283,10 +332,18 @@ final class RecordingCapture {
 
     private func interruption(_ type: AVAudioSession.InterruptionType?) {
         if type == .began, state == .recording, let writer, let id = recordingID {
-            interrupted = true; writer.pause(); state = .paused
+            interrupted = true
+            resumeTask?.cancel(); resumeTask = nil
+            writer.pause(); state = .paused
             // A long call: what was said before it is kept even if the app is stopped before the call ends (a segment
             // still open would be deleted by `recover`). The next segment starts when the recording resumes.
             if let segment = writer.cut() { save(segment, id: id) }
+            if rolling {
+                error = String(localized: "Rolling recording paused — tap Continue to resume")
+                #if os(watchOS)
+                WKInterfaceDevice.current().play(.notification)
+                #endif
+            }
         } else if type == .ended {
             // The system says whether to resume (`shouldResume`); a recording resumes either way: the meeting goes on.
             resumeAfterInterruption()

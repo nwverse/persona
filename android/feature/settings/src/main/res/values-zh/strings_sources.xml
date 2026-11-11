@@ -68,7 +68,7 @@
     <string name="settings_src_mail_google_failed">Google 登录失败</string>
     <string name="settings_src_mail_connect_failed">没连上</string>
     <string name="settings_src_mail_google_unsupported">这个安卓版本没有登记 hub 的 Google 回调地址，没法在手机上完成 Google 登录。可以先用 Gmail 的「应用专用密码」添加（Google 账号 › 安全性 › 两步验证 › 应用专用密码），或者在 iPhone 上用 Google 账号登录。</string>
-    <string name="settings_src_mail_google_not_configured">hub 还没有配置 Google 登录（管理者的 manager.json 里的 google.client_id）。可以先用 Gmail 的「应用专用密码」添加。</string>
+    <string name="settings_src_mail_google_not_configured">hub 还没有配置 Google 登录（助手的 manager.json 里的 google.client_id）。可以先用 Gmail 的「应用专用密码」添加。</string>
     <string name="settings_src_mail_google_start_failed">没能开始 Google 登录</string>
     <string name="settings_src_mail_connect">连接</string>
     <string name="settings_src_mail_google_connecting">正在连接 Gmail…</string>
@@ -98,7 +98,7 @@
     <string name="settings_src_lark_title">飞书</string>
     <string name="settings_src_lark_status_header">连接状态</string>
     <string name="settings_src_lark_last_event">最近一条实时消息</string>
-    <string name="settings_src_lark_not_configured_caption">hub 还没接飞书：在 hub 所在的机器上运行飞书网关，并在管理者的 manager.json 的 lark 里填上它（docs/extensions/feishu.md）。</string>
+    <string name="settings_src_lark_not_configured_caption">hub 还没接飞书：在 hub 所在的机器上运行飞书网关，并在助手的 manager.json 的 lark 里填上它（docs/extensions/feishu.md）。</string>
     <string name="settings_src_lark_caption">飞书账号在 hub 所在机器的飞书网关里登录，会话与收件箱共用这个账号，无需再次登录。</string>
     <string name="settings_src_lark_accounts_header">账号</string>
     <string name="settings_src_lark_quarantined">无法打开，请在飞书网关里重试或移除</string>
@@ -360,7 +360,16 @@
     <string name="settings_src_messages_read_failed">读不到信息的状态：%1$s</string>
     <string name="settings_src_messages_save_failed">没改成：%1$s</string>
     <string name="settings_src_messages_delete_failed">没删成：%1$s</string>
-    <string name="settings_src_messages_deleted">已删除 %1$d 个会话、%2$d 个人、%3$d 件收件箱条目</string>
+    <string name="settings_src_messages_deleted">已删除 %1$s、%2$s、%3$s</string>
+    <plurals name="settings_src_messages_deleted_chats">
+        <item quantity="other">%1$d 个会话</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_people">
+        <item quantity="other">%1$d 个人</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_inbox">
+        <item quantity="other">%1$d 件收件箱条目</item>
+    </plurals>
     <string name="settings_src_messages_guide_header">在 %1$s 上打开权限</string>
     <string name="settings_src_messages_that_mac">那台 Mac</string>
     <string name="settings_src_messages_recheck">重新检查</string>

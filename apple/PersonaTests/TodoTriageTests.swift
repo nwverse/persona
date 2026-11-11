@@ -38,13 +38,15 @@ struct TodoTriageTests {
                                reviews: [.init(at: ago(5), verdict: "accepted", checks: when.prefix(5).map { .init(criterion: $0, met: true) })])
     }
 
-    private var lookup: TodosLogic.SessionLookup {
-        TodosLogic.makeSessionLookup([
+    private var sessions: [Session] {
+        [
             session("ask", state: .needsYou), session("run", state: .working), session("unseen", state: .unread),
             session("idle", state: .idle, updatedHoursAgo: 2), session("old", state: .idle, updatedHoursAgo: 100),
             session("old2", state: .idle, updatedHoursAgo: 120),
-        ])
+        ]
     }
+
+    private var lookup: TodosLogic.SessionLookup { TodosLogic.makeSessionLookup(sessions) }
 
     private func at(_ t: TodoItem) -> TodoTriage { TodoTriageLogic.triage(t, lookup: lookup, now: now) }
     private func ask(_ outcome: String?, verdict: String = "v") -> TodoAsk {
@@ -118,6 +120,31 @@ struct TodoTriageTests {
         #expect(at(todo("t", updated: 100, agents: ["idle"])).section == .other)
     }
 
+    /// #3331: the assistant's Progress entry counts by the same bucket as the To-dos page's "Not done".
+    @Test func bucketMatchesTheHeaderCountShelvedAndAcceptedAreNotOpen() {
+        let stale = todo("stale", updated: 100, agents: ["old"])
+        let accepted = todo("accepted", agents: ["idle"]) { $0.reopenedAt = ago(4); $0.supervision = acceptedReopened() }
+        let open = todo("open", agents: ["idle"])
+        let done = todo("done", done: 3)
+        #expect(TodoTriageLogic.bucket(stale, lookup: lookup, now: now) == .shelved)
+        #expect(TodoTriageLogic.bucket(stale, lookup: lookup, now: now, restoredAt: ago(1)) == .open)
+        #expect(TodoTriageLogic.bucket(accepted, lookup: lookup, now: now) == .closed)
+        #expect(TodoTriageLogic.bucket(open, lookup: lookup, now: now) == .open)
+        #expect(TodoTriageLogic.bucket(done, lookup: lookup, now: now) == .closed)
+        let all = [stale, accepted, open, done]
+        let header = TodoTriageLogic.triageTodos(all, lookup: lookup, now: now, restored: [:])
+        // the action bar's two entries count the same open to-dos, the shelved one folded and not counted (#3387)
+        let entries = AssistantEntries.split(conversation: "conv", main: "conv", todos: all, sessions: sessions, interactions: [],
+                                             plans: [:], feed: [], now: now)
+        let tray = ActionTrayContent(entries)
+        // (its other rows are the sessions here that belong to no task: Agents opened by hand)
+        let tasks = (tray.needsYou + tray.running).map(\.id).filter { $0.hasPrefix("task:") }
+        #expect(tasks.count == header.open)
+        #expect(tasks == ["task:open"])
+        #expect(entries.shelved.map(\.id) == ["task:stale"])
+        #expect(!(tray.needsYou + tray.running).contains { $0.id == "task:accepted" || $0.id == "task:done" })
+    }
+
     @Test func ownTodoWithoutAgentsOrDueAheadNeverShelves() {
         #expect(at(todo("t", updated: 100, origin: nil)).section == .other)
         #expect(at(todo("t", updated: 100, agents: ["old"]) { $0.dueDate = "2026-12-01" }).section == .other)
@@ -171,6 +198,28 @@ struct TodoTriageTests {
         #expect(r.groups(.justDone).count == 1)
     }
 
+    /// The same case as `failed_start_superseded_by_finished_work` in spec/fixtures/triage/groups.json (#3713): a failed
+    /// start whose row's work really finished goes with it to Just finished, behind it, not counted open; failed starts
+    /// with nothing finished beside them still wait on the owner. The checkbox reads them so.
+    @Test func failedStartSupersededByFinishedWorkLeavesWaitingOnYou() {
+        let failed = todo("f1", title: "Deploy the self-hosted panel", done: 1) { $0.planID = "p1"; $0.startError = "no launcher" }
+        let done = todo("done1", title: "Panel: verify it on the hub", done: 2) { $0.planID = "p1"; $0.doneBy = "review" }
+        let other = todo("f2", title: "Rotate the backup keys", done: 3) { $0.planID = "p2"; $0.startError = "no launcher" }
+        let twin = todo("f3", title: "Rotate the backup keys", done: 4) { $0.startError = "no launcher" }
+        let list = [failed, done, other, twin]
+        #expect(TodoTriageLogic.supersededFailedStarts(list) == ["f1"])
+        let r = TodoTriageLogic.triageTodos(list, lookup: lookup, now: now)
+        #expect(r.groups(.justDone).map { $0.members.map(\.id) } == [["done1", "f1"]])
+        #expect(r.groups(.waiting).map { $0.members.map(\.id) } == [["f2", "f3"]])
+        #expect(r.open == 2 && r.finished == 2)
+        #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now, superseded: true) == .closed)
+        #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now) == .open)
+        // the checkbox: open while it waits on the owner, done once superseded
+        #expect(TodoTriageLogic.checksAsOpen(other, r.groups(.waiting)[0].triage["f2"]))
+        #expect(!TodoTriageLogic.checksAsOpen(failed, r.groups(.justDone)[0].triage["f1"]))
+        #expect(!TodoTriageLogic.checksAsOpen(done, r.groups(.justDone)[0].triage["done1"]))
+    }
+
     @Test func failedStartWaitingOnTheOwnerCountsAsOpen() {
         let r = TodoTriageLogic.triageTodos([todo("f", done: 1) { $0.startError = "no launcher" }], lookup: lookup, now: now)
         #expect(r.groups(.waiting).map(\.lead.id) == ["f"])
@@ -191,7 +240,10 @@ struct TodoTriageTests {
             todo("accepted", agents: ["old"]) { $0.supervision = acceptedReopened() },
             todo("quiet") { $0.quiet = true },
         ], lookup: lookup, now: now, quiet: false)
-        #expect([r.open, r.shelved, r.finished] == [1, 1, 2])
+        // Each its own: the array literal against the three counts no longer type-checks (ambiguous `==`, Xcode 27.1).
+        #expect(r.open == 1)
+        #expect(r.shelved == 1)
+        #expect(r.finished == 2)
     }
 
     @Test func relatedKeysIgnoreCaseSpacesPunctuationAndATrailingSlash() {

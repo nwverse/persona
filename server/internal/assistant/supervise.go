@@ -45,7 +45,11 @@ type Supervision struct {
 	Reviews       []TaskReview `json:"reviews"`
 	// AutoReview is the latest independent review of its change (supervise_autoreview.go, #2173); nil when none ran.
 	AutoReview *AutoReview `json:"auto_review,omitempty"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	// Waits: the done judge found the latest stretch of work stopped on a decision only the owner can make (verdict
+	// needs_user, #1277). While it holds, task_review accepted is refused: closing the task would lose the decision.
+	// Its agent working again, or any review, clears it. nil when the last judgment said otherwise.
+	Waits     *OwnerWait `json:"waits,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	// Progress: what its agent last reported to the supervisor (report_to_supervisor, agent_control.go). A live
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
 	// names the review a task waits for.
@@ -53,13 +57,20 @@ type Supervision struct {
 }
 
 // TaskProgress is a supervised task's agent's latest report: its kind, the step it is on of how many (0: not said),
-// what it said in a line, and when.
+// what it said in a line, and when. Line and Detail are for the apps only (#3181): no prompt, supervision message,
+// briefing, card or push reads them.
 type TaskProgress struct {
-	Kind  string    `json:"kind"`
-	Step  int       `json:"step,omitempty"`
-	Steps int       `json:"steps,omitempty"`
-	Text  string    `json:"text"`
-	At    time.Time `json:"at"`
+	Kind  string `json:"kind"`
+	Step  int    `json:"step,omitempty"`
+	Steps int    `json:"steps,omitempty"`
+	Text  string `json:"text"`
+	// Line: the report paraphrased in one sentence in the user's language (report_line.go), for the Progress row; ""
+	// until the model wrote it, and for good when there is no model or it failed (the apps show Text).
+	Line string `json:"line,omitempty"`
+	// Detail: the report as the agent wrote it (Markdown, at most 2000 characters), for the task's details; "" when it
+	// is Text (one line of at most 200 characters).
+	Detail string    `json:"detail,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // TaskReview is one review: the assistant's verdict, with each criterion's evidence or gap.
@@ -70,6 +81,32 @@ type TaskReview struct {
 	Round   int           `json:"round,omitempty"` // the rework round it started (rework)
 	Checks  []ReviewCheck `json:"checks,omitempty"`
 	Note    string        `json:"note,omitempty"`
+	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
+	// "Please verify" waits for them instead of being passed by the supervisor (acceptance_supervisor.go, #3240).
+	UserCheck bool `json:"user_check,omitempty"`
+	// A needs_user review's decision (#3804, decision.go): why only the owner can decide, what is to be decided, the
+	// option recommended, the options (the recommended first) and what waiting costs.
+	WhyOwner      string           `json:"why_owner,omitempty"`
+	Reason        string           `json:"reason,omitempty"`
+	Recommend     string           `json:"recommend,omitempty"`
+	Options       []DecisionOption `json:"options,omitempty"`
+	CostOfWaiting string           `json:"cost_of_waiting,omitempty"`
+	// RestateAt: when the hub handed this needs_user back to its supervisor because the owner could not answer it
+	// (undecidable, or owner_cannot_answer): told once.
+	RestateAt time.Time `json:"restate_at,omitzero"`
+	// OwnerResponse: the fixed answer the owner gave its decision (decide_yourself, not_what_i_asked, explain_first)
+	// and when; HoldReleased: after not_what_i_asked, the supervisor sent the task's agent on again.
+	OwnerResponse   string    `json:"owner_response,omitempty"`
+	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
+	HoldReleased    bool      `json:"hold_released,omitempty"`
+}
+
+// OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
+// when it was judged and the judge's reason.
+type OwnerWait struct {
+	Work   time.Time `json:"work"`
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -88,6 +125,7 @@ func (v *Supervision) clone() *Supervision {
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
+		out.Reviews[i].Options = slices.Clone(r.Options)
 	}
 	if out.DoneWhen == nil {
 		out.DoneWhen = []string{}
@@ -99,6 +137,10 @@ func (v *Supervision) clone() *Supervision {
 	if v.AutoReview != nil {
 		a := *v.AutoReview
 		out.AutoReview = &a
+	}
+	if v.Waits != nil {
+		w := *v.Waits
+		out.Waits = &w
 	}
 	return &out
 }
@@ -139,17 +181,26 @@ func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 			v.AutoReview = &a
 		}
 	}
+	if len(r.Waits) > 0 {
+		var w OwnerWait
+		if json.Unmarshal(r.Waits, &w) == nil {
+			v.Waits = &w
+		}
+	}
 	return v.clone()
 }
 
 func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 	raw, _ := json.Marshal(v.Reviews)
-	var auto json.RawMessage
+	var auto, waits json.RawMessage
 	if v.AutoReview != nil {
 		auto, _ = json.Marshal(v.AutoReview)
 	}
+	if v.Waits != nil {
+		waits, _ = json.Marshal(v.Waits)
+	}
 	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, DoneWhen: v.DoneWhen, ExpectMinutes: v.ExpectMinutes,
-		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, UpdatedAt: v.UpdatedAt}
+		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, UpdatedAt: v.UpdatedAt}
 }
 
 // cleanDoneWhen is a task's criteria as kept: trimmed, no empty or repeated ones, at most 6 of at most 200 characters.
@@ -212,8 +263,8 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 }
 
 // noteProgress keeps p as supervised task id's progress (in memory, no ledger write: see Supervision.Progress) and
-// tells the apps.
-func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) {
+// tells the apps; false when id is no supervised task.
+func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) bool {
 	s.todos.mu.Lock()
 	cur := s.todos.todos[id]
 	ok := cur != nil && cur.Supervision != nil
@@ -226,6 +277,7 @@ func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) {
 	if ok {
 		s.todosChanged(ctx)
 	}
+	return ok
 }
 
 // ---- the snapshot ----
@@ -249,6 +301,9 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	}
 	if t.DoneAt != nil {
 		return "", 8
+	}
+	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
+		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	for _, c := range agents {
 		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
