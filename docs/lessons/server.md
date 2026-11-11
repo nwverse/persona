@@ -900,6 +900,14 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- An ascending GitHub search cursor cannot use `updated_at` alone when a page ends inside one second (#4461). Keep the
+  completed thread identities at that boundary, resume an unfinished thread across restarts, and rescan a tied boundary
+  instead of trusting a page number across reordered results. Checkpoint matching-generation scans across quota windows,
+  verify every ID again immediately before moving on, and retry a changing search. More than 1,000 threads in one second,
+  or repeatedly lacking enough quota for that final check, is an explicit retryable limit. Search has no atomic snapshot:
+  a result indexed only after the final check cannot be guaranteed. Test the actual connector against synthetic HTTP,
+  including insertions, reordering, cancellation, repeated limited quota windows and retries.
+
 - A Messages ROWID can be associated with more than one chat (#4440). Deduplicate by canonical conversation and ROWID,
   before page and search limits, and count unread messages by that same identity. A numeric changes cursor can only
   advance after every selected ROWID's associations are read; select the boundary and expand it in one SQLite snapshot,
