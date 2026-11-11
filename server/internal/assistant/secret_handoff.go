@@ -265,31 +265,57 @@ func (s *Service) handoffUserTurn(ctx context.Context, machine, self string) boo
 	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{"session_id": self, "turns": 1, "lazy_images": true}, &res); err != nil {
 		return false
 	}
-	if len(res.Items) >= handoffTurnMost { // a page the node cut may have left the turn's first messages out
+	// A page the node cut (its item cap, its parse budget) may have left the turn's first messages out: only a window that
+	// opens with the turn's prompt is read.
+	if len(res.Items) == 0 || len(res.Items) >= handoffTurnMost {
 		return false
 	}
-	asked := false
+	if first := res.Items[0]; first.Role != "user" || first.Kind != proto.KindText && first.Kind != proto.KindImage || first.Queued {
+		return false
+	}
 	for _, it := range res.Items {
 		if it.Role != "user" || it.Kind == proto.KindToolResult {
 			continue
 		}
-		if !s.humanSent.has(self, it.ClientMsgID) || it.Source != nil || it.Injected != nil || it.From != "" || it.Task != nil || it.Wake {
+		if !s.humanSent.has(self, it.ClientMsgID, it.Text) || it.Source != nil || it.Injected != nil || it.From != "" ||
+			it.Task != nil || it.Wake {
 			return false
 		}
-		asked = true
 	}
-	return asked
+	return true
 }
 
 // handoffTurnMost is the most items the node gives for one turn (node.go's page cap): a turn that long is not read.
 const handoffTurnMost = 2000
 
 // humanSends are the messages a person's own app sent into each conversation, by client_msg_id, as the hub vouched
-// (SendParams.Human): kept a day, at most humanSendsMost per conversation, in memory only (a restart forgets them,
-// and the card is shown).
+// (SendParams.Human), with the start of their words: the node ties an id to the first line that begins like the text
+// sent, so a line is the user's only when it holds those words too. Kept a day, at most humanSendsMost per
+// conversation, in memory only (a restart forgets them, and the card is shown).
 type humanSends struct {
 	mu sync.Mutex
-	m  map[string]map[string]time.Time // session → client_msg_id → when
+	m  map[string]map[string]humanSend // session → client_msg_id → the send
+}
+
+type humanSend struct {
+	words string // the text sent, its words joined by single spaces, at most humanWordsMost bytes
+	at    time.Time
+}
+
+// humanWordsMost bounds the words kept of a send: enough that another's line cannot hold them by chance.
+const humanWordsMost = 256
+
+// humanWords are text's words joined by single spaces, cut to at most most bytes on a rune boundary.
+func humanWords(text string, most int) string {
+	w := strings.Join(strings.Fields(text), " ")
+	if len(w) <= most {
+		return w
+	}
+	cut := most
+	for cut > 0 && !utf8.RuneStart(w[cut]) {
+		cut--
+	}
+	return w[:cut]
 }
 
 const (
@@ -297,7 +323,7 @@ const (
 	humanSendsKeep = 24 * time.Hour
 )
 
-func (h *humanSends) note(session, id string) {
+func (h *humanSends) note(session, id, text string) {
 	if session == "" || id == "" {
 		return
 	}
@@ -305,38 +331,39 @@ func (h *humanSends) note(session, id string) {
 	defer h.mu.Unlock()
 	now := time.Now()
 	if h.m == nil {
-		h.m = map[string]map[string]time.Time{}
+		h.m = map[string]map[string]humanSend{}
 	}
 	ids := h.m[session]
 	if ids == nil {
-		ids = map[string]time.Time{}
+		ids = map[string]humanSend{}
 		h.m[session] = ids
 	}
-	for k, at := range ids {
-		if now.Sub(at) > humanSendsKeep {
+	for k, sent := range ids {
+		if now.Sub(sent.at) > humanSendsKeep {
 			delete(ids, k)
 		}
 	}
 	if len(ids) >= humanSendsMost {
 		oldest, oldestAt := "", now
-		for k, at := range ids {
-			if !at.After(oldestAt) {
-				oldest, oldestAt = k, at
+		for k, sent := range ids {
+			if !sent.at.After(oldestAt) {
+				oldest, oldestAt = k, sent.at
 			}
 		}
 		delete(ids, oldest)
 	}
-	ids[id] = now
+	ids[id] = humanSend{words: humanWords(text, humanWordsMost), at: now}
 }
 
-func (h *humanSends) has(session, id string) bool {
+// has: id is a send the hub vouched for into session, and text (the line the node tied to it) holds its words.
+func (h *humanSends) has(session, id, text string) bool {
 	if session == "" || id == "" {
 		return false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	at, ok := h.m[session][id]
-	return ok && time.Since(at) <= humanSendsKeep
+	sent, ok := h.m[session][id]
+	return ok && time.Since(sent.at) <= humanSendsKeep && strings.Contains(humanWords(text, 1<<20), sent.words)
 }
 
 // userOpened: conversation id is one the user opened, as noted when it was started (never a backfill's guess), and no

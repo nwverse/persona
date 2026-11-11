@@ -747,10 +747,11 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 	if text, ok := p.Params["text"].(string); ok {
 		p.Params["text"] = prompts.ProtectUserMessage(text)
 	}
+	sent, _ := p.Params["text"].(string)
 	out, err := s.sendParams(ctx, p)
 	if err == nil && p.Human { // the hub's word: a person's own app sent it (secret_handoff.go handoffUserTurn)
 		id, _ := p.Params["client_msg_id"].(string)
-		s.humanSent.note(p.SessionID, id)
+		s.humanSent.note(p.SessionID, id, sent)
 	}
 	return out, err
 }
