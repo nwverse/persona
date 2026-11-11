@@ -114,10 +114,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * (#4518, allocated in #4597), and 128 B for sending an edit of the last message safely (#4605 added 115 B to ja:
  * ChatView's wait for Claude's box after the rewind, the send's clear_draft and the give-back of a refused edit), and
  * 1,664 B for Forward (#3899 added 1,588 B: the action, the forward's card in a sent bubble and over the box, and its
- * strings; the picker loads on the first Forward).
+ * strings; the picker loads on the first Forward). Then 9,486 B less for the extension view renderer leaving the first
+ * screen (#3614: ViewBody.tsx and what only it imports became a chunk of its own; ja went from 595,990 B to 586,504 B).
  * Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 597_056;
+export const FIRST_SCREEN_BUDGET = 587_570;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
@@ -131,10 +132,11 @@ export async function sentBytes(dir: string, files: string[]): Promise<number> {
  * import beyond the first screen), in bytes as gzipBytes counts them (vite.config.ts startupPreload fails the build past
  * it): 29,143 B at #2798 plus 3% (28,085 B at #2880; #2798 moved ModelIdField, which the model popover now shares with
  * the idle ModelPicker, out of the first screen into a chunk of its own), and 64 B for managing launchers from the
- * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter). Every other lazy
- * page loads on intent, not at idle; raise it on purpose, in the change that needs it.
+ * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter), and 13,113 B for
+ * the extension view renderer (#3614: it left the first screen for the idle tier, which went from 18,615 B to 31,728 B).
+ * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 30_081;
+export const IDLE_TIER_BUDGET = 43_194;
 
 const gzip = promisify(gzipCompress);
 
