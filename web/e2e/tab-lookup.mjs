@@ -26,7 +26,8 @@ try {
   await p.goto(`${base}/?token=mock`);
   await p.waitForFunction(() => localStorage.getItem("persona.token"), null, { timeout: 15000 });
   await p.goto(base + path);
-  await p.waitForTimeout(6000);
+  // settles on the chat's composer (opened) or the gone notice
+  await p.locator("main textarea, main :text-matches('不在了|no longer exists', 'i')").first().waitFor({ timeout: 20_000 }); // i18n-ignore
   await p.screenshot({ path: out });
   const txt = await p.locator("main").innerText();
   const got = txt.includes("不在了") || /no longer exists/i.test(txt) ? "GONE" : "OPEN"; // i18n-ignore
