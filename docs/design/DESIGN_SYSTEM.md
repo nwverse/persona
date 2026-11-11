@@ -673,7 +673,7 @@ opens a subagent card in place (prompt, the latest result folded past four lines
 per card; a workflow card's head opens the chat's Background dialog at its run. A subagent is never a conversation of
 its own (no panel, no page, no sidebar row); a running subagent card and a workflow card are never folded into the
 work summary, a finished subagent card is. Nested subagents are flat cards by start time. A card offers Stop only
-where the node can stop that task. iOS and Android still draw the earlier design (follow-up issue).
+where the node can stop that task. iOS and Android still draw the earlier design (#5045).
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool

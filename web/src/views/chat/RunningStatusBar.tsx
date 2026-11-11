@@ -11,8 +11,8 @@
 // says the state, #3956), timed from when it started waiting, with no breath and no tokens. A subagent still running in
 // the background after the turn (#5030, cindy's background subtasks) gets "Background subtasks running, still consuming
 // model usage…" with no time and no tokens (the turn's would be left over); cindy's "Stop all" waits for a node that can
-// stop a subagent. With the hub out of reach the bar says so in front of the last state it knew, and its clock stands
-// still (nothing new can have arrived).
+// stop a subagent (#5044). With the hub out of reach the bar says so in front of the last state it knew, and its clock
+// stands still (nothing new can have arrived).
 import { useEffect, useRef, useState } from "react";
 import { duration } from "../../lib/format";
 import { useSessionLive } from "../../lib/live";
