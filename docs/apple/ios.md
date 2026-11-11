@@ -1354,7 +1354,8 @@ page merges and cache serialization; the chat cache schema changes with these fi
 ## Background rounds (#4314)
 
 In the assistant's **main** conversation, a round whose first input comes from another conversation (source kind
-`conversation`), a follow-up (`followup`) or a scheduled task (`patrol`) folds like a quiet supervision round: one muted
+`conversation`), a scheduled follow-up (`followup` with the task's title; not a usage-limit continuation, a wake-up or an
+untitled follow-up, which continue the user's own work) or a scheduled task (`patrol`) folds like a quiet supervision round: one muted
 line, `@<source> · Background round` (`@<source> · Running in the background` while it runs), drawn by the same
 `SupervisionRecordLine`. `<source>` is the label the source mention uses (`MessageSource.name`). The source comes from
 `MessageSource.of`: `Item.source`, then the `message-source` metadata block, then the hub's `injected` mark. The round
