@@ -394,7 +394,7 @@ private fun ThemeColorOptions(store: AppStyleStore) {
 @Composable
 private fun ColorSwatch(color: androidx.compose.ui.graphics.Color?) {
     val palette = PersonaTheme.palette
-    Box(Modifier.size(ContentTokens.legacyXl).clip(CircleShape)
+    Box(Modifier.size(Tokens.Size.iconXS).clip(CircleShape)
         .background(color ?: palette.surfaceStrong)
         .border(Tokens.Space.xxs / 2, if (color == null) palette.accent else palette.line, CircleShape))
 }

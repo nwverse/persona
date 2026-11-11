@@ -105,7 +105,7 @@ Call sites of the names that change meaning:
 
 1. One pixel-identical codemod commit: rename the old `xl` (20) to a temporary name, then `xxl` to `xl` and `xxxl` to `xxl`, and `tightGap` to `sm`. Check it with `scripts/app/android_shots_diff.py` before and after. `xl` and `xxl` change meaning, so this must be one atomic commit. Done with step 2: the temporary name is `ContentTokens.legacyXl`, and instead of screenshots the codemod checked that every file refers to the same sequence of values before and after.
 2. Rewrite `dimension.json` with the iOS names and values (the aliases as references) and regenerate.
-3. A design pass on the 21 places that used 20 (nine in settings, six in the Inbox, the rest in knowledge, chat and three design-system files): each moves to 16 or 24, with screenshots next to iOS.
+3. A design pass on the 21 places that used 20 (nine in settings, six in the Inbox, the rest in knowledge, chat and three design-system files): each moves to 16 or 24, with screenshots next to iOS. Seven of them sized an icon and one a swatch, which iOS sizes with `Theme.Size.iconXS`, 20: those take `Tokens.Size.iconXS` and keep their size, and `spec/tokens` gains the icon sizes Android uses.
 4. The Swift drift test from T1 keeps the two in step.
 
 ### T3. Motion

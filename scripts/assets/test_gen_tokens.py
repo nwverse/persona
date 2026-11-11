@@ -386,6 +386,13 @@ class RepositoryTests(unittest.TestCase):
             self.assertTrue(ios, f"no Theme.{enum} values found")
             self.assert_drift(group, ios)
 
+    def test_ios_sizes_match(self):
+        # spec/tokens carries the sizes Android uses, each as Theme.Size has it; the rest of Theme.Size isn't ported.
+        ios = {name: float(value) for name, value in re.findall(r'static let (\w+): CGFloat = ([0-9.]+)$', self.swift_enum("Size"), re.M)}
+        tokens = {key.removeprefix("size."): value["value"] for key, value in self.catalog.values.items() if key.startswith("size.")}
+        self.assertTrue(tokens)
+        self.assertEqual({name: ios.get(name) for name in tokens}, tokens, "a size in spec/tokens differs from Theme.Size")
+
     def test_ios_motion_durations_match(self):
         motion = self.swift_enum("Motion")
         timed = re.findall(r'static let (\w+) = Animation\.\w+\(duration: ([0-9.]+)\)', motion)

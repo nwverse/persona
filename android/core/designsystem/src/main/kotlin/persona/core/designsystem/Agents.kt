@@ -158,7 +158,7 @@ fun HeadingAction(icon: PhIcon, label: String, onClick: () -> Unit, modifier: Mo
     Box(
         modifier.size(Action).minimumInteractiveComponentSize().clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
-    ) { JIcon(icon, null, size = ContentTokens.legacyXl, tint = PersonaTheme.palette.ink2) }
+    ) { JIcon(icon, null, size = Tokens.Size.iconXS, tint = PersonaTheme.palette.ink2) }
 }
 
 /**
@@ -196,7 +196,7 @@ fun AgentTreeHeader(
         ) {
             JIcon(if (folded) PhIcons.CaretRight else PhIcons.CaretDown, stringResource(if (folded) R.string.designsystem_group_expand else R.string.designsystem_group_collapse), size = Tokens.Space.l, tint = palette.ink3)
             Spacer(Modifier.width(Tokens.Space.s - Tokens.Space.xxs))
-            icon?.let { JIcon(it, null, size = ContentTokens.legacyXl, tint = palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
+            icon?.let { JIcon(it, null, size = Tokens.Size.iconXS, tint = palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, style = type.title.copy(fontWeight = FontWeight.Bold), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,

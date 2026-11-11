@@ -49,7 +49,7 @@ fun LarkMergeForwardCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)
         ) {
-            JIcon(PhIcons.ChatsCircle, modifier = Modifier.size(ContentTokens.legacyXl), tint = palette.accent)
+            JIcon(PhIcons.ChatsCircle, modifier = Modifier.size(Tokens.Size.iconXS), tint = palette.accent)
             Text(
                 part.title.ifBlank { stringResource(R.string.inbox_lark_forward) },
                 style = PersonaTheme.type.callout,

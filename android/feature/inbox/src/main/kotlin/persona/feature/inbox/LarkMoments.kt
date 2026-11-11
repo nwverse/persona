@@ -92,7 +92,7 @@ internal fun LarkMomentsCard(
     val card = preview?.card
     JCard(modifier.fillMaxWidth().clickable(onClick = onClick), padding = Tokens.Space.m) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            Icon(PhIcons.ChatsCircle.regular, contentDescription = stringResource(R.string.inbox_moments), tint = PersonaTheme.palette.accent, modifier = Modifier.size(ContentTokens.legacyXl))
+            Icon(PhIcons.ChatsCircle.regular, contentDescription = stringResource(R.string.inbox_moments), tint = PersonaTheme.palette.accent, modifier = Modifier.size(Tokens.Size.iconXS))
             Text(preview?.title ?: stringResource(R.string.inbox_moments_post), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
         }
         card?.author?.let { author ->
