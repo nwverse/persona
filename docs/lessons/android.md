@@ -4,12 +4,31 @@
 
 A receipt reused inside task details must not invoke the same task-sheet destination again: assigning the same Compose state produces no visible change. Resolve the task's existing lead binding and open its Agent page after dismissing the sheet. Keep missing-target feedback inside that sheet; generic operation feedback discards arbitrary exception messages and a snackbar behind a modal does not prove the explanation is visible. Exercise the receipt button independently of the footer and verify the real navigation stack in addition to callback tests.
 
+## Reuse only fully started tunnels and never probe a replacement through the old connection (#3844)
+
+A local proxy listener can report `listening` before `HubWays` has passed the start's final epoch and identity checks. A reconnect could reuse that half-started handle, after which the cancelled start closed its listener and the health probe fell back to a direct route. Mark a `Running` handle ready only after those checks. Independently, a replacement tunnel can bind the same loopback address: a pooled HTTP connection still points at the old listener, so SSH and proxy health probes must use a fresh connection pool. Do not hide either race by weakening the Always assertion or disabling the intentional direct fallback.
+
 ## Late receipts must settle manual review (#3748)
 
 The review timeout does not invalidate the hub's later operation receipt. Include the manual-review state in the
 compare-and-set sources for a confirmed successful receipt, without resending the message or accepting an unknown
 outcome. Keep discarded messages outside that source set so a lookup that finishes later cannot undo the user's choice.
 
+## Reply-draft dismissal is a card decision, not task completion (#3743)
+
+Use the feed card's id and its exact original `body.draft` for dismissal; edited text belongs only to Send. Never mark the
+Inbox item done, remove the task or close its Agent to hide a draft. Later is local and card-scoped too, so new progress on
+the same source item remains visible. Apply the hub's complete returned item, rather than merging body fields: Undo removes
+`dismissed_at` and `dismissal_id`. Fence reads captured before a mutation, and reject a late Undo receipt when newer progress
+already changed that card. Retain its captured assistant manager across selection changes. Use the shell's existing Undo
+snackbar, with only Send primary; large-text and narrow action groups stack primary-first through `DraftDecisionButtons`.
+Exclude persistently dismissed cards from the oldest-unsent read anchor, but retain dynamically filed cards. Undo catch-up
+uses the retained `dismissal_updated_at`. Stable pagination starts with `paginate=1` and continues with only the opaque
+`cursor`, never a newer `since`; a captured-owner reader pins the whole range. `next_cursor` alone decides completion
+(missing means an older hub, empty means EOF), not the number of items. Bound the range to 64 pages and reject repeated
+cursors. Publish only a complete range under its original mutation fence, and restart incomplete reads without advancing.
+A snackbar action can pass semantic visibility assertions while its text is invisible. `JAppSnackbarHost` uses the inverse
+message-text role for its action, not the accent; inspect light/dark images and test contrast on the actual inverse surface.
 
 ## Large-font screenshots need Compose density, not just configuration (#3588)
 
@@ -122,6 +141,12 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- **A big page must not read a state that changes on every scroll frame** (#4039). `ChatListState.position` holds the
+  reading anchor's pixel offset, written each frame; `ChatPage` read `position.expanded`, so a scroll re-ran the whole
+  page (about 1,000 lines, chat-length lists rebuilt) once per frame. Read such parts through `derivedStateOf`
+  (`ChatListState.expanded`, `followsEnd`) and count recompositions in a real composition (Robolectric, `Recomposer` +
+  `BroadcastFrameClock`, `ChatListStateTest`): `SnapshotStateObserver` handles derived states differently from
+  composition, and a plain JVM test cannot compose (Compose calls `android.os.Trace`).
 - **A control meant to "look like the chips" must be the chip** (#2956). #2920 rebuilt the Assistant entries as a new row
   (44 dp, control radius, its own padding) next to `JChip` (36 dp, chip radius), and they visibly grew. Draw such controls
   with `JChip` / `JChipTokens`, add an optional parameter for what is missing (`dot`), and assert the rendered height
@@ -280,6 +305,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Contracts and wiring
 
+- A `@WireEnum` value missing from its list decodes as `"unknown"`, silently (#4035). Android handled the hub's `notify` kind `reply` (Awaiting reply) in every policy and test, but the tests built `NotifyEvent("reply", …)` by constructor, so none went through the decoder, and the reminder never posted. When a new kind or state reaches the wire, add it to the `@WireEnum` and test it from the raw JSON (`ServerEvent.decode`), not from a constructed event.
 - When adding interface methods with default implementations (`ChatActions.editQueue` / `info`, `AgentOperations.attachSession`), `by delegate` wrappers forward automatically, but handwritten forwarding objects do not. `trackActions` in `core:data` and the anonymous `AgentOperations` in App `AgentsWiringModule` forward method by method; missing a new method silently uses its default ("Not integrated yet") without compilation errors. When adding methods, use `git grep ': ChatActions\b\|object : AgentOperations'` to update all handwritten forwarding.
 - Claude Code transcripts do not retain `client_msg_id` (2026-11-03, #895). A user item's ID is Claude's own UUID; neither hub nor node rewrites it. With hub `client_ops`, Android previously matched "already in the transcript" only by ID, leaving every Claude Code message at "Delivered, waiting for transcript." Match pending messages to transcript entries by text (`MessageEcho`, same rules as iOS `PendingMessage.arrived`: normalization, computer clock up to 2 minutes behind, prefix match for truncation), only for sent / uncertain messages, and one pending message per transcript entry. Every new item (events, paging, gap repair) is reconciled with the outbox (`HubChatRepository` `transcript`).
 - Delivery does not guarantee an identical user message in the transcript (2026-11-03, #950). Phone `/compact` appears only as a compaction notice; Codex writes queued messages only at turn end. Waiting only for an echo leaves bubbles forever. iOS (`settleSend`) and web dismiss 60 seconds after delivery once the session is not working (wait at most another 15 minutes); Android does the same (`OutboxMessageSender.sentGraceMillis`, `connectActivity`). Do not add constructor parameters after `now`: callers pass the clock as a trailing lambda.
