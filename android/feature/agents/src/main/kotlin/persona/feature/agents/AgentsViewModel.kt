@@ -207,16 +207,18 @@ internal class AgentsViewModel(
     }
 
     private val todosFlow = tasks?.todos ?: MutableStateFlow(emptyList())
+    private val todosSupportedFlow = tasks?.todosSupported ?: MutableStateFlow(false)
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         preferences.snapshots(pairingScope).combine(repository.listStatus) { prefs, status -> prefs to status },
-        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, ::Pair)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos) ->
+        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos, todosSupported) ->
         // The current assistant's (the hub's lists are every manager's, each row with its own).
         val everySession = if (assistant == null) hubSessions else hubSessions.filter { assistant.ownsOn(it.machineId, it.manager) }
         val everyMachine = if (assistant == null) hubMachines else hubMachines.filter { assistant.ownsOn(it.id, it.manager) }
         val source = if (group == null) everySession else everySession.filter { group.admits(it.machineId) }
         val machines = if (group == null) everyMachine else everyMachine.filter { group.admits(it.id) }
         val sessions = ops.project(source)
-        val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes)
+        val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
+            grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
         val rows = sessions.map { it.listSession(prefs) }
         // A partial machine snapshot must not hide sessions in machine grouping.
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
@@ -625,6 +627,10 @@ internal class AgentsViewModel(
                 folded = current.folded - group.id + if (group.folded) emptySet() else setOf(group.id),
                 expandedIdle = if (group.folded) current.expandedIdle + TodoNoneOpened else current.expandedIdle - TodoNoneOpened,
             )
+            // By Status's Seen starts folded: opening it is kept ([StateSeenOpened]), folding it again forgets that.
+            else if (group.id == StateSeenGroup) current.copy(
+                folded = current.folded - group.id - StateSeenOpened + if (group.folded) setOf(StateSeenOpened) else emptySet(),
+            )
             else current.copy(folded = if (group.folded) current.folded - group.id else current.folded + group.id)
         }
         saveFolds()
@@ -636,7 +642,8 @@ internal class AgentsViewModel(
     fun foldAll(fold: Boolean) {
         previous = null
         settings.update { it.copy(
-            folded = if (fold) (page.value.list.groups.map { group -> group.id } + page.value.list.machines.map { machine -> machine.id }).toSet() else emptySet(),
+            folded = if (fold) (page.value.list.groups.map { group -> group.id } + page.value.list.machines.map { machine -> machine.id }).toSet()
+                else if (page.value.settings.grouping == AgentGrouping.State) setOf(StateSeenOpened) else emptySet(),
             expandedQuiet = if (fold) emptySet() else page.value.list.groups.filter { group -> group.parent == "quiet" }.map { group -> group.id }.toSet(),
         ) }
         saveFolds()
@@ -644,7 +651,6 @@ internal class AgentsViewModel(
     }
     fun showIdle(group: AgentListGroup) {
         val key = when {
-            group.id == "state/idle" -> "state-idle"
             group.id.startsWith("machine/") -> "machine-${group.id.removePrefix("machine/")}"
             else -> group.id
         }
