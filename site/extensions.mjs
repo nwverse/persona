@@ -16,8 +16,13 @@
 // mainland China, while this site is not (the Hong Kong entry). Only the icon_url the catalog names for that id is
 // fetched, only image types come back, and the response cannot run anything on this origin.
 
-export const CATALOG_URL = "https://raw.githubusercontent.com/nwverse/persona-extensions/main/persona-extensions.json";
-const CACHE_KEY = "https://extensions-catalog.invalid/v1";
+// The page shows the public official market and nothing else: the catalog must say it was generated from this
+// repository, and every source link points into it.
+export const MARKET_REPO = "nwverse/persona-extensions";
+export const CATALOG_URL = `https://raw.githubusercontent.com/${MARKET_REPO}/main/persona-extensions.json`;
+const SOURCE_ROOT = `https://github.com/${MARKET_REPO}/`;
+// Bump when the slim shape changes, so no edge keeps serving the old shape.
+const CACHE_KEY = "https://extensions-catalog.invalid/v2";
 export const FRESH_MS = 10 * 60 * 1000;
 const KEEP_SECONDS = 30 * 24 * 3600;
 const FETCH_TIMEOUT_MS = 8000;
@@ -42,6 +47,7 @@ export function slim(index) {
   let payload = index?.payload;
   if (typeof payload === "string") payload = JSON.parse(payload);
   if (!payload || !Array.isArray(payload.extensions)) throw new Error("catalog without extensions");
+  if (payload.generation?.repository !== MARKET_REPO) throw new Error("catalog not generated from " + MARKET_REPO);
   const extensions = [];
   const seen = new Set();
   for (const entry of payload.extensions) {
@@ -59,7 +65,8 @@ export function slim(index) {
       description: str(m.description),
       version: str(m.version, 40),
       publisher: str(m.publisher, 80),
-      homepage: httpsURL(m.homepage),
+      // Many manifests declare no homepage; every official extension's source is extensions/<id> in the repository.
+      source: httpsURL(m.homepage).startsWith(SOURCE_ROOT) ? httpsURL(m.homepage) : `${SOURCE_ROOT}tree/main/extensions/${encodeURIComponent(id)}`,
       tags: (Array.isArray(entry.tags) ? entry.tags : []).map((t) => str(t, 40)).filter(Boolean).slice(0, 12),
       categories: [...new Set(categories)],
       pack: Array.isArray(m.extension_pack) && m.extension_pack.length > 0,

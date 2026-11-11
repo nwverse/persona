@@ -53,7 +53,7 @@ Relationship to other docs:
 - `docs/apple/icons.md` covers the icon vocabulary and sizing.
 - `docs/android/android-design.md` covers Android styles, glass levels and page-writing rules.
 - `docs/web/web.md` covers web layout and conventions.
-- `docs/SUPER_RULES.md` holds the three product rules cited in section 4. Changes there need administrator approval.
+- `docs/SUPER_RULES.md` holds the highest-priority rules, including the product audience foundation and the interaction rules cited in section 4. Changes there need administrator approval.
 - `docs/design/DECISIONS.md` is the history of these rules: what was decided, when, and what it replaced. It holds no rules; where it and this document differ, this document wins.
 
 ### 1.2 Rules
@@ -602,7 +602,7 @@ keep each delivery separately inspectable, including its full text. Nonterminal 
 the existing progress presentation. Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
 
-A tool row names its tool in words on iOS and the web (#2986): Claude Code's tools have verbs of their own, another
+A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
 no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
 shared with computer tools). Details in `docs/lessons/ios.md`.

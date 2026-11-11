@@ -43,8 +43,10 @@ own `site/public/style.css`.
 
 `/extensions/` (`site/public/extensions/index.html`, #4781) lists the extensions of the official market: icon, name,
 description, version and downloads, most downloaded first, with search (name, id, description, tags) and filters. It
-uses the home page's palette, type and footer, light in both schemes like the home page; the home page's top bar,
-extensions section and footer link to it. Its h1 and h2 are set in the serif too: `make_site_assets.py serif` reads both pages.
+uses the home page's palette, type and footer; the home page's top bar, extensions section and footer link to it.
+Unlike the home page it follows the system's dark scheme (#4810): every color is a variable at the top of its CSS, and
+`prefers-color-scheme: dark` swaps paper and ink for a warm night set; text on orange and amber and the install card
+keep their colors in both. Add a color as a variable with both values, never as a literal in a rule, or one scheme breaks. Its h1 and h2 are set in the serif too: `make_site_assets.py serif` reads both pages.
 
 - **Data**: the page reads `/extensions/catalog.json`, which `site/extensions.mjs` builds from the market's signed
   index (`persona-extensions.json` on the market repository's `main`; `EXTENSIONS_CATALOG_URL` overrides it). It keeps
@@ -52,6 +54,9 @@ extensions section and footer link to it. Its h1 and h2 are set in the serif too
   reached the old copy is served (marked `stale`, the page says so) for up to 30 days. With no copy at all it answers
   503 and the page offers a retry and the market on GitHub. The signatures are not checked: the page only displays,
   and a hub checks them before it installs anything.
+- **Only the public market** (#4816): the Worker rejects a catalog whose `generation.repository` is not
+  `nwverse/persona-extensions`, and each extension's source link is its `homepage` only when that points into the
+  repository, otherwise `tree/main/extensions/<id>` there (many manifests declare no homepage).
 - **Optional fields**: `icon_url` (absolute https) and `downloads` (an integer), on an extension or its manifest,
   `category` / `categories`, and `downloads_updated_at` at the top of the payload. Without counts the page hides its
   sort control and lists by name; without an icon it draws the name's first character on a tint; without categories
