@@ -558,7 +558,7 @@ final class AppModel {
     /// groups keep everything.
     /// `ssh`: the SSH tunnel set up on the pairing page (docs/operations/network.md「Connecting to hub through SSH」): pairing goes through it
     /// when the address does not answer (or always, with Always Use SSH), and the hub keeps it.
-    func pair(_ new: ServerConfig, ssh: SSHRoute? = nil) async throws {
+    func pair(_ new: ServerConfig, ssh: SSHRoute? = nil, deviceID: String? = nil) async throws {
         try refusePairingWhileSigningOut()
         retryRegistry()
         // Unknown pairings would be written over (the keychain is not readable before the first unlock).
@@ -605,7 +605,7 @@ final class AppModel {
         } else if let i = same {
             // The same hub paired again (a new pairing link): its new credential replaces the old one.
             r.hubs[i].config = new
-            r.hubs[i].deviceID = nil
+            r.hubs[i].deviceID = deviceID
             r.hubs[i].tradedPairing = nil
             r.hubs[i].watch = nil
             r.hubs[i].watchDeviceID = nil
@@ -614,6 +614,7 @@ final class AppModel {
             tunnels.adopt(SSHTunnels.pairingID, as: r.hubs[i].id)
         } else {
             var hub = PairedHub(config: new, hubID: identity?.hubID, hubName: identity?.hubName)
+            hub.deviceID = deviceID
             hub.ssh = ssh
             tunnels.adopt(SSHTunnels.pairingID, as: hub.id)
             // Listed in a group's mesh already: it joins that group (shown once, not as a group of its own).
@@ -732,6 +733,7 @@ final class AppModel {
         if isDemo { leaveDemo() }
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
+        PortForwarder.shared.closeAll() // no hub left for a forwarded port to reach
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
         // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
@@ -2908,6 +2910,7 @@ final class AppModel {
         guard !gone.isEmpty else { return }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
+        PortForwarder.shared.close(groups: gone)
         machines = machines.filter { !gone.contains($0.group) }
         sessionsByMachine = sessionsByMachine.filter { !gone.contains($0.key.group) }
         interactions = interactions.filter { !gone.contains($0.value.group) }

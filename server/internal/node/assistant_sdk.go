@@ -252,7 +252,11 @@ func (n *Node) sdkCommand(b sdkBridge, launcher string, s sdkStart, base []strin
 	if l, managed := n.managedLauncher(launcher); managed {
 		// the main conversation's provider env (launcherenv.go); its values hold the key: never logged
 		s.env, s.launcherArgs = providerEnv(l, s.model, "", true), l.Args
-		s.env["CLAUDE_CONFIG_DIR"] = configDir
+		if configDir != "" {
+			s.env["CLAUDE_CONFIG_DIR"] = configDir
+		} else {
+			delete(s.env, "CLAUDE_CONFIG_DIR") // "default": unset, as claudeProcessEnv does
+		}
 		if mergesNoProxy(l) {
 			// As `personad launch` and its settings file do (#6238): the provider's hosts are added to the bypass lists
 			// this claude would read without it, the user's settings env's (applied over the environment), else the node's.
@@ -274,7 +278,11 @@ func (n *Node) sdkCommand(b sdkBridge, launcher string, s sdkStart, base []strin
 	if s.env == nil {
 		s.env = map[string]string{}
 	}
-	s.env["CLAUDE_CONFIG_DIR"] = configDir
+	if configDir != "" {
+		s.env["CLAUDE_CONFIG_DIR"] = configDir
+	} else {
+		delete(s.env, "CLAUDE_CONFIG_DIR") // "default": unset, as claudeProcessEnv does
+	}
 	if s.compaction != nil {
 		base = identity.Environment(base, s.compaction.env()...)
 	}

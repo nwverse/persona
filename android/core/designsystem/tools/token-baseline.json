@@ -85,12 +85,12 @@
       "dp": 1
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/ContentTokens.kt": {
-      "dp": 23,
+      "dp": 22,
       "font": 3
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Controls.kt": {
       "color": 9,
-      "dp": 108
+      "dp": 107
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Decisions.kt": {
       "color": 3,
@@ -207,7 +207,7 @@
       "dp": 6
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Typography.kt": {
-      "font": 42
+      "font": 39
     },
     "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Voice.kt": {
       "color": 4,
@@ -245,7 +245,7 @@
       "dp": 4
     },
     "android/feature/assistant/src/main/kotlin/persona/feature/assistant/AssistantScreen.kt": {
-      "dp": 22,
+      "dp": 19,
       "material3": 1
     },
     "android/feature/chat/src/main/kotlin/persona/feature/chat/AssistantTasks.kt": {
