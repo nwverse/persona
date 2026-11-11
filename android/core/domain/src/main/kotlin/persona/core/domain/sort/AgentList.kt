@@ -118,6 +118,8 @@ data class AgentMachineGroup(
     val folded: Boolean,
     /** "By repository": how many repositories it has. */
     val repoCount: Int? = null,
+    /** How many of [stateCounts]'s working only wait in the background (#6045): its heading counts them apart. */
+    val waitingInBackground: Int = 0,
 ) {
     val id: String get() = "machine/${machine.id}"
 }
@@ -256,7 +258,7 @@ fun buildFlatAgentList(
                 }
                 result += groups
                 AgentMachineGroup(machine, groups.map { it.id }, members.count { !it.isNestedSubtask }, agentSpaces(members).size, stateCounts(members),
-                    machineFolded, repoCount = repos.size)
+                    machineFolded, repoCount = repos.size, waitingInBackground = members.count { !it.isNestedSubtask && it.waitsInBackground })
             }
             return AgentListResult(counts, result, filtered.filter { it.state == AgentState.Unread }.map { it.id },
                 machines = machineGroups)
@@ -279,7 +281,7 @@ fun buildFlatAgentList(
                 val spaces = agentSpaces(members)
                 AgentMachineGroup(machine, nested.groups.filterNot { it.id == "pinned" }.map { it.id }, members.count { !it.isNestedSubtask }, spaces.size,
                     AgentState.entries.associateWith { state -> members.count { !it.isNestedSubtask && it.state == state } },
-                    machineFolded)
+                    machineFolded, waitingInBackground = members.count { !it.isNestedSubtask && it.waitsInBackground })
             }
             return AgentListResult(counts, result, filtered.filter { it.state == AgentState.Unread }.map { it.id },
                 machines = machineGroups)

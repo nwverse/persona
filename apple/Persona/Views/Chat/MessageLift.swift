@@ -14,6 +14,8 @@ struct MessageBarInfo {
     var isUser: Bool
     var date: Date?
     var pending: Bool
+    /// Who wrote it, when not the chat's Agent or Persona (`messageActionBar(from:)`).
+    var from: String? = nil
     var delete: MessageBarDelete? = nil
 }
 
@@ -179,7 +181,7 @@ private struct LiftedMessage: View {
             // Out of the way of the edit menu while the words are selected.
             if !selecting {
                 MessageActionBar(id: lift.bar.id, text: lift.bar.text, isUser: lift.bar.isUser, date: lift.bar.date, menu: menu,
-                                 pending: lift.bar.pending, delete: lift.bar.delete,
+                                 pending: lift.bar.pending, from: lift.bar.from, delete: lift.bar.delete,
                                  itemWidth: MessageActionBar.itemWidth(barWidth, count: count))
                     .position(x: p.bar.midX, y: p.bar.midY)
                     .transition(.scale(scale: 0.85, anchor: p.below ? .top : .bottom).combined(with: .opacity))
