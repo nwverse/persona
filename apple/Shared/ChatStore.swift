@@ -644,7 +644,7 @@ final class ChatStore {
         // Pages can repeat an id with new metadata or a completed receipt. The new copy wins, but never erases the
         // evidence above. Append-only pushes keep the fast path without building an index.
         let indices = fresh.contains { ids.contains($0.id) } ? Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) }) : [:]
-        var inOrder = true
+        var inOrder = !deduplicated // Keeping the last cached copies can move an older line behind a newer one.
         var added: [Item] = []
         for it in Self.withImageRefs(fresh, key) {
             if let i = indices[it.id] {
