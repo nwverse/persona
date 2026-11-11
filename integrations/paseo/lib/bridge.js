@@ -11,8 +11,8 @@ import { basename, resolve } from 'node:path'
 import { createRuntime, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
   EFFORTS, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, claudeId, defaultProvider, interactionOf,
-  launchersOf, linkedWorktree, paseoMode, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf, spaceIdOf,
-  strayRecord, timelineItems, transcriptOf,
+  launchersOf, linkedWorktree, parentAgentId, paseoMode, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf,
+  spaceIdOf, strayRecord, timelineItems, transcriptOf,
 } from './map.js'
 import { personaMcpServers } from './mcp.js'
 import { PaseoClient } from './paseo.js'
@@ -36,13 +36,14 @@ const MCP_UNSUPPORTED = /does not support MCP servers/i
  * @param {{ paseo?: object, log?: (msg: string) => void, connect?: (path: string) => import('node:net').Socket }} [deps]
  *   paseo: a PaseoClient (default: one for options.home).
  * @param {{ home?: string, socketPath?: string, mcpConfig?: string, retryMs?: number, pushDelayMs?: number, refreshMs?: number,
- *   awayGrace?: number, callWait?: number }} [options]
+ *   awayGrace?: number, callWait?: number, listMax?: number }} [options]
  */
 export function createPaseoBridge(deps = {}, options = {}) {
   const log = deps.log ?? (() => {})
   const paseo = deps.paseo ?? new PaseoClient({ home: options.home, log, appVersion: `persona-paseo-bridge/${BRIDGE_VERSION}` })
   const awayGrace = options.awayGrace ?? AWAY_GRACE
   const callWait = options.callWait ?? CALL_WAIT
+  const listMax = options.listMax ?? LIST_MAX
 
   const agents = new Map() // agent id → { agent, project }
   const bySession = new Map() // session id → agent id
@@ -369,17 +370,112 @@ export function createPaseoBridge(deps = {}, options = {}) {
     throw new RpcError(`Paseo 里没有这个会话（${sessionId}）：可能已经归档或删除了`, 'not_found')
   }
 
+  /**
+   * Who created whom among the agents listed (Paseo's create_agent), by agent id. An agent's creator counts while it
+   * is listed and in the same workspace: as in Paseo, a delegated agent in a workspace of its own is that workspace's
+   * own. Agents that created one another in a ring have none, each a row of its own. So the links never loop.
+   */
+  function creators() {
+    const of = new Map()
+    for (const { agent } of agents.values()) {
+      const p = agents.get(parentAgentId(agent))?.agent
+      if (p && p.id !== agent.id && p.workspaceId === agent.workspaceId && sessionOf(p.id) && sessionOf(agent.id)) of.set(agent.id, p.id)
+    }
+    for (const start of [...of.keys()]) {
+      const ring = new Set()
+      let at = start
+      while (at !== undefined && !ring.has(at)) {
+        ring.add(at)
+        at = of.get(at)
+      }
+      if (at === start) for (const id of ring) of.delete(id)
+    }
+    return of
+  }
+
+  /**
+   * The agents and the ones they created: each one's creator (creators), and for each creator those of its own that
+   * have not finished: running, waiting for an answer, or waiting for agents of their own (its row's background work).
+   */
+  function family() {
+    const creator = creators()
+    const created = new Map()
+    for (const [id, by] of creator) created.set(by, [...(created.get(by) ?? []), id])
+    const unfinished = new Map()
+    const busy = (id) => {
+      if (!unfinished.has(id)) {
+        const a = agents.get(id)?.agent
+        unfinished.set(id, isRunning(a) || (a?.pendingPermissions?.length ?? 0) > 0 || (created.get(id) ?? []).some(busy))
+      }
+      return unfinished.get(id)
+    }
+    const fleet = new Map()
+    for (const [by, ids] of created) {
+      const still = ids.filter(busy).map((id) => agents.get(id).agent)
+      if (still.length) fleet.set(by, still)
+    }
+    return { creator, fleet }
+  }
+
+  /**
+   * Whether Paseo shows on a workspace what an agent did: one the user started, or one created from another workspace
+   * (that workspace's own agent, in Paseo's sidebar too). Any other agent another one created is quiet (rowStatus):
+   * under its creator, in a ring, or left behind by a creator that is gone.
+   */
+  function workspaceOwn(agent) {
+    const by = parentAgentId(agent)
+    if (!by) return true
+    const p = agents.get(by)?.agent
+    return Boolean(p) && p.id !== agent.id && p.workspaceId !== agent.workspaceId
+  }
+
+  /** What agentRow takes beside the agent: its place, its last words, the agent that created it and its own fleet. */
+  function rowOptions(agentId, s, fam) {
+    const a = agents.get(agentId)
+    const spaceId = s.idOf(a?.project)
+    const by = fam.creator.get(agentId)
+    return { project: a?.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId),
+      parent: by && sessionOf(by), quiet: Boolean(a) && !workspaceOwn(a.agent), fleet: fam.fleet.get(agentId), canon }
+  }
+
   async function listSessions() {
     const rows = []
     const s = spaces()
+    const fam = family()
+    const agentOf = new Map() // session id → its agent, for the rows
     for (const [sid, agentId] of bySession) {
       const a = agents.get(agentId)
-      const spaceId = a && s.idOf(a.project)
-      const row = a && agentRow(a.agent,
-        { project: a.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId), canon })
-      if (row && row.session_id === sid) rows.push(row)
+      const row = a && agentRow(a.agent, rowOptions(agentId, s, fam))
+      if (row && row.session_id === sid) {
+        rows.push(row)
+        agentOf.set(sid, agentId)
+      }
     }
-    return rt.recent(rows, { days: 3650, max: LIST_MAX, pinned: (r) => r.status === 'working' || r.status === 'blocked' })
+    // The user's own agents first: an orchestrator's delegated agents (dozens, soon closed) do not push them off the
+    // list. Then the delegated agents of those listed, however many creators lie between. One that works, waits or is
+    // open on the phone keeps the agent its line of creators starts at, and every creator between is listed with it:
+    // no row names a parent that is not there.
+    const busy = (r) => r.status === 'working' || r.status === 'blocked'
+    const delegated = (r) => fam.creator.has(agentOf.get(r.session_id))
+    const top = (r) => {
+      let at = agentOf.get(r.session_id)
+      for (let by = fam.creator.get(at); by !== undefined; by = fam.creator.get(at)) at = by
+      return at
+    }
+    const kept = new Set(rows.filter((r) => delegated(r) && (busy(r) || rt.touched(r.session_id))).map(top))
+    const own = rt.recent(rows.filter((r) => !delegated(r)), { days: 3650, max: listMax, pinned: (r) => busy(r) || kept.has(agentOf.get(r.session_id)) })
+    const tops = new Set(own.map((r) => agentOf.get(r.session_id)))
+    const under = rt.recent(rows.filter((r) => delegated(r) && tops.has(top(r))), { days: 3650, max: Math.max(0, listMax - own.length), pinned: busy })
+    const listed = new Map([...own, ...under].map((r) => [r.session_id, r]))
+    const rowOfSession = new Map(rows.map((r) => [r.session_id, r]))
+    for (const r of under) {
+      for (let by = fam.creator.get(agentOf.get(r.session_id)); by !== undefined; by = fam.creator.get(by)) {
+        const sid = sessionOf(by)
+        if (listed.has(sid)) break
+        if (rowOfSession.has(sid)) listed.set(sid, rowOfSession.get(sid))
+      }
+    }
+    return [...listed.values()].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
   }
 
   const history = (agentId, epoch) => `paseo:${agentId}:${epoch ?? ''}`
@@ -558,10 +654,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   function rowOf(agent) {
-    const a = agents.get(agent.id)
-    const s = spaces()
-    const spaceId = s.idOf(a?.project)
-    return agentRow(agent, { project: a?.project, roots, labels, lastText: lastTexts.get(agent.id), spaceId, spaceName: s.names.get(spaceId), canon })
+    return agentRow(agent, rowOptions(agent.id, spaces(), family()))
   }
 
   /**
@@ -612,7 +705,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   /**
-   * Where a session still being created is listed: its workspace's project and slot; a new workspace, the project of
+   * Where a session still being created is listed: its workspace's project and name; a new workspace, the project of
    * an agent at the same directory; else the folder's own space.
    */
   function placeOf(workspaceId, cwd) {
@@ -623,7 +716,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const space = s.idOf(a?.project)
     if (!space) return { space_id: cwd, space_name: basename(cwd) }
     const place = { space_id: space, space_name: s.names.get(space) ?? a.project.projectName }
-    return workspaceId ? { ...place, slot_id: workspaceId, slot_name: slotNameOf(a.project, cwd) } : place
+    return workspaceId ? { ...place, slot_name: slotNameOf(a.project, cwd) } : place
   }
 
   /**

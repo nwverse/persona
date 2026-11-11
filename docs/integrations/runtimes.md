@@ -39,7 +39,7 @@ With the SDK (`integrations/runtime-sdk`, Node 22+, no dependencies) you only wr
 
 | Driver method | Returns |
 | --- | --- |
-| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode) and `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below) |
+| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode), `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below) and `is_subagent` / `parent_session_id` (another of the runtime's sessions started this one, see "Sub-Agents and background tasks" below) |
 | `items(params)` | One page of items (same params and result as `session.items`: from the end backwards by `turns` / `limit`, `before_seq` to page back, `after_seq` to catch up, `from_seq` + `through_seq` for a range), with `history` and `to_seq` |
 
 Optional (for each one present, the SDK declares the capability in `runtime.hello`; for those missing, node answers "not supported" for you and the App displays as usual):
@@ -165,6 +165,11 @@ with the same parsing and the same look as Claude sessions in herdr; the transcr
 on watch it receives `transcript: true` and only pushes streaming text (the SDK automatically drops `append` for such sessions). Sessions whose transcript hasn't been written yet get content from the runtime as usual,
 and node switches over automatically once the file appears. A daemon can't do this (it would read other sessions on the machine).
 
+Two things stay the runtime's word on such a row. Its own `background` list is kept beside the background tasks the transcript shows (#4494): work the runtime started for the
+session outside Claude Code. And its `model` decides the context window when it names a 1M variant (`…[1m]`, #4496): Claude Code writes the id without the suffix into the
+transcript, and a gateway writes an id of its own, so the transcript alone reads as 200K, or as no window. A window the transcript records itself keeps the transcript's word,
+and so does a session answering as another model: after a refusal's fallback, or when the reply came from a Claude model that is not the one the runtime names.
+
 ## Sub-Agents and background tasks (optional)
 
 When an Agent hands work off and ends the turn (background sub-Agents, workflows, commands running in the background), the session is "done" after the turn while the work isn't. The runtime reports them on the session row,
@@ -179,6 +184,15 @@ with the same fields as Claude sessions (`Session.subagents` / `background` in `
 - While any are running, the session counts as Working (#2228), and the hub's "done" push waits until they finish and the turn in which the session is woken up ends. Re-push `runtime.sessions` when they start and end.
 - At most 50 sub-Agents and 50 background tasks per row, text cut to 500 characters; invalid ids are dropped. A daemon's sub-Agent ids are prefixed the same way: `<daemon>.<session>@<id>`.
 - Controls such as messaging or renaming a sub-Agent: if the runtime doesn't support them, it returns `unsupported` (DSH doesn't: sub-Agents are managed by the parent session).
+- **A session of its own that another session started** (Paseo's Agents created by another Agent, #4494) is not a `subagents` entry: it is opened, sent to and can need the user
+  like any session. List it as its own row with `is_subagent: true` and `parent_session_id: <the starting session's id>`; node fills in `root_session_id`, and a daemon's
+  parent ids get the daemon's prefix like its session ids. The hub sends no "done" push for it and holds its parent's while it runs or has background work. It is its parent's
+  subtask: an App that folds subtasks lists it under its parent, and the fleet counts (the Live Activity, a phone's notification and widget) count the parent, not it.
+  - While its `status` is `blocked` (it waits for the user) node lists it without its parent, so it is a row of its own everywhere: every App shows it and counts it under
+    Needs you, whatever it folds. It is listed under its parent again once it was answered.
+  - List every session between a listed one and the session the line starts at: a row whose parent is not listed hangs nowhere.
+  - Give the parent's row a `background` entry of kind `agent` for each one that has not finished (running, or waiting for an answer), so the parent reads Working until they
+    report back. A parent that is `offline` meanwhile is left out of lists of what runs, and its subtasks with it: do not list it as `offline` while they run.
 
 DSH's approach is in `docs/integrations/dsh.md` ("Subagents and background tasks").
 

@@ -134,6 +134,15 @@ fun Session.listSession(preferences: AgentsPreferencesSnapshot): AgentSession {
     return AgentSession(visible, stateSince, (runningSubagents ?: subagents.orEmpty().count { it.running == true }) > 0)
 }
 
+/**
+ * The [kept] rows [previous] drew as rows of their own. They stay so while the quick filter remains selected: a subtask
+ * that needed the user, opened and answered, would otherwise hang under its parent again and leave the list at once
+ * (#4494), where [retainOpenedRows] keeps every other opened row. One opened from under "Subtasks" stays there.
+ */
+internal fun openedRowsOfTheirOwn(previous: AgentListResult?, kept: Set<String>): Set<String> =
+    if (previous == null || kept.isEmpty()) emptySet()
+    else previous.groups.flatMapTo(HashSet()) { group -> group.rows.mapNotNull { row -> row.id.takeIf { it in kept } } }
+
 /** Keep opened rows in their old group and slot while the quick filter remains selected. */
 internal fun retainOpenedRows(
     current: AgentListResult,

@@ -671,6 +671,21 @@ func (l *daemonLink) row(s map[string]json.RawMessage) (map[string]json.RawMessa
 	if json.Unmarshal(s["space_id"], &space) == nil && space != "" {
 		s["space_id"] = rawJSON(l.cfg.ID + ":" + space) // the apps group by space id: not with another runtime's
 	}
+	// The session that started it (docs/integrations/runtimes.md, a row of its own with a parent) is another of the
+	// daemon's: named by its id here too, or not at all.
+	for _, k := range []string{"parent_session_id", "root_session_id"} {
+		if _, named := s[k]; !named {
+			continue
+		}
+		var ref string
+		if json.Unmarshal(s[k], &ref) == nil && ref != "" {
+			if o, ok := l.outer(ref); ok {
+				s[k] = rawJSON(o)
+				continue
+			}
+		}
+		delete(s, k)
+	}
 	return s, true
 }
 

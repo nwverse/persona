@@ -65,7 +65,7 @@ type Session struct {
 	SourceThreadID   string               `json:"source_thread_id,omitempty"`
 	SourceInstanceID string               `json:"source_instance_id,omitempty"`
 	ParentThreadID   string               `json:"parent_thread_id,omitempty"`
-	ParentSessionID  string               `json:"parent_session_id,omitempty"` // Public ID scoped to the Codex home on this machine.
+	ParentSessionID  string               `json:"parent_session_id,omitempty"` // The session that started it: a Codex parent's public ID (scoped to the Codex home on this machine), or a runtime's own session (#4494, #4495).
 	RootSessionID    string               `json:"root_session_id,omitempty"`
 	ReadOnlyReason   string               `json:"read_only_reason,omitempty"`
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
