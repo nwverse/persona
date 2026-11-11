@@ -134,7 +134,9 @@ internal fun agentTreeEntries(
     val byId = list.groups.associateBy { it.id }
     val treeIds = list.machines.flatMap { it.groups }.toSet()
     list.groups.filter { it.id == "pinned" }.forEach { group(it, space = false, depth = 0, first = entries.isEmpty()) }
-    val headed = machineFilter.isEmpty() || list.machines.size > 1
+    // Computer headings only while the list holds more than one computer, as iOS's `byHost` (#4338 A7): one computer's
+    // name over its own list says nothing.
+    val headed = machineFilter.isEmpty() && list.machines.size > 1
     list.machines.forEach { machine ->
         // A computer whose sessions are all pinned has nothing left to hold here; "Pinned" says where they run.
         if (machine.groups.none(byId::containsKey)) return@forEach
