@@ -832,6 +832,8 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 
 `URL.port` is empty for both an implicit port and an explicitly written HTTP `:80` or HTTPS `:443`. When recognizing links to an Agent's dev server, retain explicit authority-port intent from the original text after validating its URL, protocol and host. Do not infer a scheme default for a URL with no port, or borrow a colon from credentials, a path, query or fragment. Regress the public helper, reply chips and click routing together; keep hub-owned pages and preview capability/session/folder checks ahead of opening a preview. Recognition alone does not establish HTTPS preview transport support.
 
+For reply tokenization (#4498), distinguish a bracketed IPv6 authority from surrounding Markdown brackets. A direct URL helper can accept the address while the prose tokenizer drops it, leaving no chip. Exercise scheme links, Markdown/autolinks and existing bare forms through the public chip renderer as well as the helper; keep URL/host admission and delimiter boundaries unchanged.
+
 ## Connection tests must use the form's credential choice (#1903)
 
 A saved credential and an empty input are different from explicitly removing that credential. Send the removal flag through the test API and give it the same precedence as saving, including when a new key was typed before removal was selected. Changing the credential choice invalidates both the displayed test result and any pending result for the old form. Test against a synthetic source and assert that the saved configuration stays unchanged.
@@ -898,3 +900,12 @@ A connected delta hub keeps its pushed session rows during REST refresh. Refresh
 optimistically removed. Keep the pre-request session snapshot and restore it immediately on archive failure,
 before refreshing. Preserve a newer pushed row if one arrived meanwhile. Exercise mounted rows and the real
 store refresh with both delta and bounded list negotiation.
+
+## Recovering from an expired page cursor must not shrink the list
+The hub keeps a session list's frozen view for 5 minutes and at most 32 of them (`server/internal/sessionlist/index.go`).
+Reaching the end of an Agents list open longer than that asked for the next page with an expired cursor, and both
+clients recovered by starting over: the web emptied the list (`clearBaseline`) and the iPhone replaced its rows with the
+first page. A list 300 rows deep became 50, the scroller clamped its offset, and the reader was thrown back near the top
+every time they reached the bottom. Recover by reading a fresh view as deep as the reader has scrolled plus one page,
+keeping the old rows on screen until it arrives (web `SessionList.reread`, #4431; iOS `SessionListModel.rebaseline`); any
+recovery that publishes fewer rows than are on screen moves the reader.
