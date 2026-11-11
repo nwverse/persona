@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import type { FeedItem } from "../../lib/feed";
 import { ago } from "../../lib/format";
@@ -42,8 +42,9 @@ const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; classNa
   unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
 };
 
-/** The task's criteria, each as its latest review found it, and what the supervisor said last. */
-export function ReviewChecklist({ todo }: { todo: Todo }) {
+/** The task's criteria, each as its latest review found it, and what the supervisor said last. `children`: what
+ *  stands in for the list once the work ended (each criterion's result against the brief, #3822). */
+export function ReviewChecklist({ todo, children }: { todo: Todo; children?: ReactNode }) {
   const sup = todo.supervision;
   if (!sup) return null;
   const list = checklist(sup);
@@ -56,7 +57,9 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
         <span className="flex-1" />
         {sup.expect_minutes ? <span className="text-[12px] text-ink-3">{t("assistant-tasks.review_expect", { minutes: sup.expect_minutes })}</span> : null}
       </div>
-      {list.length === 0 ? (
+      {children ? (
+        <div className="mt-2">{children}</div>
+      ) : list.length === 0 ? (
         <p className="mt-2 text-[12.5px] text-ink-3">{t("assistant-tasks.review_none")}</p>
       ) : (
         <ul className="mt-2 flex flex-col gap-1.5">

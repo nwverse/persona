@@ -59,6 +59,9 @@ import { Icon, type IconName } from "../../ui/icons";
 import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { AcceptRow, BriefCard } from "./Brief";
 
+// A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
+const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
+
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
 const DecisionRow = lazy(() => import("./DecisionRow").then((m) => ({ default: m.DecisionRow })));
 import { SentLine, TaskSentList } from "./Sent";
@@ -417,6 +420,12 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
       {/* it is asked for where it can't run: say it starts without */}
       {ultra?.blocked && ultra.on && <div className="text-[12px] text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
       {task.why && <div className="text-[12px] text-ink-2">{task.why}</div>}
+      {/* what the task will be held to, shown before "Start" confirms it (#3822) */}
+      {task.brief && (
+        <Suspense fallback={null}>
+          <PlanBrief brief={task.brief} title={task.title} />
+        </Suspense>
+      )}
     </div>
   );
 }

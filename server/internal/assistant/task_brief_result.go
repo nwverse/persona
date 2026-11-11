@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // ---- the result against the brief (#3822) ----
@@ -99,4 +102,74 @@ func (r *BriefResult) unsettled() []string {
 		}
 	}
 	return out
+}
+
+// briefCriteriaMost is the most criteria a receipt or a conclusion card lists; the rest are counted.
+const briefCriteriaMost = 8
+
+// briefCriteriaNow is each criterion of to-do t's brief as it stands while the work goes on: met or not met as the
+// latest review that judged it found it, unchecked when none did, then the ones scope changes dropped. Nil when the
+// to-do has no brief (none is made here) or its brief names no criterion.
+func (s *Service) briefCriteriaNow(t Todo) []BriefCriterion {
+	brief, ok := s.briefOfTodo(t.ID)
+	if !ok {
+		return nil
+	}
+	var checks []ReviewCheck // in order: a later review's check of a criterion wins (briefResultOf keeps the last)
+	if v := t.Supervision; v != nil {
+		for _, r := range v.Reviews {
+			checks = append(checks, r.Checks...)
+		}
+	}
+	list := briefResultOf(brief, checks, nil, t.ID, "", "", time.Time{}).Criteria
+	if len(list) == 0 {
+		return nil
+	}
+	return list
+}
+
+// briefResultOfTodo is how to-do t's work ended against its brief; nil while it has not, and for a to-do a later one
+// took the work over from (the result is that one's).
+func (s *Service) briefResultOfTodo(t Todo) *BriefResult {
+	brief, ok := s.briefOfTodo(t.ID)
+	if !ok || brief.Result == nil || brief.Result.Todo != t.ID || len(brief.Result.Criteria) == 0 {
+		return nil
+	}
+	return brief.Result
+}
+
+// briefResultMarkdown is a result as a card says it, in language l: one line per criterion with its state (the first
+// briefCriteriaMost, then how many more), then what was done beyond the brief. "" for no result.
+func briefResultMarkdown(l i18n.Lang, r *BriefResult) string {
+	if r == nil || len(r.Criteria) == 0 {
+		return ""
+	}
+	lines := []string{i18n.T(l, "assistant-reports.brief_head")}
+	for i, c := range r.Criteria {
+		if i == briefCriteriaMost {
+			lines = append(lines, i18n.T(l, "assistant-reports.brief_more", i18n.Args{"n": len(r.Criteria) - i}))
+			break
+		}
+		args := i18n.Args{"criterion": feishubot.EscapeMarkdown(clip(oneLine(c.Criterion), 80)), "change": feishubot.EscapeMarkdown(clip(oneLine(c.Change), 60))}
+		key := "assistant-reports.brief_unchecked"
+		switch c.State {
+		case criterionMet:
+			key = "assistant-reports.brief_met"
+		case criterionNotMet:
+			key = "assistant-reports.brief_not_met"
+		case criterionDropped:
+			if key = "assistant-reports.brief_dropped"; c.Change == "" {
+				key = "assistant-reports.brief_dropped_plain"
+			}
+		}
+		lines = append(lines, i18n.T(l, key, args))
+	}
+	if len(r.AlsoDone) > 0 {
+		also := make([]string, 0, len(r.AlsoDone))
+		for _, x := range r.AlsoDone {
+			also = append(also, feishubot.EscapeMarkdown(clip(oneLine(x), 60)))
+		}
+		lines = append(lines, i18n.T(l, "assistant-reports.brief_also_done", i18n.Args{"list": strings.Join(also, i18n.T(l, "assistant-reports.brief_also_sep"))}))
+	}
+	return strings.Join(lines, "\n")
 }

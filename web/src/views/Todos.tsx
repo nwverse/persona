@@ -1,5 +1,5 @@
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
@@ -58,6 +58,7 @@ import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeSt
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { progressLine } from "../lib/supervision";
+import { resultOf } from "../lib/brief";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
@@ -68,6 +69,11 @@ import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
 import type { Route } from "../lib/router";
+
+// A task's brief (#3822) comes with the first to-do that has one, not with the page.
+const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
+const BriefResultList = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultList })));
 import { LatestReport, ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
 import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
@@ -1326,6 +1332,8 @@ function TodoDetail({
   });
   const menu = useMenu();
   const allSessions = useAgentSessions();
+  // how its work ended against its brief (#3822): nothing while it goes on, or once it was reopened
+  const briefResult = todo.done_at ? resultOf(todo) : undefined;
   const spacesSupported = useStore((s) => s.spacesSupported);
 
   const hasLiveAgent = (mid: string, spaceName: string) => {
@@ -1446,7 +1454,25 @@ function TodoDetail({
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
-      <ReviewChecklist todo={todo} />
+      {/* The brief its work is held to (#3822): who asked and in what words above the criteria; each criterion's
+          result in their place once the work ended; the scope changes and who worked on it under them. */}
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefPanel todo={todo} />
+        </Suspense>
+      )}
+      <ReviewChecklist todo={todo}>
+        {briefResult && (
+          <Suspense fallback={null}>
+            <BriefResultList criteria={briefResult.criteria} alsoDone={briefResult.also_done} />
+          </Suspense>
+        )}
+      </ReviewChecklist>
+      {todo.brief && (
+        <Suspense fallback={null}>
+          <TaskBriefHistory todo={todo} />
+        </Suspense>
+      )}
       <LatestReport todo={todo} />
 
       {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}

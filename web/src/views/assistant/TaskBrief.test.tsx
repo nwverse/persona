@@ -1,0 +1,165 @@
+// A task's brief (#3822): on the plan card before "Start", on the task's page above its criteria, each criterion's
+// result where finished work is shown, the scope changes and who worked on it. The tests read zh-Hans, as the page does.
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { formatDate } from "../../i18n";
+import { briefAsked, resultOf, type BriefCriterion, type TaskBrief } from "../../lib/brief";
+import type { Todo } from "../../lib/todos";
+import { ReviewChecklist } from "./Supervision";
+import { BriefResultList, expectText, PlanBrief, TaskBriefHistory, TaskBriefPanel } from "./TaskBrief";
+
+const at = "2026-11-03T12:00:00Z";
+const brief: TaskBrief = {
+  id: "brief_1",
+  created_at: at,
+  started_by: "owner",
+  request: { text: "Please fix the sign-in crash before Friday", at, conversation: "main", message_id: "m1" },
+  goal: "The sign-in page no longer crashes in landscape",
+  done_when: ["The fix is merged", "A test covers landscape"],
+  criteria: ["The fix is merged", "A test covers landscape"],
+  expect_minutes: 30,
+  out_of_bounds: ["Do not touch the payment flow"],
+  log: [],
+};
+const todo: Todo = { id: "todo_3", title: "Retry the sign-in fix", created_at: at, updated_at: at, brief };
+const criteria: BriefCriterion[] = [
+  { criterion: "The fix is merged", state: "met", evidence: "merged in the example change" },
+  { criterion: "A test covers landscape", state: "not_met" },
+  { criterion: "Screenshots attached", state: "dropped", change: "No screen changed after all", changed_at: at },
+  { criterion: "The changelog has a line", state: "unchecked" },
+];
+
+describe("who asked (#3822)", () => {
+  it("is the owner's own words when the hub recorded them", () => {
+    expect(briefAsked(brief)).toEqual({ kind: "owner", at, text: "Please fix the sign-in crash before Friday", truncated: false });
+  });
+  it("names who started work the owner did not ask for, with why", () => {
+    expect(briefAsked({ ...brief, request: undefined, started_by: "assistant", reason: "Left over from the deploy" })).toEqual({ kind: "started", by: "assistant", at, why: "Left over from the deploy" });
+    expect(briefAsked({ ...brief, request: undefined, started_by: "routine", trigger_title: "Morning check" })).toMatchObject({ kind: "started", by: "routine", why: "Morning check" });
+  });
+  it("says a brief made later is one, and invents nobody", () => {
+    expect(briefAsked({ ...brief, request: undefined, started_by: "unknown", reconstructed: true })).toEqual({ kind: "reconstructed" });
+    expect(briefAsked({ ...brief, request: undefined, started_by: "unknown" })).toEqual({ kind: "unknown", at });
+    expect(briefAsked({ ...brief, request: undefined, started_by: "someone-new" })).toEqual({ kind: "unknown", at });
+  });
+});
+
+describe("the brief on the plan card (#3822)", () => {
+  it("shows the owner's words with the date, the goal, the criteria, the time and what is out of bounds", () => {
+    const html = renderToStaticMarkup(<PlanBrief brief={brief} title="Fix the sign-in crash" />);
+    expect(html).toContain('data-brief-asked="owner"');
+    expect(html).toContain(`你在 ${formatDate(at)} 说：`);
+    expect(html).toContain("Please fix the sign-in crash before Friday");
+    expect(html).toContain("The sign-in page no longer crashes in landscape");
+    expect(html).toContain("The fix is merged");
+    expect(html).toContain("A test covers landscape");
+    expect(html).toContain("约 30 分钟");
+    expect(html).toContain("Do not touch the payment flow");
+    expect(html).toContain("line-clamp-2"); // long words are held to two lines, the rest on demand
+  });
+  it("does not repeat a goal that is the task's title", () => {
+    const html = renderToStaticMarkup(<PlanBrief brief={{ ...brief, goal: "Fix the sign-in crash" }} title="Fix the sign-in crash" />);
+    expect(html).not.toContain(">目标<");
+  });
+  it("says who started it when the owner did not ask", () => {
+    const html = renderToStaticMarkup(<PlanBrief brief={{ ...brief, request: undefined, started_by: "leader", reason: "The earlier agent stopped" }} title="x" />);
+    expect(html).toContain('data-brief-asked="leader"');
+    expect(html).toContain(`${formatDate(at)} 由负责人对话发起：The earlier agent stopped`);
+    expect(html).not.toContain("你在");
+  });
+  it("says hours for long work", () => {
+    expect(expectText(45)).toBe("约 45 分钟");
+    expect(expectText(150)).toBe("约 2.5 小时");
+    expect(expectText(240)).toBe("约 4 小时");
+  });
+});
+
+describe("the brief on the task's page (#3822)", () => {
+  it("says a reconstructed brief is one and labels the hand-over prompt", () => {
+    const old: Todo = { ...todo, brief: { ...brief, request: undefined, started_by: "unknown", reconstructed: true, handover: "You are taking over a session that stopped: carry on from its branch." } };
+    const html = renderToStaticMarkup(<TaskBriefPanel todo={old} />);
+    expect(html).toContain("事后补建：当初的原话没有记录");
+    expect(html).toContain("交接提示词");
+    expect(html).toContain("You are taking over a session that stopped");
+    expect(html).not.toContain("你在");
+  });
+  it("marks work past its clock while it is open, in words and a mark", () => {
+    const late: Todo = { ...todo, brief: { ...brief, overdue_at: "2026-11-05T12:00:00Z" } };
+    const html = renderToStaticMarkup(<TaskBriefPanel todo={late} />);
+    expect(html).toContain('data-testid="brief-overdue"');
+    expect(html).toContain("已超时");
+    expect(html).toContain(`${formatDate("2026-11-05T12:00:00Z")} 起已超过预计用时`);
+    expect(renderToStaticMarkup(<TaskBriefPanel todo={{ ...late, done_at: at }} />)).not.toContain("brief-overdue");
+  });
+  it("leaves the criteria and the time to the review box when the task has one", () => {
+    const supervised: Todo = { ...todo, supervision: { supervisor: "main", done_when: brief.done_when, expect_minutes: 30 } };
+    const html = renderToStaticMarkup(<TaskBriefPanel todo={supervised} />);
+    expect(html).not.toContain("The fix is merged");
+    expect(html).not.toContain("约 30 分钟");
+    expect(renderToStaticMarkup(<TaskBriefPanel todo={todo} />)).toContain("The fix is merged");
+  });
+  it("draws nothing for a to-do without a brief", () => {
+    expect(renderToStaticMarkup(<TaskBriefPanel todo={{ ...todo, brief: undefined }} />)).toBe("");
+    expect(renderToStaticMarkup(<TaskBriefHistory todo={{ ...todo, brief: undefined }} />)).toBe("");
+    expect(renderToStaticMarkup(<TaskBriefHistory todo={todo} />)).toBe(""); // nothing changed, nobody took over
+  });
+  it("lists the scope changes and who worked on it, with why each stopped", () => {
+    const worked: Todo = {
+      ...todo,
+      brief: { ...brief, log: [{ at, kind: "scope", change: "No screenshots needed", why: "No screen changed", dropped: ["Screenshots attached"], added: ["The changelog has a line"], expect_minutes: 180, approval: { text: "ok", at } }, { at, kind: "overdue" }] },
+      lineage: [
+        { todo_id: "todo_1", title: "Fix the sign-in crash", agent: "claude", machine: "box", started: at, ended: "2026-11-04T12:00:00Z", why: "Its computer went offline", superseded_by: "todo_2" },
+        { todo_id: "todo_2", title: "Take over the sign-in fix", agent: "codex", started: "2026-11-04T12:00:00Z", ended: "2026-11-05T12:00:00Z", why: "The model service kept failing", continues: "todo_1", superseded_by: "todo_3" },
+        { todo_id: "todo_3", title: "Retry the sign-in fix", started: "2026-11-05T12:00:00Z", continues: "todo_2", current: true },
+      ],
+    };
+    const html = renderToStaticMarkup(<TaskBriefHistory todo={worked} />);
+    expect(html).toContain("范围变更");
+    expect(html).toContain("No screenshots needed");
+    expect(html).toContain("原因：No screen changed");
+    expect(html).toContain("去掉：Screenshots attached");
+    expect(html).toContain("新增：The changelog has a line");
+    expect(html).toContain("预计用时改为：约 3 小时");
+    expect(html).toContain("经你同意");
+    expect(html.match(/data-testid="brief-scope"/g)).toHaveLength(1);
+    expect(html).toContain("谁做过");
+    expect(html).toContain("停下原因：Its computer went offline");
+    expect(html).toContain("停下原因：The model service kept failing");
+    expect(html).toContain("当前任务");
+    expect(html).toContain("还在进行");
+    expect(html.match(/<li data-lineage-current/g)).toHaveLength(1);
+  });
+});
+
+describe("each criterion's result (#3822)", () => {
+  it("says met, not met, dropped with the change, and not checked, then what else was done", () => {
+    const html = renderToStaticMarkup(<BriefResultList criteria={criteria} alsoDone={["Removed a dead flag"]} />);
+    for (const state of ["met", "not_met", "dropped", "unchecked"]) expect(html).toContain(`data-criterion-state="${state}"`);
+    expect(html).toContain("已达成：merged in the example change");
+    expect(html).toContain("未达成");
+    expect(html).toContain("已去掉：No screen changed after all");
+    expect(html).toContain("未核对");
+    expect(html).toContain("另外做了");
+    expect(html).toContain("Removed a dead flag");
+  });
+  it("reads a state it does not know as not checked", () => {
+    const html = renderToStaticMarkup(<BriefResultList criteria={[{ criterion: "x", state: "later" }]} />);
+    expect(html).toContain('data-criterion-state="unchecked"');
+    expect(html).toContain("未核对");
+  });
+  it("stands in for the review box's list once the work ended", () => {
+    const done: Todo = { ...todo, done_at: at, supervision: { supervisor: "main", done_when: brief.done_when, state: "accepted" } };
+    const html = renderToStaticMarkup(<ReviewChecklist todo={done}><BriefResultList criteria={criteria} /></ReviewChecklist>);
+    expect(html).toContain('data-testid="brief-result"');
+    expect(html).toContain("验收标准"); // the box keeps its title
+    expect(html).not.toContain('aria-label="未单独核对'); // the review's own list is not drawn twice
+    expect(renderToStaticMarkup(<ReviewChecklist todo={done} />)).not.toContain("brief-result");
+  });
+  it("is the to-do's own result only", () => {
+    const result = { at, todo_id: "todo_3", criteria };
+    expect(resultOf({ ...todo, brief: { ...brief, result } })).toBe(result);
+    expect(resultOf({ ...todo, id: "todo_1", brief: { ...brief, result } })).toBeUndefined(); // another to-do took the work over
+    expect(resultOf({ ...todo, brief: { ...brief, result: { at, criteria: [] } } })).toBeUndefined();
+    expect(resultOf(todo)).toBeUndefined();
+  });
+});
