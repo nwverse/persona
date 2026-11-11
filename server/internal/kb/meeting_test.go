@@ -108,7 +108,7 @@ func TestRoomMeetingNeverInMeta(t *testing.T) {
 	if _, err := os.Stat(e.Store.path(KindRecording, recID, meetingFile)); err != nil {
 		t.Fatalf("the trim removed meeting.json: %v", err)
 	}
-	if !searchable("recordings/" + recID + "/meta.json") || searchable("recordings/"+recID+"/"+meetingFile) {
+	if !searchable("recordings/"+recID+"/meta.json") || searchable("recordings/"+recID+"/"+meetingFile) {
 		t.Error("meeting.json is searched")
 	}
 }
