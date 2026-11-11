@@ -100,9 +100,22 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * shared stylesheet's classes for the topic page and the knowledge map, and its switch in Settings' search; the pages,
  * their code and words load on demand), and 2,048 B for tool names in words (#2986 added 1,996 B: lib/turns.ts's
  * subjects of Claude Code's newer tools and other servers' MCP tools named in words, the verbs views/chat/ActionRow.tsx
- * gives them). Raise it on purpose, in the change that needs it.
+ * gives them), and 1,024 B for background rounds in the main conversation (#4314 added about 580 B: lib/turns.ts's
+ * background-round detection and source blocks in an opened round, the folded line's words and Needs you's grouping by
+ * supervisor), and 4,096 B for the authoritative workspace catalog and its direct workspace rows, the first-screen
+ * worktree action words, and shared sticky group controls (PR #3222: 3,605 B over its main baseline), and 1,536 B for
+ * when each session was last active (#4236 added 1,081 B to ja: the sidebar row's age at its end, the paged list's
+ * Active within menu and its folded Earlier group, their words), and 512 B for a Persona chat's queue actions (#4342
+ * added 312 B: views/chat/QueueStrip.tsx's own and relayed rows, the photos a take-back brings back, the Persona Send now
+ * words and the relayed line), and 1,536 B for the refusal fallback (#2528 added 1,115 B to ja: the refusal notice
+ * line, the fallback card above the composer with its way back to the configured model, lib/model-fallback.ts and
+ * lib/refusal-public.ts, their words), and 640 B for holding earlier feed cards off the newest page until their page
+ * loads (#4485 added 520 B to ja: the first-screen feed-page gate), and 64 B for the credential-owner bootstrap
+ * (#4518, allocated in #4597), and 128 B for sending an edit of the last message safely (#4605 added 115 B to ja:
+ * ChatView's wait for Claude's box after the rewind, the send's clear_draft and the give-back of a refused edit).
+ * Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 585_856;
+export const FIRST_SCREEN_BUDGET = 595_392;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
@@ -115,10 +128,11 @@ export async function sentBytes(dir: string, files: string[]): Promise<number> {
  * The most the idle tier may send (src/lib/lazy-page.ts: the chunks of each `lazyPage(…, { idle: true })` and what they
  * import beyond the first screen), in bytes as gzipBytes counts them (vite.config.ts startupPreload fails the build past
  * it): 29,143 B at #2798 plus 3% (28,085 B at #2880; #2798 moved ModelIdField, which the model popover now shares with
- * the idle ModelPicker, out of the first screen into a chunk of its own). Every other lazy page loads on intent, not at
- * idle; raise it on purpose, in the change that needs it.
+ * the idle ModelPicker, out of the first screen into a chunk of its own), and 64 B for managing launchers from the
+ * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter). Every other lazy
+ * page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 30_017;
+export const IDLE_TIER_BUDGET = 30_081;
 
 const gzip = promisify(gzipCompress);
 

@@ -76,29 +76,48 @@ func (s *Service) kbConnectors(ctx context.Context, e *kb.Engine) {
 	}
 }
 
-// kbCollectItems records every connector's items (documents, meetings and events) and tags new ones.
-func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine) {
+// kbCollectItems records every connector's items (documents, meetings and events) and tags new ones; more: untagged
+// ones are left (past the round's cap, a paused connection) and kbTagItems goes on with them next round. When it
+// stops before tagging (not writable, the connectors not answering, none with items) it is more as it was.
+func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine, more bool) bool {
 	s.kb.sourceWrites.Lock()
 	defer s.kb.sourceWrites.Unlock()
 	if !s.kbWritable(ctx) {
-		return
+		return more
 	}
 	var list assistantwire.Archives
 	if err := s.appCall(ctx, AppConnectors, assistantwire.ConnectorsArchives, map[string]any{}, &list); err != nil {
 		s.logf("kb: the connectors' items: %v", err)
-		return
+		return more
 	}
 	if len(list.Items) == 0 {
-		return
+		return more
 	}
 	for _, id := range list.Items {
 		if err := e.CollectItems(ctx, busItems{s: s, id: id}, id); err != nil {
 			s.logf("kb: items: %v", err)
 		}
 	}
-	if err := e.TagItems(ctx); err != nil && !ai.IsPaused(err) {
+	return s.tagItems(ctx, e)
+}
+
+// kbTagItems goes on tagging the items a round before left, without reading the connectors again; more as
+// kbCollectItems.
+func (s *Service) kbTagItems(ctx context.Context, e *kb.Engine, more bool) bool {
+	s.kb.sourceWrites.Lock()
+	defer s.kb.sourceWrites.Unlock()
+	if !s.kbWritable(ctx) {
+		return more
+	}
+	return s.tagItems(ctx, e)
+}
+
+func (s *Service) tagItems(ctx context.Context, e *kb.Engine) (more bool) {
+	more, err := e.TagItems(ctx, kbTagItemsMax)
+	if err != nil && !ai.IsPaused(err) {
 		s.logf("kb: tag items: %v", err)
 	}
+	return more
 }
 
 // busArchive is a connector's archive read through the hub (connectors.changes).

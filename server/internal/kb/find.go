@@ -87,7 +87,7 @@ func matcher(query string) func(string) bool {
 func searchable(rel string) bool {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch {
-	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir:
+	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir || parts[0] == trashDirName:
 		return false
 	case len(parts) == 3 && parts[0] == KindChat && parts[2] == retentionFile:
 		return false
@@ -95,6 +95,8 @@ func searchable(rel string) bool {
 		return false // minutes.md has the minutes' text
 	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], liveFile):
 		return false // live.json, and its temporary file while it is replaced
+	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], meetingFile):
+		return false // meeting.json (meeting.go): the manager's bookkeeping of the room and the mark
 	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == "handles.json":
 		return false
 	case len(parts) == 3 && parts[0] == KindProject && parts[2] == "moments-judged.json":
