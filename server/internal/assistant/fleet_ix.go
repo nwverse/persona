@@ -229,6 +229,9 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 // (the manager restarted with it on the phone) is shown again without a second push.
 func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
 	ix = cleanTitle(ix)
+	// A Just me turn's card, the node's or the manager's own (ask_user, a confirmation): pushed without its content,
+	// never to Lark or a channel (meeting_justme.go).
+	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
 	if ix.ExpiresAt.IsZero() {
 		ix.ExpiresAt = time.Now().Add(s.notifyTimings().hookTimeout()).UTC()
 	}

@@ -17,10 +17,11 @@ const Module = "github.com/nwverse/persona/server/"
 var Platforms = []string{"linux/amd64", "linux/arm64", "darwin/arm64", "darwin/amd64", "windows/amd64"}
 
 // HubOwn are the hub's own packages: persona-manager links none of them. A contract between the hub and a helper of
-// its own (relayproto with the push relay, shareproof with the sharing ingress) is the hub's too.
+// its own (relayproto with the push relay, shareproof with the sharing ingress, passwordpake with the web app's
+// password WASM) is the hub's too.
 var HubOwn = []string{"cmd/persona-hub", "internal/hub", "internal/hubcli", "internal/hubedge", "internal/apns",
-	"internal/mdns", "internal/proxyproto", "internal/pushcrypto", "internal/relay", "internal/relayproto",
-	"internal/shareproof", "internal/webasset"}
+	"internal/mdns", "internal/passwordpake", "internal/proxyproto", "internal/pushcrypto", "internal/relay",
+	"internal/relayproto", "internal/shareproof", "internal/webasset"}
 
 // Shared are the packages both programs link (the wire types, the database, the configuration, identity, the update
 // code): the hub links these and its own, nothing else; a new package the hub needs is put in one of the two lists on
