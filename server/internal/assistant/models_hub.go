@@ -38,6 +38,9 @@ func (s *Service) modelsRequest(ctx context.Context, method string, params json.
 	case assistantwire.MethodModelsExtensionComplete: // an extension's model.complete (model_rpc.go)
 		out, err := s.extensionComplete(ctx, params)
 		return out, true, err
+	case assistantwire.MethodModelsPurposeComplete: // the manager's own call on a built-in purpose (model_rpc.go)
+		out, err := s.purposeComplete(ctx, params)
+		return out, true, err
 	default:
 		return nil, false, nil
 	}
@@ -48,7 +51,17 @@ func (s *Service) modelsRequest(ctx context.Context, method string, params json.
 	}
 	if method == assistantwire.MethodModelsUsable {
 		b, err := s.resolveModel(ctx, p.Purpose)
-		return map[string]any{"usable": err == nil && s.modelUsable(ctx, b)}, true, nil
+		if err != nil || !s.modelUsable(ctx, b) {
+			return map[string]any{"usable": false}, true, nil
+		}
+		name := b.Provider
+		for _, v := range s.modelProviders(ctx) {
+			if v.ID == b.Provider {
+				name = cmpOr(v.Name, v.ID)
+				break
+			}
+		}
+		return map[string]any{"usable": true, "provider": name, "model": b.Model}, true, nil
 	}
 	out, err := s.launcherHTTP(ctx, p.Name, p.Machine, p.HTTP)
 	return out, true, err
@@ -97,9 +110,9 @@ func (s *Service) launcherHTTP(ctx context.Context, name, machine string, r *quo
 				}
 				return map[string]any{"base_url": l.BaseURL, "machine": local}, nil
 			}
-			key, err := s.openKey(l.KeySealed)
+			key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 			if err != nil {
-				return nil, errors.New(i18n.T(s.lang(ctx), "assistant-models.err_key_decrypt"))
+				return nil, errors.New(i18n.Localize(err, s.lang(ctx)))
 			}
 			return quota.Do(ctx, &http.Client{Timeout: 25 * time.Second}, l.BaseURL, key, *r)
 		}

@@ -19,7 +19,7 @@ func planStart(t *testing.T, ultracode any, body string) map[string]any {
 	s, f := newTaskService(t)
 	ctx := context.Background()
 	task := map[string]any{"title": "重构同步层", "prompt": "把同步层拆成三个模块并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": false, "why": "这个仓库最近在 box 上"}
+		"readonly": false, "permission": "bypassPermissions", "why": "这个仓库最近在 box 上"}
 	if ultracode != nil {
 		task["ultracode"] = ultracode
 	}
@@ -109,7 +109,8 @@ func TestTaskStartsWithoutUltracodeWhenRefused(t *testing.T) {
 			f.refuseUltra = refusal
 			ctx := context.Background()
 			args, _ := json.Marshal(map[string]any{"tasks": []any{map[string]any{"title": "重构同步层", "prompt": "把同步层拆成三个模块并补测试",
-				"machine": "box", "cwd": "/code/app", "readonly": false, "why": "这个仓库最近在 box 上", "ultracode": true}}})
+				"machine": "box", "cwd": "/code/app", "readonly": false, "permission": "bypassPermissions", "why": "这个仓库最近在 box 上",
+				"ultracode": true}}})
 			if _, err := s.toolTaskPlan(ctx, "conv1", args); err != nil {
 				t.Fatal(err)
 			}

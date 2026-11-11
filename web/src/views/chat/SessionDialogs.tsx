@@ -3,14 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
-import { BYPASS_MODE, BYPASS_WARNING, canSwitchToBypass, effortOptions, effortTitle, modeTitle, renameBody, switchableModes } from "../../lib/session-actions";
+import { BYPASS_MODE, BYPASS_WARNING, effortOptions, effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
+import { headerIcon, headerTone, modeMenuItems, modesChangeable, type ModeTone } from "../../lib/header-mode";
 import { canSwitchModel, onModelPicker } from "../../lib/model-switch";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
 import { href, navigate, parse, showsSession } from "../../lib/router";
 import { stripBase } from "../../lib/base";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { Button, copyText, cx, Dialog, Loading, Menu, Switch, toast, useMenu } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog, Loading, Menu, Spinner, Switch, toast, useMenu } from "../../ui/atoms";
 import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree";
 import { Icon, type IconName } from "../../ui/icons";
 import { lazyOverlay } from "../LazyOverlay";
@@ -277,7 +278,68 @@ export function ModeChips({ session, effortOnly, assistant, withInfo }: { sessio
     if (!withModel) setPopover(null);
   }, [withModel]);
   const mark = ultracodeOn(session) ? {} : effortOnly && session.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;
-  // the popover applies the model and then the effort: the second must build on the session the first changed
+  const { set, latest } = useModeSet(session);
+  const speedTitle = (id: string, name: string) => id === "default" ? t("chat-sessiondialogs.speed_standard") : id === "priority" ? t("chat-sessiondialogs.speed_fast") : name;
+  const speedChoices = session.service_tiers ?? [];
+  const currentSpeed = speedChoices.find((tier) => tier.id === session.service_tier);
+  const mode = session.permission_mode;
+  const danger = mode === BYPASS_MODE;
+  return (
+    // A Persona conversation has its launcher chip after these and no text to give way: these keep their width up to
+    // the row less 5.5rem (the row's 0.5rem gap and 5rem of launcher chip), so that chip truncates first (#3575). At
+    // phone width that chip is an icon (#4142): 3rem leaves its 2.5rem and the gap, 5rem also the footer's 22px ⓘ
+    // button and its gap (`withInfo`, #3533). An agent's chips keep their width on a wide screen, where the path beside
+    // them truncates first; at phone width (the path hidden) they may shrink, their labels truncating, so the ⓘ after
+    // them never slides under the composer's stop or send button (the ultracode mark, #3428, made the English row too wide).
+    <span className={cx("flex shrink-0 items-center gap-1", assistant && "min-w-0 max-w-[calc(100%-5.5rem)]", assistant && (withInfo ? "max-sm:max-w-[calc(100%-5rem)]" : "max-sm:max-w-[calc(100%-3rem)]"), !assistant && "max-sm:min-w-0 max-sm:shrink")}>
+      {!effortOnly && <Chip label={mode ? modeTitle(mode) : t("chat-sessiondialogs.permission_default")} narrow={{ icon: "shield", label: modeShort(mode) }} danger={danger} onClick={modeMenu.open} active={Boolean(modeMenu.anchor)} title={danger ? BYPASS_WARNING : t("chat-sessiondialogs.permission_mode")} />}
+      <Chip
+        buttonRef={effortChip}
+        label={effortOnly && !session.efforts?.length ? t("chat-sessiondialogs.speed") : session.effort ? t("chat-sessiondialogs.effort_chip", { effort: effortTitle(session.effort) }) : t("chat-sessiondialogs.effort_default")}
+        narrow={{ icon: "gauge", label: session.effort ? effortTitle(session.effort) : t("chat-sessiondialogs.short_default") }}
+        onClick={withModel ? (e) => setPopover((a) => (a ? null : e.currentTarget)) : effortMenu.open}
+        active={Boolean(withModel ? popover : effortMenu.anchor)}
+        title={withModel ? t("composer.model_effort") : t("chat-sessiondialogs.effort")}
+        mark={mark}
+      />
+      {modeMenu.anchor && !effortOnly && (
+        <Menu
+          anchor={modeMenu.anchor}
+          onClose={modeMenu.close}
+          side="top"
+          width={300}
+          header={t("chat-sessiondialogs.permission_mode")}
+          // the header's rows (#3956): into "Allow all" in red and asked again (#1379), out of it asked where it can't come back
+          items={modeMenuItems(session, (m) => void set({ permission_mode: m }), { assistant })}
+        />
+      )}
+      {effortMenu.anchor && !withModel && (
+        <Menu
+          anchor={effortMenu.anchor}
+          onClose={effortMenu.close}
+          side="top"
+          width={280}
+          header={t("chat-sessiondialogs.effort")}
+          items={[
+            ...(effortOnly && !session.efforts?.length ? [] : effortOptions(session).map((m) => ({ key: m.id, label: m.title, detail: m.detail, radio: true, checked: session.effort === m.id, onSelect: () => void set({ effort: m.id }) }))),
+            ...(speedChoices.length ? [{
+              key: "speed", label: t("chat-sessiondialogs.speed"),
+              hint: currentSpeed ? speedTitle(currentSpeed.id, currentSpeed.name) : t("chat-sessiondialogs.speed_unknown"),
+              divider: true, onSelect: () => {},
+              // Speed controls load on intent, alongside the existing model popover.
+              children: () => import("./CodexSpeed").then((module) => module.codexSpeedOptions(latest.current)),
+            }] : []),
+          ]}
+        />
+      )}
+      {popover && withModel && <ModelEffortPopover session={session} anchor={popover} onClose={() => setPopover(null)} apply={set} />}
+    </span>
+  );
+}
+
+/** POST …/modes with a patch, drawn at once and put back if it fails: the composer's chips and the header's mode. `latest`:
+ *  the popover applies the model and then the effort, and the second must build on the session the first changed. */
+function useModeSet(session: Session) {
   const latest = useRef(session);
   latest.current = session;
   const set = async (patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> => {
@@ -293,57 +355,61 @@ export function ModeChips({ session, effortOnly, assistant, withInfo }: { sessio
       return false;
     }
   };
+  return { set, latest };
+}
+
+const MODE_LOOK: Record<ModeTone, string> = {
+  asks: "bg-field text-ink-3",
+  unknown: "bg-field text-ink-3",
+  plans: "bg-mode-plans-tint text-mode-plans",
+  acts: "bg-mode-acts-tint text-mode-acts",
+  allows: "bg-mode-allows-tint text-mode-allows",
+};
+
+/** The permission mode at the end of an Agent's header (#3956, iOS `HeaderModeButton` from #3719): the mode's symbol in its
+ *  tone, no words (they are its accessible name, its tooltip and its menu). Ask First is never hidden, so the control stays
+ *  in one place. Its menu is the composer chip's (`modeMenuItems`); a spinner stands in for the symbol while a change is on
+ *  its way. */
+export function HeaderModeButton({ session }: { session: Session }) {
+  const menu = useMenu();
+  const { set } = useModeSet(session);
+  const [changing, setChanging] = useState(false);
   const mode = session.permission_mode;
-  const danger = mode === BYPASS_MODE;
+  const tone = headerTone(mode);
+  const words = t("chat-sessiondialogs.header_mode", { mode: mode ? modeTitle(mode) : t("chat-sessiondialogs.mode_unknown") });
+  const locked = !modesChangeable(session);
+  const pick = async (to: string) => {
+    setChanging(true);
+    try { await set({ permission_mode: to }); } finally { setChanging(false); }
+  };
+  const items = modeMenuItems(session, (to) => void pick(to), { locked });
   return (
-    // A Persona conversation has its launcher chip after these and no text to give way: these keep their width up to
-    // the row less 5.5rem (the row's 0.5rem gap and 5rem of launcher chip), so that chip truncates first (#3575). At
-    // phone width that chip is an icon (#4142): 3rem leaves its 2.5rem and the gap, 5rem also the footer's 22px ⓘ
-    // button and its gap (`withInfo`, #3533). An agent's chips keep their width on a wide screen, where the path beside
-    // them truncates first; at phone width (the path hidden) they may shrink, their labels truncating, so the ⓘ after
-    // them never slides under the composer's stop or send button (the ultracode mark, #3428, made the English row too wide).
-    <span className={cx("flex shrink-0 items-center gap-1", assistant && "min-w-0 max-w-[calc(100%-5.5rem)]", assistant && (withInfo ? "max-sm:max-w-[calc(100%-5rem)]" : "max-sm:max-w-[calc(100%-3rem)]"), !assistant && "max-sm:min-w-0 max-sm:shrink")}>
-      {!effortOnly && <Chip label={mode ? modeTitle(mode) : t("chat-sessiondialogs.permission_default")} narrow={{ icon: "shield", label: modeShort(mode) }} danger={danger} onClick={modeMenu.open} active={Boolean(modeMenu.anchor)} title={danger ? BYPASS_WARNING : t("chat-sessiondialogs.permission_mode")} />}
-      <Chip
-        buttonRef={effortChip}
-        label={session.effort ? t("chat-sessiondialogs.effort_chip", { effort: effortTitle(session.effort) }) : t("chat-sessiondialogs.effort_default")}
-        narrow={{ icon: "gauge", label: session.effort ? effortTitle(session.effort) : t("chat-sessiondialogs.short_default") }}
-        onClick={withModel ? (e) => setPopover((a) => (a ? null : e.currentTarget)) : effortMenu.open}
-        active={Boolean(withModel ? popover : effortMenu.anchor)}
-        title={withModel ? t("composer.model_effort") : t("chat-sessiondialogs.effort")}
-        mark={mark}
-      />
-      {modeMenu.anchor && !effortOnly && (
+    <>
+      <button
+        type="button"
+        onClick={menu.open}
+        disabled={changing}
+        aria-label={words}
+        aria-haspopup="menu"
+        aria-expanded={Boolean(menu.anchor)}
+        title={words}
+        data-mode-tone={tone}
+        data-testid="header-mode"
+        className={cx("touch-hit flex h-7 min-w-9 shrink-0 items-center justify-center rounded-full px-2.5 transition-colors hover:brightness-95 dark:hover:brightness-110", MODE_LOOK[tone])}
+      >
+        {changing ? <Spinner size={13} /> : <Icon name={headerIcon(mode)} size={15} stroke={2} />}
+      </button>
+      {menu.anchor && (
         <Menu
-          anchor={modeMenu.anchor}
-          onClose={modeMenu.close}
-          side="top"
+          anchor={menu.anchor}
+          onClose={menu.close}
+          align="right"
           width={300}
-          header={t("chat-sessiondialogs.permission_mode")}
-          items={switchableModes(assistant || session.assistant, session.agent, canSwitchToBypass(session)).map((m) => ({
-            key: m.id,
-            label: m.title,
-            detail: m.detail,
-            radio: true,
-            checked: mode === m.id,
-            // an agent switched to "Allow all" while it runs (#1379): in red, and asked again first
-            ...(m.id === BYPASS_MODE && mode !== BYPASS_MODE && !(assistant || session.assistant || session.agent === "agy") ? { danger: true, confirm: t("chat-sessiondialogs.bypass_confirm"), confirmDetail: BYPASS_WARNING } : {}),
-            onSelect: () => void set({ permission_mode: m.id }),
-          }))}
+          header={words}
+          items={locked ? [{ key: "locked", label: t("chat-sessiondialogs.modes_locked"), note: true, onSelect: () => {} }, ...items] : items}
         />
       )}
-      {effortMenu.anchor && !withModel && (
-        <Menu
-          anchor={effortMenu.anchor}
-          onClose={effortMenu.close}
-          side="top"
-          width={280}
-          header={t("chat-sessiondialogs.effort")}
-          items={effortOptions(session).map((m) => ({ key: m.id, label: m.title, detail: m.detail, radio: true, checked: session.effort === m.id, onSelect: () => void set({ effort: m.id }) }))}
-        />
-      )}
-      {popover && withModel && <ModelEffortPopover session={session} anchor={popover} onClose={() => setPopover(null)} apply={set} />}
-    </span>
+    </>
   );
 }
 

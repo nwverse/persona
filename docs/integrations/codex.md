@@ -316,6 +316,12 @@ herdr reports blocked when Codex has an unanswered async question, so `agent pro
 - Real Codex: `scripts/test/test-codex.sh` (`docs/operations/testing.md`, "Codex integration testing") starts Codex in isolated herdr, asks questions and requests approvals, with one case per UI state and multiple turns each.
 - App: `CodexCardsTests` (mock `MOCK_CODEX=1`), light / dark screenshots.
 
+## Closeout
+
+A Codex Agent learns the closeout's form (`docs/assistant/agent-work.md`, "Closeout") the way it learns its task: in the prompt. With the `closeout` triage switch on, the prompts of `task_plan`, `agent_start` and `dispatch_start` end with the form, whatever launcher runs them, and the first message is what a Codex session is started with ("Starting from the phone"). Triage reads the closeout from the last reply of the turn as the node reads it from the rollout, so a Codex closeout is parsed like any other (`TestCodexCloseoutIsRead`).
+
+Two things Claude Code sessions have are missing here. Persona installs no Codex hooks of its own (the engine's integration only reports the session id, "Recognition"), so no Codex stop is held when a turn that did work ends without a closeout, and a Codex session started without a task prompt (from an app, in a terminal) is told nothing up front. Codex's own Stop and SessionStart hooks would need the user to trust them in `config.toml` first ("Research: app-server and approval hooks for Codex in Agents (2026-11-02, conclusions only, not implemented)" below). `assistant/codex_instructions.md` is the developer instructions of the Codex-run assistant, not of Agents, and assistant conversations write no closeout.
+
 ## Not supported yet
 
 - Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue only through the App.
@@ -344,7 +350,7 @@ with its own tag and "Message the Agent" input label. Code: `server/internal/nod
   numbered choices such as "› 1." = Needs you (a "Terminal is asking you" card). Otherwise report `done`, and the hub determines Unread / Seen from whether it has been read. Read the screen at most every 2 seconds.
 - **Same file layout as Codex**, rooted at `~/.trae/cli`: `sessions/YYYY/MM/DD/rollout-*.jsonl` and `session_index.jsonl` (thread names for titles).
 - **Newer rollout format**: user messages and replies are in `history_mutation.display_completions[].item` (same item structure as `item_completed`),
-  while tool calls remain in `event_msg/item_completed`. The same item may appear in both places (deduplicate by id). A `history_mutation` line may span hundreds of KB to 1 MB
+  while tool calls remain in `event_msg/item_completed`. The same item may appear in both places within a turn (deduplicate by id within the turn). A `history_mutation` line may span hundreds of KB to 1 MB
   (full context after compaction); decode only `display_completions`. `task_started` / `task_complete` are recorded in `Meta.TurnOpen`.
   `TerminalInteraction` (polling / sending input to a running command) is not displayed.
 - **Messaging**: herdr's `agent prompt` recognizes only known Agents and returns not found for fork panes, so use `pane send-text` + Enter (`Node.prompt`).
@@ -420,3 +426,16 @@ Read codex-rs source tags `rust-v0.153.4` / `rust-v0.163.0`, plus binaries for b
 ### Orca hook ownership when starting Codex
 
 A new local Codex launched inside Orca must keep that terminal’s hook environment. A shared Codex app-server daemon can retain a previously launched terminal’s Orca identity, attributing a new conversation and first-work naming to the wrong worktree. The phone-start helper probes the executable in the new terminal and adds `--no-daemon` when supported. It preserves explicit remote connections, already isolated launchers and older CLIs without that flag. Other terminal engines keep their existing launch behavior.
+
+## Speed
+
+The web composer's effort menu includes a Speed submenu for Persona conversations running Codex and writable external app-server threads whose current model advertises
+`serviceTiers` through `model/list`. Standard sends `default`; Fast uses the advertised tier ID, currently `priority`.
+The submenu explains increased usage or cost before selection. It is independent of reasoning effort and takes effect
+on subsequent turns. Settings > Agents > Codex also exposes the native `service_tier` default for new sessions.
+
+An explicit choice uses `thread/settings/update` and waits for acknowledgment. Refusals, unsupported methods and lost
+connections return errors without retaining a next-turn speed override. `thread/resume` and `thread/settings/updated`
+provide the current speed. A native null means Standard. Missing speed stays unknown because `thread/read` does not
+currently report it. Refreshes preserve acknowledged state, and reconnects start with unknown state until native
+settings arrive. Terminal-only panes, subagents and models without advertised tiers have no speed control.

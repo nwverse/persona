@@ -61,10 +61,30 @@ type PlanTask struct {
 	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
+	// the agent must not do. Continues: the to-do this task takes over from (a retry on another computer, a rework
+	// round, a task split off it), for ContinuesWhy: it then works for that to-do's brief instead of a new one. Brief is
+	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
+	// call or a card's edit says.
+	Goal         string   `json:"goal,omitempty"`
+	OutOfBounds  []string `json:"out_of_bounds,omitempty"`
+	Continues    string   `json:"continues,omitempty"`
+	ContinuesWhy string   `json:"continues_why,omitempty"`
+	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
+	StartedWhy string     `json:"started_why,omitempty"`
+	Brief      *TaskBrief `json:"brief,omitempty"`
+	// Supervisor: the leader conversation the main conversation handed the task to (task_plan's supervisor, #3608);
+	// "" the plan's own conversation supervises it, as before.
+	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
+	// Role: "leader" makes the task's agent a task leader that may hand out workers beneath this task (task_leader.go,
+	// #3656); "" is an ordinary worker. Only a supervising conversation's task_plan sets it. Parent: the leader's task
+	// this task is a worker of; the hub's, never what a tool call or an edit says.
+	Role   string `json:"role,omitempty"`
+	Parent string `json:"parent,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
@@ -75,7 +95,8 @@ type PlanTask struct {
 	Attachments []string `json:"attachments,omitempty"`
 	Mentioned   []string `json:"mentioned,omitempty"`
 	AttachFrom  string   `json:"attach_from,omitempty"`
-	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
+	// Set once started: the todo the task is, and why its agent did not start. TodoID is cleared when another plan
+	// takes over that to-do; ReuseTodo keeps the historical target. ErrorCode and ErrorArgs: the start's
 	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
 	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
 	TodoID    string            `json:"todo_id,omitempty"`
@@ -237,6 +258,31 @@ func (s *Service) loadPlan(ctx context.Context, id string) (*TaskPlan, error) {
 	return planFromRow(*row), nil
 }
 
+// conversationPlans reads persisted plans, or snapshots the storeless plans, without relying on list order.
+func (s *Service) conversationPlans(ctx context.Context, conversation string) ([]*TaskPlan, error) {
+	var plans []*TaskPlan
+	if st := s.store(); st != nil {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			plans = append(plans, planFromRow(row))
+		}
+	} else {
+		s.tasks.mu.Lock()
+		defer s.tasks.mu.Unlock()
+		for _, plan := range s.tasks.plans {
+			if plan.Conversation == conversation {
+				cp := *plan
+				cp.Tasks = append([]PlanTask(nil), plan.Tasks...)
+				plans = append(plans, &cp)
+			}
+		}
+	}
+	return plans, nil
+}
+
 func planFromRow(row db.TaskPlanRow) *TaskPlan {
 	p := &TaskPlan{ID: row.ID, Conversation: row.Conversation, State: row.State, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 	_ = json.Unmarshal(row.Tasks, &p.Tasks)
@@ -293,6 +339,9 @@ func (s *Service) appendFeed(ctx context.Context, conversation, kind, ref string
 
 // appendFeedAt is appendFeed for an item that belongs at another time (the "Today" card: the start of the day).
 func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref string, body any, at time.Time) (FeedItem, error) {
+	if s.isLeaderRef(conversation) { // a task leader's agent is no conversation: nobody reads a feed there (task_leader.go)
+		return FeedItem{}, nil
+	}
 	it := FeedItem{ID: "feed_" + randomHex(8), Conversation: conversation, At: at.UTC(), Kind: kind, Ref: ref}
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -303,12 +352,27 @@ func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref stri
 	}
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
+		if kind == feedMessage && s.duplicateDismissedDraft(it) {
+			s.tasks.mu.Unlock()
+			return FeedItem{}, nil
+		}
 		s.tasks.feed[conversation] = append(s.tasks.feed[conversation], it)
 		s.tasks.mu.Unlock()
-	} else if err := st.AppendFeed(ctx, db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}); err != nil {
-		return FeedItem{}, err
+	} else {
+		row := db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}
+		if ds, ok := st.(draftFeedStore); kind == feedMessage && ok {
+			inserted, err := ds.AppendDraftFeed(ctx, row)
+			if err != nil || !inserted {
+				return FeedItem{}, err
+			}
+		} else if err := st.AppendFeed(ctx, row); err != nil {
+			return FeedItem{}, err
+		}
 	}
 	s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": conversation, "item": it})
+	if kind == feedReceipt {
+		s.interruptsSoon() // a task went on after being cut off (interruptions.go)
+	}
 	return it, nil
 }
 
@@ -317,11 +381,23 @@ const feedPage = 500
 // feedItems is a conversation's items after since, oldest first (with the message cards sent after since: the client
 // has them, not that they went out), without the plans they name: for readers that look only at the items.
 func (s *Service) feedItems(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
+	items, err := s.rawFeed(ctx, conversation, since)
+	if err != nil {
+		return nil, err
+	}
+	s.settleCards(ctx, items)
+	s.fileCards(ctx, items)
+	return s.resolveInterruptions(ctx, conversation, items), nil
+}
+
+// rawFeed is feedItems as stored, with nothing worked out on reading.
+func (s *Service) rawFeed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
 	var items []FeedItem
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
 		for _, it := range s.tasks.feed[conversation] {
-			if at := cardSentAt(it); it.At.After(since) || it.Kind == feedMessage && at != nil && at.After(since) {
+			at, changed := cardSentAt(it), cardChangedAt(it)
+			if it.At.After(since) || it.Kind == feedMessage && (at != nil && at.After(since) || changed != nil && changed.After(since)) {
 				items = append(items, it)
 			}
 		}
@@ -335,8 +411,6 @@ func (s *Service) feedItems(ctx context.Context, conversation string, since time
 			items = append(items, FeedItem{ID: r.ID, Conversation: r.Conversation, At: r.At, Kind: r.Kind, Ref: r.Ref, Body: r.Body})
 		}
 	}
-	s.settleCards(ctx, items)
-	s.fileCards(ctx, items)
 	return items, nil
 }
 
@@ -468,6 +542,7 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 // ---- HTTP ----
 
 func (s *Service) taskRoutes() {
+	s.draftDecisionRoutes()
 	s.doneCheckRoute()
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
@@ -538,11 +613,29 @@ func (s *Service) taskRoutes() {
 			}
 			since = t
 		}
-		items, plans, err := s.feed(r.Context(), r.PathValue("id"), since)
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
+		query := r.URL.Query()
+		paginated := query.Get("paginate") == "1" || query.Has("cursor")
+		if query.Has("cursor") && (query.Get("cursor") == "" || query.Has("since")) {
+			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		var items []FeedItem
+		var nextCursor string
+		var err error
+		if paginated {
+			items, nextCursor, err = s.pagedFeed(r.Context(), r.PathValue("id"), since, query.Get("cursor"))
+		} else {
+			items, err = s.feedItems(r.Context(), r.PathValue("id"), since)
+		}
+		if err != nil {
+			status := http.StatusServiceUnavailable
+			if errors.Is(err, errFeedCursor) {
+				status = http.StatusBadRequest
+			}
+			apierr.Write(w, status, err)
+			return
+		}
+		plans := s.feedPlans(r.Context(), items)
 		if items == nil {
 			items = []FeedItem{}
 		}
@@ -565,7 +658,11 @@ func (s *Service) taskRoutes() {
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
+		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
+		if paginated {
+			out["next_cursor"] = nextCursor
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

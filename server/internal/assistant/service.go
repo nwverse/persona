@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
@@ -50,8 +51,12 @@ type Service struct {
 	nodeAnswering atomic.Int64
 	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
 	taskStarting atomic.Int64
+	// leaderStarts counts task leaders being started: until one is linked its agent is no leader to the hub (task_leader.go).
+	leaderStarts atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
+	refs launcherSecrets
 
 	hub   Hub
 	store func() Store
@@ -88,24 +93,31 @@ type Service struct {
 	// running is Run's context: it ends when the service stops (runCtx).
 	running atomic.Pointer[context.Context]
 
-	titles    titleBook      // titles.go
-	prefs     settingsBook   // profile.go
-	main      mainBook       // start.go
-	archived  archiveBook    // conversations.go
-	origins   originBook     // origins.go
-	guests    guestBook      // guest.go
-	relays    relayBook      // conversations.go
-	quiet     quietBook      // quiet.go
-	supervise superviseBook  // supervise_signals.go
-	autoRuns  autoReviewBook // supervise_autoreview.go
-	reports   reportBook     // reports.go
-	upReports reportRate     // agent_control.go: report_to_supervisor
-	noteRate  reportRate     // todo_decisions.go: todo_decision_add
-	dispatch  dispatchBook   // dispatch.go: dispatch_start, dispatch_read
-	adoptMu   sync.Mutex     // agent_control.go: one agent_supervise at a time
-	placeBook placeBook      // places.go
-	accept    acceptBook     // acceptance.go
-	deploy    deployProbe    // deploy_check.go: is the work in the running hub
+	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
+	interrupts interruptBook
+
+	titles    titleBook     // titles.go
+	prefs     settingsBook  // profile.go
+	main      mainBook      // start.go
+	archived  archiveBook   // conversations.go
+	origins   originBook    // origins.go
+	guests    guestBook     // guest.go
+	relays    relayBook     // conversations.go
+	quiet     quietBook     // quiet.go
+	supervise superviseBook // supervise_signals.go
+	tbriefs   taskBriefBook // task_brief.go
+	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
+	// what a plan does once it exists set it; the hub never does.
+	briefsOptional bool
+	autoRuns       autoReviewBook // supervise_autoreview.go
+	reports        reportBook     // reports.go
+	upReports      reportRate     // agent_control.go: report_to_supervisor
+	noteRate       reportRate     // todo_decisions.go: todo_decision_add
+	dispatch       dispatchBook   // dispatch.go: dispatch_start, dispatch_read
+	adoptMu        sync.Mutex     // agent_control.go: one agent_supervise at a time
+	placeBook      placeBook      // places.go
+	accept         acceptBook     // acceptance.go
+	deploy         deployProbe    // deploy_check.go: is the work in the running hub
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll bool
 	later            laterBook    // later.go: questions that can wait for a briefing
@@ -120,6 +132,7 @@ type Service struct {
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
+	attend     attendState       // meeting_feed.go: feeding the meetings Persona attends, and their turns
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
@@ -130,6 +143,7 @@ type Service struct {
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
 	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
 	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
+	offers     routeBook         // route.go: the directions offered for New chats
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
@@ -141,6 +155,7 @@ type Service struct {
 
 	devs          Devices // the computers (devices.go); nil: no fleet
 	agentArchives agentArchiveBook
+	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
 	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
@@ -159,6 +174,11 @@ type Service struct {
 	acceptSweepHook func(id string)
 	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
 	sessionsSeen func(DeviceSessions)
+
+	// asks are the questions of attended meetings being answered (meeting_ask.go); meetingModel stands in for the
+	// meeting.answer model in tests (nil: the configured one).
+	asks         meetingAsks
+	meetingModel kb.Model
 }
 
 var _ Handler = (*Service)(nil)
@@ -181,6 +201,9 @@ func New(o Options) *Service {
 	s.alwaysRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
+	s.routeRoutes()
+	s.agentRouteRoutes()
+	s.directionNameRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()
@@ -300,7 +323,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p[holdPushesParam] != true && !meetingSource(p) {
+		// A meeting's batch is no one speaking there either: its turn is a side exchange (meeting_turns.go).
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
@@ -372,20 +396,22 @@ func (s *Service) session(ctx context.Context, machine, id string) (proto.Sessio
 
 // devices are the user's machines.
 func (s *Service) devices(ctx context.Context) []Device {
-	devices, _ := s.devicesAndPhone(ctx)
+	devices, _, _ := s.devicesAndPhone(ctx)
 	return devices
 }
 
-// devicesAndPhone are the user's machines, and whether the phone's app is connected (phone_* tools work now).
-func (s *Service) devicesAndPhone(ctx context.Context) ([]Device, bool) {
+// devicesAndPhone are the user's machines, whether the phone's app is connected (phone_* tools work now) and the
+// Persona apps' versions as they last said (client_apps.go).
+func (s *Service) devicesAndPhone(ctx context.Context) ([]Device, bool, []ClientApp) {
 	var res struct {
-		Devices     []Device `json:"devices"`
-		PhoneOnline bool     `json:"phone_online"`
+		Devices     []Device    `json:"devices"`
+		PhoneOnline bool        `json:"phone_online"`
+		Apps        []ClientApp `json:"apps"`
 	}
 	if err := s.call(ctx, DeviceAll, DeviceDevicesList, map[string]any{}, &res); err != nil {
 		s.logf("assistant: devices: %v", err)
 	}
-	return res.Devices, res.PhoneOnline
+	return res.Devices, res.PhoneOnline, res.Apps
 }
 
 // device is the machine by id; false when the hub has none.
@@ -527,6 +553,8 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
+	// A meeting's turn under way is the user's from here on (meeting_turns.go).
+	s.meetingTurnUserSpoke(r.MachineID, r.SessionID)
 	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
@@ -538,6 +566,9 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 // TurnStarted: one of a task's agents is working; what was going to be done about an agent's last turn is off.
 func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
+	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
+		return // a meeting's batch started it: a side exchange (meeting_turns.go)
+	}
 	s.turnStartedObserved(ctx, r, true)
 }
 
@@ -549,16 +580,26 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
+	s.turnEnded(ctx, r, s.meetingTurnEnded(r.MachineID, r.SessionID))
+}
+
+// turnEnded is TurnEnded; meeting: the turn was a meeting's batch's (meeting_turns.go), a side exchange that is
+// neither a task's progress nor triaged, mirrored or a reason to name the conversation.
+func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
-	s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
-	// A review's reviewer answered (supervise_autoreview.go).
-	go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
-	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
-	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	if !meeting {
+		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
+		// A review's reviewer answered (supervise_autoreview.go).
+		go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+		go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
+		go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	}
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
 	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
-	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
+	if !meeting {
+		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
+	}
 }
 
 // afterSettle runs settled for machine's session sid once its turn stayed still (settleDelay, read now), on a timer:

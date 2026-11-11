@@ -90,10 +90,19 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * The most a cold first screen of the client page may send, in bytes, as sentBytes counts it over the page's own files,
  * the shared and App groups and one language's startup catalog (vite.config.ts startupPreload fails the build past
  * it): the heaviest language's at #2689 (ja, 559,565 B) plus 3%, and 2,560 B for the sidebar's assistant switcher
- * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws. Raise it on
- * purpose, in the change that needs it.
+ * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws, and 512 B for the
+ * launcher chips' stale-pick check and its toast (views/assistant/AssistantChat.tsx, #3895), and 1,024 B for the
+ * interrupted receipts' text and handling (#3903 added 883 B, #3917), and 512 B for adding a computer to the current
+ * assistant (views/machines/AddComputer.tsx's words and its add.manager handling, #3508), and 512 B for the address's manager that conversation requests fall back on (lib/manager-choice.ts routedConversationManager, #3670),
+ * and 1,024 B for the Agent header's permission mode (#3956 added 708 B: its button and tones, the mode menu's question
+ * on leaving Allow all and its disabled Allow all row, their words), and 512 B for the Machines page asking each online
+ * manager for its computers' metrics (#4026 added 254 B over), and 800 B for the Topics kind (#3783: its tab and name, the
+ * shared stylesheet's classes for the topic page and the knowledge map, and its switch in Settings' search; the pages,
+ * their code and words load on demand), and 2,048 B for tool names in words (#2986 added 1,996 B: lib/turns.ts's
+ * subjects of Claude Code's newer tools and other servers' MCP tools named in words, the verbs views/chat/ActionRow.tsx
+ * gives them). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 578_912;
+export const FIRST_SCREEN_BUDGET = 585_856;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

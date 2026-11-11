@@ -204,7 +204,7 @@ private fun PersonaRootContent(
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                SnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
+                persona.core.designsystem.JAppSnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
             }
         }
     }
@@ -424,7 +424,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val shownPending = pending.filter(counts::owned)
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
-    val agentNeeds = agentRequests.count(counts::countsCard)
+    // The Agents tab counts its waiting agents, one per session (ShellCounts.agentsWaiting), as iOS and the web do.
+    val agentNeeds = counts.agentsWaiting(agentRequests)
     // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
     // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current
@@ -752,11 +753,16 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                   sidebarColumnShown.value = true
               }
           }
+          // A switch of assistant closes the current assistant's settings pages over the list (docs/assistant/managers.md
+          // "Clients"), in the Settings sheet and on each tab (a link or a readiness card opens them there): none shows one
+          // assistant's settings, or sends what it holds, once another is current; the list shows the new one's.
+          persona.feature.settings.CloseAssistantSettingsOnSwitch(currentAssistant.id) { listOf(settingsSheetStack) + stacks.values }
           if (settingsOpened) {
               val settingsNavigator = remember(navigator, settingsSheetStack) {
                   SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
               }
               JSettingsSheet(onDismiss = { settingsOpened = false }) {
+                CompositionLocalProvider(LocalAssistantWaiting provides waiting) {
                   val settingsEntries = entryProvider<NavKey> {
                       entry<SettingsRoute> { ShellSettings(services, settingsNavigator, shell, onClose = { settingsOpened = false }) }
                       entry<SettingsPageRoute> { route ->
@@ -789,6 +795,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                               })
                       }
                   }
+                }
               }
           }
         }

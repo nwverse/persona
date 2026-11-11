@@ -32,8 +32,9 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"inbox_folders", "inbox_move", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review", "task_start_screen", "task_start_keys", "task_retry",
-	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report"}
+	"conversation_new", "conversation_send", "task_plan", "task_review", "task_scope", "task_start_screen", "task_start_keys", "task_retry",
+	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
+	"direction_name", "leader_progress"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -69,6 +70,9 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
+	if res, refused := s.meetingRefuses(ctx, call.MachineID, call.SessionID, call.Name, true); refused {
+		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
+	}
 	switch call.Name {
 	case "persona_settings":
 		return s.toolPersonaSettings(ctx, call, args) // settings_tool.go
@@ -79,7 +83,8 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 			return proto.TextResult(err.Error(), true)
 		}
 	}
-	res, err := s.runTool(ctx, call.MachineID, call.SessionID, call.Name, args)
+	// A model's call says which conversation asked (task_brief.go callerOrigin); the hub's own runTool calls do not.
+	res, err := s.runTool(withToolCaller(ctx, call.MachineID, call.SessionID), call.MachineID, call.SessionID, call.Name, args)
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
@@ -121,6 +126,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTaskStartKeys(ctx, self, args)
 	case "task_retry":
 		return s.toolTaskRetry(ctx, self, args)
+	case "task_scope":
+		return s.toolTaskScope(ctx, self, args) // task_brief_scope.go
 	case "task_review":
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
@@ -134,6 +141,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return res, err
 	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
 		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
+	case "direction_name":
+		return s.toolDirectionName(ctx, self, args) // direction_progress.go
+	case "leader_progress":
+		return s.toolLeaderProgress(ctx, self, args)
 	case "concern_report":
 		return s.toolConcernReport(ctx, machine, self, args) // concerns.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
@@ -415,7 +426,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
-		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, a.Prompt)
+		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, s.withCloseoutBrief(sctx, a.Prompt, false))
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -461,6 +472,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		lctx, lcancel := context.WithTimeout(sctx, agentStartListTimeout)
 		knownIDs := s.knownSessionIDs(lctx, am.ID)
 		lcancel()
+		s.setPlanThen(ctx, am.ID, params)
 		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
 			delete(params, "ultracode")                                  // an extra the agent it landed on cannot have: it starts without it (#3596)
@@ -478,9 +490,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
-		if s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID) {
+		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
-				"you are told here when it is done or waits for the user, nothing else notifies the user).%s", am.Name, a.Cwd, res.Session.SessionID, note), nil
+				"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note), nil
 		}
 		return fmt.Sprintf("Started on %s in %s: session %s. It shows up in the app's Agents tab.%s", am.Name, a.Cwd, res.Session.SessionID, note), nil
 	}
@@ -518,11 +530,11 @@ func startResultUnknown(err error) bool {
 // list failed) the model gets neutral text: check the Agents list first and never start a second copy.
 func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, cwd, prompt string, tab any, note string, knownIDs map[string]bool) string {
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, knownIDs); ok {
-		if s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID) {
+		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 				"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
-				"you are told here when it is done or waits for the user, nothing else notifies the user).%s",
-				m.Name, cwd, sess.SessionID, note)
+				"%s).%s",
+				m.Name, cwd, sess.SessionID, told, note)
 		}
 		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 			"confirmed from the machine's own list). It shows up in the app's Agents tab.%s", m.Name, cwd, sess.SessionID, note)
@@ -703,6 +715,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 // ask puts ix on the phone (the snapshot's interactions: the hub shows it like any agent's card, pushes it and
 // expires it) and waits for the answer (Action); when ctx ends first the question is withdrawn.
 func (s *Service) ask(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	ix = s.ownCard(ctx, ix)
 	q := &question{ix: ix, answer: make(chan proto.Resolution, 1)}
 	s.questions.mu.Lock()
 	if s.questions.m == nil {
@@ -801,6 +814,7 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 	if r.Cancel && (q.ix.Kind != proto.IxQuestion || !q.ix.CanCancel || !r.IsQuestionCancel()) {
 		return ActionResult{}, errInvalidQuestionCancel
 	}
+	r = honest(q.ix, r)
 	select {
 	case q.answer <- r:
 	default: // answered already

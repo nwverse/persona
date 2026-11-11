@@ -25,6 +25,7 @@ import {
   isLegacySpacesRouteError,
   makeSessionLookup,
   mostUrgentAgent,
+  orphanedLine,
   sortTodos,
   TODO_STATUS_INFO,
   heldDelivery,
@@ -54,7 +55,7 @@ import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { progressLine } from "../lib/supervision";
 import { prLink } from "./TodoStageBar";
@@ -287,12 +288,13 @@ export function TodosView({
     } else navigate("/todos", true);
   };
 
-  const toggleDone = useCallback(async (todo: Todo) => {
+  // `open`: the row's checkbox shows it open (`checksAsOpen`): a failed start waiting on the owner is ticked to close it
+  const toggleDone = useCallback(async (todo: Todo, open = !todo.done_at) => {
     try {
-      await updateTodo(todo.id, { done: !todo.done_at });
+      await updateTodo(todo.id, { done: open });
       await refreshTodos();
       await refresh();
-      toast(todo.done_at ? t("todos.reopened") : t("todos.completed"), "ok");
+      toast(open ? t("todos.completed") : t("todos.reopened"), "ok");
     } catch (e) {
       toast(t("todos.action_failed", { error: errorText(e) }), "error");
     }
@@ -729,7 +731,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   views: readonly TodoRowView[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
 }) {
   const holds = group.todos.some((td) => td.id === selectedId);
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds });
@@ -803,7 +805,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
   views: ReadonlyMap<string, TodoRowView>;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
   onRestore: (id: string) => void;
 }) {
   const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
@@ -840,7 +842,7 @@ function TodoTriageRow({
   views: ReadonlyMap<string, TodoRowView>;
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
   onRestore: (id: string) => void;
 }) {
   const others = group.members.slice(1);
@@ -895,6 +897,8 @@ export type TodoRowView = {
   urgentLead: string;
   /** What the agent asks (its card) or does / last said. */
   urgentText: string;
+  /** The line says nobody is working on it (#3618): its lead is in the caution color, the reason after it. */
+  orphaned: boolean;
   /** One of its agents runs with ultracode on (#12): the Agent list row's mark after its title. */
   ultracode: boolean;
 };
@@ -916,6 +920,16 @@ const DOT_STATE: Record<TodoStatus, AgentState> = {
  *  else what its agent last reported to its supervisor (#3156). */
 export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Interaction[]): TodoRowView {
   const view = agentRowView(todo, lookup, interactions);
+  // Nobody is working on it (#3618): the hub's finding goes ahead of what a stopped agent last said (Interrupted,
+  // Follow up; docs/assistant/todos.md). A card that waits for the user still says its question.
+  const orphan = view.status !== "needs_you" ? orphanedLine(todo) : undefined;
+  if (orphan) {
+    view.urgentLine = true;
+    view.orphaned = true;
+    view.urgentLead = orphan.lead;
+    view.urgentText = orphan.reason ? ` · ${orphan.reason}` : "";
+    return view;
+  }
   if (!view.urgentLine && !todo.done_at) {
     const said = progressLine(todo.supervision);
     if (said) {
@@ -936,7 +950,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -976,7 +990,7 @@ const TodoListItem = memo(function TodoListItem({
   view: TodoRowView;
   selected: boolean;
   onSelect: (id: string) => void;
-  onToggleDone: (todo: Todo) => void;
+  onToggleDone: (todo: Todo, open?: boolean) => void;
   /** Its status section (#3156): a PR to merge shows its link, a shelved one its Restore. */
   section?: TriageSection;
   onRestore?: (id: string) => void;
@@ -986,6 +1000,9 @@ const TodoListItem = memo(function TodoListItem({
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
+  // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713)
+  const open = checksAsOpen(todo, section);
+  const failedOpen = open && Boolean(todo.start_error);
 
   return (
     <div
@@ -1007,14 +1024,14 @@ const TodoListItem = memo(function TodoListItem({
       {/* Checkbox button: touch-hit makes the 16px circle a 44px target on touch, its own (no row underneath) */}
       <button
         type="button"
-        aria-label={todo.done_at ? t("todos.reopen_todo") : t("todos.complete_todo")}
+        aria-label={open ? t("todos.complete_todo") : t("todos.reopen_todo")}
         onClick={(e) => {
           e.stopPropagation();
-          onToggleDone(todo);
+          onToggleDone(todo, open);
         }}
         className={cx(
           "touch-hit mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
-          todo.done_at
+          !open
             ? "border-accent bg-accent text-white"
             : "border-line-strong hover:border-accent hover:text-accent text-transparent",
         )}
@@ -1031,7 +1048,7 @@ const TodoListItem = memo(function TodoListItem({
               <UltraMark size={11} />
             </span>
           ) : (
-            <span className={cx("truncate text-[13.5px] font-semibold text-ink", todo.done_at && "line-through text-ink-3 font-normal")}>
+            <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "line-through text-ink-3 font-normal")}>
               {todo.title}
             </span>
           )}
@@ -1047,7 +1064,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Status Line */}
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]">
-          {!todo.done_at && <StatusMark state={dotState} size="sm" />}
+          {open && <StatusMark state={dotState} size="sm" />}
           <span className={cx("shrink-0 whitespace-nowrap font-medium", toneClass)}>{todoStatusLabel(todo, status)}</span>
           {!todo.done_at && activeCount > 0 && (
             <>
@@ -1067,6 +1084,9 @@ const TodoListItem = memo(function TodoListItem({
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
 
+        {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
+        {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
+
         {/* Why the hub closed it */}
         {isAutoDone(todo) && todo.done_reason && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3">{todo.done_reason}</div>
@@ -1083,8 +1103,8 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Most Urgent Agent Line */}
         {view.urgentLine && (
-          <div className="mt-1 truncate text-[11.5px] text-ink-3">
-            {view.urgentLead && <span className="font-medium text-attention">{view.urgentLead}</span>}
+          <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
+            {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
             {view.urgentText}
           </div>
         )}
