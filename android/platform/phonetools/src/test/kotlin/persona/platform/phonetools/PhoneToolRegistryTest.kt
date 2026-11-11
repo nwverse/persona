@@ -312,4 +312,42 @@ class PhoneToolRegistryTest {
         assertTrue(result.isError)
         assertEquals(text(PhoneToolText.timedOut()), text(result))
     }
+
+    /**
+     * An unexpected exception thrown outside the existing catch list (here: the availability check itself)
+     * must not leave the call-id's in-flight slot occupied forever. The leader converts it into a failure
+     * result, completes the gate, and a follower waiting on the same call-id gets that result instead of
+     * hanging. The exception never escapes the runtime's launch.
+     */
+    @Test fun anUnexpectedExceptionReleasesTheInflightSlotAndAnswersFollowers() = runTest {
+        val confirmGate = CompletableDeferred<Unit>()
+        val registry = PhoneToolRegistry({ setOf(PhoneSource.Calendar) }, { true }, { true }, { _, _ -> true },
+            // The confirmation itself suspends, then throws an exception type the existing catches do not
+            // name. The leader must convert it, complete the gate, and wake the follower.
+            { confirmGate.await(); throw RuntimeException("boom") },
+            { _, _ -> PhoneToolResult.text("ok") })
+        val writeArgs = buildJsonObject {
+            put("title", "测试日程"); put("start", "2026-11-01T10:00:00+08:00"); put("end", "2026-11-01T11:00:00+08:00")
+        }
+        val call = PhoneToolCall("exploding", "phone_calendar_create_event", writeArgs)
+        val leader = async { registry.call(call) }
+        runCurrent()
+        // The leader is suspended inside confirm: the follower joins as a Follower, not a new Leader.
+        val follower = async { registry.call(call) }
+        runCurrent()
+        assertFalse(leader.isCompleted)
+        assertFalse(follower.isCompleted)
+        // Let the confirmation throw. The leader converts it into a failure result; the follower's deferred
+        // is completed with that same result instead of hanging forever.
+        confirmGate.complete(Unit)
+        val leaderResult = leader.await()
+        val followerResult = follower.await()
+        assertTrue(leaderResult.isError)
+        assertTrue(followerResult.isError)
+        assertEquals(text(leaderResult), text(followerResult))
+        // The gate is released: a later call with the same id replays the cached failure, not a new leader.
+        val replay = registry.call(call)
+        assertTrue(replay.isError)
+        assertEquals(text(leaderResult), text(replay))
+    }
 }

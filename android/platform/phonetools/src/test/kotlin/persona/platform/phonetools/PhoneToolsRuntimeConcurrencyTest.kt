@@ -241,4 +241,82 @@ class PhoneToolsRuntimeConcurrencyTest {
         rt.close()
         scope.cancel()
     }
+
+    /**
+     * Back-pressure: the permit is acquired inside the collector, before launch. Once every permit is taken
+     * by a still-executing call, the collector suspends on the next acquire and stops draining the transport
+     * channel. The number of calls that started executing stays bounded no matter how many more arrive;
+     * there is no unbounded set of waiting coroutines.
+     */
+    @Test fun backpressureBoundsHowManyCallsStartExecuting() = runTest {
+        val transport = FakeTransport()
+        val connection = FakeConnection()
+        val scope = CoroutineScope(coroutineContext)
+        val gate = CompletableDeferred<Unit>()
+        var started = 0
+        val rt = runtime(scope, transport, connection) { _, _ ->
+            started++
+            gate.await()  // hold every execute so permits are never released
+            PhoneToolResult.text("ok")
+        }
+        enableAllSources(rt)
+        rt.setForeground(true)
+        advanceUntilIdle()
+        val empty = buildJsonObject {}
+        // Far more calls than permits (8) plus the transport channel's own capacity.
+        repeat(8 + 16 + 10) { i -> transport.incoming.send(PhoneToolCall("c$i", "phone_device_info", empty)) }
+        runCurrent()
+        // Only the permits' worth of calls started; the rest are still in the channel or suspended on acquire.
+        assertEquals(8, started)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        rt.close()
+        scope.cancel()
+    }
+
+    /**
+     * A confirmed write that arrived on the old socket and is still waiting for a permit must not survive
+     * into the next connection. collectLatest cancels the collector (and with it the pending acquire) when
+     * the connection drops, so the queued write never launches: no confirmation card, no execute.
+     */
+    @Test fun aCallWaitingForAPermitDoesNotSurviveAReconnect() = runTest {
+        val transport = FakeTransport()
+        val connection = FakeConnection()
+        val scope = CoroutineScope(coroutineContext)
+        val gate = CompletableDeferred<Unit>()
+        var executions = 0
+        val rt = runtime(scope, transport, connection) { _, _ ->
+            executions++
+            gate.await()
+            PhoneToolResult.text("ok")
+        }
+        enableAllSources(rt)
+        rt.setForeground(true)
+        advanceUntilIdle()
+        // Fill every permit with reads whose execute never finishes.
+        repeat(8) { i -> transport.incoming.send(PhoneToolCall("fill-$i", "phone_device_info", buildJsonObject {})) }
+        runCurrent()
+        assertEquals(8, executions)
+        // This confirmed write arrives now and suspends on acquire: it has not launched.
+        val writeArgs = buildJsonObject {
+            put("title", kotlinx.serialization.json.JsonPrimitive("测试日程"))
+            put("start", kotlinx.serialization.json.JsonPrimitive("2026-11-01T10:00:00+08:00"))
+            put("end", kotlinx.serialization.json.JsonPrimitive("2026-11-01T11:00:00+08:00"))
+        }
+        transport.incoming.send(PhoneToolCall("queued-write", "phone_calendar_create_event", writeArgs))
+        runCurrent()
+        assertNull(rt.confirmations.pending.value)
+        // Drop the connection: the collector's pending acquire is cancelled, discarding the queued write.
+        connection.state.value = ConnectionState.Connecting
+        runCurrent()
+        connection.state.value = ConnectionState.Online
+        advanceUntilIdle()
+        // The queued write never showed a card and never executed, even though permits are about to free up.
+        assertNull(rt.confirmations.pending.value)
+        assertEquals(8, executions)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        rt.close()
+        scope.cancel()
+    }
 }
