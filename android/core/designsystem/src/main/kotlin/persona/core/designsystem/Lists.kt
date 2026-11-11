@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -74,6 +75,9 @@ fun JSectionHeader(
     /** The [count] in a capsule of this state's tone (the To-dos list's sections, #3712, as iOS `CountBadge`); none: quiet digits. */
     countTone: Status? = null,
     action: (@Composable RowScope.() -> Unit)? = null,
+    /** [trailing] is the fold's own action word ("Expand" / "Collapse"): while the header folds ([onClick] and [open]),
+     *  TalkBack hears it from the state and click label, so the visible word is not read a second time (#4120). */
+    trailingIsFoldAction: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -118,7 +122,10 @@ fun JSectionHeader(
             }
         }
         if (trailing != null || action != null) Spacer(Modifier.width(8.dp))
-        trailing?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1) }
+        trailing?.let {
+            Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
+                modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
+        }
         action?.invoke(this)
     }
 }
