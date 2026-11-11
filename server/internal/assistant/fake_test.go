@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // fakeHub is the hub as the assistant sees it in unit tests: its hello, the machines with their sessions, a node on
@@ -129,9 +130,12 @@ type fakeHub struct {
 	hubCards       []proto.Interaction // interactions.list: what the hub has up
 	told           []told              // the manager's fleet.* events (Tell)
 	failSend       error               // session.send fails with it
+	sentOnce       []map[string]any    // session.send_once params, in order
 	failSendOnce   map[string]error    // session.send_once fails with these, by "machine/session"
 	failInterrupt  error               // session.interrupt fails with it
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
+	// refuseConfigDir: assistant.send with a config_dir fails as the hub refuses it for a node too old for one
+	refuseConfigDir bool
 
 	// The launchers' health (launcher_health.go): launchers.check's answers by "machine/launcher" (none: it works),
 	// the checks and repairs asked for, launchers.repair's answer (nil: the node has no such method) and what a repair
@@ -147,7 +151,8 @@ type fakeHub struct {
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
 	// doctor is each machine's node.doctor claude-version detail (none: the report has no such check).
-	doctor map[string]string
+	doctor      map[string]string
+	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
 	// questions it got.
 	auth      map[string]proto.ClaudeAuthStatus
@@ -245,6 +250,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if sid, _ := a["session_id"].(string); f.failSendOnce[p.Device+"/"+sid] != nil {
 			return nil, f.failSendOnce[p.Device+"/"+sid]
 		}
+		f.sentOnce = append(f.sentOnce, a)
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers
@@ -391,7 +397,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case deviceNodeDoctor:
 		checks := []map[string]string{}
 		if detail, ok := f.doctor[p.Device]; ok {
-			checks = append(checks, map[string]string{"name": "claude-version", "status": "ok", "detail": detail})
+			checks = append(checks, map[string]string{"name": "claude-version", "status": "ok", "state": f.doctorState[p.Device], "detail": detail})
 		}
 		return json.Marshal(map[string]any{"ok": true, "checks": checks})
 	case DeviceAssistantPrepare:
@@ -403,6 +409,10 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		f.guestPrepared = append(f.guestPrepared, a)
 		return json.Marshal(map[string]any{"cwd": "/home/me/.persona/guest"})
+	case "worktree.status":
+		return json.Marshal(proto.WorktreeStatus{})
+	case "workspace.resolve":
+		return json.Marshal(proto.Workspace{Cwd: a["path"].(string), Available: true})
 	case DeviceWorktreePrepare, DeviceWorktreeCreate: // the machine's engine: checkouts under /wt/<repo>
 		a["method"] = p.Method
 		f.worktrees = append(f.worktrees, a)
@@ -463,8 +473,18 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.failAssistant != nil {
 			return nil, f.failAssistant
 		}
+		if _, set := a["config_dir"]; set && f.refuseConfigDir {
+			return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
+		}
 		f.sends = append(f.sends, a)
 		id, _ := a["session_id"].(string)
+		if want, _ := a["new_session_id"].(string); id == "" && want != "" { // a new conversation under the id asked for
+			if f.known[want] {
+				return json.Marshal(map[string]any{"session_id": want, "existed": true})
+			}
+			id = want
+			f.known[id] = true
+		}
 		if id == "" { // a new conversation
 			f.made++
 			id = fmt.Sprintf("s%d", f.made)
@@ -511,7 +531,9 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	case AppConnectors + " " + ConnectorsSignedIn:
 		return json.Marshal(map[string]any{"connectors": []string{}, "clis": map[string]string{}, "lark_cli": f.larkCLI})
 	case AppPlugins + " " + PluginsAssistant:
-		return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})

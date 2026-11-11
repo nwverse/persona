@@ -41,6 +41,67 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - Read-only tasks always retain `permission: plan`, including after card edits and on retries. Health-space plans still wait for Start. Runtime support and the current card labels are described in [To-dos](todos.md#read-only-planned-tasks).
 - `task_plan` **does not block**: once the plan is handed to you, the turn ends immediately and you can continue talking about something else. When you tap Start, hub starts the Agents directly; Persona sees the result in the next message's live snapshot.
 
+### Task workspace policy (#3659)
+
+`task_plan.tasks[].workspace` is a task-level choice, separate from `cwd` (the source directory before dispatch):
+
+| Request | Meaning |
+| --- | --- |
+| `"new"` | Create a checkout through the machine's existing herdr/Orca workspace engine |
+| `{"new":{"branch":"task/fix-login"}}` | Create through that engine, with an explicit branch |
+| `{"existing":"/code/app"}` | Reuse an existing directory (`~/…` is expanded on the selected machine) |
+| `{"existing":"ws_…"}` | Select a workspace from that machine's catalog; node-local and board-qualified IDs are accepted |
+| `"none"` | Create no workspace; run at `cwd` (the default for read-only/non-Git tasks) |
+
+Settings › Assistant › Dispatch tasks offers **When dispatching tasks, prefer**:
+`task_workspace_preference: "prefer-existing"` (default) reuses an available source directory;
+`"prefer-new"` gives each writable Git task a new checkout. A read-only task defaults to `none`.
+A writable Git task whose directory is occupied defaults to `new`, regardless of preference.
+An explicit `workspace` overrides inference. When a caller means a particular branch/PR/checkout, it should name that checkout with `existing`.
+Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
+The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
+
+The open web plan card has New / Use existing / Not needed, a machine-local workspace picker, manual existing path/ID,
+an optional new branch, and the resolved absolute path. “Edit” also supports changing machine/cwd and recomputes the preview.
+`POST /api/v1/task-plans/{id}/workspace-preview` applies editable fields to the saved plan without saving or creating anything.
+Start sends those choices through the existing `/start` request; clients cannot supply trusted resolution metadata.
+Task details and the started plan show the chosen policy and actual path, read-only.
+
+For a new checkout, the default branch is `task/<todo id>`: the plan reserves that ID for a stable preview but does not create
+the todo or workspace until Start. The path comes only from the machine engine:
+`WorktreePrepare.Path` plus `herdr.WorktreeDirName(branch)`, exactly as `agent_start` does.
+There is no new workspace-root/template setting or arbitrary new-path override. Dispatch rechecks on the final machine,
+calls `newWorktree`, uses the engine's returned path/host workspace ID, and stores the actual `cwd` in the plan and the unchanged
+`todo_agents.cwd` column. A retry uses the created checkout rather than creating another one; a created checkout stays on its machine.
+Creation/lookup failures prevent Agent launch and appear on the task as failed dispatch with the underlying reason.
+
+An existing workspace on the same machine and canonical path cannot be reused while another unfinished task holds it.
+The refusal names that task's ID/title and suggests waiting or choosing New (v1 has no queue).
+Admission also covers concurrent starts before the agent link exists. Ended/released tasks do not retain a claim.
+Read-only tasks using `none` do not claim a workspace.
+
+The saved `PlanTask.workspace_resolved` is a hub-owned object, separate from the policy, so future repository entries can be
+added without overloading `cwd`. Examples below omit the other task fields and unrelated response fields; the paths are illustrative
+engine answers, not a required directory layout.
+
+`task_plan` itself still returns a textual plan/dispatch acknowledgement. The response fragments are saved tasks read from
+`GET /api/v1/task-plans/{id}` or the conversation feed **after dispatch completes**, not confirmation from the initial queued reply:
+
+```json
+{"workspace":"new","cwd":"/code/app"}
+{"workspace":"new","cwd":"/wt/app/task-todo_example","workspace_resolved":{"machine":"box","path":"/wt/app/task-todo_example","branch":"task/todo_example","workspace_id":"host-space","created":true}}
+
+{"workspace":{"existing":"/code/app"},"cwd":"/code/app"}
+{"workspace":{"existing":"/code/app"},"cwd":"/code/app","workspace_resolved":{"machine":"box","path":"/code/app"}}
+
+{"workspace":"none","cwd":"/code/app","readonly":true}
+{"workspace":"none","cwd":"/code/app","workspace_resolved":{"machine":"box","path":"/code/app"}}
+```
+
+The engine registers new workspaces in the existing App/catalog/board view, with its existing project/branch/kind metadata.
+This v1 does not add multi-repository entries, change `agent_start`, or change acceptance semantics.
+After acceptance, workspaces are **silently retained**: no cleanup, recycling, or migration.
+
 ### Needs you and In progress: each thing once (#3387)
 
 Above the Assistant's composer there are two entries. **Needs you** lists everything the user has to act on; **In
@@ -323,13 +384,14 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
 - **No automatic closure**: when hub judges a supervised to-do complete (the "Automatic completion" check in `docs/assistant/todos.md`), it does not write `done_at`; it marks it pending review. If judged incomplete (`not_done` / `waiting` / `needs_user` / `unsure`), tell the supervisor "Stopped but not finished." Manual completion is unchanged.
 - **A stop that waits on the owner is not accepted** (#1277): when the judge says a stretch of work stopped on a decision only the owner can make (`needs_user`, such as drafts waiting for the owner to pick one), the ledger keeps it as `waits` (`{work, at, reason}`, persisted with the ledger, `todo_supervision.waits`). While it holds, `task_review accepted` is refused (`user_check` included), because closing the task would lose the decision. The refusal tells the supervisor to review it `needs_user` as a decision the owner can answer, to send the owner's answer to the Agent if they already gave it, or to cancel it. The Agent working again, or any review written, clears it. The live snapshot labels such a task "停下等用户拍板，别直接验收" ("stopped on the owner's decision, don't accept it"). Before this, a supervisor once accepted four tasks whose outcomes were each a decision still waiting on the owner, and the decisions were lost with them.
   Completion is about the assigned task and its `done_when`, not whichever side question the Agent answered last. A known peer, cross-conversation or inspection turn cannot enter pending review on its answer alone. Only a fresh, successful `report_to_supervisor` done call with evidence tied to this task can establish the completion candidate from such a turn; the supervisor must still verify it. Unknown-source fallbacks never imply that a new question replaced a finished task. Ordinary delivery turns continue through the existing judge without requiring that tool.
-  Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior.
+  Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior. A text of only `/exit` / `/quit` (no attachments) from such a conversation, as `agent_send` or as `agent_interrupt`'s `then`, is refused before anything is stopped, sent or confirmed on the phone, and again after the phone answers should the agent have become such a task meanwhile (#3537): the node closes an agent only for the bare command, and the agent a task runs on is not another conversation's to close (the user can close it in the app, or with `agent_archive` and `close` once it is idle).
 - **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
-  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below).
+  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below), `inbox` new Inbox messages from other people about it (below, off by default).
   The same signal for the same task is reported only once within the same state segment. A second guard suppresses an unchanged summary for the same task, Agent and signal kind for 30 minutes, regardless of new turn timestamps or elapsed-minute counters. Its hashed fingerprints and timestamps live in Postgres settings (`assistant.supervision_dedup`), survive manager restarts, and are reserved before dispatch; failed dispatch and queue admission release the reservation. An unreadable or unwritable reservation is retried rather than treated as empty history. Changed evidence, questions, summary, task, Agent or status can wake again. Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, links, and handling instructions).
   The first waits 15 seconds to coalesce; subsequent messages are at most one per 10 minutes, with a 2-minute minimum for decision-waiting signals such as `needs_you` / `idle` / `interrupted` / `failed`. If the main chat is running, queue between turns ("Supervision message" above the input); replace any queued, undelivered supervision message with the merged one.
   Supervised tasks no longer emit "🔔 任务…" (task notices) from `quiet.go`; all appear in supervision messages. Tasks started by other chats are unchanged.
   **`orphaned`** (#3618, `server/internal/assistant/tasks_orphan.go`): every Agent of the open task is closed or its computer is offline, and no wake, continuation, card or queued input is pending for any of them (`docs/assistant/todos.md`, "Nobody is working on this"). The message says why (closed after a model error with the error, closed, computer offline) and the instructions give three ways out: send the Agent a message to resume it, start another Agent and cancel this task, or close the task. One state segment is the same set of Agents with no new step from any of them, so the signal is told once however the reason changes meanwhile (a closed Agent's computer going to sleep), and again only after an Agent worked and was lost again. It is a decision-waiting signal (2-minute minimum), is dropped from a waiting message once an Agent is back, and is never raised for a task waiting for review or for the user.
+  **`inbox`** (#4293, `server/internal/assistant/supervise_inbox.go`): off unless `inbox_signals` is on in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key `assistant.inbox_signals`, approved on the phone; Settings › Assistant › Agent follow-up on the web), because each one is a supervisor turn the user pays for. With it on, when the AI twin's pass takes new messages from other people into an Inbox item the judge linked to a supervised task ("Message cards link to tasks" below), the task's supervisor gets the signal through the same path as every other: pending, deduplicated by the item and its newest message, routed to the task's leader conversation or the main chat, gathered and spaced at the normal (not the decision-waiting) cadence. The entry names the item (id, title, who wrote the newest message, one line of it) and how many messages came; several about one task before the message goes out are one entry, the newest item's, with all of them counted. The instructions say the item's text is other people's data, not the user's instructions: pass what the Agent needs on with `agent_send`, ask the user before changing the task on someone else's word, and leave replies to the AI twin's draft. Never raised for an unsupervised task, a task waiting for the owner's decision (`needs_user`), a task leader's worker (a coding agent without permission prompts gets no outside text), Persona's own confirmed reply, or a bot chat (where Persona's own bot posts its pushes and cards), so nothing a supervisor does can come back as a signal; the twin's handling chat writes nothing into the Inbox. A signal still waiting is dropped if the switch goes off or the task starts waiting for the owner.
 - **Levels and visibility** (#1988): `info` reports update task progress only and never wake the assistant. Other automatic signals are `triage`: they wake it but the web folds the whole turn into a muted supervision record by default, including the input, trace and answer. Expanding the record reveals the original content; transcripts are never deleted. Older supervision messages default to triage too. The fold ends at the next genuine user message, so that user's exchange remains visible.
   `supervision_finish {visibility: silent|user, summary}` gives the assistant an explicit disposition. Silent means finish without a user-facing reply; user explicitly reveals the turn without adding a push. Successful `notify_user`, `ask_user`, and user-facing `task_review` conclusions also promote it, monotonically: a later silent disposition cannot hide them. Server work folds preserve promotion via `fold.supervision_user`.
   Native clients need corresponding whole-turn folding, promotion and `checking` receipt rendering; this change modifies server and web only.
@@ -466,6 +528,7 @@ Off by default: with no leaders, everything above is unchanged and only the main
 - **What a leader gets**: its context starts with "这是 leader 对话" (prompts `assistant/context.md`). A task it hands out with `task_plan` is supervised with the leader as `supervisor` (tasks handed out before it became one are not). The supervision loop routes each signal to its task's supervisor when that is a current leader (`digestTo`, `server/internal/assistant/supervise_leader.go`): the leader gets its own "📋 督办" message (when its conversation is gone, the main chat gets them instead) (the leader variant of `prompts/assistant/supervise.md`), with the same gathering, queueing, deduplication and folding as the main chat's. It reviews its tasks with `task_review` (accepted, rework with the same 2-round limit, cancelled); another side conversation cannot.
 - **What still goes to the main chat**: a leader's `needs_user` (the user gets the decision card as always, and the main chat gets an `escalated` entry with the leader's reason and recommendation, so it neither asks again nor loses track); any signal of a task waiting for the user; failed and retried starts (the start remedies, `task_start_screen` / `task_start_keys` / `task_retry`, stay main-chat tools); and tasks waiting for the user's nod to ship stay in the snapshot's approvals list. The main chat may still review a leader's task (for example after the user answered there); the task stays the leader's.
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools, apart from a task leader's restricted `task_plan` ("Task leaders" below); the main chat and leaders are not limited.
+- **In the clients** (#4331): the sidebars call leaders **常驻** (en "Pinned"; the code, API and events keep leader / direction) and list only them under Persona chats, after the main chat, each with the direction tree's Working and Waiting on you counts ("The direction tree"); a conversation's menu has **设为常驻** / **取消常驻** (`…/make` / `…/end`). The clients read the tree again on its `directions` message, so an open sidebar follows a leader made or ended anywhere at once (a sixth leader once stayed hidden until a reload: the clients had read the leaders only when they loaded).
 - **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
 
 ### Task leaders (#3656)
@@ -480,6 +543,44 @@ The depth is dot (the main chat or a leader conversation) → task leader → wo
 - **Reviewing**: the leader's `task_review` takes `todo_id`, `verdict` (accepted, rework, needs_user, cancelled), `note`, `checks`, `reason` and `recommend`, and reaches its direct workers only (the ledger names this leader; its own task, any other task and a worker's siblings are refused). accepted closes the worker by review, cancelled closes it and stops its agent, rework sends the gaps to the worker (two rounds, then it goes up); no conclusion card, "Please verify" or push goes to the user. needs_user goes to the conversation that handed the leader its task, as the signal `decide` ("它的 leader（一个编码 Agent）判断要用户决定", with the leader's reason and recommendation); that conversation asks the user or decides, and reviews the worker with its own `task_review`, which does not take the worker over. The leader cannot message a worker or read its transcript: for a worker that did not start or is stuck it plans a new worker and cancels the old one.
 - **Permissions**: any `task_plan` task that is not read-only (`readonly: false`), from a conversation or from a task leader, must say `permission: "bypassPermissions"` itself; a missing or other value is refused before anything is planned, with a readable reason (it would otherwise stop at a permission prompt at run time, with nobody there to answer it), and Start, `retryTask`, `task_retry` and every start of a plan task (`runPlanTaskStart`: retry, remedy, recovered) refuse a saved plan that lacks it before starting anything. `readonly: true` is unaffected and always runs in plan mode. Its `ExitPlanMode` request is denied automatically before a card is registered, with instructions to return findings and report completion to its supervisor; it never grants implementation permission just to finish (#3985).
 - **Work-trust computers**: a `role: "leader"` task is refused with a readable reason at planning, at Start, on a retry, in `startTaskAgent` (so a remedy or recovered start) and in the health detour (`healthyPlace` never moves a flexible task leader there): a work-trust computer's agents get only the reporting tools, so the role could not work, and its privacy boundary is not widened.
+
+#### Standing authorizations
+
+The manager keeps explicit user grants in its Postgres settings key `assistant.standing_authorizations`.
+The main conversation reads and changes them through `persona_settings` with that key. A change requires the
+user's own permission-card approval; an Agent cannot turn its own quoted authorization into a grant. An unchanged
+list asks nothing. The setting value is `{revision, authorizations}`; writes include the revision just read and the
+whole list. New entries omit `id` and `granted_at`, which the server assigns. Existing IDs are immutable: changing a
+scope means removing its entry and adding a new one. A stale approval cannot restore a grant revoked meanwhile.
+
+Each authorization has `id`, `machine_id`, `directory`, `actions`, `conditions`, `quote`, `source`, `granted_at`
+(RFC 3339), and `reversible`. Actions are `merge`, `push`, `deploy-test`, `deploy-production`, `send`, `delete`,
+and `spend`. Conditions retain the user's wording; `ci_green` and `no_conflicts` have independent runtime checks
+(see [Agent work](agent-work.md#standing-authorization-answers)). The original words and source remain inspectable.
+Directories are specific absolute paths on one computer, matched by path segment: `/code/example` includes its
+subdirectories but not `/code/example-copy`. Roots, single-level paths and wildcards are rejected. The node verifies repository identity through local Git metadata: matching common Git directories cover linked worktrees outside that path.
+Origin URLs are descriptive metadata, never authorization evidence: an arbitrary `git init` can copy a remote URL.
+Independent clones require separate registration. A subdirectory grant retains its relative directory
+boundary across worktrees. Different common Git directories and similar path prefixes do not match; repository basenames never
+establish identity. If an older or unavailable node cannot return identity, only the exact registered directory
+matches. A child directory may contain an independent repository, so a path prefix alone cannot extend a grant.
+
+At actual `task_plan` dispatch and `agent_send` with `task`, the manager reads matching grants and appends the prompt
+template containing scope, actions, conditions and the user's words. No other repository receives them. Pending plans
+read again when started, and a failed lookup stops dispatch. Ordinary chat messages are unchanged. Explicit task
+limits and read-only mode remain stronger than a standing grant. Revocation affects future dispatches and answers;
+it cannot undo an instruction already delivered or work already executed.
+
+App API (the conversation's manager, with full-access role):
+
+| Method | Path | JSON response |
+| --- | --- | --- |
+| GET | `/api/v1/assistant/standing-authorizations` | `{"revision": 1, "authorizations": [{"id": "sa_example", "machine_id": "example-node", "directory": "/code/example", "actions": ["merge"], "conditions": ["ci_green", "no_conflicts"], "quote": "Merge after checks pass without asking again.", "source": "Main conversation", "granted_at": "2026-11-11T07:36:00Z", "reversible": true}]}` |
+| DELETE | `/api/v1/assistant/standing-authorizations/{id}` | `{"ok": true, "revision": 2}` |
+
+DELETE is idempotent; deleting a missing entry keeps the revision. A concurrent update returns 409 and the caller
+refreshes before retrying; storage unavailable returns 503, and insufficient role returns 403. There is no HTTP grant
+creation endpoint: additions use the main conversation's approval flow. The empty default list authorizes nothing.
 
 #### Asks go to the supervisor first (#3589)
 
@@ -607,6 +708,19 @@ Supervision above covers the tasks the main chat or a leader hands out. An Agent
 - **Depth cap unchanged**: an Agent that became a task this way is a worker and hands out no Persona tasks ("Leader conversations" above).
 - **Clients**: none changed. The to-dos carry `quiet` and `supervision` as other tasks do; showing them under their Agents is separate work.
 
+### The direction tree (#4352)
+
+Each direction (a leader conversation) opens into the open tasks it supervises, each task into the Agents doing it, each Agent into the Agents under it. The hub builds this one tree (`server/internal/assistant/direction_tree.go`, `GET /api/v1/assistant/directions/tree`, `docs/protocol/protocol.md`); the sidebar, the To-dos page's grouping by direction and the Agents page's direction grouping on web, iOS and Android all draw it and never work out the grouping or a task's state themselves. The owner-facing name of the group is 常驻 (en "Pinned", ja 常駐); field names, the route and the event keep `direction`.
+
+- **Directions**: every current leader (`assistant.leaders` without the main chat), in the order `GET /api/v1/assistant/leaders` lists the current ones, named as it names them; then the secretary group (书记官, en "Secretary", ja 書記官), always last and always present, with the main chat's id and no name. Ended directions are not listed: their open tasks are the secretary's again, as their signals are (leader reports).
+- **Tasks**: exactly the to-dos the To-dos page counts open (`triageCountsAsOpen`, the #3340 rule; quiet tasks, a failed start still waiting, ask to-dos and concerns included, as the page includes them). Closed, cancelled, accepted, deployed and shelved ones are never listed.
+- **Whose**: the ledger's `supervisor`. A current leader's id → that direction. The main chat's id, `""`, no ledger, an ended or unknown conversation → the secretary. A task leader's Agent (`"machine/session"`, "Task leaders" above) → a worker: it is not listed or counted as a task of its own, and its active Agents are the `children` of that leader Agent inside the leader's task (a leader started again: the current leader Agent of the task its worker row names). When the leader's task is not open, the worker is listed as an ordinary task of the conversation above the leader (`supervisorAboveTask`). Workers whose leaders lead one another in a loop are each listed on their own (the same on every build).
+- **State** (first match wins): `needs_you` — the SOP's Waiting on you (an Agent asks or was interrupted, the owner decides, incl. `needs_user`, a failed start); `review` — waits for acceptance (`pending_review`, or an open acceptance ask) with nothing of it running; `stuck` — the leader reports' stuck rule (`taskStuck`: Waiting on you, PR to merge, Other open or Shelved, nothing moved for 24 h, every machine of its Agents answered); `working` — every other open task (shown as 在做).
+- **Counts**: per direction, how many of its listed tasks are in each state. A direction row shows `counts.working` and `counts.needs_you` as 「在做 N · 等你 N」 (en "Doing N · Needs you N", ja 「作業中 N · あなた待ち N」). The four counts of all groups add up to the To-dos page's open count for the same data, less the worker tasks nested under a leader Agent. The tree is the default manager's alone (it is not merged over managers the way `GET /api/v1/todos` is, `hub/ownership_lists.go`), so on a hub with more than one manager the sum matches only that manager's to-dos.
+- **Order**: tasks needs_you, review, stuck, working; within a state the newest activity first, then id.
+- **Agents**: a task's active Agents (not released, not dismissed); under each, the Agents of the task it spawned (`source: spawned`, `via` its `machine/session`), its workers' Agents, its running in-session sub-agents (`session_id` `"<parent>@<id>"`, title the description, nested by the sub-agent that launched each) and its Codex sub-agent sessions still going. An Agent appears once in its task. Its `state` is its session's as the apps get it on session rows (`""` when the session was not found). The tree asks each computer for its sessions once per build.
+- **Push**: `{"type":"directions"}` whenever the tree's content changed: a to-do, the sessions of a computer one of its Agents is on, a direction, its name or the leader list changed, or (every 10 minutes) a task may have become stuck; gathered for one second, compared with a digest of the last tree told, so an unchanged tree tells nothing. Clients read the tree again on it and on (re)connect; a hub without the route answers 404 and the clients keep the flat direction rows.
+
 ## Data and APIs (hub)
 
 ### Task = to-do
@@ -709,6 +823,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
 - Included: all Working / Waiting for you Agents (excluding Persona's own chats), minus those already represented by tasks: Agents attached to unfinished tasks (nonempty `origin`),
   and sessions marked by hub with a non-manual to-do (including new tasks not yet refreshed into the to-do list). Agents attached to manually created to-dos still count as manual.
   Tasks from other chats remain excluded from the main chat, and their Agents do not reappear as manual duplicates.
+- Subtasks (Android, #4769): an Agent another one started (a Codex subagent, or an agent another Paseo agent created, #4494) is no pill of its own while the dock shows the Agent above it, as its pill or as its task's; that row's background line counts the ones still running where the host reports them (a Paseo creator does). One that waits for you stays, and so does a working one whose creator the dock does not show (finished, or let go). iOS and the web still give each its own pill; the shared fixture (`spec/fixtures/entries`) has no such case yet.
 - Ordering: task pills first, manual Agents afterward (waiting first; others by most recent entry into their current state). Their pills add the Agents page's `</>` mark; waiting pills use the same Needs you red and "Waiting for you" as tasks.
 - Disappearance: remove from the dock when finished (Unread), idle, or offline. Unlike tasks, Unread manual Agents do not remain in the dock (they remain in Agents).
 - "All N" includes them; the board lists them after tasks in Waiting for you / Working. Tapping a pill or board row opens the Agent's chat in the task-details sheet.
@@ -727,6 +842,8 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
 - **Message cards link to tasks** (hub): the Inbox's judge (`inbox/judge.md`, which since phase 1 only links items to tasks) sees active tasks. If a message concerns one, it returns `task_id` (only an ID shown to it).
   The AI twin's first message includes that task's progress (`inbox/agent.md`), so the draft states actual progress. Draft submission
   (`inbox_draft`) inserts a `message` entry into the chat that started the task. The App renders `MessageCard`: original message, attached task (live), draft (Edit inline), Send (Inbox sending; send by ID if the item is not local), Later (collapse for now).
+  When the linked task is supervised and `inbox_signals` is on, every new batch of messages from other people on the item also reaches the task's supervisor
+  as the signal `inbox` ("Supervision (#3124)" above, #4293), whether or not the twin drafts anything.
   Already-replied cards show "Replied on your behalf" and the sent text.
   - **Sent state on the card** (#1519): when a reply for this item is sent (from a card, Inbox, or any client), hub writes `sent_at` and `sent` (the sent text) into the previously inserted message-card body,
     then rebroadcasts `assistant_feed` with the same ID; clients replace the body by ID. `GET …/feed?since=` also includes cards sent after `since`. Written once, never cleared:

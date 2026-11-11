@@ -256,13 +256,20 @@ fun HomeNavigation(
     onSelectedMenu: (() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
+    // Felt only when it moves to another page, as iOS's switcher.
+    val haptics = rememberHaptics()
+    val select: (String) -> Unit = { key -> if (key != selected) haptics(Haptic.Tap); onSelect(key) }
     if (PersonaTheme.style != AppStyle.Glass) {
         Row(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()
             .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             leading()
-            JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
-                items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { onSelect(items[it].key) }, Modifier.weight(1f))
+            // The switcher keeps its cells' width; given the rest of the row itself, Board's ruled frame stretched
+            // past its two cells and left an empty box beside them.
+            Box(Modifier.weight(1f)) {
+                JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
+                    items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { select(items[it].key) })
+            }
             trailing()
         }
         return
@@ -283,13 +290,13 @@ fun HomeNavigation(
                     val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
                     val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
                     val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
-                    val fittedSize = maxOf(Tokens.Type.Chip.size.value, labelStyle.fontSize.value * fit).sp
+                    val fittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
                     Box(Modifier.width(HomeTokens.segmentWidth * scale).height(HomeTokens.segmentHeight * scale)
                         .clip(CircleShape).background(if (chosen) {
                             if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
                         } else Color.Transparent)
                         .clickable(role = Role.Tab) {
-                            if (chosen && onSelectedMenu != null) onSelectedMenu() else onSelect(item.key)
+                            if (chosen && onSelectedMenu != null) onSelectedMenu() else select(item.key)
                         }.semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
                         Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
                             color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)

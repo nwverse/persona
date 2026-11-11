@@ -363,6 +363,11 @@ data class Session(
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
     /**
+     * The assistant space it runs in (docs/assistant/health.md "Which space"): "health" for a health chat; absent for the
+     * assistant's own chats and from older hubs.
+     */
+    @SerialName("space") val space: String? = null,
+    /**
      * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant chats", #3264): user, channel, inbox, task, spawned,
      * lark_agent, extension, or one this app doesn't know yet; null is the user's (older hubs never say).
      */
@@ -415,6 +420,16 @@ data class Session(
     @WireTime @SerialName("activity_at") val activityAt: String? = null,
     /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
     @SerialName("turn_error") val turnError: String? = null,
+    /**
+     * What the hub recognized of [turnError] (docs/protocol/protocol.md): not_logged_in, auth_failed, model_route,
+     * rate_limited or model_fallback_unavailable (the model Claude Code fell back to after a refusal can't be used, #2528:
+     * "Continue" would only go to it again). Older hubs never send it.
+     */
+    @SerialName("turn_error_code") val turnErrorCode: String? = null,
+    /** The refusal fallback still active in this session, as Claude Code recorded it (#2289, #2528). */
+    @SerialName("model_fallback") val modelFallback: ModelRefusal? = null,
+    /** "Back to the configured model" was asked and no newer reply has come yet (#2528). Not proof it runs. */
+    @SerialName("model_restore") val modelRestore: ModelRestore? = null,
     /** Why it waits for the user, in its host's words (a botmux attention's reason); only while it needs you. */
     @SerialName("attention_reason") val attentionReason: String? = null,
     /**
@@ -465,6 +480,9 @@ data class Session(
     @SerialName("ultracode_note") val ultracodeNote: String? = null,
     /** A change of it waits for the agent's turn to end (or a draft / dialog in the terminal): a queue flag, not the value. */
     @SerialName("ultracode_pending") val ultracodePending: Boolean = false,
+    /** It was on and a resume started it off (#582, docs/protocol/protocol.md "Claude Code ultracode"): the chat offers it back
+     *  until it is on again or the notice is dismissed; the hub never turns it back on by itself. */
+    @WireTime @SerialName("ultracode_lost_at") val ultracodeLostAt: String? = null,
     /** Present on bounded summary rows; absent on legacy complete rows. */
     val waiting: Boolean? = null,
     @SerialName("background_count") val backgroundCountHint: Int? = null,
@@ -477,6 +495,8 @@ data class Session(
     @SerialName("background_working") val backgroundWorking: Boolean? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
+    /** A chat of the health space ([space]), which the assistant's own lists leave out. */
+    val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
     val agentState: AgentState get() = AgentState.of(state, status)
     /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
     val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
@@ -594,7 +614,39 @@ data class Item(
     val injected: Injected? = null,
     /** Optional provenance for model input that was not typed by the user. Older hubs omit it. */
     val source: MessageSource? = null,
+    /** On a notice: a Claude Code model_refusal_* record (#2289, #2528), its public fields only. */
+    @SerialName("model_refusal") val modelRefusal: ModelRefusal? = null,
 )
+
+/**
+ * A Claude Code model_refusal_* record as the hub gives it (server proto.ModelRefusal, #2528): its known fields with
+ * values as recorded (unknown ones included) and [text], the refusal's own words. Never the record's line: older hubs
+ * also sent it as `raw`, which is not decoded, so it is never shown or kept.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = ModelRefusalSerializer::class)
+data class ModelRefusal(
+    val subtype: String = "",
+    @SerialName("original_model") val originalModel: String? = null,
+    @SerialName("fallback_model") val fallbackModel: String? = null,
+    val category: String? = null,
+    val scope: String? = null,
+    val explanation: String? = null,
+    val text: String? = null,
+)
+
+object ModelRefusalSerializer : WireSerializer<ModelRefusal>(ModelRefusal.generatedSerializer())
+
+/** A pending "back to the configured model" (server proto.ModelRestore): `next_start`, the next start asks for [to]. */
+@KeepGeneratedSerializer
+@Serializable(with = ModelRestoreSerializer::class)
+data class ModelRestore(
+    val state: String = "",
+    val to: String? = null,
+    @WireTime val at: String? = null,
+)
+
+object ModelRestoreSerializer : WireSerializer<ModelRestore>(ModelRestore.generatedSerializer())
 
 /** Source titles are business data; clients localize the fallback for each kind. */
 @KeepGeneratedSerializer

@@ -11,6 +11,7 @@ import { classicWorkerProblem } from "./src/sw-entry-check";
 import { catalogFiles, i18nCatalogs, startupNamespacesFile } from "./i18n-catalogs";
 import { pageTokensPlugin } from "./page-tokens";
 import { thirdPartyLicenses } from "./third-party-licenses";
+import { compatBootstrap } from "./compat-bootstrap";
 
 // `npm run dev` talks to a hub through Vite's proxy: PERSONA_HUB_URL (eval "$(python3 ../scripts/persona_config.py env)").
 const environment = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
@@ -220,7 +221,8 @@ const holdLazyImports: Plugin = {
 };
 
 export default defineConfig({
-  plugins: [katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, thirdPartyLicenses],
+  plugins: [katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, thirdPartyLicenses,
+    compatBootstrap(fileURLToPath(new URL("./public/compatibility-bootstrap.js", import.meta.url)))],
   // Text size (src/lib/text-scale.ts): font sizes become calc(size * var(--text-scale, 1)), after Tailwind wrote them.
   css: { postcss: { plugins: [textScale()] } },
   server: {
@@ -234,7 +236,8 @@ export default defineConfig({
   optimizeDeps: { include: ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-clipboard", "@xterm/addon-web-links", "@xterm/addon-search", "@xterm/addon-webgl"] },
   // Tests run in zh-Hans, the source language, so their expectations read like the interface (src/i18n/test-setup.ts).
   // Node 25+ has its own localStorage, undefined without --localstorage-file, and it hides jsdom's: turn it off.
-  test: { setupFiles: ["src/i18n/test-setup.ts"], execArgv: ["--no-experimental-webstorage"] },
+  // A node_modules that isn't what package-lock.json pins stops the run before any test (scripts/installed-deps.mjs, #4776).
+  test: { globalSetup: ["scripts/installed-deps.mjs"], setupFiles: ["src/i18n/test-setup.ts"], execArgv: ["--no-experimental-webstorage"] },
   build: {
     target: "es2022",
     sourcemap: false,

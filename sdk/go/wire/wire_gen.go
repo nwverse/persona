@@ -56,6 +56,16 @@ type Manifest struct {
 	// "Command-line programs (tools)", #4507). Installing them is a permission. Hubs before them refuse the manifest.
 	Tools []ToolSpec `json:"tools,omitempty"`
 	Auth  *AuthSpec  `json:"auth,omitempty"`
+	// Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+	// executable; writes and arbitrary command lines are not part of this contract.
+	HostIntegrations []HostIntegrationSpec `json:"host_integrations,omitempty"`
+}
+
+// HostIntegrationSpec: A configured CLI integration, selected by a closed ID rather than by an extension-provided
+// executable.
+type HostIntegrationSpec struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
 }
 
 // ToolSpec: one command-line program. Exactly one of archive and npm.
@@ -4441,7 +4451,8 @@ type KBDetail struct {
 	ID   string `json:"id"`
 	// Where it is on the manager's machine, for its own file tools.
 	Path string `json:"path"`
-	// The entity's own fields (meta.json).
+	// The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+	// Status uses the same locked_fields and provenance as other corrected fields.
 	Meta     json.RawMessage      `json:"meta"`
 	Summary  string               `json:"summary,omitempty"`
 	Log      []string             `json:"log,omitempty"`
@@ -4562,12 +4573,14 @@ type KBUpdateParams struct {
 	Name           string   `json:"name,omitempty"`
 	// A project's: short or long.
 	ProjectKind string `json:"project_kind,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Goal        string `json:"goal,omitempty"`
-	MyRole      string `json:"my_role,omitempty"`
-	Note        string `json:"note,omitempty"`
-	Importance  string `json:"importance,omitempty"`
-	Relevance   *int   `json:"relevance,omitempty"`
+	// People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+	// ignored. Omitted or empty keeps the current status; active restores a person.
+	Status     string `json:"status,omitempty"`
+	Goal       string `json:"goal,omitempty"`
+	MyRole     string `json:"my_role,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Importance string `json:"importance,omitempty"`
+	Relevance  *int   `json:"relevance,omitempty"`
 	// Replaces the tags; an empty list clears them, none keeps them.
 	Tags    []string `json:"tags,omitzero"`
 	Summary string   `json:"summary,omitempty"`
@@ -5735,6 +5748,7 @@ func (v requiredJSONView) MarshalJSON() ([]byte, error) {
 // newDef makes a value of each definition, for tests that read examples by definition name.
 var newDef = map[string]func() any{
 	"Manifest":                      func() any { return new(Manifest) },
+	"HostIntegrationSpec":           func() any { return new(HostIntegrationSpec) },
 	"ToolSpec":                      func() any { return new(ToolSpec) },
 	"ToolCheck":                     func() any { return new(ToolCheck) },
 	"ToolArchive":                   func() any { return new(ToolArchive) },

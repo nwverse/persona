@@ -514,7 +514,7 @@ private fun SettingsContent(
                 row(SettingsPage.About, R.string.settings_section_about, PhIcons.Info, R.string.settings_row_about_subtitle),
                 custom { position ->
                     JGroupItem(position) {
-                        JRow(stringResource(R.string.settings_update_check), value = when {
+                        JRow(stringResource(R.string.settings_update_check), leadingIcon = PhIcons.ArrowClockwise, value = when {
                             busy -> stringResource(R.string.settings_update_checking)
                             installing -> stringResource(R.string.settings_update_installing)
                             update != null -> stringResource(R.string.settings_update_found)
@@ -589,21 +589,19 @@ private fun SettingsContent(
             }
             if (paired) item {
                 JButton(stringResource(R.string.settings_disconnect_forget), { confirmDisconnect = true },
-                    Modifier.fillMaxWidth().padding(top = Tokens.Space.xl), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
+                    Modifier.fillMaxWidth().padding(top = Tokens.Space.section), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
             }
             item { deviceFeedback() }
         }
     }
-    // Registered after the child pages, so routed back leaves a page in one step. Not on the pairing page: it steps back
-    // through its own pages first and calls onBack itself when none is left (PairingScreen's `back`).
-    if (onBack != null) BackHandler(page != "settings" && page != "pair", onBack = onBack)
+    // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
+    if (onBack != null) BackHandler(page != "settings" && page != "pair" && page != "hubs-add", onBack = onBack)
     // An AI use opened inside "Model configuration" (no navigation host) closes before the page does.
     BackHandler(page == "models" && purpose != null) { purpose = null }
     BackHandler(page == "plugins" && extension != null) { extension = null }
     BackHandler(page == "channels" && channel != null) { channel = null }
     BackHandler(page == "managers" && manager != null) { manager = null }
     BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
-    BackHandler(page == "hubs-add") { page = "hubs" }
     BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
     if (confirmDisconnect) JDialog(
         onDismiss = { confirmDisconnect = false }, title = stringResource(R.string.settings_disconnect_title),
@@ -628,6 +626,7 @@ fun ReadinessScreen(
     readiness: AssistantReadinessSource? = null,
     /** Opens a step's page ("Model providers", "Machines"); null during the first checklist, whose buttons then open help only. */
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)? = null,
+    onLater: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -697,7 +696,8 @@ fun ReadinessScreen(
         }
         onDone()
     }
-    JListPage(title = stringResource(if (notificationsOnly) R.string.settings_ready_notifications else R.string.settings_ready_title), onBack = onBack, largeTitle = showTitle && onBack == null) {
+    val title = stringResource(if (notificationsOnly) R.string.settings_ready_notifications else R.string.settings_ready_title)
+    val checklist: LazyListScope.() -> Unit = {
         header()
         val mainSteps = main?.takeIf { readinessOn && !notificationsOnly }
         if (mainSteps != null) {
@@ -809,6 +809,14 @@ fun ReadinessScreen(
             }
         }
     }
+    if (onLater == null) {
+        JListPage(title, onBack = onBack, largeTitle = showTitle && onBack == null, content = checklist)
+    } else CompositionLocalProvider(
+        LocalRootBack provides null, LocalRootLeading provides pairingTitleInset, LocalHomeChrome provides null,
+    ) {
+        JListPage(title, largeTitle = false, actions = { JTextButton(stringResource(R.string.settings_ready_set_up_later), onLater) },
+            content = checklist)
+    }
     mainHelp?.let { help ->
         ReadinessHelpDialog(help, main?.machine?.name, onDismiss = { mainHelp = null }, onAction = { action ->
             main?.steps?.firstOrNull { it.primaryAction() == action }?.let { mainAction(action, it) }
@@ -840,7 +848,8 @@ private fun OnboardingContent(services: SettingsServices, onDone: () -> Unit) {
     if (diagnostics) {
         DiagnosticsScreen(services, onBack = { diagnostics = false })
     } else ReadinessScreen(services.sessions, services.diagnostics, notificationsOnly = false, showTitle = false,
-        onDiagnostics = { diagnostics = true }, onDone = onDone, onBack = onDone, readiness = services.readiness.takeUnless { services.demo })
+        onDiagnostics = { diagnostics = true }, onDone = onDone, onBack = null, onLater = onDone,
+        readiness = services.readiness.takeUnless { services.demo })
 }
 
 /** One of the first group's pages ([page]) while [assistant] is offline: its title and [JAssistantOffline]. */
