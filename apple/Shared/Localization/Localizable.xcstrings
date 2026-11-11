@@ -1,6 +1,144 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Pack partly uninstalled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pack partly uninstalled"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合集只卸载了一部分"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パックの一部だけアンインストールされました"
+          }
+        }
+      }
+    },
+    "“%@” is still installed. Members already uninstalled stay uninstalled, and nothing was put back. You can try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“%1$@” is still installed. Members already uninstalled stay uninstalled, and nothing was put back. You can try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」还在。已经卸载的成员不会恢复，可以再试一次。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」はまだインストールされています。アンインストール済みのメンバーは元に戻りません。もう一度お試しください。"
+          }
+        }
+      }
+    },
+    "Uninstalled: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uninstalled: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已卸载：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アンインストール済み：%1$@"
+          }
+        }
+      }
+    },
+    "Not uninstalled: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not uninstalled: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未能卸载：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アンインストールできなかったもの：%1$@"
+          }
+        }
+      }
+    },
+    "Not tried, still installed: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not tried, still installed: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未处理，仍已安装：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未処理でインストールされたまま：%1$@"
+          }
+        }
+      }
+    },
+    "Members: %@. Uninstalling only the pack keeps them. Uninstalling with members deletes their settings and data.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Members: %1$@. Uninstalling only the pack keeps them. Uninstalling with members deletes their settings and data."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "成员：%1$@。只卸载合集会保留这些成员；连成员一起卸载会删除它们的设置和数据。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メンバー：%1$@。パックのみアンインストールするとメンバーは残ります。メンバーごとアンインストールすると、メンバーの設定とデータが削除されます。"
+          }
+        }
+      }
+    },
     "Connection method": {
       "extractionState": "manual",
       "localizations": {
@@ -1052,7 +1190,7 @@
       "shouldTranslate": false
     },
     "%@ (%@)": {
-      "comment": "A permission and its detail\nAn error message and its code",
+      "comment": "A member's name and why it wasn't uninstalled\nA permission and its detail\nAn error message and its code",
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
