@@ -133,7 +133,7 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
 
 - **Bridge code**: bundled in personad as runtime package `persona-paseo-runtime` (`internal/runtimepkg`, generated from `integrations/` at build time).
   When the engine switches to Paseo, node writes it beside `runtime.sock` at `runtime-packages/persona-paseo-runtime/<hash>/`, then runs:
-  `node bridge.mjs --socket <runtime.sock> --paseo-home <Paseo home> --mcp-config <mcp.json beside runtime.sock>`.
+  `node bridge.mjs --socket <runtime.sock> --paseo-home <Paseo home> --mcp-config <mcp.json beside runtime.sock> --allow-tools <the Agent's own Persona tools>`.
 - **Which Node.js**: the first version 22 or newer, in this order:
   1. `PERSONA_NODEJS`
   2. The one used by the Paseo daemon (the process in `paseo.pid`)
@@ -191,6 +191,7 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
   - `plan` → plan card:
     - Approval selects Paseo's `implement`, then switches to the mode selected on the phone. If the previous mode was bypass / auto, use `implement_resume` to return to it.
     - Rejection sends the feedback as the denial reason.
+  - One of the Agent's own Persona tools (`--allow-tools`: `report_to_supervisor`, the to-do decision tools, a leader's `task_plan` / `task_review`) asked by Claude Code in an Agent Persona started (it carries the `persona.session` label) → allowed by the bridge once, with no card, no rule kept and no mode changed (#4966, `docs/integrations/claude-integration.md` "Persona tools Agents call without a card"). An agent made in Paseo's own app, and every other tool, still ask.
   - Everything else → permission card:
     - If Claude Code provides a suggested rule, the card offers "Always allow," stating which rule will be added and where it applies.
     - Denial includes the reason you entered.

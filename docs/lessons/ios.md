@@ -415,6 +415,19 @@ Use an invalidation revision as the task key and handle the flag after completio
 - After `scrollTo(id)` far from latest, the bottom sentinel may never report invisible through `onScrollVisibilityChange` (lazy loading removes it entirely), leaving `atBottom` true:
   restoration resumes following and the next reply drags the reader to latest (#597). On landing more than one screen from latest, set `atBottom` false (within one screen the sentinel remains alive and callbacks are reliable).
 - Do not wrap potentially many rows into one child view (a `VStack` inside `LazyVStack`): hundreds lay out at once, blocking the main thread and blanking the page; make independent lazy rows.
+- One very long finished answer is the same mistake inside a single row (2026-11-12, #4970): a 33,000-character report (9 tables, 12 code blocks) was
+  one `Markdown` row. MarkdownUI's `BlockSequence` keeps the space between blocks in `@State` filled from `onPreferenceChange`, keyed by each block's deep
+  `hashValue`: the whole document is laid out, then evaluated and laid out again, hashing every block (a 1.2–3 s frame on opening the chat). Every
+  table's border and row backgrounds are a `GeometryReader` over anchor preferences, re-run on each scrolled frame for every table of the row. Agent
+  chats draw such answers as parts (`AnswerParts`): cut only between blocks whose margins the theme fixes, since MarkdownUI spaces blocks by
+  `max(bottom of one, top of the next)` and a list or quote takes the largest margins inside it. Check spacing by pixels against the whole answer in a
+  window (`AnswerPartsLookTests`), not `ImageRenderer`: one pass of it draws the blocks before their margins arrive.
+  - Parts trade the opening freeze for drawing as they come into view: the lazy stack drops a part's layers once it scrolls far away, and drawing
+    many distinct CJK glyphs the first time is most of the main thread's work in fast programmatic jumps (#5076). Finger scrolling stays in budget.
+- Check that a scroll measurement moved the list before trusting it (#4970). `-showPagePerf`'s glide and `-showListOffset` move the `UIScrollView`
+  themselves; a chat not told a finger is on it keeps following its newest end and puts its stored `ScrollPosition` back as rows size themselves, so
+  the list barely moves and the numbers look excellent. Chats register a per-list hook (`PagePerf.touchers`): a single static one was taken by Persona's
+  own conversation, mounted in the shell at the same time. `-scrollTrace YES` writes the list's offset per frame; screenshots at two moments show it too.
 - Lists whose rows expand themselves (topic-card **Expand**) must not use `LazyVStack` + `scrollPosition` (2026-11-04, #1087): after expanding the app never idles
   (no UI snapshot for 60 seconds on iPhone simulator; iPad or shorter cards happen to settle), only after the chat was previously opened (cached, all topics shown immediately).
   Eliminating animation, bottom anchoring, following, `.alignment` and position writes changed nothing; removing the `scrollPosition` binding or using `VStack` fixed it.

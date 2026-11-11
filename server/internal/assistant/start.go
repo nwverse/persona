@@ -285,7 +285,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if params["launch"] != "headless" {
 		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
 	}
-	if err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
+	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
@@ -731,6 +731,7 @@ func (s *Service) startRoutes() {
 			in.Prompt = s.withWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
 		// The main conversation is the assistant's, on its machine.
+		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
 			OpenedBy: requestOpener(r), GuestTools: guestTools})
@@ -744,6 +745,10 @@ func (s *Service) startRoutes() {
 		// The owner's New chat: is it a direction? In the background; nothing waits for it (route.go).
 		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks {
 			go s.routeNewChat(sess.MachineID, sess.SessionID, sentence)
+		}
+		if *note != "" {
+			apierr.WriteJSON(w, map[string]any{"session": sess, "launcher_note": *note})
+			return
 		}
 		apierr.WriteJSON(w, map[string]any{"session": sess})
 	})
@@ -844,6 +849,9 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	}
 	delete(p.Params, "source") // app input cannot claim an automated author
 	delete(p.Params, "message_source")
+	if id, _ := p.Params["client_msg_id"].(string); id != "" {
+		s.availOwnerSent(p.MachineID, p.SessionID, id, time.Now()) // a replay opens no reply wait (availability.go)
+	}
 	text, said := p.Params["text"].(string)
 	if said {
 		p.Params["text"] = prompts.ProtectUserMessage(text)
@@ -986,7 +994,8 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
 		return err
 	}
-	return s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
+	_, err := s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
+	return err
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.

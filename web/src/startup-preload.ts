@@ -122,9 +122,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * main was already 732 B over its budget at 52b3fae6f (ja 598,940 B against 598,208 B); that overage is kept here, not
  * new room. And 3,072 B for the composer's model pill (#5032 added 2,600 B to ja, 589,326 B to 591,926 B: the pill, the
  * session's model lists it reads for its name, the composer card's width modes and their words; the model panel, its
- * data and its words load on the pill's first tap). Raise it on purpose, in the change that needs it.
+ * data and its words load on the pill's first tap). And 192 B for provider display names (#5029 added 165 B to ja:
+ * plan task chips name their launcher by the provider's display name through lib/provider-names.ts, the shared cache of
+ * the providers' names and the hook that reads them again after a rename). Raise it on purpose, in the change that needs
+ * it.
  */
-export const FIRST_SCREEN_BUDGET = 592_398;
+export const FIRST_SCREEN_BUDGET = 592_590;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

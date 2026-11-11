@@ -41,6 +41,11 @@ Chat page:
 
 - Messages: user bubbles (coral), assistant Markdown (no bubble, reading first), thinking (one folded row), grouped tool steps (>2 fold into "N steps · Run 5 · Read 3",
   always showing the last step), to-do lists (TodoWrite rendered directly), red/green Edit diffs, Bash commands and output, images.
+- A long finished answer in an Agent chat (from 6,000 bytes or 80 lines) is several lazy rows, about 24 lines each (`AnswerParts`, `AssistantTextPart`, #4970):
+  one row of a 30,000-character report was laid out whole, twice, on opening and redrew every table's decoration on each scrolled frame. Cuts fall only
+  between plain blocks whose reply-theme margins are fixed (paragraph, ATX heading, fenced code, table), each part drawn the gap MarkdownUI would put
+  there; lists, quotes, display math and HTML comments are never cut. A long press on any part acts on the whole answer; its file chips sit under the last
+  part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
 - Expanded work is one card: each step remains a separate lazy-loaded chat row (a turn may have hundreds; one giant view would hang), with each row drawing a card slice
   (`WorkCardSlice`: top corners on first step, bottom corners on Collapse N steps, backgrounds extending halfway into spacing to join neighbors), thin separators starting at the text column; tool rows 44pt high.
   **Liquid Glass (default) has no card** (requested 2026-10-31: cards did not match chat home, `StyleSpec.workList = .timeline`): steps sit directly on the page, with a thin left vertical line from first step
