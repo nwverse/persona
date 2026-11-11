@@ -236,6 +236,23 @@ func TestMeetingRoomFed(t *testing.T) {
 		t.Fatalf("fed %+v", l)
 	}
 
+	// The next batch tells the room of the asks meeting.answer took, never of its own.
+	if _, err := r.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
+		l.FedAt = l.FedAt.Add(-2 * feedBatchEvery)
+		now := time.Now().UTC()
+		l.Asks = append(l.Asks,
+			kb.LiveAsk{ID: askOne, Question: "q1", State: askAnswered, Answer: "ROOM-ANSWER", Via: kb.AskViaRoom, AskedAt: now, Sources: []kb.AskSource{}},
+			kb.LiveAsk{ID: askTwo, Question: "q2", State: askAnswered, Answer: "MATERIAL-ANSWER", Via: kb.AskViaMaterial, AskedAt: now, Sources: []kb.AskSource{}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.look(meetingRec)
+	sends = r.sends()
+	if text, _ := sends[len(sends)-1]["text"].(string); !strings.Contains(text, "MATERIAL-ANSWER") || strings.Contains(text, "ROOM-ANSWER") {
+		t.Fatalf("asks batch %v", sends[len(sends)-1])
+	}
+
 	// Another meeting (a #2981 one) naming the room as its attending session: refused.
 	r.upload(meetingOther, 1, map[string]any{"attendance": "listener", "attending_session": map[string]any{"machine_id": "server", "session_id": sid}})
 	r.do("POST", livePath(meetingOther), "", `{"from":0,"segments":[{"start":1,"end":3,"text":"Bo: hello"}]}`, http.StatusOK)

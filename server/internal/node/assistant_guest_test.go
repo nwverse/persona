@@ -392,3 +392,25 @@ func TestGuestDeleteRemovesOnlyARoom(t *testing.T) {
 		t.Errorf("deleted again: %v", err)
 	}
 }
+
+// A room's transcript is an assistant conversation's, also when no process runs it: its projects folder, either
+// spelling of the state directory, and its state.
+func TestMeetingRoomIsAnAssistantConversation(t *testing.T) {
+	rec := "0f8fad5b-d9cb-469f-a165-70867728950e"
+	for _, base := range []string{"-home-me--persona-guest-meeting-" + rec, "-home-me-" + nonAlnum.ReplaceAllString(compat.StateDir, "-") + "-guest-meeting-" + rec} {
+		if !isAssistantProject(base, "-home-me--persona-assistant") {
+			t.Errorf("%s is not an assistant's", base)
+		}
+	}
+	for _, base := range []string{"-home-me--persona-guest", "-home-me-code-guest-meeting-notes", "-home-me--persona-guest-meeting-x"} {
+		if isAssistantProject(base, "-home-me--persona-assistant") {
+			t.Errorf("%s is an assistant's", base)
+		}
+	}
+	n, _ := testNode(t)
+	room := "7d4a3c1e-1111-4222-8333-444455556666"
+	n.state.put(room, sessionState{Launcher: "claude", Cwd: "/somewhere/guest-meeting/" + rec, Guest: []string{"meeting_lines"}, GuestKind: guestMeeting})
+	if !n.isAssistantSession(room) {
+		t.Fatal("a room with no process is not an assistant conversation")
+	}
+}

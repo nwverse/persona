@@ -99,12 +99,18 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 	}
 	msgID := "followup-" + msg.ID
 	if f := m.Followup; f != nil && f.Pending {
-		// A creation a restart left unsettled: the node's conversation under that id is the one; else, a call other
-		// than the one making it drops the record and makes it now.
-		if found, ok := s.followupFound(ctx, id, f); ok {
+		// A creation a restart left unsettled: the node's conversation under that id is the one (made by this call,
+		// its message went with it); else a call other than the one making it drops the record and makes it now, and
+		// the one making it makes it again under the same id.
+		found, ok := s.followupFound(ctx, id, f)
+		switch {
+		case ok && f.OpID == msg.ID:
+			s.followupSet(e, id, &found)
+			return kb.ConvView{MachineID: found.MachineID, SessionID: found.SessionID}, true, nil
+		case ok:
 			m.Followup = &found
 			s.followupSet(e, id, &found)
-		} else if f.OpID != msg.ID {
+		case f.OpID != msg.ID:
 			m.Followup = nil
 			s.followupSet(e, id, nil)
 		}

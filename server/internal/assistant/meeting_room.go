@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -324,6 +325,8 @@ func (s *Service) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb.Li
 	fresh := l.FedTo == nil || !s.sameMachine(l.FedTo.MachineID, ref.MachineID) || l.FedTo.SessionID != ref.SessionID
 	b := feedBatchOf(l, fresh, end)
 	b.room = true
+	// The room answered its own asks: they are in its thread already, only the ones meeting.answer took are told.
+	b.answers = slices.DeleteFunc(b.answers, func(a kb.LiveAsk) bool { return a.Via == kb.AskViaRoom })
 	if b.empty() {
 		if end && l.FedTo == nil {
 			s.attendNote(e, id, func(l *kb.Live) { l.EndFed = true })

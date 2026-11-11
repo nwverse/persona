@@ -212,6 +212,13 @@ func TestMeetingFollowupPending(t *testing.T) {
 	if out["created"] != false || len(r.sends()) != 1 {
 		t.Fatalf("made twice: %v", out)
 	}
+	// The call that made it, repeated after a restart cut its answer off: its conversation, created, nothing sent again.
+	pending()
+	before := len(r.sentOnce())
+	out = r.do("POST", "/api/v1/recordings/"+meetingRec+"/followup", "", map[string]any{"id": callOne, "text": "Hello"}, http.StatusOK)
+	if out["created"] != true || len(r.sends()) != 1 || len(r.sentOnce()) != before {
+		t.Fatalf("its maker repeated: %v", out)
+	}
 }
 
 const callThree = "c0000000-0000-4000-8000-000000000003"
