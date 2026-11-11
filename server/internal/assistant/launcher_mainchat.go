@@ -76,15 +76,11 @@ func (s *Service) finishMainChatModel(ctx context.Context, machine, purpose stri
 	if fit == mainChatFits {
 		return "", nil
 	}
-	picker, err := s.pickerLaunchers(withUnhidden(ctx, name), machine)
+	launchers, err := s.assistantLaunchers(ctx, machine)
 	if err != nil {
 		return "", err
 	}
-	launchers, err := s.assistantLaunchersOf(ctx, machine, picker)
-	if err != nil {
-		return "", err
-	}
-	kind := agentKind(cmp.Or(s.managedAgent(ctx, name), launcherAgentIn(picker, name)))
+	kind := agentKind(s.launcherAgent(withUnhidden(ctx, name), machine, name))
 	d, _ := s.device(ctx, machine)
 	where := firstNonEmpty(d.Name, machine)
 	to := s.mainChatInstead(ctx, d, name, kind, launchers)
@@ -154,24 +150,8 @@ func (s *Service) mainChatInstead(ctx context.Context, d Device, name, kind stri
 	return ""
 }
 
-// agentKind is the agent a launcher starts: claude when it names none.
+// agentKind is the agent a launcher starts: claude when it names none (or is gone: it ran the main chat's kind).
 func agentKind(agent string) string { return cmp.Or(agent, "claude") }
-
-// managedAgent is the agent of the managed launcher name ("" for none, or one of Claude's).
-func (s *Service) managedAgent(ctx context.Context, name string) string {
-	if m, ok := s.managedNamed(ctx, name); ok {
-		return m.Agent
-	}
-	return ""
-}
-
-// launcherAgentIn is the agent of name in a machine's list ("" when it is not there: gone, it ran the main chat's kind).
-func launcherAgentIn(list []ConfiguredLauncher, name string) string {
-	if i := slices.IndexFunc(list, func(l ConfiguredLauncher) bool { return l.Name == name }); i >= 0 {
-		return cmp.Or(list[i].Agent, list[i].AgentType)
-	}
-	return ""
-}
 
 // mainChatRefusal says that launcher can't run the assistant on machine, for the user's language.
 func (s *Service) mainChatRefusal(ctx context.Context, machine, launcher string) error {
