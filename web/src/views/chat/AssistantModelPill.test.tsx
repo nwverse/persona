@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 // A Persona chat's model pill and panel (#5033): on a hub that keeps picks a pick is PUT for the conversation (drawn at
 // once, put back with the hub's words on a refusal) and following the default again is a DELETE; the strip on top says
-// which it is. An older hub keeps the pick in this page and the effort on the session (POST …/modes), as the old chips
+// which it is. A chat that runs offers no provider of another engine; the new-conversation page offers every kind. An older hub keeps the pick in this page and the effort on the session (POST …/modes), as the old chips
 // did; the new-conversation page keeps its pick for the start. Codex's Fast goes through the speed request. The panel
 // is a stand-in that keeps its props and draws its header (ui/model-panel has its own tests).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
+import { agentName } from "../../lib/agent-kind";
 import { NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickEffort, pickLauncher } from "../../lib/assistant-chat";
 import { getSession, getState, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
@@ -62,7 +63,7 @@ beforeEach(() => {
     calls.push({ method: init?.method ?? "GET", url, body });
     if (url.includes("/models")) return json(claudeList);
     if (url.includes("/launchers?purpose=assistant")) return json({
-      launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }],
+      launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }],
       default: { provider: "claude", model: "opus", effort: "high" },
       unavailable: [{ name: "gpt-direct", kind: "api", code: "api_protocol", reason: "Responses API" }],
     });
@@ -104,7 +105,9 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
     expect(calls.some((c) => c.url.includes(`/machines/${mid()}/launchers?purpose=assistant`))).toBe(true);
     await open();
     expect(panel.props!.scope).toBe("assistant");
-    expect(panel.props!.providers.map((p) => [p.id, p.unavailable ?? ""])).toEqual([["claude", ""], ["relay", ""], ["gpt-direct", "Responses API"]]);
+    // codex is another engine than this Claude Code chat runs: off, with why (a new conversation is needed)
+    const otherEngine = t("chat-modelpanel.other_engine", { from: agentName("claude"), to: agentName("codex") });
+    expect(panel.props!.providers.map((p) => [p.id, p.unavailable ?? ""])).toEqual([["claude", ""], ["relay", ""], ["codex", otherEngine], ["gpt-direct", "Responses API"]]);
     expect(panel.props!.state.current).toEqual({ provider: "claude", model: "opus", effort: "high" });
     expect(strip()!.getAttribute("data-pick-strip")).toBe("default");
     expect(strip()!.textContent).toBe(t("chat-modelpill.header_default", { setup: "claude · Opus 5.5" }));
@@ -137,6 +140,16 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
     expect(await act(() => panel.props!.onPick({ provider: "relay", model: "opus" }))).toBe(false);
     expect(getSession(mid(), "c1")?.model_pick).toEqual({ launcher: "claude", model: "haiku" });
     expect(toast).toHaveBeenCalledWith(expect.stringContaining("这个服务商不对这台电脑开放"), "error");
+  });
+
+  it("puts back a pick the hub finds is another engine (409 launcher_other_kind), with its words", async () => {
+    await show(chat());
+    await open();
+    pickAnswer = () => json({ error: "relay runs Codex; this conversation runs on Claude Code", code: "launcher_other_kind", conversation_agent: "claude", launcher: "relay", launcher_agent: "codex", delivered: "none" }, 409);
+    expect(await act(() => panel.props!.onPick({ provider: "relay", model: "opus" }))).toBe(false);
+    expect(sent("PUT")).toEqual([{ launcher: "relay", model: "opus", machine_id: mid() }]);
+    expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("relay runs Codex; this conversation runs on Claude Code"), "error");
   });
 
   it("an effort set on the model that runs is kept with it; another chat's pick is undone rather than followed", async () => {
@@ -186,6 +199,8 @@ describe("an older hub and the new-conversation page", () => {
     expect(pill().textContent).toContain("Opus 5.5");
     await open();
     expect(strip()!.textContent).toBe(t("chat-modelpill.header_new", { setup: "claude · Opus 5.5" }));
+    // nothing runs yet: every engine can start it
+    expect(panel.props!.providers.find((p) => p.id === "codex")!.unavailable).toBeUndefined();
     expect(await act(() => panel.props!.onPick({ provider: "relay", model: "haiku", effort: "low" }))).toBe(true);
     expect([pickedLauncher(NEW_CONVERSATION), pickedModel(NEW_CONVERSATION), pickedEffort(NEW_CONVERSATION)]).toEqual(["relay", "haiku", "low"]);
     expect(calls.some((c) => c.method !== "GET")).toBe(false);

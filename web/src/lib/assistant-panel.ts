@@ -3,11 +3,13 @@
 // lists for the main chat (`?purpose=assistant`): its rc-file aliases and PATH wrappers, plain claude and the Model
 // providers that can run it (launchers and Messages-protocol direct APIs), each with its model list; then what can't run
 // it there (Responses / Chat Completions direct APIs, providers out of the computer's scope or with their own sign-in…),
-// listed off with the hub's reason rather than hidden. Every pickable provider switches the same way, from the next
-// message, so "Recommended" is the provider the chat runs on now and the others keep their own groups. Loaded with the
-// panel, not with the composer.
+// listed off with the hub's reason rather than hidden. A chat that already runs keeps its engine (Claude Code can't
+// resume a Codex thread, nor Codex a Claude transcript), so a provider of another engine is off there too, as in an
+// Agent's panel; the new-conversation page runs nothing yet and offers every kind. Every pickable provider switches the
+// same way, from the next message, so "Recommended" is the provider the chat runs on now and the others keep their own
+// groups. Loaded with the panel, not with the composer.
 import { t } from "../i18n";
-import { agentId } from "./agent-kind";
+import { agentId, agentName } from "./agent-kind";
 import type { AssistantSetup } from "./assistant-models";
 import { ALL_EFFORTS, defaultModel, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
 import { validModelId } from "./model-id";
@@ -37,6 +39,9 @@ export interface AssistantPanelOptions {
   typed?: boolean;
   /** The engine the chat runs, for a launcher the list doesn't have. */
   engine?: string;
+  /** The chat already runs on `engine`: a provider of another engine can't take it over (the hub refuses it, 409
+   *  `launcher_other_kind`), so it is listed off with why. Not set on the new-conversation page. */
+  running?: boolean;
   /** The chat has Codex's Fast speed: the model it runs offers it ("as it runs": on when `fastOn`). */
   fast?: boolean;
   fastOn?: boolean;
@@ -45,7 +50,8 @@ export interface AssistantPanelOptions {
 /** The panel's providers and state for a Persona chat running `setup`: `info` the computer's launchers for the main chat
  *  (undefined before they are read), `listOf` each launcher's list as read. */
 export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers | undefined, listOf: (launcher: string) => ModelList, o: AssistantPanelOptions = {}): AssistantPanel {
-  const { typed = false, engine = "claude" } = o;
+  const { typed = false, engine = "claude", running = false } = o;
+  const runs = agentId(engine);
   const launchers = info?.launchers ?? [];
   const providers: PanelProvider[] = launchers.map((l) => {
     const kind = agentId(l.agent_type || l.agent || "claude");
@@ -62,7 +68,9 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
       if (!models.length && l.model) models = [{ id: l.model, name: modelLabel(l.model), efforts: kind === "claude" ? ALL_EFFORTS : [] }];
       p.models = models;
     }
-    if (typed && typedModelOffered(kind, e.list)) p.typable = true;
+    // the provider it runs on stays as it is, whatever its kind: it is what the panel says the chat runs
+    if (running && kind !== runs && l.name !== setup.provider) p.unavailable = t("chat-modelpanel.other_engine", { from: agentName(runs), to: agentName(kind) });
+    else if (typed && typedModelOffered(kind, e.list)) p.typable = true;
     return p;
   });
   // what the chat runs on, when the list doesn't have it (yet): plain claude is always there; another one is gone

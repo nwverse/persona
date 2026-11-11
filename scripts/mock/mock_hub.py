@@ -22900,7 +22900,8 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 # sonnetcc, a Messages-protocol direct API ("Team API", which has no /model list) and codex, with the default and an
 # `unavailable` list (a Responses direct API, a provider out of the computer's scope); PUT / DELETE
 # /api/v1/assistant/conversations/{id}/model keep or drop `model_pick` on the conversation (the out-of-scope one is 409
-# launcher_out_of_scope, an unknown one 409 launcher_missing, a model with sonnetcc 400). =picked: the second chat starts
+# launcher_out_of_scope, an unknown one 409 launcher_missing, another agent than the chat's 409 launcher_other_kind, a
+# model with sonnetcc 400). =picked: the second chat starts
 # with a pick. GET /mock/model_pick: the requests; ?reset=1 drops every pick.
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
 MODEL_PICK_LOG = []
@@ -22917,6 +22918,9 @@ MODEL_PICK_REASONS = {
     "launcher_out_of_scope": {"en": "This provider is only for MacBook, not this computer",
                               "zh-Hans": "这个服务商只给 MacBook 用，不在这台电脑上",
                               "ja": "このプロバイダーは MacBook 専用で、このコンピューターでは使えません"},
+    "launcher_other_kind": {"en": "This conversation runs on another agent; start a new conversation to use this launcher",
+                            "zh-Hans": "这个对话跑在另一种 Agent 上，要用这个启动器得新开对话",
+                            "ja": "この会話は別のエージェントで動いています。このランチャーを使うには新しい会話を始めてください"},
 }
 if MODEL_PICK_MODE:
     LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
@@ -22964,6 +22968,9 @@ def model_pick_route(handler, p, body):
         return handler.send_json({"error": MODEL_PICK_REASONS["launcher_out_of_scope"][lang], "code": "launcher_out_of_scope"}, 409) or True
     if launcher not in {l["name"] for l in MODEL_PICK_LAUNCHERS}:
         return handler.send_json({"error": "%s is not on this computer" % launcher, "code": "launcher_missing"}, 409) or True
+    picked = next((l.get("agent_type") or "claude" for l in MODEL_PICK_LAUNCHERS if l["name"] == launcher), "claude")
+    if picked != (s.get("agent") or "claude"):
+        return handler.send_json({"error": MODEL_PICK_REASONS["launcher_other_kind"][lang], "code": "launcher_other_kind"}, 409) or True
     if launcher == "sonnetcc" and req.get("model"):
         return handler.send_json({"error": "sonnetcc sets its own model"}, 400) or True
     pick = {k: req[k] for k in ("launcher", "model", "effort") if req.get(k)}

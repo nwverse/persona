@@ -25,7 +25,8 @@ import { setServiceTier } from "./SessionDialogs";
 const conversationModel = (s: Session) => `/assistant/conversations/${encodeURIComponent(s.session_id)}/model`;
 
 /** PUT …/model {launcher, model?, effort?, machine_id}: kept for the conversation. Drawn at once; put back, with the hub's
- *  words (out of the computer's scope, gone, can't run assistant chats…), if it says no. */
+ *  words (out of the computer's scope, gone, another engine than the chat runs, can't run assistant chats…), if it says
+ *  no. */
 async function keepPick(s: Session, pick: ModelPick): Promise<boolean> {
   const before = s.model_pick;
   upsertSession({ ...s, model_pick: pick });
@@ -96,12 +97,14 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
   const { info } = assistantLaunchers(mid);
   const setup = assistantSetup(chat, info);
   const engine = chat.session?.agent || "claude";
+  // a chat that runs keeps its engine; one whose agent isn't known is refused nothing on a guess, as on the hub
+  const running = Boolean(chat.session?.agent);
   const fast = Boolean(chat.session?.service_tiers?.some((x) => x.id === "priority"));
   const fastOn = chat.session?.service_tier === "priority";
   const { providers, state } = useMemo(
-    () => assistantPanel(setup, info, (name) => modelList(mid, name), { typed, engine, fast, fastOn }),
+    () => assistantPanel(setup, info, (name) => modelList(mid, name), { typed, engine, running, fast, fastOn }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
-    [setup.provider, setup.model, setup.effort, info, mid, typed, engine, fast, fastOn, version],
+    [setup.provider, setup.model, setup.effort, info, mid, typed, engine, running, fast, fastOn, version],
   );
   const latest = () => (chat.session ? (getSession(chat.session.machine_id, chat.session.session_id) ?? chat.session) : undefined);
   const key = assistantPickKey(chat);

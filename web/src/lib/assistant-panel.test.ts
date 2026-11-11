@@ -1,9 +1,10 @@
 // A Persona chat's model pill and panel (#5033, docs/web/web.md "Model pill and model panel"): where the setup the next
 // message runs on comes from (its kept pick, the default, what a side chat started with, this page's pick on an older hub
 // or the new-conversation page), what the pill says, the panel's providers (what can run Persona chats, with their
-// lists; what can't, off with the hub's reason) and what a pick keeps.
+// lists; what can't, off with the hub's reason; another engine than a running chat's, off) and what a pick keeps.
 import { afterEach, describe, expect, it } from "vitest";
 import { t } from "../i18n";
+import { agentName } from "./agent-kind";
 import { NEW_CONVERSATION, pickEffort, pickLauncher, pickModel } from "./assistant-chat";
 import { assistantPick, assistantPillView, assistantSetup, type AssistantChat } from "./assistant-models";
 import { assistantPanel, assistantPickOf } from "./assistant-panel";
@@ -104,6 +105,23 @@ describe("the panel's providers", () => {
     expect(relay.typable).toBeUndefined();
     // a direct API whose list is empty: the model it is set up with
     expect(providers.find((p) => p.id === "team-api")!.models).toEqual([{ id: "claude-sonnet-5-5", name: "sonnet 5.5", efforts: ALL }]);
+  });
+
+  it("a chat that runs keeps its engine: another engine's providers are off with why, as in an Agent's panel; the new-chat page offers every kind", () => {
+    const pickable = (ps: { id: string; unavailable?: string }[]) => ps.filter((p) => !p.unavailable).map((p) => p.id);
+    const claudeChat = assistantPanel(assistantSetup(chat({ isMain: true }), info), info, listOf, { typed: true, engine: "claude", running: true }).providers;
+    expect(claudeChat.find((p) => p.id === "codex")).toMatchObject({ unavailable: t("chat-modelpanel.other_engine", { from: agentName("claude"), to: agentName("codex") }) });
+    expect(claudeChat.find((p) => p.id === "codex")!.typable).toBeUndefined();
+    expect(pickable(claudeChat)).toEqual(["claude", "relay", "team-api"]);
+    // the hub's own reasons stay theirs
+    expect(claudeChat.find((p) => p.id === "far-gw")!.unavailable).toBe("这个服务商不对这台电脑开放");
+    // a Codex chat: the Claude Code providers are the other engine; the one it runs on stays
+    const c = chat({ session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5" }) });
+    const codexChat = assistantPanel(assistantSetup(c, info), info, listOf, { engine: "codex", running: true }).providers;
+    expect(pickable(codexChat)).toEqual(["codex"]);
+    expect(codexChat.find((p) => p.id === "relay")!.unavailable).toBe(t("chat-modelpanel.other_engine", { from: agentName("codex"), to: agentName("claude") }));
+    // the new-chat page runs nothing yet
+    expect(pickable(assistantPanel(assistantSetup(chat({ session: undefined }), info), info, listOf, { typed: true }).providers)).toEqual(["claude", "relay", "team-api", "codex"]);
   });
 
   it("a pick whose launcher is gone stays shown, off, with why", () => {

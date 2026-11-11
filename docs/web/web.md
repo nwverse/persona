@@ -1570,7 +1570,10 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   shows the model it is set up with), each in its own group; "Recommended" is the provider the chat runs on now. What
   can't run Persona chats there (a Responses or Chat Completions direct API, a provider out of the computer's scope or
   with its own sign-in) is listed at the end with the hub's reason, off, not hidden; a pick whose launcher is gone stays
-  shown, off, with why, and the hub refuses its messages rather than run them elsewhere. A launcher that fixes its own
+  shown, off, with why, and the hub refuses its messages rather than run them elsewhere. A chat that already runs keeps
+  its engine (Claude Code can't resume a Codex thread, nor Codex a Claude transcript): a provider of another engine is
+  off with an Agent panel's words, "Switching from Claude Code to Codex needs a new conversation"; the new-chat page runs
+  nothing yet and offers every kind. A launcher that fixes its own
   model offers its default only; a model ID typed into the search is offered where the hub keeps typed IDs
   (`typed_models`). A strip above the search says where the setup comes from: "Following the default · claude · Opus
   5.5" (the main chat, Model configuration › Main chat), "Same as when this chat started · …" (another chat), "Picked for
@@ -1578,8 +1581,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   A pick is kept for the conversation on a hub with `assistant_model_pick`: `PUT /assistant/conversations/{id}/model`
   `{launcher, model?, effort?, machine_id}` (no model for a provider's default entry; the effort the setup has), drawn
   at once as the session's `model_pick` and put back with the hub's words when it says no (`launcher_out_of_scope`,
-  `launcher_own_service`, `launcher_missing`, a launcher that can't run assistant chats); **Follow default** / **Undo
-  pick** is a `DELETE`. It holds from the next message on every device; the messages carry nothing of it. An effort set
+  `launcher_own_service`, `launcher_missing`, `launcher_other_kind`, a launcher that can't run assistant chats);
+  **Follow default** / **Undo pick** is a `DELETE`. It holds from the next message on every device; the messages carry nothing of it. An effort set
   in the flyout of the model that runs is kept the same way; Codex's Fast is the speed request. On an older hub the pick
   lives on this page and goes with each message (`launcher`, `model`) and the effort with `POST …/modes`, as the old
   chips did, and a pick of a launcher the list no longer offers goes back to the default with a word. The new-chat page
