@@ -100,7 +100,12 @@ running Agent to another provider".
   than held for the minutes the message holds the session's typing lock.
 - **From the first Ctrl+C on, on its own clock** (`context.WithoutCancel`, at most 5 minutes): a hub redeploy that ends
   the connection does not leave the agent quit and not started again. The start on the new launcher gets 90 seconds.
-  The hub waits 7 minutes for a message with `apply_switch`.
+  The hub waits 7 minutes for a message with `apply_switch`. A resident node (`personad node --attach`, Persona Link)
+  makes a new Node for each connection; what the node keeps of switches outside the records is shared by its Nodes
+  (`switch_share.go`, handed over as the background scans are): the next connection's Node lists a switch still under
+  way as starting, its messages and the user's Resume wait for it, picks and stops are refused; the records the switch
+  writes once its connection is gone go to the next Node, over the copy it loaded from the hub, and through it to the
+  hub. The computer stays reachable meanwhile: nothing waits for the old Node.
 - **A failed switch is dropped and rolled back.** Whatever fails (the checks when the message comes, an agent that does
   not quit, a start that does not come up), the pending switch is cleared, so nothing tries it again on every message,
   and the message is refused with nothing typed. After a start that did not come up, the record goes back to what it was
@@ -129,8 +134,8 @@ running Agent to another provider".
 - **Where the pending switch lives.** In the session's state record (`pending_switch`, persisted with the model in the
   hub's Postgres), so a node restart neither drops it nor carries it out by itself; a message right after a restart
   waits for the record to load first. A session Persona did not start has no record and gets none for this (a record
-  means "Persona started it"): its switch waits in the node's memory, and a node restart forgets it, so its row shows
-  none and nothing is switched behind the user's back. A switch carried out writes a record, as a Resume does, and so
+  means "Persona started it"): its switch waits in the node's memory (a resident node's reconnect keeps it), and a node
+  restart forgets it, so its row shows none and nothing is switched behind the user's back. A switch carried out writes a record, as a Resume does, and so
   does one that failed: a session Persona did not start keeps a record of its own launcher after a failed switch, the
   one a Resume brings it back on once no process of it is left to name it.
 - **Not carried over**, as with any resume: the ultracode switch (its resume notice says so), "allow for this session"

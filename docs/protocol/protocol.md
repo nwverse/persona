@@ -541,7 +541,8 @@ keeps waiting. An answer-only device's message never carries one. With `apply_sw
   while the switch was being prepared refuses the message as `input_draft` / `dialog_open` and leaves the switch waiting.
 
 **Time.** The node's checks before the quit take at most a minute; from the first Ctrl+C on, the switch runs on its own
-clock (a client or connection that goes away does not leave the agent half switched), at most 5 minutes: the quit
+clock (a client or connection that goes away does not leave the agent half switched; a resident node's next connection
+lists it as starting, waits for it and writes what it wrote), at most 5 minutes: the quit
 (about 8 seconds), the shell coming back (at most 10 seconds), the start on the new launcher (at most 90 seconds) and,
 after a failed one, the pane cleared and the start on its own launcher (the same bounds). The hub waits 7 minutes for a
 message with `apply_switch`, decided by the request (not the cached row), where it waits 90 seconds (5 minutes for a
