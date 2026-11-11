@@ -86,6 +86,7 @@ func (n *Node) scanOffline() []proto.Session {
 	forked := maps.Clone(n.forked) // "Branch to New Chat"'s copies (fork.go)
 	n.mu.Unlock()
 	own := n.assistantProject()
+	persona := n.personaProjectDirs()
 	for _, p := range files {
 		id := strings.TrimSuffix(filepath.Base(p), ".jsonl")
 		if !validID(id) {
@@ -107,8 +108,11 @@ func (n *Node) scanOffline() []proto.Session {
 			continue
 		}
 		// Another platform's runs (agentfilters.go) go before the newest are counted: hundreds a day would crowd out
-		// the user's own.
+		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go).
 		if !forked[id] && n.agentFiltered("claude", p) {
+			continue
+		}
+		if !forked[id] && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
 			continue
 		}
 		cands = append(cands, cand{p, st, others})
@@ -119,12 +123,18 @@ func (n *Node) scanOffline() []proto.Session {
 	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands)}
 	var counted [3]int
 	listed := map[string]bool{}
+	// The desktop app's sessions as its sidebar lists them (claudedesktop.go): left out before a row is counted.
+	desktop := readClaudeDesktopIndex(n.home)
+	shown := map[string]bool{}
 	for _, c := range cands {
 		id := strings.TrimSuffix(filepath.Base(c.path), ".jsonl")
 		if listed[id] {
 			continue // an older copy in another config directory (newest first): it used to win, and list the session twice
 		}
 		listed[id] = true
+		if !keep[id] && !forked[id] && desktop.hidden(id, shown) {
+			continue // an archived session of the desktop app, or a transcript its session went on from
+		}
 		if counted[c.count] >= limit[c.count] {
 			continue
 		}
@@ -159,6 +169,7 @@ func (n *Node) scanOffline() []proto.Session {
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
 		untitled(&s, m)
 		out = append(out, s)
+		shown[id] = true
 		counted[c.count]++
 	}
 	return out

@@ -106,6 +106,7 @@ Colors are written light/dark. iOS sizes are at the default text size.
 | `brand` | coral `#D4683F`/`#E8835C`; persona marks only, never tappable things | `apple/Shared/Design/Theme.swift:110` | none | `brand` is the accent (differs) |
 | `countBadge` | `#636366` both modes, white text at 4.5:1 | `apple/Shared/Design/Theme.swift:153` | accent fill (differs) | same as Apple |
 | `onSolid` | white | `apple/Shared/Design/Theme.swift:154` | `text-white` | n/a |
+| `Reply.secondaryInk` | `#636366`/`#AEAEB2`; Markdown H4–H6 in replies (#3863), ≥ 4.5:1 on every page, card and the reply box (`StyleSpecTests`), where `.secondary` is about 3.4:1 | `apple/Shared/Design/ReplyTokens.swift` | `--ink-2` `#62656b`/`#a5a8ad` (h4) | none: h4 is `bodyStrong` in the text color (differs) |
 
 `persona` is the persona's own primary (falls back to the accent). `pageBackground`, `card` and `cardStroke` come from the active `StyleSpec`.
 
@@ -781,6 +782,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.
 - [ ] Structure: in every grouping a session that needs the user is visible without opening anything; rows follow the work-item row; primary screens show no raw model IDs, session IDs, paths or engine names (sections 3.4, 5.6).
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
+- [ ] Performance (Apple clients): the review checklist in `docs/apple/performance.md` is pasted and marked; no new main-thread IO, expensive `@State` initial value or work in `body`, and a change to a hot path (chat list, composer, Agents list, pushes, launch, images) attaches before and after numbers.
 
 ## Codex speed controls (#3865)
 
