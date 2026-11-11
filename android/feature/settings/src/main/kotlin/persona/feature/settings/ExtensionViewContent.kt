@@ -451,7 +451,8 @@ internal fun ExtensionViewColumn(state: ExtensionViewState, handle: ExtensionVie
 /** A chart from the design system; a card's is short, with no scale. */
 @Composable
 private fun ChartItem(item: ExtensionViewItem, modifier: Modifier, compact: Boolean) {
-    val data = remember(item) { ExtensionViewText.chart(item) } ?: return
+    val locale = currentLocale
+    val data = remember(item, locale) { ExtensionViewText.chart(item, locale) } ?: return
     JChart(data, modifier, compact = compact, title = item.title?.takeIf { it.isNotBlank() }, detail = item.detail?.takeIf { it.isNotBlank() })
 }
 

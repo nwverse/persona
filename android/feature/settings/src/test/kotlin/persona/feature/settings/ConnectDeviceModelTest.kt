@@ -50,6 +50,28 @@ class ConnectDeviceModelTest {
         assertFalse("an expired code waits for nothing", model.poll())
     }
 
+    @Test fun aDeviceThatPairedWhileThePageWasStoppedIsShownOnReturn() = runBlocking {
+        val hub = Hub()
+        var now = 0L
+        var paired = 0
+        val model = ConnectDeviceModel(hub) { now }
+        assertFalse("no code yet: nothing to catch up on", model.catchUp { paired++ })
+        model.make()
+        assertFalse("nobody took the code", model.catchUp { paired++ })
+        assertEquals(0, paired)
+        // The other device scanned the code, then the screen went off; the code expired before the page came back.
+        hub.list = hub.list + PairedDevice("new", "新手机", "phone", "full")
+        now = 700_000
+        model.tick()
+        assertTrue(model.state.value.expired)
+        assertFalse("polling still waits for nothing", model.poll())
+        assertTrue(model.catchUp { paired++ })
+        assertEquals(ConnectPhase.Paired("新手机"), model.state.value.phase)
+        assertEquals(1, paired)
+        assertFalse("once paired, nothing more to catch up on", model.catchUp { paired++ })
+        assertEquals(1, paired)
+    }
+
     @Test fun aRefusalIsShownWithItsReason() = runBlocking {
         val hub = Hub().apply { fail = IllegalStateException("x") }
         val model = ConnectDeviceModel(hub) { 0 }

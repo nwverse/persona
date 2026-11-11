@@ -15,6 +15,11 @@ import android.content.Context
 const val MAX_CLIPBOARD_TEXT_CHARS = 256 * 1024
 
 /**
+ * Checks whether [text] length is within [MAX_CLIPBOARD_TEXT_CHARS] safe threshold.
+ */
+fun isClipboardTextUnderLimit(text: String): Boolean = text.length <= MAX_CLIPBOARD_TEXT_CHARS
+
+/**
  * Places [text] on the system clipboard if its length is within [MAX_CLIPBOARD_TEXT_CHARS],
  * notifying [onNotice] or [feedback] of success or refusal.
  *
