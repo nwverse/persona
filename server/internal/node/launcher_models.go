@@ -206,9 +206,10 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 		}
 		cmd = exec.CommandContext(ctx, shell, "-ic", n.launcherCommand(name)+` "$@"`, "persona",
 			"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-			"--settings", n.claudeSettings(ctx, name, ours, dir))
+			"--settings", n.launcherProbeSettings(ctx, name, ours, dir))
 	}
 	cmd.Dir = dir
+	cmd.Env = n.launcherProbeEnv()
 	killGroupOnCancel(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

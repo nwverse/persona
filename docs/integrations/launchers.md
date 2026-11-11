@@ -29,6 +29,12 @@ The node runs the list script and the launchers in an interactive shell (`loginS
 always bash without zsh (Git Bash on Windows). Bash runs as `bash -ic` and reads `~/.bashrc`, not `~/.bash_profile` / `~/.profile`: aliases kept there aren't listed.
 Bash has no zsh `(z)` / `(Q)`, and macOS's bundled bash 3.2 has no `BASH_ALIASES`, so under bash the script prints `alias -p`, and the node splits words and strips quotes by the shell's rules itself (nothing expanded or run, `node/launchers_shell.go`) before handing them to the same parser.
 
+### Launcher checks use the launcher's profile (#3345)
+
+Availability, model-list and auth probes do not inherit a node service's assistant-only `CLAUDE_CONFIG_DIR`. They start a login shell and run the existing launcher command: shell startup and wrapper/provider assignments still apply, and plain `claude` gets the machine's `claude_start_dir` when configured. An otherwise unset directory means Claude's default `~/.claude` with `~/.claude.json`.
+Headless probes and conversations do not need the interactive `hasCompletedOnboarding` flag. Only a terminal start's readiness-timeout diagnostic checks it, in that start's actual profile.
+This changes checks only: existing Agent and assistant launch commands, profile defaults and transcript discovery are unchanged. No conversations or credentials are migrated.
+
 ### The terminal's shell is another environment (#1642)
 
 The node **lists** launchers, and runs "Test availability", the launcher health checks, probes and repairs, in its own login shell (`loginShellProgram -ic`). A start **types** the launcher into a new herdr tab, whose shell is whatever herdr opens there. When the two read different startup files, a launcher the list shows does not exist where it runs:
@@ -384,4 +390,3 @@ and node-side `node/launcherquota.go`.
 - App: `LauncherQuotaSection`, above “Availability” (same on web, `web/src/views/settings/LauncherQuota.tsx`; Android places it on the launcher page reached from Machines, passing that computer as `machine=`, see `docs/android/android.md`, “Extension UI and marketplace”). Title: “Quota · <gateway name>,” using the report's `gateway_name` (fallback to `gateway` for old hubs). The app hardcodes no gateway names.
   Usage ≥ 70% is orange, ≥ 90% or exhausted is red; refresh at the top right. DEBUG `-openLauncherPage <name>` opens it directly.
   Fake hub's `cc_main` and `cc_team` carry quota from two example gateways (`示例网关`, “Example gateway,” and `示例中转`, “Example relay”) for screenshots.
-

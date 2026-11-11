@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -48,6 +51,10 @@ func probeScript(name string, args ...string) string {
 	for _, arg := range args {
 		command += " " + shellQuote(arg)
 	}
+	return probeScriptCommand(name, command)
+}
+
+func probeScriptCommand(name, command string) string {
 	return fmt.Sprintf(`
 __jp_env() { /usr/bin/env | while IFS= read -r __jp_line; do printf '%%s\0' "$__jp_line"; done; }
 __jp_report() {
@@ -184,7 +191,12 @@ func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := loginShell(ctx, probeScript(name, args...))
+	command := n.launcherCommand(name)
+	for _, arg := range args {
+		command += " " + shellQuote(arg)
+	}
+	cmd := loginShell(ctx, probeScriptCommand(name, command))
+	cmd.Env = n.launcherProbeEnv()
 	killGroupOnCancel(cmd)
 	out, _ := cmd.Output()
 	p, ok := parseProbe(string(out))
@@ -199,6 +211,44 @@ func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (
 		return Probe{}, errProbeUnseen
 	}
 	return withSettingsEnv(p, n.home), nil
+}
+
+// A service's assistant profile is not the terminal shell's default. Let shell
+// startup and the unchanged launcherCommand select the target's directory; do
+// not change how an actual Agent or assistant conversation starts (#3345).
+func (n *Node) launcherProbeEnv() []string {
+	env := withoutEnv(os.Environ(), []string{"CLAUDE_CONFIG_DIR"})
+	if n.sessionScope != nil {
+		env = append(env, "CLAUDE_CONFIG_DIR="+n.sessionScope.claude)
+	}
+	return env
+}
+
+// The base marker precedes the file check, so this reads the shell's environment
+// even when claude is a binary the function stubs cannot intercept.
+func (n *Node) launcherShellEnv(ctx context.Context) []string {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := loginShell(ctx, probeScriptCommand("claude", "true"))
+	cmd.Env = n.launcherProbeEnv()
+	killGroupOnCancel(cmd)
+	out, _ := cmd.Output()
+	p, _ := parseProbe(string(out))
+	return identity.Environment(cmd.Env, envList(p.Shell)...)
+}
+
+func (n *Node) launcherProbeSettings(ctx context.Context, name, ours, cwd string) string {
+	env := n.launcherShellEnv(ctx)
+	dir := envValue(env, "CLAUDE_CONFIG_DIR")
+	if name == "claude" {
+		if d := n.claudeStartDir.Load(); d != nil && *d != "" {
+			dir = proto.ExpandHome(*d, n.home)
+		}
+	}
+	if dir == "" {
+		dir = filepath.Join(n.home, ".claude")
+	}
+	return n.claudeSettings(ctx, name, ours, cwd, dir)
 }
 
 // withSettingsEnv puts the env of the --settings a claude launcher passes on top of what the probe saw. Claude Code

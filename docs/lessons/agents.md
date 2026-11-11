@@ -2,6 +2,8 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+- A service-level `CLAUDE_CONFIG_DIR` can be a headless-only assistant profile with no `hasCompletedOnboarding` (#3345). It is not evidence that a launcher cannot answer. Probes drop that inherited value before shell startup, then use the existing launcher command and its profile choices. Judge interactive onboarding only against that interactive profile, not another discovered one. Fixing a health check must not silently move existing conversations to another directory.
+
 - Task placement must preserve locality (#1175): a failed launcher check is not permission to move an explicitly targeted task to another computer with the original absolute directory. Persist fixed placement by default through preview, card edits and retries; require an explicit flexible policy for portable work. Returning from background dispatch only proves the work was queued, not that a native Agent received its first prompt.
 
 - A successful session deletion must survive a node reclassifying an unchanged offline transcript as `interrupted`. Apply persisted deletion notes to that status too, using machine/session ID and last-use time; neither a shared project name nor a missing worktree means another conversation was deleted (#5933).
