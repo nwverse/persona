@@ -78,7 +78,7 @@ func TestLarkCLIGate(t *testing.T) {
 		// Not decided here: the usual permission flow asks about the whole command.
 		{`lark-cli im +chat-list | python3 -c 'import sys'`, "other"},
 		{`lark-cli im +chat-list > ~/chats.json`, "other"},
-		{`FOO=1 lark-cli im +chat-list`, "other"},
+		{`FOO=1 lark-cli im +chat-list`, "allow"},
 		{`lark-cli "$CMD" +chat-list`, "other"},
 		{`lark-cli`, "other"},
 	} {

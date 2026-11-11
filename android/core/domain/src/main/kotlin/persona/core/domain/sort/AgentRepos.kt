@@ -106,7 +106,7 @@ fun gitPlaceOf(repoRoot: String?, worktree: String?): RepoPlace? {
 private val AgentSession.place: RepoPlace
     get() = gitPlaceOf(session.repoRoot, session.worktree) ?: repoOf(session.cwd, session.repoRoot)
 
-/** The repositories of [rows] by name in natural order (then path), each computer's apart; ids are `repo/<machine>/<path>`, `tree/<machine>/<path>`. */
+/** The repositories of [rows] by name in natural order (then path), with each computer's repositories kept apart. */
 fun agentRepos(rows: List<AgentSession>): List<AgentRepo> =
     rows.groupBy { it.session.machineId to it.place.repo }.map { (key, members) ->
         val (machine, repo) = key
@@ -116,7 +116,10 @@ fun agentRepos(rows: List<AgentSession>): List<AgentRepo> =
             val main = inTree.first().place.main
             // Orca's sidebar and git name a working tree by its branch.
             val branch = inTree.firstNotNullOfOrNull { it.session.branch?.takeIf(String::isNotEmpty) }
-            AgentWorktree("tree/$machine/$path", branch ?: if (path == repo) name else baseName(path), path, main, inTree, branch)
+            // Keep the saved fold key for the repository inferred from the path. If the host puts the same
+            // path under a different repository, scope its key to that repository even when filtered on its own.
+            val id = "tree/$machine/$path" + if (repo != repoOf(path).repo) "\u0000$repo" else ""
+            AgentWorktree(id, branch ?: if (path == repo) name else baseName(path), path, main, inTree, branch)
         }.sortedWith(compareBy<AgentWorktree> { !it.main }.thenComparing({ it.name to it.path }, byName))
         AgentRepo("repo/$machine/$repo", machine, name, repo, trees)
     }.sortedWith(compareBy<AgentRepo, Pair<String, String>>(byName) { it.name to it.path }.thenBy { it.machineId })
